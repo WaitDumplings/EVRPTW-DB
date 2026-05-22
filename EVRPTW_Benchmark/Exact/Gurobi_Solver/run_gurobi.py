@@ -172,6 +172,9 @@ def main() -> None:
     parser.add_argument("--cs_copies", type=int, default=3, help="Number of dummy copies per active charging station. Default: 3.")
     parser.add_argument("--output_flag", type=int, default=0)
     parser.add_argument("--checkpoints_s", default="", help="Comma-separated seconds for incumbent snapshots, e.g. 60,300,900.")
+    parser.add_argument("--tie_break_vehicle_count", action=argparse.BooleanOptionalAction, default=True, help="Within optimal distance tolerance, minimize vehicle count. Default: true.")
+    parser.add_argument("--distance_tolerance_abs", type=float, default=1e-6)
+    parser.add_argument("--distance_tolerance_rel", type=float, default=1e-8)
     parser.add_argument("--save_traceback", action="store_true", help="Store Python tracebacks in the summary CSV.")
     parser.add_argument("--verbose", action="store_true", help="Print per-instance progress.")
     args = parser.parse_args()
@@ -193,6 +196,9 @@ def main() -> None:
         cs_copies=args.cs_copies,
         output_flag=args.output_flag,
         checkpoints_s=checkpoints_s,
+        tie_break_vehicle_count=args.tie_break_vehicle_count,
+        distance_tolerance_abs=args.distance_tolerance_abs,
+        distance_tolerance_rel=args.distance_tolerance_rel,
     )
 
     summary_rows = []
@@ -225,6 +231,9 @@ def main() -> None:
                     "route_sequence_json": "",
                     "solution_path": "",
                     "time_trace_path": "",
+                    "tie_break_applied": "",
+                    "stage1_best_distance_km": "",
+                    "distance_tolerance": "",
                     "errors": errors,
                     "traceback": "",
                 })
@@ -253,6 +262,9 @@ def main() -> None:
                 "route_sequence_json": json.dumps(solution_route_sequence(solution)),
                 "solution_path": str(solution_path),
                 "time_trace_path": str(save_path / "gurobi_time_trace.csv"),
+                "tie_break_applied": solution.metadata.get("tie_break_applied"),
+                "stage1_best_distance_km": solution.metadata.get("stage1_best_distance_km"),
+                "distance_tolerance": solution.metadata.get("distance_tolerance"),
                 "errors": json.dumps(solution.violations),
                 "traceback": "",
             })
@@ -280,6 +292,9 @@ def main() -> None:
                 "route_sequence_json": "",
                 "solution_path": "",
                 "time_trace_path": str(save_path / "gurobi_time_trace.csv"),
+                "tie_break_applied": "",
+                "stage1_best_distance_km": "",
+                "distance_tolerance": "",
                 "errors": error,
                 "traceback": traceback.format_exc() if args.save_traceback else "",
             })
@@ -291,7 +306,8 @@ def main() -> None:
         fieldnames = [
             "instance_id", "file", "status", "status_name", "feasible", "objective_distance_km",
             "vehicle_count", "runtime_s", "first_feasible_time_s", "mip_gap", "best_bound",
-            "routes_json", "route_sequence_json", "solution_path", "time_trace_path", "errors", "traceback",
+            "routes_json", "route_sequence_json", "solution_path", "time_trace_path",
+            "tie_break_applied", "stage1_best_distance_km", "distance_tolerance", "errors", "traceback",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
