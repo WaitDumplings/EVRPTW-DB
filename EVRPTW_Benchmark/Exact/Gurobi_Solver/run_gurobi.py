@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
 from evrptw_core.io import load_instance, save_solution
-from evrptw_core.schema import EVRPTWSolution
+from evrptw_core.schema import EVRPTWSolution, solution_route_sequence
 from evrptw_core.validation import validate_instance_structure
 from gurobi_solver import GurobiEVRPTWSolver, GurobiSolverConfig
 
@@ -250,7 +250,7 @@ def main() -> None:
                 "mip_gap": solution.metadata.get("mip_gap"),
                 "best_bound": solution.metadata.get("best_bound"),
                 "routes_json": json.dumps(solution.routes),
-                "route_sequence_json": json.dumps([node for route in solution.routes for node in route]),
+                "route_sequence_json": json.dumps(solution_route_sequence(solution)),
                 "solution_path": str(solution_path),
                 "time_trace_path": str(save_path / "gurobi_time_trace.csv"),
                 "errors": json.dumps(solution.violations),

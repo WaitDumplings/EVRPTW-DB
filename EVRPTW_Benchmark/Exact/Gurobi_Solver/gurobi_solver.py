@@ -9,7 +9,7 @@ import numpy as np
 
 from gurobipy import GRB, Model, quicksum
 
-from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution
+from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution, merge_route_sequences
 
 
 @dataclass(frozen=True)
@@ -423,10 +423,7 @@ class GurobiEVRPTWSolver:
 
     @staticmethod
     def _flatten_routes(routes: list[list[int]]) -> list[int]:
-        sequence: list[int] = []
-        for route in routes:
-            sequence.extend(int(node) for node in route)
-        return sequence
+        return merge_route_sequences(routes)
 
     @staticmethod
     def _relative_gap(objective: float | None, bound: float | None) -> float | None:

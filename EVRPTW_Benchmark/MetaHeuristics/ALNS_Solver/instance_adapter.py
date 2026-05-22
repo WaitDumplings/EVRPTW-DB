@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from evrptw_core.schema import EVRPTWInstance
+from evrptw_core.schema import EVRPTWInstance, merge_route_sequences
 
 
 def to_alns_tensor_instance(instance: EVRPTWInstance) -> dict[str, Any]:
@@ -53,4 +53,4 @@ def to_alns_tensor_instance(instance: EVRPTWInstance) -> dict[str, Any]:
 
 
 def flatten_routes(routes: list[list[int]]) -> list[int]:
-    return [int(node) for route in routes for node in route]
+    return merge_route_sequences(routes)

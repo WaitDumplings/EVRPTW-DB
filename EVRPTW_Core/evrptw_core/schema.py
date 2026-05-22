@@ -78,6 +78,34 @@ class EVRPTWInstance:
         return 1 + self.num_customers + self.num_charging_stations
 
 
+def merge_route_sequences(routes: list[list[int]]) -> list[int]:
+    """Merge per-vehicle routes into one depot-separated sequence.
+
+    Route convention: each route usually starts and ends with depot node 0.
+    When concatenating routes, the end depot of the previous route is also the
+    separator before the next route, so the next route's leading depot is
+    removed. Example:
+
+    [[0, 3, 2, 1, 0], [0, 7, 5, 0]] -> [0, 3, 2, 1, 0, 7, 5, 0]
+    """
+    merged: list[int] = []
+    for route in routes:
+        if not route:
+            continue
+        clean_route = [int(node) for node in route]
+        if not merged:
+            merged.extend(clean_route)
+        elif clean_route[0] == 0 and merged[-1] == 0:
+            merged.extend(clean_route[1:])
+        else:
+            merged.extend(clean_route)
+    return merged
+
+
+def solution_route_sequence(solution: "EVRPTWSolution") -> list[int]:
+    return merge_route_sequences(solution.routes)
+
+
 @dataclass
 class EVRPTWSolution:
     """Solver output schema.
