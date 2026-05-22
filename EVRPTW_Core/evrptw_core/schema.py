@@ -32,6 +32,9 @@ class EVRPTWInstance:
     tw_s: np.ndarray
     cs_time_to_depot_s: np.ndarray
     vehicle: dict[str, Any]
+    speed_profile: dict[str, Any] = field(default_factory=dict)
+    cs_activation: dict[str, Any] = field(default_factory=dict)
+    greedy_audit: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -55,6 +58,9 @@ class EVRPTWInstance:
             tw_s=np.asarray(data["tw_s"], dtype=np.float32),
             cs_time_to_depot_s=np.asarray(data["cs_time_to_depot_s"], dtype=np.float32),
             vehicle=dict(data.get("vehicle", {})),
+            speed_profile=dict(data.get("speed_profile", {})),
+            cs_activation=dict(data.get("cs_activation", {})),
+            greedy_audit=dict(data.get("greedy_audit", {})),
             metadata=dict(data.get("metadata", {})),
             raw=data,
         )

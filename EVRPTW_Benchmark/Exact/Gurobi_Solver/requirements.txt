@@ -1,0 +1,6 @@
+# Install a gurobipy version compatible with your local Gurobi license.
+# Example for a Gurobi 12 license:
+# gurobipy>=12,<13
+# Example for a Gurobi 13 license:
+# gurobipy>=13,<14
+gurobipy
