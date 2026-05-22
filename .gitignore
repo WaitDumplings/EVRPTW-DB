@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+.env
+
+# Generated datasets and benchmark outputs
+EVRPTW_Dataset/*
+!EVRPTW_Dataset/README.md
+!EVRPTW_Dataset/.gitkeep
+EVRPTW_Benchmark/results/*
+!EVRPTW_Benchmark/results/README.md
+!EVRPTW_Benchmark/results/.gitkeep
+
+# Large generated artifacts
+*.pkl
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.log
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
