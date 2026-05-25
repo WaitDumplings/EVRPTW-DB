@@ -151,7 +151,9 @@ def sample_time_windows(
             start = center - 0.5 * min(width, span_end - span_start)
             end = center + 0.5 * min(width, span_end - span_start)
         tw[idx, 0] = max(span_start, start, working_start_min)
-        tw[idx, 1] = min(span_end + service_time_min[idx], end, working_end_min)
+        # TW stores the latest service-start time; service duration and return
+        # travel are handled by feasibility checks.
+        tw[idx, 1] = min(span_end, end, working_end_min)
         if tw[idx, 1] <= tw[idx, 0]:
             tw[idx] = [working_start_min, working_end_min]
     metadata = {

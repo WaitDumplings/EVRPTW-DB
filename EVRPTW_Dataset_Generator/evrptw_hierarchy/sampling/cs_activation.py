@@ -8,7 +8,7 @@ from evrptw_hierarchy.core.models import RegionBoard
 from evrptw_hierarchy.graph.distance_oracle import DistanceOracle
 
 
-def build_candidate_pool(board: RegionBoard, active_customer_ids: np.ndarray, max_candidates: int) -> np.ndarray:
+def build_candidate_pool(board: RegionBoard, active_customer_ids: np.ndarray, max_candidates: int | None = None) -> np.ndarray:
     candidate: set[int] = set()
     for cid in np.asarray(active_customer_ids, dtype=int):
         candidate.update(int(x) for x in board.customer_candidate_cs_ids[int(cid)].tolist())
@@ -17,10 +17,7 @@ def build_candidate_pool(board: RegionBoard, active_customer_ids: np.ndarray, ma
         candidate.update(int(x) for x in board.cluster_candidate_cs_ids[int(cluster_id)].tolist())
     if not candidate:
         candidate.update(range(len(board.charging_stations)))
-    arr = np.asarray(sorted(candidate), dtype=np.int32)
-    if arr.size > max_candidates:
-        arr = arr[:max_candidates]
-    return arr
+    return np.asarray(sorted(candidate), dtype=np.int32)
 
 
 def activate_charging_stations(
@@ -34,7 +31,7 @@ def activate_charging_stations(
     cfg = config.get("cs_activation", {})
     k = int(num_charging_stations)
     max_candidates = int(cfg.get("max_candidate_pool", max(4 * k, 64)))
-    candidate_ids = build_candidate_pool(board, active_customer_ids, max_candidates=max_candidates)
+    candidate_ids = build_candidate_pool(board, active_customer_ids, max_candidates=None)
     if candidate_ids.size < k:
         missing = [idx for idx in range(len(board.charging_stations)) if idx not in set(candidate_ids.tolist())]
         if missing:
@@ -49,6 +46,23 @@ def activate_charging_stations(
     cluster_labels = board.cluster_labels[active_customer_ids]
     cluster_weights = np.ones(len(active_customer_ids), dtype=np.float32)
     weights = cluster_weights / max(float(cluster_weights.sum()), 1e-12)
+    original_candidate_pool_size = int(candidate_ids.size)
+    if candidate_ids.size > max_candidates:
+        finite = np.isfinite(dist_customer_cs)
+        safe = np.where(finite, dist_customer_cs, np.inf)
+        mean_score = np.full(candidate_ids.size, np.inf, dtype=np.float64)
+        p90_score = np.full(candidate_ids.size, np.inf, dtype=np.float64)
+        for col in range(candidate_ids.size):
+            col_dist = safe[:, col]
+            finite_col = col_dist[np.isfinite(col_dist)]
+            if finite_col.size:
+                mean_score[col] = float(np.mean(finite_col))
+                p90_score[col] = float(np.quantile(finite_col, 0.90))
+        candidate_score = mean_score + 0.25 * p90_score
+        keep = np.argsort(candidate_score, kind="mergesort")[:max_candidates]
+        candidate_ids = candidate_ids[keep]
+        cs_nodes = cs_nodes[keep]
+        dist_customer_cs = dist_customer_cs[:, keep]
 
     selected_local: list[int] = []
     available = list(range(len(candidate_ids)))
@@ -107,6 +121,8 @@ def activate_charging_stations(
     metadata = {
         "policy": "graph_facility_location_greedy",
         "candidate_pool_size": int(candidate_ids.size),
+        "original_candidate_pool_size": int(original_candidate_pool_size),
+        "candidate_truncation_policy": "mean_plus_p90_customer_coverage" if original_candidate_pool_size > int(candidate_ids.size) else "none",
         "selected_count": int(selected.size),
         "mean_customer_to_nearest_cs_km": float(np.mean(safe_final)),
         "p90_customer_to_nearest_cs_km": float(np.quantile(safe_final, 0.90)),

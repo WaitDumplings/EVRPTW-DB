@@ -1,2 +1,6 @@
 numpy>=2.2,<2.3
 pandas>=2.2
+gymnasium>=0.29
+torch>=2.4
+PyYAML>=6.0
+numba>=0.64

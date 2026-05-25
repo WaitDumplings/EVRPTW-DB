@@ -23,6 +23,7 @@ class GurobiSolverConfig:
     tie_break_vehicle_count: bool = True
     distance_tolerance_abs: float = 1e-6
     distance_tolerance_rel: float = 1e-8
+    threads: int | None = None
 
 
 @dataclass(frozen=True)
@@ -205,6 +206,8 @@ class GurobiEVRPTWSolver:
         model.Params.TimeLimit = float(self.config.time_limit_s)
         model.Params.MIPGap = float(self.config.mip_gap)
         model.Params.OutputFlag = int(self.config.output_flag)
+        if self.config.threads is not None:
+            model.Params.Threads = int(self.config.threads)
 
         recharge_nodes = {start_depot, *cs_nodes}
         end_nodes = set(customer_nodes + cs_nodes + [end_depot])

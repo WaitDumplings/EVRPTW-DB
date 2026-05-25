@@ -10,6 +10,11 @@ charging:
   power_kw: 150.0
 region:
   profile: mixed_amazon_station_region
+  # Amazon station-day analysis suggests an 8k-scale service territory is
+  # realistic for large station studies. The public default is kept at 5k to
+  # balance Amazon calibration, generation speed, and RL training cost; larger
+  # studies can override this from the CLI.
+  default_mother_num_customers: 5000
   area_size_km:
   - - 0.0
     - 100.0
@@ -84,6 +89,17 @@ region:
 active_customer_sampling:
   sample_active_cluster_subset: true
   target_customers_per_active_cluster: 130.0
+  # Amazon historical route size is used only as an input-side proxy for
+  # active community demand scale. It is not a target vehicle count, route
+  # count, route sequence, route duration, or solver outcome.
+  community_size_calibration:
+    enabled: true
+    source: /data/aws/amazon_daily_depot_analysis/depot_daily_active_customers.csv
+    statistic: mean_route_unique_customers
+    median_customers_per_route: 141.6661
+    lognormal_sigma: 0.1835
+    min_customers_per_route: 56.0
+    max_customers_per_route: 205.0
   small_scale_cluster_sqrt_divisor: 4.0
   active_cluster_capacity_buffer: 1.08
   macro_activity_lognormal_sigma: 0.85

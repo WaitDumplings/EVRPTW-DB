@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -23,6 +23,40 @@ class ActiveDaySampler:
     config: dict[str, Any]
     vehicle: VehicleConfig
     rng: np.random.Generator
+    last_active_sampling_metadata: dict[str, Any] = field(default_factory=dict, init=False)
+
+    def _target_customers_per_active_cluster(self, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+        target = float(cfg.get("target_customers_per_active_cluster", 130.0))
+        meta: dict[str, Any] = {
+            "target_source": "fixed",
+            "target_customers_per_active_cluster": float(target),
+            "calibration_role": "manual_active_community_size",
+            "uses_route_count_as_vehicle_target": False,
+            "uses_sequence_or_realized_route_outcome": False,
+        }
+        route_cfg = cfg.get("community_size_calibration", {}) or cfg.get("route_size_calibration", {})
+        if bool(route_cfg.get("enabled", False)):
+            median = float(route_cfg.get("median_customers_per_route", target))
+            sigma = float(route_cfg.get("lognormal_sigma", 0.0))
+            low = float(route_cfg.get("min_customers_per_route", max(1.0, median * 0.4)))
+            high = float(route_cfg.get("max_customers_per_route", max(low, median * 2.0)))
+            sampled = float(self.rng.lognormal(math.log(max(median, 1e-9)), max(sigma, 0.0)))
+            target = float(np.clip(sampled, low, high))
+            meta = {
+                "target_source": "amazon_community_size_lognormal",
+                "target_customers_per_active_cluster": float(target),
+                "calibration_role": "input_side_active_community_size_proxy",
+                "uses_route_count_as_vehicle_target": False,
+                "uses_sequence_or_realized_route_outcome": False,
+                "sampled_customers_per_route_before_clip": float(sampled),
+                "median_customers_per_route": float(median),
+                "lognormal_sigma": float(sigma),
+                "min_customers_per_route": float(low),
+                "max_customers_per_route": float(high),
+                "source": str(route_cfg.get("source", "")),
+                "statistic": str(route_cfg.get("statistic", "")),
+            }
+        return target, meta
 
     def sample_active_customers(self, board: RegionBoard, num_customers: int) -> np.ndarray:
         n = len(board.customers)
@@ -36,8 +70,8 @@ class ActiveDaySampler:
         micro_activity = self.rng.lognormal(0.0, micro_sigma, size=int(board.micro_zone_labels.max()) + 1)
 
         selected_clusters: list[int] = []
+        target, sampling_meta = self._target_customers_per_active_cluster(cfg)
         if bool(cfg.get("sample_active_cluster_subset", True)):
-            target = float(cfg.get("target_customers_per_active_cluster", 130.0))
             sqrt_divisor = float(cfg.get("small_scale_cluster_sqrt_divisor", 4.0))
             min_by_sqrt = int(math.ceil(math.sqrt(max(num_customers, 1)) / max(sqrt_divisor, 1e-9)))
             if num_customers <= 1:
@@ -65,15 +99,33 @@ class ActiveDaySampler:
                 selected_clusters.append(pick)
                 selected_capacity += cluster_sizes[pick]
             cluster_mask = np.isin(board.cluster_labels, np.asarray(selected_clusters, dtype=int))
+            sampling_meta.update({
+                "active_cluster_target": int(active_cluster_target),
+                "selected_cluster_count": int(len(selected_clusters)),
+                "selected_cluster_capacity": float(selected_capacity),
+                "capacity_buffer": float(capacity_buffer),
+                "cluster_count": int(cluster_count),
+            })
         else:
             cluster_mask = np.ones(n, dtype=bool)
+            sampling_meta.update({
+                "active_cluster_target": int(cluster_count),
+                "selected_cluster_count": int(cluster_count),
+                "selected_cluster_capacity": int(n),
+                "capacity_buffer": 1.0,
+                "cluster_count": int(cluster_count),
+            })
 
         weights = cluster_activity[board.cluster_labels] * micro_activity[board.micro_zone_labels] * cluster_mask.astype(float)
         if np.count_nonzero(weights) < num_customers:
             weights = cluster_activity[board.cluster_labels] * micro_activity[board.micro_zone_labels]
             selected_clusters = []
+            sampling_meta["fallback_to_full_region"] = True
+        else:
+            sampling_meta["fallback_to_full_region"] = False
 
         weights = weights / max(float(weights.sum()), 1e-12)
+        self.last_active_sampling_metadata = sampling_meta
         if not bool(cfg.get("ensure_selected_cluster_coverage", True)) or not selected_clusters:
             return self.rng.choice(n, size=int(num_customers), replace=False, p=weights).astype(np.int32)
 
@@ -240,7 +292,7 @@ class ActiveDaySampler:
                 last_error = "insufficient_working_horizon"
                 continue
 
-            audit = self._greedy_audit(shortest_time, demands_cm3, service_time_min, tw)
+            audit = self._greedy_audit(shortest_time, demands_cm3, service_time_min, tw, float(day["working_start_min"]), float(day["working_end_min"]))
             if not bool(audit["success"]):
                 last_error = str(audit.get("error", "greedy_audit_failed"))
                 continue
@@ -290,6 +342,7 @@ class ActiveDaySampler:
                     "generation_attempt": attempt + 1,
                     "terminal_node_ids": terminal_node_ids.astype(np.int32),
                     "time_window_metadata": tw_meta,
+                    "active_customer_sampling": self.last_active_sampling_metadata,
                     "last_error_before_success": last_error if attempt else "",
                     "charging_policy": "full_charge",
                     "saved_time_unit": "seconds",
@@ -304,7 +357,7 @@ class ActiveDaySampler:
             )
         raise RuntimeError(f"Could not generate feasible active-day instance after {max_attempts} attempts: {last_error}")
 
-    def _greedy_audit(self, shortest_time: np.ndarray, demands_cm3: np.ndarray, service_time_min: np.ndarray, tw: np.ndarray) -> dict[str, Any]:
+    def _greedy_audit(self, shortest_time: np.ndarray, demands_cm3: np.ndarray, service_time_min: np.ndarray, tw: np.ndarray, working_start_min: float, working_end_min: float) -> dict[str, Any]:
         n = len(demands_cm3)
         unvisited = set(range(n))
         routes = 0
@@ -314,7 +367,7 @@ class ActiveDaySampler:
         while unvisited:
             routes += 1
             cur = 0
-            clock = 0.0
+            clock = float(working_start_min)
             load = 0.0
             progressed = False
             while True:
@@ -328,12 +381,12 @@ class ActiveDaySampler:
                     back = float(shortest_time[node, 0])
                     if not np.isfinite(travel) or not np.isfinite(back):
                         continue
-                    arrival = max(clock + travel, float(tw[cid, 0]))
-                    finish = arrival + float(service_time_min[cid])
-                    if finish <= float(tw[cid, 1]) + 1e-6 and np.isfinite(back):
-                        if best is None or arrival < best_arrival:
+                    service_start = max(clock + travel, float(tw[cid, 0]))
+                    finish = service_start + float(service_time_min[cid])
+                    if service_start <= float(tw[cid, 1]) + 1e-6 and finish + back <= float(working_end_min) + 1e-6:
+                        if best is None or service_start < best_arrival:
                             best = cid
-                            best_arrival = arrival
+                            best_arrival = service_start
                 if best is None:
                     if cur != 0 and np.isfinite(shortest_time[cur, 0]):
                         total_time += float(shortest_time[cur, 0])

@@ -25,10 +25,17 @@ python instance_generate.py \
   --seed 20260522
 ```
 
+If `--mother_num_customers` is omitted, the default is read from
+`region.default_mother_num_customers` in the config. The Amazon-calibrated
+default is 5000 latent customers for efficient generation/training. Amazon-scale studies can override this to 8000+ latent customers, matching the lower end of observed station
+mother-board sizes and covering the largest observed station-day active count
+in the training set.
+
 ## Documentation
 
 - [Design rationale](docs/design_rationale.md) explains the two-stage mother-board / active-day model.
 - [Calibration guideline](docs/calibration_guideline.md) explains the algorithm self-audit, parameter meanings, and how to calibrate the generator to a new real last-mile dataset.
+- [Amazon depot-day scale reference](docs/amazon_depot_day_scale.md) records the station/mother-board and daily active-customer scales used by the default config.
 
 ## Shortest-Path Acceleration
 
@@ -61,3 +68,5 @@ save_path/
 ```
 
 Mother boards do not store active-day time windows or charging-aware shortest-time matrices. Each daily instance computes these after active customers and active charging stations are selected, so inactive charging stations cannot leak into instance travel times. By default, instance pickle files persist `distance_matrix_km` and `cs_time_to_depot_s`; raw travel-time, EV transition-time, and shortest-time matrices in seconds are computed during generation/audit but not saved unless enabled in `storage`.
+
+Amazon historical route size is used only as a proxy for active community demand scale. Amazon route count, actual route sequence, route duration, and route cost are never used as generated vehicle targets or solution priors.

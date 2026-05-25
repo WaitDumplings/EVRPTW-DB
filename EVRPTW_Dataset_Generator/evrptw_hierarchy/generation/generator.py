@@ -107,6 +107,67 @@ class HierarchyDatasetGenerator:
         for board in self.boards:
             save_pickle(region_dir / f"{board.region_id}_board.pkl", board)
 
+    def prepare_region_pool(
+        self,
+        num_regions: int,
+        mother_num_customers: int,
+        mother_num_charging_stations: int,
+    ) -> None:
+        """Ensure the in-memory mother-board pool contains ``num_regions`` boards."""
+        while len(self.boards) < int(num_regions):
+            slot = len(self.boards)
+            self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
+
+    def sample_active_instance(
+        self,
+        num_customers: int,
+        num_charging_stations: int,
+        region_reuse_limit: int,
+        mother_num_customers: int,
+        mother_num_charging_stations: int,
+        instance_index: int = 0,
+        max_attempts_per_instance: int | None = None,
+    ):
+        """Sample one feasible active-day instance from the current region pool.
+
+        This is the online training API used by RL environments. It keeps the
+        same stale-region replacement rules as offline dataset generation but
+        does not write instances or region boards to disk.
+        """
+        if not self.boards:
+            raise RuntimeError("Region pool is empty; call prepare_region_pool first.")
+        sampler = ActiveDaySampler(self.config, self.vehicle, self.rng)
+        max_attempts = int(max_attempts_per_instance or self.config.get("generation", {}).get("max_attempts_per_instance", 30))
+        outer_attempts = int(self.config.get("generation", {}).get("max_region_attempts_per_instance", 5))
+        last_error = "not_started"
+        for _ in range(outer_attempts):
+            slot = self._select_region_slot(int(region_reuse_limit))
+            if self._is_stale(self.usages[slot], int(region_reuse_limit)):
+                self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
+            board = self.boards[slot]
+            usage = self.usages[slot]
+            oracle = self._oracle_for(board)
+            try:
+                instance = sampler.build_instance(
+                    board=board,
+                    usage_index=usage.sampled_days + 1,
+                    instance_index=int(instance_index),
+                    num_customers=int(num_customers),
+                    num_charging_stations=int(num_charging_stations),
+                    max_attempts=max_attempts,
+                    oracle=oracle,
+                )
+                usage.record_day(
+                    instance.active_customer_ids,
+                    board.cluster_labels,
+                    int(self.config.get("freshness", {}).get("recent_window", 30)),
+                )
+                return instance
+            except Exception as exc:
+                last_error = str(exc)
+                self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
+        raise RuntimeError(f"Failed to sample online active instance: {last_error}")
+
     def generate(
         self,
         save_path: str | Path,

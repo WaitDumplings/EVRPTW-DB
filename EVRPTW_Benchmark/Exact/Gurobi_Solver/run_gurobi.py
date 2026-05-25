@@ -171,6 +171,7 @@ def main() -> None:
     parser.add_argument("--mip_gap", type=float, default=0.0)
     parser.add_argument("--cs_copies", type=int, default=3, help="Number of dummy copies per active charging station. Default: 3.")
     parser.add_argument("--output_flag", type=int, default=0)
+    parser.add_argument("--threads", type=int, default=None, help="Optional Gurobi thread limit per model.")
     parser.add_argument("--checkpoints_s", default="", help="Comma-separated seconds for incumbent snapshots, e.g. 60,300,900.")
     parser.add_argument("--tie_break_vehicle_count", action=argparse.BooleanOptionalAction, default=True, help="Within optimal distance tolerance, minimize vehicle count. Default: true.")
     parser.add_argument("--distance_tolerance_abs", type=float, default=1e-6)
@@ -199,6 +200,7 @@ def main() -> None:
         tie_break_vehicle_count=args.tie_break_vehicle_count,
         distance_tolerance_abs=args.distance_tolerance_abs,
         distance_tolerance_rel=args.distance_tolerance_rel,
+        threads=args.threads,
     )
 
     summary_rows = []

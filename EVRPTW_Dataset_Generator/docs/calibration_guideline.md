@@ -55,6 +55,31 @@ Known boundary:
 
 Daily activation is not uniform over all latent customers. It first samples active clusters, then samples customers using cluster-level and micro-zone-level lognormal activity weights.
 
+The active cluster count should be calibrated from station-day community-demand
+scale, not set as a purely manual constant. Amazon does not directly label our
+synthetic communities, so we use historical route size only as an input-side
+proxy for community demand. In the Amazon training data aggregated by
+`date x station`, the mean number of unique dropoff customers per route has:
+
+| metric | value |
+|---|---:|
+| min | 56.0 |
+| p25 | 129.3 |
+| median | 144.6 |
+| mean | 143.9 |
+| p75 | 160.0 |
+| p90 | 176.1 |
+| max | 205.0 |
+
+The default config therefore samples `target_customers_per_active_cluster` from
+a clipped lognormal distribution with median `141.6661` and sigma `0.1835`.
+For a fixed `num_customers`, this converts Amazon route-size statistics into a
+daily active-community count. It does not prescribe vehicle count, generated
+route count, route sequence, route duration, or objective value. Those remain
+solver-side quantities. Cus1800 therefore activates a realistic number of
+communities without leaking Amazon solution-side structure; small Cus5/Cus15
+cases still activate multiple communities through the sparse-day lower bound.
+
 This matches a station-day view: a service territory is stable, but each day activates a subset of communities and addresses.
 
 Current behavior:
@@ -137,6 +162,7 @@ From the real dataset, compute the following by depot/station/day whenever possi
 | Statistic | Use In Generator |
 |---|---|
 | daily active customer count | choose `num_customers` scenarios |
+| station-level latent customer count | choose `mother_num_customers` |
 | depot-to-stop distance distribution | cluster radius and service region scale |
 | nearest-neighbor stop distance | address spacing and local density |
 | within-route/community pairwise distance | community footprint |
@@ -151,7 +177,7 @@ From the real dataset, compute the following by depot/station/day whenever possi
 | travel time / road or Euclidean distance | congestion/effective speed |
 | working start / dispatch start | day start distribution |
 
-Do not use actual stop sequence, realized route duration, realized route cost, or driver behavior as generator rules.
+Do not use actual stop sequence, realized route duration, realized route cost, or driver behavior as generator rules. Historical route counts should also not be used as a required vehicle count. They can be reported as diagnostics and, at most, used indirectly to calibrate input-side community demand scale.
 
 ### Step 2: Calibrate Region Scale And Depot
 

@@ -37,7 +37,7 @@ The mother board stores a large candidate pool. Daily instances activate a small
 
 ## Daily CS Activation
 
-For each active day, CS activation is solved as a graph facility-location problem over active demand. Candidate CS are pre-filtered locally, then selected greedily by minimizing
+For each active day, CS activation is solved as a graph facility-location problem over active customers. Candidate CS are pre-filtered locally, then selected greedily by minimizing
 
 ```text
 J(S) = alpha * mean_i d_G(i, S)
@@ -49,7 +49,7 @@ J(S) = alpha * mean_i d_G(i, S)
 
 where `d_G` is road-network shortest distance. This combines:
 
-- p-median behavior through the demand-weighted mean term;
+- p-median behavior through the active-customer mean coverage term;
 - k-center behavior through p90/max coverage terms;
 - maximal-covering behavior through the unreachable penalty;
 - infrastructure diversity through the redundancy penalty.
@@ -79,13 +79,13 @@ time(i, j) = road_distance(i, j) / effective_speed
            + full_charge_time if i is an active CS
 ```
 
-The final `shortest_time_matrix_s` is computed only on the active terminal set. For the common local-delivery case where all active terminals are mutually battery-reachable, the generator uses an O(n^2) fast path because charging detours cannot improve travel time when full charging time is positive.
+The final `shortest_time_matrix_s` is computed only on the active terminal set. For the common local-delivery case where all active terminals are mutually battery-reachable, the generator uses an O(n^2) fast path because charging detours cannot improve travel time when full charging time is positive. The benchmark charging policy is fixed full-charge at active charging stations, matching the generator and exact solver semantics.
 
 The persisted default is storage-efficient: `distance_matrix_km` is saved because distance is the objective and the energy basis; time matrices are derived from distance and speed during generation/audit and are not saved unless requested; if saved, they use seconds. Each instance also saves `cs_time_to_depot_s`, the charging-aware CS-to-depot return time used by time-window and future-feasibility logic.
 
 ## Daily Active-Customer Sampling
 
-Daily instances activate a subset of route/community clusters before sampling customers. For Cus1800, the default target is roughly 130 active customers per active cluster, producing around 14-15 active route territories. This prevents each day from activating the whole latent region and makes the daily view closer to Amazon station-day operations, where a depot dispatches multiple local route communities.
+Daily instances activate a subset of community clusters before sampling customers. The default active community size is no longer a single hard-coded value. It is sampled from an Amazon-calibrated clipped lognormal distribution fitted to `mean_route_unique_customers` over `date x station` records. This Amazon field is used only as an input-side proxy for local community demand scale, not as a generated vehicle count, route count, route sequence, route duration, or objective-value prior. For Cus1800, this usually produces about 12-15 active communities. This prevents each day from activating the whole latent region while keeping the daily view close to station-day operations.
 
 ## Demand, Service Time, And Time Windows
 
@@ -93,7 +93,7 @@ Demand, service time, and time windows are daily attributes. They are sampled af
 
 - Demand uses package-count and package-volume distributions in cubic centimeters.
 - Service time is modeled as a function of package count and volume with lognormal residual variation.
-- Time windows are not assigned by hard Bernoulli copying. The daily TW presence rate is sampled from a beta distribution, then constrained by reachable service envelopes.
+- Time windows are not assigned by hard Bernoulli copying. The daily TW presence rate is sampled from a beta distribution, then constrained by reachable service envelopes. A TW upper bound is interpreted as the latest service-start time; service completion and depot return are checked separately by generator audits and solvers.
 
 ## Mother-Board Freshness
 
