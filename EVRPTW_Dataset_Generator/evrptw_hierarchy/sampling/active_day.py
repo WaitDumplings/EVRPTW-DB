@@ -24,6 +24,28 @@ class ActiveDaySampler:
     vehicle: VehicleConfig
     rng: np.random.Generator
     last_active_sampling_metadata: dict[str, Any] = field(default_factory=dict, init=False)
+    _board_sampling_cache: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
+
+    def _sampling_cache_for(self, board: RegionBoard) -> dict[str, Any]:
+        key = f"{board.region_id}:{board.mother_board_id}:{len(board.customers)}:{len(board.charging_stations)}"
+        cache = self._board_sampling_cache.get(key)
+        if cache is not None:
+            return cache
+        cluster_labels = np.asarray(board.cluster_labels, dtype=np.int32)
+        micro_zone_labels = np.asarray(board.micro_zone_labels, dtype=np.int32)
+        cluster_count = int(cluster_labels.max()) + 1
+        micro_count = int(micro_zone_labels.max()) + 1
+        cluster_indices = [np.flatnonzero(cluster_labels == idx).astype(np.int32) for idx in range(cluster_count)]
+        cache = {
+            "cluster_labels": cluster_labels,
+            "micro_zone_labels": micro_zone_labels,
+            "cluster_count": cluster_count,
+            "micro_count": micro_count,
+            "cluster_sizes": np.bincount(cluster_labels, minlength=cluster_count).astype(float),
+            "cluster_indices": cluster_indices,
+        }
+        self._board_sampling_cache[key] = cache
+        return cache
 
     def _target_customers_per_active_cluster(self, cfg: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         target = float(cfg.get("target_customers_per_active_cluster", 130.0))
@@ -62,12 +84,17 @@ class ActiveDaySampler:
         n = len(board.customers)
         if num_customers > n:
             raise ValueError(f"num_customers={num_customers} exceeds mother board customer pool {n}.")
+        cache = self._sampling_cache_for(board)
+        cluster_labels = cache["cluster_labels"]
+        micro_zone_labels = cache["micro_zone_labels"]
+        cluster_count = int(cache["cluster_count"])
+        cluster_sizes = cache["cluster_sizes"]
+        cluster_indices = cache["cluster_indices"]
         cfg = self.config.get("active_customer_sampling", {})
         cluster_sigma = float(cfg.get("macro_activity_lognormal_sigma", 0.8))
         micro_sigma = float(cfg.get("micro_activity_lognormal_sigma", 0.5))
-        cluster_count = int(board.cluster_labels.max()) + 1
         cluster_activity = self.rng.lognormal(0.0, cluster_sigma, size=cluster_count)
-        micro_activity = self.rng.lognormal(0.0, micro_sigma, size=int(board.micro_zone_labels.max()) + 1)
+        micro_activity = self.rng.lognormal(0.0, micro_sigma, size=int(cache["micro_count"]))
 
         selected_clusters: list[int] = []
         target, sampling_meta = self._target_customers_per_active_cluster(cfg)
@@ -85,20 +112,21 @@ class ActiveDaySampler:
             min_by_scale = max(min_by_sqrt, min_by_sparse_day)
             active_cluster_target = max(1, int(math.ceil(num_customers / max(target, 1.0))), min_by_scale)
             active_cluster_target = min(active_cluster_target, cluster_count, int(num_customers))
-            cluster_sizes = np.bincount(board.cluster_labels, minlength=cluster_count).astype(float)
             cluster_weights = cluster_activity * np.maximum(cluster_sizes, 1.0)
             cluster_weights = cluster_weights / max(float(cluster_weights.sum()), 1e-12)
             available = list(range(cluster_count))
             selected_capacity = 0.0
             capacity_buffer = float(cfg.get("active_cluster_capacity_buffer", 1.08))
             while available and (len(selected_clusters) < active_cluster_target or selected_capacity < num_customers * capacity_buffer):
-                probs = np.asarray([cluster_weights[idx] for idx in available], dtype=float)
+                probs = cluster_weights[np.asarray(available, dtype=int)]
                 probs = probs / max(float(probs.sum()), 1e-12)
                 pick_pos = int(self.rng.choice(len(available), p=probs))
                 pick = available.pop(pick_pos)
                 selected_clusters.append(pick)
                 selected_capacity += cluster_sizes[pick]
-            cluster_mask = np.isin(board.cluster_labels, np.asarray(selected_clusters, dtype=int))
+            cluster_mask = np.zeros(n, dtype=bool)
+            for cluster_id in selected_clusters:
+                cluster_mask[cluster_indices[int(cluster_id)]] = True
             sampling_meta.update({
                 "active_cluster_target": int(active_cluster_target),
                 "selected_cluster_count": int(len(selected_clusters)),
@@ -116,9 +144,10 @@ class ActiveDaySampler:
                 "cluster_count": int(cluster_count),
             })
 
-        weights = cluster_activity[board.cluster_labels] * micro_activity[board.micro_zone_labels] * cluster_mask.astype(float)
+        base_weights = cluster_activity[cluster_labels] * micro_activity[micro_zone_labels]
+        weights = base_weights * cluster_mask.astype(float)
         if np.count_nonzero(weights) < num_customers:
-            weights = cluster_activity[board.cluster_labels] * micro_activity[board.micro_zone_labels]
+            weights = base_weights
             selected_clusters = []
             sampling_meta["fallback_to_full_region"] = True
         else:
@@ -132,7 +161,7 @@ class ActiveDaySampler:
         chosen: list[int] = []
         selected_for_coverage = selected_clusters[: min(len(selected_clusters), int(num_customers))]
         for cluster_id in selected_for_coverage:
-            candidates = np.where(board.cluster_labels == int(cluster_id))[0]
+            candidates = cluster_indices[int(cluster_id)]
             candidates = candidates[weights[candidates] > 0]
             if candidates.size == 0:
                 continue
@@ -148,7 +177,10 @@ class ActiveDaySampler:
         if chosen:
             remaining_weights[np.asarray(chosen, dtype=int)] = 0.0
         if np.count_nonzero(remaining_weights) < remaining:
-            pool = np.asarray([idx for idx in range(n) if idx not in set(chosen)], dtype=int)
+            available_mask = np.ones(n, dtype=bool)
+            if chosen:
+                available_mask[np.asarray(chosen, dtype=int)] = False
+            pool = np.flatnonzero(available_mask)
             extra = self.rng.choice(pool, size=remaining, replace=False)
         else:
             remaining_weights = remaining_weights / max(float(remaining_weights.sum()), 1e-12)
@@ -231,6 +263,14 @@ class ActiveDaySampler:
         cs_start = int(num_customers) + 1
         out = np.empty(max(cost.shape[0] - cs_start, 0), dtype=np.float32)
         full_charge = float(self.vehicle.full_charge_time_min)
+        if out.size == 0:
+            return out
+        if np.all(np.isfinite(cost)):
+            # In the common local-delivery case all active terminals are mutually
+            # battery-reachable. Road shortest-path distances satisfy triangle
+            # inequality and every intermediate CS detour adds nonnegative full
+            # charge time, so direct CS -> depot is optimal.
+            return np.maximum(0.0, cost[cs_start:, 0] - full_charge).astype(np.float32)
         for local, source in enumerate(range(cs_start, cost.shape[0])):
             dist = cost[source].copy()
             finite = np.isfinite(dist)
@@ -359,51 +399,77 @@ class ActiveDaySampler:
 
     def _greedy_audit(self, shortest_time: np.ndarray, demands_cm3: np.ndarray, service_time_min: np.ndarray, tw: np.ndarray, working_start_min: float, working_end_min: float) -> dict[str, Any]:
         n = len(demands_cm3)
-        unvisited = set(range(n))
+        if n == 0:
+            return {
+                "success": True,
+                "served_customers": 0,
+                "unserved_customers": 0,
+                "vehicle_upper_bound": 0,
+                "vehicle_count": 0,
+                "total_route_time_proxy_s": 0.0,
+                "total_load_cm3": 0.0,
+                "error": "",
+            }
+
+        shortest = np.asarray(shortest_time, dtype=np.float64)
+        demands = np.asarray(demands_cm3, dtype=np.float64)
+        service = np.asarray(service_time_min, dtype=np.float64)
+        tw_start = np.asarray(tw[:, 0], dtype=np.float64)
+        tw_end = np.asarray(tw[:, 1], dtype=np.float64)
+        unvisited = np.ones(n, dtype=bool)
         routes = 0
         total_time = 0.0
         total_load = 0.0
-        capacity = self.vehicle.cargo_capacity_cm3
-        while unvisited:
+        capacity = float(self.vehicle.cargo_capacity_cm3)
+        eps = 1e-6
+
+        while np.any(unvisited):
             routes += 1
             cur = 0
             clock = float(working_start_min)
             load = 0.0
             progressed = False
             while True:
-                best = None
-                best_arrival = None
-                for cid in list(unvisited):
-                    node = 1 + cid
-                    if load + float(demands_cm3[cid]) > capacity:
-                        continue
-                    travel = float(shortest_time[cur, node])
-                    back = float(shortest_time[node, 0])
-                    if not np.isfinite(travel) or not np.isfinite(back):
-                        continue
-                    service_start = max(clock + travel, float(tw[cid, 0]))
-                    finish = service_start + float(service_time_min[cid])
-                    if service_start <= float(tw[cid, 1]) + 1e-6 and finish + back <= float(working_end_min) + 1e-6:
-                        if best is None or service_start < best_arrival:
-                            best = cid
-                            best_arrival = service_start
-                if best is None:
-                    if cur != 0 and np.isfinite(shortest_time[cur, 0]):
-                        total_time += float(shortest_time[cur, 0])
+                remaining = np.flatnonzero(unvisited)
+                if remaining.size == 0:
+                    if cur != 0 and np.isfinite(shortest[cur, 0]):
+                        total_time += float(shortest[cur, 0])
                     break
+
+                nodes = remaining + 1
+                travel = shortest[cur, nodes]
+                back = shortest[nodes, 0]
+                service_start = np.maximum(clock + travel, tw_start[remaining])
+                finish = service_start + service[remaining]
+                feasible = (
+                    (load + demands[remaining] <= capacity)
+                    & np.isfinite(travel)
+                    & np.isfinite(back)
+                    & (service_start <= tw_end[remaining] + eps)
+                    & (finish + back <= float(working_end_min) + eps)
+                )
+                if not np.any(feasible):
+                    if cur != 0 and np.isfinite(shortest[cur, 0]):
+                        total_time += float(shortest[cur, 0])
+                    break
+
+                feasible_remaining = remaining[feasible]
+                feasible_arrival = service_start[feasible]
+                best = int(feasible_remaining[int(np.argmin(feasible_arrival))])
                 node = 1 + best
-                travel = float(shortest_time[cur, node])
-                clock = max(clock + travel, float(tw[best, 0])) + float(service_time_min[best])
-                load += float(demands_cm3[best])
-                total_load += float(demands_cm3[best])
-                unvisited.remove(best)
+                travel_to_best = float(shortest[cur, node])
+                clock = max(clock + travel_to_best, float(tw_start[best])) + float(service[best])
+                load += float(demands[best])
+                total_load += float(demands[best])
+                unvisited[best] = False
                 cur = node
                 progressed = True
+
             if not progressed:
                 return {
                     "success": False,
-                    "served_customers": int(n - len(unvisited)),
-                    "unserved_customers": int(len(unvisited)),
+                    "served_customers": int(n - int(np.count_nonzero(unvisited))),
+                    "unserved_customers": int(np.count_nonzero(unvisited)),
                     "vehicle_upper_bound": None,
                     "vehicle_count": int(routes),
                     "error": "no_feasible_next_customer",

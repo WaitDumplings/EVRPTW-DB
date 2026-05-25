@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from evrptw_core.io import load_instance
 from .env_factory import make_terran_env
 from .models import Agent
-from .rollout import rollout_single_instance
+from .rollout import rollout_eval_batch
 
 
 def _instance_paths(eval_path: Path, num_customers: int, num_charging_stations: int) -> list[Path]:
@@ -55,6 +55,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decode-mode", type=str, default="sample", choices=["sample", "greedy"])
     parser.add_argument("--max-steps", type=int, default=128)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--eval-batch-size", type=int, default=1)
+    parser.add_argument("--eval-num-batches", type=int, default=None)
+    parser.add_argument("--info-level", type=str, choices=["light", "full"], default="full")
+    parser.add_argument("--save-routes", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -82,29 +86,40 @@ def main() -> None:
     if not paths:
         raise FileNotFoundError(f"No instance_*.pkl files found under {args.eval_path}")
 
+    if args.eval_num_batches is not None:
+        paths = paths[: max(1, int(args.eval_batch_size)) * int(args.eval_num_batches)]
+
     rows = []
-    for idx, path in enumerate(paths):
-        instance = load_instance(path)
-        env = make_terran_env(instance=instance, n_traj=args.n_traj)
-        row = rollout_single_instance(
+    batch_size = max(1, int(args.eval_batch_size))
+    env_info_level = "full" if args.save_routes else args.info_level
+    for batch_start in range(0, len(paths), batch_size):
+        batch_paths = paths[batch_start : batch_start + batch_size]
+        instances = [load_instance(path) for path in batch_paths]
+        envs = [make_terran_env(instance=instance, n_traj=args.n_traj, info_level=env_info_level) for instance in instances]
+        batch_rows = rollout_eval_batch(
             agent,
-            env,
+            envs,
             decode_mode=args.decode_mode,
             max_steps=args.max_steps,
             device=device,
-            seed=args.seed + idx,
+            seed=args.seed + batch_start,
+            include_routes=args.save_routes,
         )
-        row.update(
-            {
-                "instance_id": instance.instance_id,
-                "solver_name": solver_name,
-                "seed": args.seed,
-                "checkpoint": str(args.checkpoint_path),
-                "decode_mode": args.decode_mode,
-                "n_traj": args.n_traj,
-            }
-        )
-        rows.append(row)
+        for instance, row in zip(instances, batch_rows):
+            row.update(
+                {
+                    "instance_id": instance.instance_id,
+                    "solver_name": solver_name,
+                    "seed": args.seed,
+                    "checkpoint": str(args.checkpoint_path),
+                    "decode_mode": args.decode_mode,
+                    "n_traj": args.n_traj,
+                    "eval_batch_size": batch_size,
+                    "eval_info_level": env_info_level,
+                    "save_routes": args.save_routes,
+                }
+            )
+        rows.extend(batch_rows)
 
     feasible_rows = [row for row in rows if row["feasible"]]
     summary = {
@@ -113,6 +128,10 @@ def main() -> None:
         "checkpoint": str(args.checkpoint_path),
         "decode_mode": args.decode_mode,
         "n_traj": args.n_traj,
+        "eval_batch_size": max(1, int(args.eval_batch_size)),
+        "eval_num_batches": int(np.ceil(len(rows) / max(1, int(args.eval_batch_size)))),
+        "eval_info_level": env_info_level,
+        "save_routes": args.save_routes,
         "num_instances": len(rows),
         "feasible_rate": float(np.mean([row["feasible"] for row in rows])),
         "avg_objective_distance_km": float(np.mean([row["objective_distance_km"] for row in feasible_rows])) if feasible_rows else float("nan"),

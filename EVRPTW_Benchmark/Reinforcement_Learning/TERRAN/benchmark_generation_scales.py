@@ -72,6 +72,7 @@ def _run_scale(
     region_reuse_limit: int,
     seed: int,
     report_every: int,
+    region_pool_path: str | Path | None,
 ) -> dict[str, Any]:
     pool = AsyncInstancePool(
         config_path=config_path,
@@ -87,6 +88,7 @@ def _run_scale(
         queue_size=int(queue_size),
         regions_per_worker=1,
         multiprocessing_context="spawn",
+        region_pool_path=region_pool_path,
     )
 
     start_s = time.perf_counter()
@@ -151,6 +153,7 @@ def main() -> None:
     parser.add_argument("--mother-num-customers", type=int, default=10_000)
     parser.add_argument("--mother-num-charging-stations", type=int, default=120)
     parser.add_argument("--region-reuse-limit", type=int, default=1_000_000)
+    parser.add_argument("--region-pool-path", type=str, default=None)
     parser.add_argument("--seed", type=int, default=20260524)
     parser.add_argument(
         "--scales",
@@ -188,6 +191,7 @@ def main() -> None:
             region_reuse_limit=int(args.region_reuse_limit),
             seed=int(args.seed) + offset * 10_000,
             report_every=int(args.report_every),
+            region_pool_path=args.region_pool_path,
         )
         rows.append(row)
         write_header = not output.exists()

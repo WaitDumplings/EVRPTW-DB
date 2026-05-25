@@ -27,6 +27,9 @@ class OnlineInstancePool:
     region_reuse_limit: int = 200
     seed: int | None = None
     max_attempts_per_instance: int | None = None
+    region_pool_path: str | Path | None = None
+    region_pool_shuffle: bool = True
+    region_pool_replacement_policy: str = "cycle"
 
     def __post_init__(self) -> None:
         path = Path(self.config_path)
@@ -34,11 +37,37 @@ class OnlineInstancePool:
             path = GENERATOR_ROOT / path
         self.config_path = path
         self.generator = HierarchyDatasetGenerator.from_config_path(path, seed=self.seed)
-        self.generator.prepare_region_pool(
-            num_regions=self.num_regions,
-            mother_num_customers=self.mother_num_customers,
-            mother_num_charging_stations=self.mother_num_charging_stations,
-        )
+        self.region_pool_status = "generated_online"
+        loaded_precomputed = False
+        if self.region_pool_path not in (None, ""):
+            pool_path = Path(self.region_pool_path)
+            if not pool_path.is_absolute():
+                pool_path = REPO_ROOT / pool_path
+            try:
+                self.generator.load_region_pool(
+                    pool_path=pool_path,
+                    num_regions=int(self.num_regions),
+                    shuffle=bool(self.region_pool_shuffle),
+                    replacement_policy=str(self.region_pool_replacement_policy),
+                )
+                if len(self.generator.boards) >= int(self.num_regions):
+                    loaded_precomputed = True
+                    self.region_pool_status = f"loaded_precomputed:{pool_path}"
+                else:
+                    self.region_pool_status = (
+                        f"precomputed_pool_insufficient:{pool_path}:"
+                        f"{len(self.generator.boards)}<{int(self.num_regions)}"
+                    )
+            except Exception as exc:  # Optional acceleration path; training must remain robust.
+                self.region_pool_status = f"precomputed_pool_failed:{self.region_pool_path}:{exc}"
+
+        if not loaded_precomputed:
+            self.generator = HierarchyDatasetGenerator.from_config_path(path, seed=self.seed)
+            self.generator.prepare_region_pool(
+                num_regions=self.num_regions,
+                mother_num_customers=self.mother_num_customers,
+                mother_num_charging_stations=self.mother_num_charging_stations,
+            )
         self.sample_count = 0
 
     def sample(self) -> EVRPTWInstance:
@@ -64,6 +93,7 @@ class OnlineInstancePool:
                     "customer_exposure_rate": usage.customer_exposure_rate,
                     "recent_mean_jaccard_distance": usage.recent_mean_jaccard_distance,
                     "cluster_exposure_entropy": usage.cluster_exposure_entropy,
+                    "region_pool_status": self.region_pool_status,
                 }
             )
         return rows

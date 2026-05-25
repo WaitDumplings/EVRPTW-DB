@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +11,36 @@ from evrptw_hierarchy.configs.config import load_yaml, vehicle_from_config
 from evrptw_hierarchy.core.models import RegionBoard, RegionUsage, VehicleConfig
 from evrptw_hierarchy.generation.region_generator import RegionGenerator
 from evrptw_hierarchy.graph.distance_oracle import DistanceOracle
-from evrptw_hierarchy.io.persistence import ensure_dir, save_pickle
+from evrptw_hierarchy.io.persistence import ensure_dir, load_pickle, save_pickle
 from evrptw_hierarchy.sampling.active_day import ActiveDaySampler
 from evrptw_hierarchy.validation.reports import summarize_instance, summarize_region, write_reports
 from evrptw_hierarchy.visualization.plots import write_region_svg
+
+
+def _fresh_usage(board: RegionBoard) -> RegionUsage:
+    return RegionUsage(
+        region_id=board.region_id,
+        sampled_days=0,
+        customer_activation_counts=np.zeros(len(board.customers), dtype=np.int32),
+        cluster_activation_counts=np.zeros(len(board.cluster_centers), dtype=np.int32),
+    )
+
+
+def _region_board_from_payload(payload: Any) -> RegionBoard:
+    if isinstance(payload, RegionBoard):
+        return payload
+    if not isinstance(payload, dict):
+        raise TypeError(f"Unsupported region-board payload type: {type(payload).__name__}")
+    fields = RegionBoard.__dataclass_fields__
+    kwargs = {key: payload[key] for key in fields if key in payload}
+    missing = [
+        key
+        for key, field_def in fields.items()
+        if key not in kwargs and field_def.default is MISSING and field_def.default_factory is MISSING
+    ]
+    if missing:
+        raise ValueError(f"Region-board payload is missing required fields: {missing}")
+    return RegionBoard(**kwargs)
 
 
 @dataclass
@@ -26,6 +53,9 @@ class HierarchyDatasetGenerator:
     usages: list[RegionUsage] = field(default_factory=list, init=False)
     oracles: dict[str, DistanceOracle] = field(default_factory=dict, init=False)
     next_region_serial: int = field(default=0, init=False)
+    precomputed_boards: list[RegionBoard] = field(default_factory=list, init=False)
+    next_precomputed_index: int = field(default=0, init=False)
+    precomputed_replacement_policy: str = field(default="cycle", init=False)
 
     def __post_init__(self) -> None:
         cfg_seed = self.config.get("seed")
@@ -37,17 +67,41 @@ class HierarchyDatasetGenerator:
     def from_config_path(cls, config_path: str | Path, seed: int | None = None) -> "HierarchyDatasetGenerator":
         return cls(load_yaml(config_path), seed=seed)
 
+    def _next_precomputed_board(self, slot_index: int) -> RegionBoard | None:
+        if not self.precomputed_boards:
+            return None
+        if self.next_precomputed_index >= len(self.precomputed_boards):
+            if self.precomputed_replacement_policy != "cycle":
+                return None
+            self.next_precomputed_index = 0
+        active_ids = {board.region_id for idx, board in enumerate(self.boards) if idx != slot_index}
+        for _ in range(len(self.precomputed_boards)):
+            board = self.precomputed_boards[self.next_precomputed_index]
+            self.next_precomputed_index = (self.next_precomputed_index + 1) % len(self.precomputed_boards)
+            if board.region_id not in active_ids:
+                return board
+        return self.precomputed_boards[self.next_precomputed_index]
+
     def _create_region(self, slot_index: int, mother_num_customers: int, mother_num_charging_stations: int) -> tuple[RegionBoard, RegionUsage]:
+        precomputed = self._next_precomputed_board(slot_index)
+        if precomputed is not None:
+            board = precomputed
+            usage = _fresh_usage(board)
+            if slot_index < len(self.boards):
+                old_id = self.boards[slot_index].region_id
+                self.oracles.pop(old_id, None)
+                self.boards[slot_index] = board
+                self.usages[slot_index] = usage
+            else:
+                self.boards.append(board)
+                self.usages.append(usage)
+            return board, usage
+
         generator = RegionGenerator(self.config, self.vehicle, self.rng)
         serial = self.next_region_serial
         self.next_region_serial += 1
         board = generator.generate(serial, mother_num_customers, mother_num_charging_stations)
-        usage = RegionUsage(
-            region_id=board.region_id,
-            sampled_days=0,
-            customer_activation_counts=np.zeros(len(board.customers), dtype=np.int32),
-            cluster_activation_counts=np.zeros(len(board.cluster_centers), dtype=np.int32),
-        )
+        usage = _fresh_usage(board)
         if slot_index < len(self.boards):
             old_id = self.boards[slot_index].region_id
             self.oracles.pop(old_id, None)
@@ -106,6 +160,70 @@ class HierarchyDatasetGenerator:
         region_dir = ensure_dir(save_path / "regions")
         for board in self.boards:
             save_pickle(region_dir / f"{board.region_id}_board.pkl", board)
+
+    def save_region_pool(
+        self,
+        save_path: str | Path,
+        num_regions: int,
+        mother_num_customers: int,
+        mother_num_charging_stations: int,
+    ) -> dict[str, Any]:
+        """Generate and persist a reusable city/region mother-board pool."""
+        root = ensure_dir(save_path)
+        self.prepare_region_pool(
+            num_regions=int(num_regions),
+            mother_num_customers=int(mother_num_customers),
+            mother_num_charging_stations=int(mother_num_charging_stations),
+        )
+        self._save_regions(root)
+        usages = [_fresh_usage(board) for board in self.boards]
+        region_rows = [summarize_region(board, usage) for board, usage in zip(self.boards, usages)]
+        manifest = {
+            "pool_path": str(root),
+            "num_regions": int(len(self.boards)),
+            "mother_num_customers": int(mother_num_customers),
+            "mother_num_charging_stations": int(mother_num_charging_stations),
+            "seed": self.seed,
+            "region_ids": [board.region_id for board in self.boards],
+            "region_rows": region_rows,
+        }
+        with (root / "manifest.json").open("w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        return manifest
+
+    def load_region_pool(
+        self,
+        pool_path: str | Path,
+        num_regions: int | None = None,
+        shuffle: bool = True,
+        replacement_policy: str = "cycle",
+    ) -> None:
+        """Load a reusable mother-board pool and activate up to ``num_regions`` boards.
+
+        ``num_regions`` controls the in-memory active region pool used by online
+        training. The full precomputed pool remains available for stale-region
+        replacement, so a larger offline pool can support many training epochs
+        without regenerating region geometry.
+        """
+        root = Path(pool_path)
+        region_dir = root / "regions" if (root / "regions").exists() else root
+        board_paths = sorted(region_dir.glob("*_board.pkl"))
+        if not board_paths:
+            raise FileNotFoundError(f"No region board pickles found under {region_dir}")
+        boards = [_region_board_from_payload(load_pickle(path)) for path in board_paths]
+        if shuffle:
+            order = self.rng.permutation(len(boards))
+            boards = [boards[int(idx)] for idx in order]
+        active_count = len(boards) if num_regions is None else min(int(num_regions), len(boards))
+        if active_count <= 0:
+            raise ValueError("num_regions must select at least one precomputed region board.")
+        self.precomputed_boards = boards
+        self.precomputed_replacement_policy = str(replacement_policy)
+        self.boards = boards[:active_count]
+        self.usages = [_fresh_usage(board) for board in self.boards]
+        self.oracles.clear()
+        self.next_precomputed_index = active_count
+        self.next_region_serial = max(self.next_region_serial, len(boards))
 
     def prepare_region_pool(
         self,

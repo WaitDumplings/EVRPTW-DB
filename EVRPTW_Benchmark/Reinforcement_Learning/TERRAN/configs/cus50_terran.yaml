@@ -1,10 +1,9 @@
 run_name: TERRAN
 dataset_name: Amazon_Calibrated_v1
-
 data:
   generator_config: configs/amazon_hierarchy.yaml
-  num_customers: 100
-  num_charging_stations: 20
+  num_customers: 50
+  num_charging_stations: 10
   mother_board_pool_size: 8
   mother_num_customers: 5000
   mother_num_charging_stations: 120
@@ -17,27 +16,24 @@ data:
   async_instance_workers: 8
   async_instance_queue_batches: 2
   async_multiprocessing_context: spawn
-
 env:
   use_fast_env: true
   use_jit_mask: true
   normalize_reward: true
   reward_distance_scale_mode: single_customer_repair_median
   charging_mode: fixed_full
-
 model:
   embedding_dim: 256
   tanh_clipping: 15.0
   n_encode_layers: 3
   use_graph_token: false
   use_dynamic_embedding: false
-
 training:
   online_training: true
   epochs: 300
-  num_envs_per_gpu: 256
+  num_envs_per_gpu: 384
   n_traj: 50
-  rollout_steps: 150
+  rollout_steps: 90
   ppo_step_chunk_size: 64
   ppo_update_epochs: 3
   num_minibatches: 4
@@ -52,20 +48,18 @@ training:
   debug: false
   debug_log_every: 1
   profile_timing: false
-
   gradient_accumulation_steps: 1
 pbrs:
   use_customer_pbrs: false
   use_repair_distance_pbrs: false
   use_feasible_ratio_pbrs: false
   use_terminal_heuristic: false
-
 evaluation:
   eval_interval: 10
-  eval_path: EVRPTW_Dataset/Amazon_Calibrated_v1/Cus_100/CS_20/eval_1000
+  eval_path: EVRPTW_Dataset/Amazon_Calibrated_v1/Cus_50/CS_10/eval_1000
   eval_n_traj: 8
   eval_decode_mode: sample
-  eval_max_steps: 180
+  eval_max_steps: 100
   eval_limit: null
   eval_batch_size: 1000
   eval_num_batches: null

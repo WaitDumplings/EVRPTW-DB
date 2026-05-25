@@ -15,15 +15,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--num-envs-per-gpu", type=int, default=None)
     parser.add_argument("--rollout-steps", type=int, default=None)
+    parser.add_argument("--ppo-step-chunk-size", type=int, default=None)
     parser.add_argument("--n-traj", type=int, default=None)
     parser.add_argument("--num-minibatches", type=int, default=None)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
     parser.add_argument("--mother-board-pool-size", type=int, default=None)
+    parser.add_argument("--region-pool-path", type=str, default=None)
+    parser.add_argument("--region-pool-shuffle", action="store_true")
+    parser.add_argument("--no-region-pool-shuffle", action="store_true")
+    parser.add_argument("--region-pool-replacement-policy", type=str, default=None, choices=["cycle", "generate"])
     parser.add_argument("--mother-num-customers", type=int, default=None)
     parser.add_argument("--mother-num-charging-stations", type=int, default=None)
     parser.add_argument("--eval-interval", type=int, default=None)
     parser.add_argument("--eval-path", type=str, default=None)
     parser.add_argument("--eval-n-traj", type=int, default=None)
     parser.add_argument("--eval-limit", type=int, default=None)
+    parser.add_argument("--eval-batch-size", type=int, default=None)
+    parser.add_argument("--eval-num-batches", type=int, default=None)
+    parser.add_argument("--eval-info-level", type=str, choices=["light", "full"], default=None)
+    parser.add_argument("--eval-save-routes", action="store_true")
+    parser.add_argument("--no-eval-save-routes", action="store_true")
     parser.add_argument("--debug", action="store_true", help="Print train/eval diagnostics and mirror them to debug_log.txt.")
     parser.add_argument("--no-debug", action="store_true", help="Disable debug diagnostic logging.")
     parser.add_argument("--debug-log-every", type=int, default=None)
@@ -42,6 +53,14 @@ def main() -> None:
     overrides: dict[str, Any] = {"data": {}, "training": {}, "evaluation": {}}
     if args.mother_board_pool_size is not None:
         overrides["data"]["mother_board_pool_size"] = args.mother_board_pool_size
+    if args.region_pool_path is not None:
+        overrides["data"]["region_pool_path"] = args.region_pool_path
+    if args.region_pool_shuffle:
+        overrides["data"]["region_pool_shuffle"] = True
+    if args.no_region_pool_shuffle:
+        overrides["data"]["region_pool_shuffle"] = False
+    if args.region_pool_replacement_policy is not None:
+        overrides["data"]["region_pool_replacement_policy"] = args.region_pool_replacement_policy
     if args.mother_num_customers is not None:
         overrides["data"]["mother_num_customers"] = args.mother_num_customers
     if args.mother_num_charging_stations is not None:
@@ -60,10 +79,14 @@ def main() -> None:
         overrides["training"]["num_envs_per_gpu"] = args.num_envs_per_gpu
     if args.rollout_steps is not None:
         overrides["training"]["rollout_steps"] = args.rollout_steps
+    if args.ppo_step_chunk_size is not None:
+        overrides["training"]["ppo_step_chunk_size"] = args.ppo_step_chunk_size
     if args.n_traj is not None:
         overrides["training"]["n_traj"] = args.n_traj
     if args.num_minibatches is not None:
         overrides["training"]["num_minibatches"] = args.num_minibatches
+    if args.gradient_accumulation_steps is not None:
+        overrides["training"]["gradient_accumulation_steps"] = args.gradient_accumulation_steps
     if args.debug:
         overrides["training"]["debug"] = True
     if args.no_debug:
@@ -82,6 +105,16 @@ def main() -> None:
         overrides["evaluation"]["eval_n_traj"] = args.eval_n_traj
     if args.eval_limit is not None:
         overrides["evaluation"]["eval_limit"] = args.eval_limit
+    if args.eval_batch_size is not None:
+        overrides["evaluation"]["eval_batch_size"] = args.eval_batch_size
+    if args.eval_num_batches is not None:
+        overrides["evaluation"]["eval_num_batches"] = args.eval_num_batches
+    if args.eval_info_level is not None:
+        overrides["evaluation"]["eval_info_level"] = args.eval_info_level
+    if args.eval_save_routes:
+        overrides["evaluation"]["eval_save_routes"] = True
+    if args.no_eval_save_routes:
+        overrides["evaluation"]["eval_save_routes"] = False
     if not overrides["data"] and not overrides["training"] and not overrides["evaluation"]:
         overrides = {}
     else:

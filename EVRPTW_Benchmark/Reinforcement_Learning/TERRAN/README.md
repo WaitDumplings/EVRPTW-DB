@@ -17,6 +17,31 @@ rollouts through the environment's `n_traj` dimension.
 - `smoke_test_terran.py`: verifies the model and environment interface on a
   pickle instance.
 
+
+## Optional Precomputed Region Pool
+
+Training can use a reusable mother-board pool prepared by the dataset generator:
+
+```bash
+conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_region_pool \
+  --num-regions 256 \
+  --mother-num-customers 5000 \
+  --mother-num-charging-stations 120 \
+  --seed 20260525
+
+CUDA_VISIBLE_DEVICES=0 conda run -n maojie python -m EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train \
+  --config cus15_terran.yaml \
+  --seed 1515 \
+  --region-pool-path EVRPTW_Dataset/Amazon_Calibrated_v1/region_pools/mother_N5000_CS120_R256_seed20260525
+```
+
+`mother_board_pool_size` remains the number of active boards held by one run.
+`region_pool_path` is optional: if loading fails or the pool has fewer boards
+than `mother_board_pool_size`, training automatically falls back to online
+generation. The default replacement policy is `cycle`, which reuses the
+precomputed pool for stale-region replacement without regenerating region
+geometry.
+
 ## PBRS Switches
 
 `PotentialRewardConfig` exposes the reward-shaping controls without modifying

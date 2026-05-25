@@ -55,6 +55,10 @@ class PotentialRewardWrapper(Wrapper):
         self._single_customer_repair_dist: np.ndarray | None = None
         self._node_to_depot_repair_dist: np.ndarray | None = None
         self._total_customer_repair_dist: float = 1.0
+        self.reward_scale = 1.0
+
+    def set_reward_scale(self, reward_scale: float) -> None:
+        self.reward_scale = max(float(reward_scale), 0.0)
 
     def reset(self, **kwargs: Any):
         obs, info = self.env.reset(**kwargs)
@@ -79,6 +83,11 @@ class PotentialRewardWrapper(Wrapper):
         repair = self._repair_distance_pbrs(prev_repair)
         feasible = self._feasible_ratio_pbrs(prev_obs, obs)
         terminal = self._terminal_heuristic(info, terminated, truncated, prev_finished)
+        scale = float(self.reward_scale)
+        customer = (scale * customer).astype(np.float32)
+        repair = (scale * repair).astype(np.float32)
+        feasible = (scale * feasible).astype(np.float32)
+        terminal = (scale * terminal).astype(np.float32)
         shaped = base_reward.astype(np.float32) + customer + repair + feasible + terminal
 
         self._last_obs = obs
@@ -92,6 +101,7 @@ class PotentialRewardWrapper(Wrapper):
             "pbrs_feasible_ratio": feasible.copy(),
             "terminal_heuristic": terminal.copy(),
             "shaped": shaped.copy(),
+            "pbrs_scale": np.full_like(shaped, scale, dtype=np.float32),
         }
         return obs, shaped, terminated, truncated, out_info
 
@@ -210,6 +220,7 @@ class PotentialRewardWrapper(Wrapper):
             "pbrs_feasible_ratio": reward.copy(),
             "terminal_heuristic": reward.copy(),
             "shaped": reward.copy(),
+            "pbrs_scale": np.ones_like(reward, dtype=np.float32),
         }
         return info
 

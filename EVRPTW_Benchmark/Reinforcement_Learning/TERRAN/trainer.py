@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 import random
 import sys
@@ -23,7 +24,7 @@ from .data_pool import OnlineInstancePool
 from .env_factory import make_terran_env
 from .models import Agent
 from .pbrs import PotentialRewardConfig
-from .rollout import collect_rollout, compute_returns, rollout_single_instance
+from .rollout import collect_rollout, compute_returns, rollout_eval_batch
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -79,6 +80,61 @@ def _instance_paths(eval_path: Path, num_customers: int, num_charging_stations: 
     return sorted(root.glob("instance_*.pkl"))
 
 
+def _pbrs_enabled(cfg: dict[str, Any]) -> bool:
+    pbrs = cfg.get("pbrs", {}) or {}
+    return bool(
+        pbrs.get("use_customer_pbrs", False)
+        or pbrs.get("use_repair_distance_pbrs", False)
+        or pbrs.get("use_feasible_ratio_pbrs", False)
+        or pbrs.get("use_terminal_heuristic", False)
+    )
+
+
+def pbrs_scale_for_epoch(cfg: dict[str, Any], epoch: int, total_epochs: int) -> float:
+    if not _pbrs_enabled(cfg):
+        return 0.0
+    pbrs = cfg.get("pbrs", {}) or {}
+    annealing = pbrs.get("annealing", {}) or {}
+    if not bool(annealing.get("enabled", False)):
+        return float(annealing.get("start_scale", 1.0))
+    start_scale = float(annealing.get("start_scale", 1.0))
+    end_scale = float(annealing.get("end_scale", 0.2))
+    start_epoch = max(1, int(annealing.get("start_epoch", 1)))
+    end_epoch = max(start_epoch, int(annealing.get("end_epoch", total_epochs)))
+    schedule = str(annealing.get("schedule", "cosine")).lower()
+    if epoch <= start_epoch:
+        return max(start_scale, 0.0)
+    if epoch >= end_epoch:
+        return max(end_scale, 0.0)
+    progress = (float(epoch) - float(start_epoch)) / max(float(end_epoch - start_epoch), 1.0)
+    progress = min(max(progress, 0.0), 1.0)
+    if schedule == "linear":
+        weight = progress
+    elif schedule == "exponential":
+        if start_scale <= 0 or end_scale <= 0:
+            weight = progress
+            return max(start_scale + (end_scale - start_scale) * weight, 0.0)
+        return max(start_scale * ((end_scale / start_scale) ** progress), 0.0)
+    elif schedule == "constant":
+        return max(start_scale, 0.0)
+    else:
+        weight = 0.5 - 0.5 * math.cos(math.pi * progress)
+    return max(start_scale + (end_scale - start_scale) * weight, 0.0)
+
+
+def set_pbrs_reward_scale(envs: Sequence[Any], scale: float) -> None:
+    for env in envs:
+        current = env
+        visited = set()
+        while current is not None and id(current) not in visited:
+            visited.add(id(current))
+            setter = getattr(current, "set_reward_scale", None)
+            if callable(setter):
+                setter(scale)
+                break
+            current = getattr(current, "env", None)
+
+
 def build_pbrs_config(cfg: dict[str, Any]) -> PotentialRewardConfig | None:
     pbrs = cfg.get("pbrs", {})
     config = PotentialRewardConfig(
@@ -123,6 +179,9 @@ def make_envs(cfg: dict[str, Any], seed: int):
         region_reuse_limit=int(data_cfg.get("region_reuse_limit", 200)),
         seed=seed,
         max_attempts_per_instance=data_cfg.get("max_attempts_per_instance"),
+        region_pool_path=data_cfg.get("region_pool_path"),
+        region_pool_shuffle=bool(data_cfg.get("region_pool_shuffle", True)),
+        region_pool_replacement_policy=str(data_cfg.get("region_pool_replacement_policy", "cycle")),
     )
     if bool(data_cfg.get("async_instance_prefetch", False)):
         workers = int(data_cfg.get("async_instance_workers", min(8, max(1, num_envs))))
@@ -165,11 +224,19 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
     decode_mode = str(eval_cfg.get("eval_decode_mode", "sample"))
     max_steps = int(eval_cfg.get("eval_max_steps", 128))
     limit = eval_cfg.get("eval_limit", None)
+    batch_size = max(1, int(eval_cfg.get("eval_batch_size", 1)))
+    num_batches_limit = eval_cfg.get("eval_num_batches", None)
+    eval_save_routes = bool(eval_cfg.get("eval_save_routes", False))
+    eval_info_level = str(eval_cfg.get("eval_info_level", "light"))
     if eval_path is None or not eval_path.exists():
         return {
             "eval_num_instances": 0,
             "eval_n_traj": n_traj,
+            "eval_batch_size": batch_size,
+            "eval_num_batches": 0,
             "eval_decode_mode": decode_mode,
+            "eval_info_level": eval_info_level,
+            "eval_save_routes": eval_save_routes,
             "eval_feasible_rate": np.nan,
             "eval_avg_objective_distance_km": np.nan,
             "eval_avg_vehicle_count": np.nan,
@@ -179,11 +246,17 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
     paths = _instance_paths(eval_path, num_customers, num_cs)
     if limit is not None:
         paths = paths[: int(limit)]
+    if num_batches_limit is not None:
+        paths = paths[: batch_size * int(num_batches_limit)]
     if not paths:
         return {
             "eval_num_instances": 0,
             "eval_n_traj": n_traj,
+            "eval_batch_size": batch_size,
+            "eval_num_batches": 0,
             "eval_decode_mode": decode_mode,
+            "eval_info_level": eval_info_level,
+            "eval_save_routes": eval_save_routes,
             "eval_feasible_rate": np.nan,
             "eval_avg_objective_distance_km": np.nan,
             "eval_avg_vehicle_count": np.nan,
@@ -194,21 +267,27 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
     was_training = agent.training
     agent.eval()
     rows: list[dict[str, Any]] = []
-    for idx, path in enumerate(paths):
-        instance = load_instance(path)
+    num_batches = 0
+    for batch_start in range(0, len(paths), batch_size):
+        batch_paths = paths[batch_start : batch_start + batch_size]
+        instances = [load_instance(path) for path in batch_paths]
         eval_env_cfg = dict(cfg.get("env", {}) or {})
         if bool(eval_env_cfg.get("use_fast_env", True)):
-            eval_env_cfg["info_level"] = "full"
-        env = make_terran_env(instance=instance, n_traj=n_traj, **eval_env_cfg)
-        row = rollout_single_instance(
+            eval_env_cfg["info_level"] = "full" if eval_save_routes else eval_info_level
+        envs = [make_terran_env(instance=instance, n_traj=n_traj, **eval_env_cfg) for instance in instances]
+        batch_rows = rollout_eval_batch(
             agent,
-            env,
+            envs,
             decode_mode=decode_mode,
             max_steps=max_steps,
             device=device,
-            seed=seed + epoch * 1_000_000 + idx,
+            seed=seed + epoch * 1_000_000 + batch_start,
+            include_routes=eval_save_routes,
         )
-        rows.append(row)
+        for instance, row in zip(instances, batch_rows):
+            row["instance_id"] = instance.instance_id
+        rows.extend(batch_rows)
+        num_batches += 1
     if was_training:
         agent.train()
 
@@ -216,7 +295,11 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
     return {
         "eval_num_instances": len(rows),
         "eval_n_traj": n_traj,
+        "eval_batch_size": batch_size,
+        "eval_num_batches": num_batches,
         "eval_decode_mode": decode_mode,
+        "eval_info_level": eval_info_level,
+        "eval_save_routes": eval_save_routes,
         "eval_feasible_rate": float(np.mean([row["feasible"] for row in rows])),
         "eval_avg_objective_distance_km": float(np.mean([row["objective_distance_km"] for row in feasible_rows])) if feasible_rows else np.nan,
         "eval_avg_vehicle_count": float(np.mean([row["vehicle_count"] for row in feasible_rows])) if feasible_rows else np.nan,
@@ -299,6 +382,8 @@ def evaluate_policy_loss(
     cfg,
     device,
     env_indices: Sequence[int] | np.ndarray | None = None,
+    step_start: int = 0,
+    step_end: int | None = None,
 ):
     del device
     clip_coef = float(cfg["training"].get("clip_coef", 0.2))
@@ -309,15 +394,25 @@ def evaluate_policy_loss(
     else:
         env_indices = np.asarray(env_indices, dtype=np.int64)
 
+    if step_end is None:
+        step_end = len(batch.observations)
+    step_start = max(0, int(step_start))
+    step_end = min(len(batch.observations), int(step_end))
+    if step_start >= step_end:
+        raise ValueError(f"empty PPO step range: [{step_start}, {step_end})")
+
     # Static node embeddings are identical across rollout steps. Encode once for
     # the selected env minibatch, then reuse cached K/V/logit projections while
-    # each step supplies its own dynamic state.
+    # each step supplies its own dynamic state. For large Cus1000-style graphs,
+    # callers can invoke this function on time chunks to avoid retaining all
+    # decoder graphs until a single backward pass.
     cached_state = agent.backbone.encode(_slice_obs_by_env(batch.observations[0], env_indices))
 
     policy_losses = []
     value_losses = []
     entropy_losses = []
-    for step, obs in enumerate(batch.observations):
+    for step in range(step_start, step_end):
+        obs = batch.observations[step]
         obs_mb = _slice_obs_by_env(obs, env_indices)
         actions = batch.actions[step, env_indices].long()
         old_logprob = batch.old_logprobs[step, env_indices]
@@ -390,11 +485,13 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     rollout_steps = int(train_cfg.get("rollout_steps", 64))
     ppo_epochs = int(train_cfg.get("ppo_update_epochs", 4))
     num_minibatches = max(1, int(train_cfg.get("num_minibatches", 1)))
+    gradient_accumulation_steps = max(1, int(train_cfg.get("gradient_accumulation_steps", 1)))
     checkpoint_interval = int(train_cfg.get("checkpoint_interval", 50))
     eval_interval = int(eval_cfg.get("eval_interval", 0) or 0)
     debug_enabled = bool(train_cfg.get("debug", False))
     debug_log_every = max(1, int(train_cfg.get("debug_log_every", 1)))
     profile_timing = bool(train_cfg.get("profile_timing", False))
+    ppo_step_chunk_size = int(train_cfg.get("ppo_step_chunk_size", 0) or 0)
 
     out_root = REPO_ROOT / "EVRPTW_Benchmark/Reinforcement_Learning/TERRAN"
     ckpt_dir = out_root / "checkpoints" / f"Cus_{num_customers}_CS_{num_cs}" / run_name / f"seed_{seed}"
@@ -416,6 +513,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "n_traj",
         "rollout_steps",
         "num_minibatches",
+        "gradient_accumulation_steps",
+        "effective_instances_per_optimizer_step",
+        "pbrs_scale",
         "initial_env_pool_time_s",
         "rollout_reset_time_s",
         "rollout_stack_obs_time_s",
@@ -436,7 +536,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "eval_avg_runtime_s",
         "eval_num_instances",
         "eval_n_traj",
+        "eval_batch_size",
+        "eval_num_batches",
         "eval_decode_mode",
+        "eval_info_level",
+        "eval_save_routes",
         "eval_status",
     ]
     eval_fields = [
@@ -447,7 +551,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "eval_avg_runtime_s",
         "eval_num_instances",
         "eval_n_traj",
+        "eval_batch_size",
+        "eval_num_batches",
         "eval_decode_mode",
+        "eval_info_level",
+        "eval_save_routes",
         "eval_status",
     ]
 
@@ -462,12 +570,18 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             f"[Init] run={run_name} seed={seed} device={device} epochs={epochs} "
             f"n_traj={train_cfg.get('n_traj', 50)} rollout_steps={rollout_steps} "
             f"num_envs={train_cfg.get('num_envs_per_gpu', 128)} minibatches={num_minibatches} "
+            f"accum_grad={gradient_accumulation_steps} "
             f"n_encode_layers={model_cfg.get('n_encode_layers', 3)} "
             f"initial_env_pool_time_s={initial_env_pool_time_s:.3f} "
-            f"eval_interval={eval_interval} eval_n_traj={eval_cfg.get('eval_n_traj', 8)}",
+            f"eval_interval={eval_interval} eval_n_traj={eval_cfg.get('eval_n_traj', 8)} "
+            f"eval_batch_size={eval_cfg.get('eval_batch_size', 1)} "
+            f"eval_info_level={eval_cfg.get('eval_info_level', 'light')} "
+            f"pbrs_annealing={cfg.get('pbrs', {}).get('annealing', {})}",
         )
         for epoch in range(1, epochs + 1):
             epoch_start = time.perf_counter()
+            pbrs_scale = pbrs_scale_for_epoch(cfg, epoch, epochs)
+            set_pbrs_reward_scale(envs, pbrs_scale)
             agent.train()
             batch = collect_rollout(
                 agent,
@@ -491,25 +605,49 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             if profile_timing:
                 _sync_cuda(device)
             ppo_start = time.perf_counter()
+            total_steps = int(batch.actions.size(0))
+            chunk_size = ppo_step_chunk_size if ppo_step_chunk_size > 0 else total_steps
+            chunk_size = max(1, min(chunk_size, total_steps))
             for _ in range(ppo_epochs):
                 np.random.shuffle(env_order)
-                for env_indices in np.array_split(env_order, minibatches):
-                    if env_indices.size == 0:
+                split_indices = [indices for indices in np.array_split(env_order, minibatches) if indices.size > 0]
+                for group_start in range(0, len(split_indices), gradient_accumulation_steps):
+                    accum_group = split_indices[group_start : group_start + gradient_accumulation_steps]
+                    if not accum_group:
                         continue
                     optimizer.zero_grad(set_to_none=True)
-                    loss, policy_loss, value_loss, entropy = evaluate_policy_loss(
-                        agent,
-                        batch,
-                        returns,
-                        advantages.detach(),
-                        cfg,
-                        device,
-                        env_indices=env_indices,
-                    )
-                    loss.backward()
+                    group_policy = 0.0
+                    group_value = 0.0
+                    group_entropy = 0.0
+                    group_size = float(len(accum_group))
+                    for env_indices in accum_group:
+                        weighted_policy = 0.0
+                        weighted_value = 0.0
+                        weighted_entropy = 0.0
+                        for step_start in range(0, total_steps, chunk_size):
+                            step_end = min(step_start + chunk_size, total_steps)
+                            chunk_weight = float(step_end - step_start) / max(float(total_steps), 1.0)
+                            loss, policy_loss, value_loss, entropy = evaluate_policy_loss(
+                                agent,
+                                batch,
+                                returns,
+                                advantages.detach(),
+                                cfg,
+                                device,
+                                env_indices=env_indices,
+                                step_start=step_start,
+                                step_end=step_end,
+                            )
+                            (loss * chunk_weight / group_size).backward()
+                            weighted_policy += policy_loss.item() * chunk_weight
+                            weighted_value += value_loss.item() * chunk_weight
+                            weighted_entropy += entropy.item() * chunk_weight
+                        group_policy += weighted_policy / group_size
+                        group_value += weighted_value / group_size
+                        group_entropy += weighted_entropy / group_size
                     torch.nn.utils.clip_grad_norm_(agent.parameters(), float(train_cfg.get("max_grad_norm", 1.0)))
                     optimizer.step()
-                    losses.append((policy_loss.item(), value_loss.item(), entropy.item()))
+                    losses.append((group_policy, group_value, group_entropy))
             if profile_timing:
                 _sync_cuda(device)
             ppo_update_time_s = time.perf_counter() - ppo_start
@@ -530,6 +668,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     f"train_obj={_format_float(train_summary['train_avg_best_objective_distance_km'])} "
                     f"train_veh={_format_float(train_summary['train_avg_vehicle_count'])} "
                     f"served={_format_float(train_summary['train_avg_served_customers'])} "
+                    f"pbrs_scale={pbrs_scale:.4f} "
                     f"timing_reset={batch.timings.get('rollout_reset_time_s', 0.0):.3f}s "
                     f"timing_model={batch.timings.get('rollout_model_action_time_s', 0.0):.3f}s "
                     f"timing_env={batch.timings.get('rollout_env_step_time_s', 0.0):.3f}s "
@@ -550,7 +689,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "[Eval] "
                     f"epoch={epoch}/{epochs} n={eval_row.get('eval_num_instances')} "
                     f"n_traj={eval_row.get('eval_n_traj')} "
+                    f"batch={eval_row.get('eval_batch_size')}x{eval_row.get('eval_num_batches')} "
                     f"mode={eval_row.get('eval_decode_mode')} "
+                    f"info={eval_row.get('eval_info_level')} "
                     f"fr={_format_float(eval_row.get('eval_feasible_rate'))} "
                     f"obj={_format_float(eval_row.get('eval_avg_objective_distance_km'))} "
                     f"veh={_format_float(eval_row.get('eval_avg_vehicle_count'))} "
@@ -571,6 +712,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "n_traj": int(train_cfg.get("n_traj", 50)),
                     "rollout_steps": rollout_steps,
                     "num_minibatches": minibatches,
+                    "gradient_accumulation_steps": gradient_accumulation_steps,
+                    "effective_instances_per_optimizer_step": int(np.ceil(num_envs / max(minibatches, 1))) * gradient_accumulation_steps,
+                    "pbrs_scale": pbrs_scale,
                     "initial_env_pool_time_s": initial_env_pool_time_s,
                     "rollout_reset_time_s": batch.timings.get("rollout_reset_time_s", ""),
                     "rollout_stack_obs_time_s": batch.timings.get("rollout_stack_obs_time_s", ""),
@@ -591,7 +735,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "eval_avg_runtime_s": eval_row.get("eval_avg_runtime_s", ""),
                     "eval_num_instances": eval_row.get("eval_num_instances", ""),
                     "eval_n_traj": eval_row.get("eval_n_traj", ""),
+                    "eval_batch_size": eval_row.get("eval_batch_size", ""),
+                    "eval_num_batches": eval_row.get("eval_num_batches", ""),
                     "eval_decode_mode": eval_row.get("eval_decode_mode", ""),
+                    "eval_info_level": eval_row.get("eval_info_level", ""),
+                    "eval_save_routes": eval_row.get("eval_save_routes", ""),
                     "eval_status": eval_row.get("eval_status", ""),
                 }
             )

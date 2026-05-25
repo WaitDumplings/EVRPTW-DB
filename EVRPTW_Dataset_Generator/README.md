@@ -31,6 +31,31 @@ default is 5000 latent customers for efficient generation/training. Amazon-scale
 mother-board sizes and covering the largest observed station-day active count
 in the training set.
 
+
+## Reusable Mother-Board Pools
+
+For repeated RL training runs, region/mother-board generation can be moved offline and reused across customer scales:
+
+```bash
+conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_region_pool \
+  --num-regions 256 \
+  --mother-num-customers 5000 \
+  --mother-num-charging-stations 120 \
+  --seed 20260525
+```
+
+The default output path is:
+
+```text
+EVRPTW_Dataset/Amazon_Calibrated_v1/region_pools/
+  mother_N5000_CS120_R256_seed20260525/
+```
+
+This pool stores only stable city/region territory objects. Daily active
+instances are still sampled online so training keeps operating-day diversity.
+If a downstream trainer cannot read the pool or the pool contains fewer boards
+than requested, it falls back to online mother-board generation.
+
 ## Documentation
 
 - [Design rationale](docs/design_rationale.md) explains the two-stage mother-board / active-day model.

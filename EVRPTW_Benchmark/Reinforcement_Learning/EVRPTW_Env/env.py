@@ -56,7 +56,7 @@ class EVRPTWVectorEnv(Env):
         charging_mode: str = "fixed_full",
         normalize_reward: bool = True,
         reward_distance_scale_km: float | None = None,
-        reward_distance_scale_mode: str = "single_customer_repair_sum",
+        reward_distance_scale_mode: str = "single_customer_repair_median",
     ) -> None:
         super().__init__()
         if reward_mode not in {"distance", "distance_success"}:
@@ -74,8 +74,14 @@ class EVRPTWVectorEnv(Env):
         self.normalize_reward = bool(normalize_reward)
         self.reward_distance_scale_km_override = reward_distance_scale_km
         self.reward_distance_scale_mode = str(reward_distance_scale_mode)
-        if self.reward_distance_scale_mode not in {"max_edge", "single_customer_repair_sum"}:
-            raise ValueError("reward_distance_scale_mode must be max_edge or single_customer_repair_sum")
+        valid_scale_modes = {
+            "max_edge",
+            "single_customer_repair_sum",
+            "single_customer_repair_mean",
+            "single_customer_repair_median",
+        }
+        if self.reward_distance_scale_mode not in valid_scale_modes:
+            raise ValueError(f"reward_distance_scale_mode must be one of {sorted(valid_scale_modes)}")
         self.reward_distance_scale_km = 1.0
 
         self._rng = np.random.default_rng()
@@ -159,6 +165,10 @@ class EVRPTWVectorEnv(Env):
         repair = repair[np.isfinite(repair)]
         if repair.size == 0:
             return max(float(finite_dist.max()), 1e-9)
+        if self.reward_distance_scale_mode == "single_customer_repair_mean":
+            return max(float(repair.mean()), 1e-9)
+        if self.reward_distance_scale_mode == "single_customer_repair_median":
+            return max(float(np.median(repair)), 1e-9)
         return max(float(repair.sum()), 1e-9)
 
     def _build_spaces(self) -> None:

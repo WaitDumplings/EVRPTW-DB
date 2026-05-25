@@ -25,6 +25,9 @@ class _WorkerConfig:
     region_reuse_limit: int
     seed: int | None
     max_attempts_per_instance: int | None
+    region_pool_path: str | Path | None
+    region_pool_shuffle: bool
+    region_pool_replacement_policy: str
 
 
 def _worker_loop(worker_id: int, cfg: _WorkerConfig, result_queue, stop_event) -> None:  # noqa: ANN001
@@ -40,6 +43,9 @@ def _worker_loop(worker_id: int, cfg: _WorkerConfig, result_queue, stop_event) -
             region_reuse_limit=int(cfg.region_reuse_limit),
             seed=seed,
             max_attempts_per_instance=cfg.max_attempts_per_instance,
+            region_pool_path=cfg.region_pool_path,
+            region_pool_shuffle=cfg.region_pool_shuffle,
+            region_pool_replacement_policy=cfg.region_pool_replacement_policy,
         )
         while not stop_event.is_set():
             instance = pool.sample()
@@ -86,6 +92,9 @@ class AsyncInstancePool:
         regions_per_worker: int | None = None,
         multiprocessing_context: str = "spawn",
         get_timeout_s: float = 300.0,
+        region_pool_path: str | Path | None = None,
+        region_pool_shuffle: bool = True,
+        region_pool_replacement_policy: str = "cycle",
     ) -> None:
         self.num_workers = max(1, int(num_workers))
         self.queue_size = max(self.num_workers, int(queue_size))
@@ -101,6 +110,9 @@ class AsyncInstancePool:
             region_reuse_limit=int(region_reuse_limit),
             seed=seed,
             max_attempts_per_instance=max_attempts_per_instance,
+            region_pool_path=region_pool_path,
+            region_pool_shuffle=bool(region_pool_shuffle),
+            region_pool_replacement_policy=str(region_pool_replacement_policy),
         )
         self.mp_ctx = mp.get_context(multiprocessing_context)
         self.result_queue = self.mp_ctx.Queue(maxsize=self.queue_size)

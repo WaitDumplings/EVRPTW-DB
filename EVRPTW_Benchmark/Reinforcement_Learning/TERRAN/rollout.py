@@ -167,7 +167,7 @@ def compute_returns(rewards: torch.Tensor, dones: torch.Tensor, gamma: float) ->
     return returns
 
 
-def select_best_trajectory(info: dict[str, Any]) -> dict[str, Any]:
+def select_best_trajectory(info: dict[str, Any], include_routes: bool = True) -> dict[str, Any]:
     success = np.asarray(info["success"], dtype=bool)
     objective = np.asarray(info["objective_distance_km"], dtype=np.float64)
     served = np.asarray(info["served_customers"], dtype=np.int32)
@@ -180,20 +180,30 @@ def select_best_trajectory(info: dict[str, Any]) -> dict[str, Any]:
         candidates = np.where(served == max_served)[0]
         selected = int(candidates[np.argmin(objective[candidates])]) if candidates.size else 0
         feasible = False
-    routes = info["routes"][selected]
-    route_sequence = merge_route_sequences(routes)
-    return {
+    row = {
         "selected_traj_idx": selected,
         "feasible": feasible,
         "objective_distance_km": float(objective[selected]),
         "vehicle_count": int(np.asarray(info["vehicle_count"])[selected]),
         "served_customers": int(served[selected]),
-        "route_sequence_json": json.dumps(route_sequence),
-        "routes_json": json.dumps(routes),
     }
+    if include_routes and "routes" in info:
+        routes = info["routes"][selected]
+        route_sequence = merge_route_sequences(routes)
+        row["route_sequence_json"] = json.dumps(route_sequence)
+        row["routes_json"] = json.dumps(routes)
+    return row
 
 
-def rollout_single_instance(agent, env, decode_mode: str, max_steps: int, device: str | torch.device, seed: int | None = None):
+def rollout_single_instance(
+    agent,
+    env,
+    decode_mode: str,
+    max_steps: int,
+    device: str | torch.device,
+    seed: int | None = None,
+    include_routes: bool = True,
+):
     obs, info = env.reset(seed=seed) if seed is not None else env.reset()
     done = np.zeros(env.unwrapped.n_traj, dtype=bool)
     start = time.perf_counter()
@@ -206,6 +216,41 @@ def rollout_single_instance(agent, env, decode_mode: str, max_steps: int, device
         if done.all():
             break
     elapsed = time.perf_counter() - start
-    row = select_best_trajectory(info)
+    row = select_best_trajectory(info, include_routes=include_routes)
     row["runtime_s"] = float(elapsed)
     return row
+
+
+def rollout_eval_batch(
+    agent,
+    envs,
+    decode_mode: str,
+    max_steps: int,
+    device: str | torch.device,
+    seed: int | None = None,
+    include_routes: bool = False,
+):
+    if not envs:
+        return []
+    observations, infos = reset_envs(envs, seed=seed)
+    n_traj = int(envs[0].unwrapped.n_traj)
+    done = np.zeros((len(envs), n_traj), dtype=bool)
+    start = time.perf_counter()
+    for _ in range(int(max_steps)):
+        obs_batch = stack_observations(observations)
+        with torch.no_grad():
+            actions, _, _, _, _ = sample_actions(agent, obs_batch, decode_mode=decode_mode, device=device)
+        action_np = actions.detach().cpu().numpy().astype(np.int64)
+        observations, _, step_done, infos = step_envs(envs, action_np)
+        done = done | step_done
+        if done.all():
+            break
+    elapsed = time.perf_counter() - start
+    per_instance_runtime = float(elapsed) / max(len(envs), 1)
+    rows: list[dict[str, Any]] = []
+    for info in infos:
+        row = select_best_trajectory(info, include_routes=include_routes)
+        row["runtime_s"] = per_instance_runtime
+        row["batch_runtime_s"] = float(elapsed)
+        rows.append(row)
+    return rows
