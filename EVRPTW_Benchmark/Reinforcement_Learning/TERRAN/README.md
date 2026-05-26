@@ -9,7 +9,7 @@ rollouts through the environment's `n_traj` dimension.
 - `models/`: migrated TERRAN attention backbone, actor, and critic.
 - `env_factory.py`: creates the shared EVRPTW environment with optional TERRAN
   reward shaping.
-- `data_pool.py`: online mother-board pool for training-time instance sampling.
+- `data_pool.py`: online service-territory pool for training-time instance sampling.
 - `pbrs.py`: optional potential-based reward shaping switches.
 - `train.py`: PPO-style TERRAN training entry point.
 - `eval.py`: fixed-dataset best-of-`n_traj` sample evaluation.
@@ -18,27 +18,27 @@ rollouts through the environment's `n_traj` dimension.
   pickle instance.
 
 
-## Optional Precomputed Region Pool
+## Optional Precomputed Service-Territory Pool
 
-Training can use a reusable mother-board pool prepared by the dataset generator:
+Training can use a reusable service-territory pool prepared by the dataset generator:
 
 ```bash
 conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_region_pool \
-  --num-regions 256 \
-  --mother-num-customers 5000 \
-  --mother-num-charging-stations 120 \
+  --num-territories 1024 \
+  --latent-customer-pool-size 5000 \
+  --cs-candidate-pool-size 120 \
   --seed 20260525
 
 CUDA_VISIBLE_DEVICES=0 conda run -n maojie python -m EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train \
   --config cus15_terran.yaml \
   --seed 1515 \
-  --region-pool-path EVRPTW_Dataset/Amazon_Calibrated_v1/region_pools/mother_N5000_CS120_R256_seed20260525
+  --territory-pool-path EVRPTW_Dataset/AC_v1/ServiceTerritoryPool_1024
 ```
 
-`mother_board_pool_size` remains the number of active boards held by one run.
-`region_pool_path` is optional: if loading fails or the pool has fewer boards
+`mother_board_pool_size` remains the backward-compatible config key for the number of active service territories held by one run.
+`territory_pool_path` is optional: if loading fails or the pool has fewer territories
 than `mother_board_pool_size`, training automatically falls back to online
-generation. The default replacement policy is `cycle`, which reuses the
+service-territory generation. The default replacement policy is `cycle`, which reuses the
 precomputed pool for stale-region replacement without regenerating region
 geometry.
 
@@ -70,9 +70,9 @@ hyperparameters:
 - `configs/cus15_terran_pbrs.yaml`: TERRAN+PBRS with customer-progress,
   repair-distance progress, and terminal heuristic enabled.
 
-Training samples online Cus15/CS3 operating days from a 32-region mother-board
+Training samples online Cus15/CS3 operating days from a 32-region service-territory
 pool and does not save each training instance. Evaluation uses a fixed
-200-instance dataset and sample decoding: each instance runs `n_traj=50`
+1000-instance AC-v1 evaluation suite and sample decoding: each instance runs `n_traj=50`
 trajectories and keeps the best feasible trajectory by objective distance.
 
 

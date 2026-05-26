@@ -5,7 +5,7 @@ Source files generated from `/data/aws/data/almrrc2021-data-training/model_build
 - `/data/aws/amazon_daily_depot_analysis/depot_mother_board_summary.csv`
 - `/data/aws/amazon_daily_depot_analysis/depot_daily_active_customers.csv`
 
-The aggregation unit is `date x station_code`. A station/depot is interpreted as a region-level mother board; each date is interpreted as one active operating day.
+The aggregation unit is `date x station_code`. A station/depot is interpreted as a region-level service territory graph; each date is interpreted as one active operating day.
 
 ## Station Mother-Board Size
 
@@ -25,7 +25,7 @@ Unique active dropoff customers per `date x station_code`:
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 521 | 56 | 633 | 1381 | 1719.0 | 2233 | 3633 | 8611 |
 
-This supports fixed benchmark scales such as Cus50, Cus100, Cus1000, Cus1800, and Cus3000 as different operating-day demand levels sampled from a larger station territory. Cus8000-style studies should explicitly use an 8000+ mother board.
+This supports fixed benchmark scales such as Cus50, Cus100, Cus1000, Cus1800, and Cus3000 as different operating-day demand levels sampled from a larger station territory. Cus8000-style studies should explicitly use an 8000+ service territory graph.
 
 ## Daily Route Count Diagnostic
 

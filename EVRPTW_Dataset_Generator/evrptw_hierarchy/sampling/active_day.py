@@ -83,7 +83,7 @@ class ActiveDaySampler:
     def sample_active_customers(self, board: RegionBoard, num_customers: int) -> np.ndarray:
         n = len(board.customers)
         if num_customers > n:
-            raise ValueError(f"num_customers={num_customers} exceeds mother board customer pool {n}.")
+            raise ValueError(f"num_customers={num_customers} exceeds service-territory customer pool {n}.")
         cache = self._sampling_cache_for(board)
         cluster_labels = cache["cluster_labels"]
         micro_zone_labels = cache["micro_zone_labels"]
@@ -380,6 +380,8 @@ class ActiveDaySampler:
                 greedy_audit=audit,
                 metadata={
                     "generation_attempt": attempt + 1,
+                    "service_territory_id": board.region_id,
+                    "territory_graph_id": board.mother_board_id,
                     "terminal_node_ids": terminal_node_ids.astype(np.int32),
                     "time_window_metadata": tw_meta,
                     "active_customer_sampling": self.last_active_sampling_metadata,

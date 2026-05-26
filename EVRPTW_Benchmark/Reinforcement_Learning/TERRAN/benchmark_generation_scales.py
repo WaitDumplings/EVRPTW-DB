@@ -28,7 +28,7 @@ def _make_fixed_board_config(base_config_path: str | Path, output_dir: Path) -> 
     with path.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    # Benchmark active-day sampling against a fixed mother-board pool.
+    # Benchmark active-day sampling against a fixed service-territory pool.
     # Disable freshness replacement so the timing is not contaminated by
     # occasional region regeneration after high customer exposure.
     freshness = dict(cfg.get("freshness", {}))
@@ -72,6 +72,7 @@ def _run_scale(
     region_reuse_limit: int,
     seed: int,
     report_every: int,
+    territory_pool_path: str | Path | None,
     region_pool_path: str | Path | None,
 ) -> dict[str, Any]:
     pool = AsyncInstancePool(
@@ -88,6 +89,7 @@ def _run_scale(
         queue_size=int(queue_size),
         regions_per_worker=1,
         multiprocessing_context="spawn",
+        territory_pool_path=territory_pool_path,
         region_pool_path=region_pool_path,
     )
 
@@ -144,7 +146,7 @@ def _run_scale(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark fixed-board online instance generation across customer scales.")
+    parser = argparse.ArgumentParser(description="Benchmark fixed-territory online instance generation across customer scales.")
     parser.add_argument("--config", default="cus100_terran.yaml")
     parser.add_argument("--num-instances", type=int, default=10_000)
     parser.add_argument("--warmup-instances", type=int, default=64)
@@ -153,18 +155,18 @@ def main() -> None:
     parser.add_argument("--mother-num-customers", type=int, default=10_000)
     parser.add_argument("--mother-num-charging-stations", type=int, default=120)
     parser.add_argument("--region-reuse-limit", type=int, default=1_000_000)
-    parser.add_argument("--region-pool-path", type=str, default=None)
+    parser.add_argument("--territory-pool-path", "--region-pool-path", dest="territory_pool_path", type=str, default=None)
     parser.add_argument("--seed", type=int, default=20260524)
     parser.add_argument(
         "--scales",
         nargs="+",
-        default=["5:2", "15:3", "50:10", "100:20", "1000:120"],
+        default=["5:3", "15:3", "50:10", "100:20", "1000:120"],
         help="Customer:CS pairs, e.g. 100:20.",
     )
     parser.add_argument("--report-every", type=int, default=1000)
     parser.add_argument(
         "--output",
-        default="EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/logs/fixed_board_generation_scale_benchmark.csv",
+        default="EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/logs/fixed_territory_generation_scale_benchmark.csv",
     )
     args = parser.parse_args()
 
@@ -191,7 +193,8 @@ def main() -> None:
             region_reuse_limit=int(args.region_reuse_limit),
             seed=int(args.seed) + offset * 10_000,
             report_every=int(args.report_every),
-            region_pool_path=args.region_pool_path,
+            territory_pool_path=args.territory_pool_path,
+            region_pool_path=None,
         )
         rows.append(row)
         write_header = not output.exists()

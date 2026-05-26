@@ -8,8 +8,8 @@ This module adapts the legacy `ALNS_Solver_MULTI` implementation to the canonica
 
 ```bash
 python run_alns.py \
-  --dataset_path ../../../EVRPTW_Dataset/Amazon_Calibrated_v1/Cus_5/CS_2 \
-  --save_path ../../results/Amazon_Calibrated_v1/Cus_5/CS_2/ALNS_Solver \
+  --dataset_path ../../../EVRPTW_Dataset/AC_v1/AC_Tiny_5 \
+  --save_path ../../results/AC_v1/AC_Tiny_5/ALNS_Solver \
   --num_workers 4 \
   --seed 2026
 ```

@@ -4,8 +4,8 @@ Pickle-native VNS + Tabu Search benchmark module. The solver is adapted from the
 
 ```bash
 python run_vns_ts.py \
-  --dataset_path ../../../EVRPTW_Dataset/Amazon_Calibrated_v1/Cus_5/CS_2 \
-  --save_path ../../results/Amazon_Calibrated_v1/Cus_5/CS_2/VNS_TS_Solver \
+  --dataset_path ../../../EVRPTW_Dataset/AC_v1/AC_Tiny_5 \
+  --save_path ../../results/AC_v1/AC_Tiny_5/VNS_TS_Solver \
   --num_workers 4 \
   --seed 2026
 ```

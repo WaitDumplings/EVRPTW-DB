@@ -16,7 +16,7 @@ from evrptw_hierarchy.generation.generator import HierarchyDatasetGenerator
 
 @dataclass
 class OnlineInstancePool:
-    """In-memory mother-board pool for online TERRAN training."""
+    """In-memory service-territory pool for online TERRAN training."""
 
     config_path: str | Path
     num_regions: int = 32
@@ -27,6 +27,7 @@ class OnlineInstancePool:
     region_reuse_limit: int = 200
     seed: int | None = None
     max_attempts_per_instance: int | None = None
+    territory_pool_path: str | Path | None = None
     region_pool_path: str | Path | None = None
     region_pool_shuffle: bool = True
     region_pool_replacement_policy: str = "cycle"
@@ -39,8 +40,9 @@ class OnlineInstancePool:
         self.generator = HierarchyDatasetGenerator.from_config_path(path, seed=self.seed)
         self.region_pool_status = "generated_online"
         loaded_precomputed = False
-        if self.region_pool_path not in (None, ""):
-            pool_path = Path(self.region_pool_path)
+        pool_source = self.territory_pool_path if self.territory_pool_path not in (None, "") else self.region_pool_path
+        if pool_source not in (None, ""):
+            pool_path = Path(pool_source)
             if not pool_path.is_absolute():
                 pool_path = REPO_ROOT / pool_path
             try:
@@ -59,7 +61,7 @@ class OnlineInstancePool:
                         f"{len(self.generator.boards)}<{int(self.num_regions)}"
                     )
             except Exception as exc:  # Optional acceleration path; training must remain robust.
-                self.region_pool_status = f"precomputed_pool_failed:{self.region_pool_path}:{exc}"
+                self.region_pool_status = f"precomputed_pool_failed:{pool_source}:{exc}"
 
         if not loaded_precomputed:
             self.generator = HierarchyDatasetGenerator.from_config_path(path, seed=self.seed)

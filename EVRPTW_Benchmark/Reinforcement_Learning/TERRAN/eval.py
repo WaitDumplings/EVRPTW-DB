@@ -14,18 +14,36 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT))
 
-from evrptw_core.io import load_instance
+from evrptw_core.io import iter_instances
 from .env_factory import make_terran_env
 from .models import Agent
 from .rollout import rollout_eval_batch
 
 
-def _instance_paths(eval_path: Path, num_customers: int, num_charging_stations: int) -> list[Path]:
-    if eval_path.is_file():
-        return [eval_path]
-    nested = eval_path / "instances" / f"Cus_{num_customers}_CS_{num_charging_stations}"
-    root = nested if nested.exists() else eval_path
-    return sorted(root.glob("instance_*.pkl"))
+def _eval_instance_batches(
+    eval_path: Path,
+    num_customers: int,
+    num_charging_stations: int,
+    batch_size: int,
+    limit: int | None = None,
+    num_batches_limit: int | None = None,
+):
+    max_count = None if limit is None else int(limit)
+    if num_batches_limit is not None:
+        by_batches = max(1, int(batch_size)) * int(num_batches_limit)
+        max_count = by_batches if max_count is None else min(max_count, by_batches)
+    batch = []
+    seen = 0
+    for instance in iter_instances(eval_path, num_customers=num_customers, num_charging_stations=num_charging_stations):
+        if max_count is not None and seen >= max_count:
+            break
+        batch.append(instance)
+        seen += 1
+        if len(batch) >= max(1, int(batch_size)):
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -80,21 +98,18 @@ def main() -> None:
     agent.load_state_dict(checkpoint["model_state_dict"])
     agent.eval()
 
-    paths = _instance_paths(args.eval_path, args.num_customers, args.num_charging_stations)
-    if args.limit is not None:
-        paths = paths[: int(args.limit)]
-    if not paths:
-        raise FileNotFoundError(f"No instance_*.pkl files found under {args.eval_path}")
-
-    if args.eval_num_batches is not None:
-        paths = paths[: max(1, int(args.eval_batch_size)) * int(args.eval_num_batches)]
-
     rows = []
     batch_size = max(1, int(args.eval_batch_size))
     env_info_level = "full" if args.save_routes else args.info_level
-    for batch_start in range(0, len(paths), batch_size):
-        batch_paths = paths[batch_start : batch_start + batch_size]
-        instances = [load_instance(path) for path in batch_paths]
+    seen_before_batch = 0
+    for instances in _eval_instance_batches(
+        args.eval_path,
+        args.num_customers,
+        args.num_charging_stations,
+        batch_size,
+        args.limit,
+        args.eval_num_batches,
+    ):
         envs = [make_terran_env(instance=instance, n_traj=args.n_traj, info_level=env_info_level) for instance in instances]
         batch_rows = rollout_eval_batch(
             agent,
@@ -102,7 +117,7 @@ def main() -> None:
             decode_mode=args.decode_mode,
             max_steps=args.max_steps,
             device=device,
-            seed=args.seed + batch_start,
+            seed=args.seed + seen_before_batch,
             include_routes=args.save_routes,
         )
         for instance, row in zip(instances, batch_rows):
@@ -120,6 +135,10 @@ def main() -> None:
                 }
             )
         rows.extend(batch_rows)
+        seen_before_batch += len(instances)
+
+    if not rows:
+        raise FileNotFoundError(f"No EVRPTW instances found under {args.eval_path}")
 
     feasible_rows = [row for row in rows if row["feasible"]]
     summary = {
@@ -140,7 +159,7 @@ def main() -> None:
     }
     output_dir = args.output_dir
     if output_dir is None:
-        output_dir = REPO_ROOT / "EVRPTW_Benchmark/results/Amazon_Calibrated_v1" / f"Cus_{args.num_customers}" / f"CS_{args.num_charging_stations}" / solver_name
+        output_dir = REPO_ROOT / "EVRPTW_Benchmark/results/AC_v1" / f"Cus_{args.num_customers}" / f"CS_{args.num_charging_stations}" / solver_name
     _write_csv(output_dir / "terran_routes.csv", rows)
     _write_csv(output_dir / "terran_summary.csv", [summary])
     print(summary)

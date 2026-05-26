@@ -20,8 +20,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
-from evrptw_core.io import load_instance, save_solution
-from evrptw_core.schema import EVRPTWSolution
+from evrptw_core.io import iter_instance_dicts, load_instance, save_solution
+from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution
 from evrptw_core.validation import validate_instance_structure
 from instance_adapter import flatten_routes, to_alns_tensor_instance
 from solver import ALNS_Solver
@@ -44,17 +44,19 @@ def finite_or_none(value: float) -> float | None:
 
 
 def solve_one(task: dict[str, Any]) -> dict[str, Any]:
-    instance_file = Path(task["instance_file"])
+    instance_source = str(task.get("instance_file", ""))
+    instance_file = Path(instance_source) if instance_source else Path(".")
+    instance_payload = task.get("instance_payload")
     seed = int(task["seed"])
     max_iters = task.get("max_iters")
     delta_iters = task.get("delta_iters")
     verbose = bool(task.get("verbose", False))
     save_traceback = bool(task.get("save_traceback", False))
 
-    instance_id = instance_file.stem
+    instance_id = str(task.get("instance_id", instance_file.stem))
     try:
         set_random_seed(seed)
-        instance = load_instance(instance_file)
+        instance = EVRPTWInstance.from_dict(instance_payload) if instance_payload is not None else load_instance(instance_file)
         instance_id = instance.instance_id
         validation = validate_instance_structure(instance)
         if not validation.success:
@@ -224,22 +226,24 @@ def main() -> None:
     solutions_dir = save_path / "solutions"
     solutions_dir.mkdir(parents=True, exist_ok=True)
 
-    instance_files = iter_instance_files(dataset_path)
+    instance_payloads = list(iter_instance_dicts(dataset_path))
     if args.max_instances is not None:
-        instance_files = instance_files[: args.max_instances]
-    if not instance_files:
-        print(f"No instance pickle files found under: {dataset_path}")
+        instance_payloads = instance_payloads[: args.max_instances]
+    if not instance_payloads:
+        print(f"No EVRPTW instances found under: {dataset_path}")
 
     num_workers = max(1, int(args.num_workers))
     print(
-        f"ALNS benchmark schedule: instances={len(instance_files)}, num_workers={num_workers}, "
+        f"ALNS benchmark schedule: instances={len(instance_payloads)}, num_workers={num_workers}, "
         f"max_iters={args.max_iters}, delta_iters={args.delta_iters}"
     )
 
     tasks = []
-    for idx, instance_file in enumerate(instance_files):
+    for idx, payload in enumerate(instance_payloads):
         tasks.append({
-            "instance_file": str(instance_file),
+            "instance_file": str(dataset_path),
+            "instance_payload": payload,
+            "instance_id": str(payload.get("instance_id", f"instance_{idx:06d}")),
             "seed": int(args.seed) + idx,
             "max_iters": args.max_iters,
             "delta_iters": args.delta_iters,

@@ -6,8 +6,8 @@ The solver is intentionally simple and deterministic. It uses the canonical `dis
 
 ```bash
 python run_greedy.py \
-  --dataset_path ../../../EVRPTW_Dataset/Amazon_Calibrated_v1/Cus_5/CS_2 \
-  --save_path ../../results/Amazon_Calibrated_v1/Cus_5/CS_2/Greedy_Solver \
+  --dataset_path ../../../EVRPTW_Dataset/AC_v1/AC_Tiny_5 \
+  --save_path ../../results/AC_v1/AC_Tiny_5/Greedy_Solver \
   --num_workers 4 \
   --customer_order nearest \
   --seed 2026

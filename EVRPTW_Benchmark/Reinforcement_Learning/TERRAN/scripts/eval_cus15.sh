@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 PYTHON_BIN=(conda run -n maojie python)
 
-EVAL_PATH="${1:-EVRPTW_Dataset/Amazon_Calibrated_v1/Cus_15/CS_3/eval_200}"
+EVAL_PATH="${1:-EVRPTW_Dataset/AC_v1/AC_Small_15}"
 N_TRAJ="${2:-50}"
 DEVICE="${3:-cuda}"
 
@@ -36,22 +36,22 @@ run_eval \
   TERRAN \
   1234 \
   EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/checkpoints/Cus_15_CS_3/TERRAN/seed_1234/checkpoint_final.pt \
-  EVRPTW_Benchmark/results/Amazon_Calibrated_v1/Cus_15/CS_3/TERRAN/seed_1234
+  EVRPTW_Benchmark/results/AC_v1/AC_Small_15/TERRAN/seed_1234
 
 run_eval \
   TERRAN \
   2026 \
   EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/checkpoints/Cus_15_CS_3/TERRAN/seed_2026/checkpoint_final.pt \
-  EVRPTW_Benchmark/results/Amazon_Calibrated_v1/Cus_15/CS_3/TERRAN/seed_2026
+  EVRPTW_Benchmark/results/AC_v1/AC_Small_15/TERRAN/seed_2026
 
 run_eval \
   TERRAN_PBRS \
   1234 \
   EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/checkpoints/Cus_15_CS_3/TERRAN_PBRS/seed_1234/checkpoint_final.pt \
-  EVRPTW_Benchmark/results/Amazon_Calibrated_v1/Cus_15/CS_3/TERRAN_PBRS/seed_1234
+  EVRPTW_Benchmark/results/AC_v1/AC_Small_15/TERRAN_PBRS/seed_1234
 
 run_eval \
   TERRAN_PBRS \
   2026 \
   EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/checkpoints/Cus_15_CS_3/TERRAN_PBRS/seed_2026/checkpoint_final.pt \
-  EVRPTW_Benchmark/results/Amazon_Calibrated_v1/Cus_15/CS_3/TERRAN_PBRS/seed_2026
+  EVRPTW_Benchmark/results/AC_v1/AC_Small_15/TERRAN_PBRS/seed_2026

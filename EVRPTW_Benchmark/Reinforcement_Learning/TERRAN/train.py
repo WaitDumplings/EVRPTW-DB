@@ -19,11 +19,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-traj", type=int, default=None)
     parser.add_argument("--num-minibatches", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
-    parser.add_argument("--mother-board-pool-size", type=int, default=None)
-    parser.add_argument("--region-pool-path", type=str, default=None)
-    parser.add_argument("--region-pool-shuffle", action="store_true")
-    parser.add_argument("--no-region-pool-shuffle", action="store_true")
-    parser.add_argument("--region-pool-replacement-policy", type=str, default=None, choices=["cycle", "generate"])
+    parser.add_argument("--service-territory-pool-size", "--mother-board-pool-size", dest="mother_board_pool_size", type=int, default=None)
+    parser.add_argument("--territory-pool-path", "--region-pool-path", dest="territory_pool_path", type=str, default=None)
+    parser.add_argument("--territory-pool-shuffle", "--region-pool-shuffle", dest="territory_pool_shuffle", action="store_true")
+    parser.add_argument("--no-territory-pool-shuffle", "--no-region-pool-shuffle", dest="no_territory_pool_shuffle", action="store_true")
+    parser.add_argument("--territory-pool-replacement-policy", "--region-pool-replacement-policy", dest="territory_pool_replacement_policy", type=str, default=None, choices=["cycle", "generate"])
     parser.add_argument("--mother-num-customers", type=int, default=None)
     parser.add_argument("--mother-num-charging-stations", type=int, default=None)
     parser.add_argument("--eval-interval", type=int, default=None)
@@ -53,14 +53,14 @@ def main() -> None:
     overrides: dict[str, Any] = {"data": {}, "training": {}, "evaluation": {}}
     if args.mother_board_pool_size is not None:
         overrides["data"]["mother_board_pool_size"] = args.mother_board_pool_size
-    if args.region_pool_path is not None:
-        overrides["data"]["region_pool_path"] = args.region_pool_path
-    if args.region_pool_shuffle:
-        overrides["data"]["region_pool_shuffle"] = True
-    if args.no_region_pool_shuffle:
-        overrides["data"]["region_pool_shuffle"] = False
-    if args.region_pool_replacement_policy is not None:
-        overrides["data"]["region_pool_replacement_policy"] = args.region_pool_replacement_policy
+    if args.territory_pool_path is not None:
+        overrides["data"]["territory_pool_path"] = args.territory_pool_path
+    if args.territory_pool_shuffle:
+        overrides["data"]["territory_pool_shuffle"] = True
+    if args.no_territory_pool_shuffle:
+        overrides["data"]["territory_pool_shuffle"] = False
+    if args.territory_pool_replacement_policy is not None:
+        overrides["data"]["region_pool_replacement_policy"] = args.territory_pool_replacement_policy
     if args.mother_num_customers is not None:
         overrides["data"]["mother_num_customers"] = args.mother_num_customers
     if args.mother_num_charging_stations is not None:

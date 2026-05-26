@@ -11,7 +11,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
-from evrptw_core.io import load_instance, save_solution
+from evrptw_core.io import iter_instances, save_solution
 from evrptw_core.schema import EVRPTWSolution, solution_route_sequence
 from evrptw_core.validation import validate_instance_structure
 from gurobi_solver import GurobiEVRPTWSolver, GurobiSolverConfig
@@ -205,15 +205,12 @@ def main() -> None:
 
     summary_rows = []
     time_rows = []
-    instance_files = iter_instance_files(dataset_path)
-    if not instance_files:
-        print(f"No instance pickle files found under: {dataset_path}")
-
-    for instance_file in instance_files:
-        instance_id = instance_file.stem
+    instance_count = 0
+    for instance in iter_instances(dataset_path):
+        instance_count += 1
+        instance_file = dataset_path
+        instance_id = instance.instance_id
         try:
-            instance = load_instance(instance_file)
-            instance_id = instance.instance_id
             validation = validate_instance_structure(instance)
             if not validation.success:
                 errors = json.dumps(validation.errors)

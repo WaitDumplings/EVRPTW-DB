@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import pickle
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution
+
+INSTANCE_BUNDLE_FORMAT = "evrptw_instance_bundle_v1"
 
 
 def _load_pickle_dict(path: str | Path) -> dict[str, Any]:
@@ -15,8 +17,106 @@ def _load_pickle_dict(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def _iter_instance_dicts_from_file(path: Path) -> Iterator[dict[str, Any]]:
+    with path.open("rb") as f:
+        first = pickle.load(f)
+        if not isinstance(first, dict):
+            raise TypeError(f"Expected pickle dict at {path}, got {type(first)!r}")
+        if first.get("format") == INSTANCE_BUNDLE_FORMAT:
+            count = first.get("num_instances")
+            read = 0
+            while count is None or read < int(count):
+                try:
+                    payload = pickle.load(f)
+                except EOFError:
+                    break
+                if not isinstance(payload, dict):
+                    raise TypeError(f"Bad instance payload in {path}: {type(payload)!r}")
+                yield payload
+                read += 1
+            return
+        if "instances" in first and isinstance(first["instances"], list):
+            for payload in first["instances"]:
+                if not isinstance(payload, dict):
+                    raise TypeError(f"Bad instance payload in {path}: {type(payload)!r}")
+                yield payload
+            return
+        yield first
+
+
+def instance_bundle_path(dataset_path: str | Path, num_customers: int | None = None, num_charging_stations: int | None = None) -> Path | None:
+    root = Path(dataset_path)
+    if root.is_file():
+        return root
+    direct = root / "instances.pkl"
+    if direct.exists():
+        return direct
+    if num_customers is not None and num_charging_stations is not None:
+        nested = root / "instances" / f"Cus_{int(num_customers)}_CS_{int(num_charging_stations)}" / "instances.pkl"
+        if nested.exists():
+            return nested
+    return None
+
+
+def iter_instance_dicts(
+    dataset_path: str | Path,
+    *,
+    num_customers: int | None = None,
+    num_charging_stations: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    root = Path(dataset_path)
+    bundle = instance_bundle_path(root, num_customers, num_charging_stations)
+    if bundle is not None:
+        yield from _iter_instance_dicts_from_file(bundle)
+        return
+    if root.is_file():
+        yield from _iter_instance_dicts_from_file(root)
+        return
+    if num_customers is not None and num_charging_stations is not None:
+        nested = root / "instances" / f"Cus_{int(num_customers)}_CS_{int(num_charging_stations)}"
+        search_root = nested if nested.exists() else root
+    else:
+        search_root = root / "instances" if (root / "instances").exists() else root
+    for path in sorted(search_root.glob("**/instance_*.pkl")):
+        yield from _iter_instance_dicts_from_file(path)
+
+
+def iter_instances(
+    dataset_path: str | Path,
+    *,
+    num_customers: int | None = None,
+    num_charging_stations: int | None = None,
+) -> Iterator[EVRPTWInstance]:
+    for payload in iter_instance_dicts(dataset_path, num_customers=num_customers, num_charging_stations=num_charging_stations):
+        instance = EVRPTWInstance.from_dict(payload)
+        if num_customers is not None and instance.num_customers != int(num_customers):
+            continue
+        if num_charging_stations is not None and instance.num_charging_stations != int(num_charging_stations):
+            continue
+        yield instance
+
+
+def load_instances(
+    dataset_path: str | Path,
+    *,
+    num_customers: int | None = None,
+    num_charging_stations: int | None = None,
+    limit: int | None = None,
+) -> list[EVRPTWInstance]:
+    out: list[EVRPTWInstance] = []
+    for instance in iter_instances(dataset_path, num_customers=num_customers, num_charging_stations=num_charging_stations):
+        out.append(instance)
+        if limit is not None and len(out) >= int(limit):
+            break
+    return out
+
+
 def load_instance(path: str | Path) -> EVRPTWInstance:
-    return EVRPTWInstance.from_dict(_load_pickle_dict(path))
+    iterator = iter_instances(path)
+    try:
+        return next(iterator)
+    except StopIteration as exc:
+        raise ValueError(f"No EVRPTW instance found in {path}") from exc
 
 
 def load_solution(path: str | Path) -> EVRPTWSolution:

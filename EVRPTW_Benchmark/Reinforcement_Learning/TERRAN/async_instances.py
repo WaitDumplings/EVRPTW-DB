@@ -25,6 +25,7 @@ class _WorkerConfig:
     region_reuse_limit: int
     seed: int | None
     max_attempts_per_instance: int | None
+    territory_pool_path: str | Path | None
     region_pool_path: str | Path | None
     region_pool_shuffle: bool
     region_pool_replacement_policy: str
@@ -43,6 +44,7 @@ def _worker_loop(worker_id: int, cfg: _WorkerConfig, result_queue, stop_event) -
             region_reuse_limit=int(cfg.region_reuse_limit),
             seed=seed,
             max_attempts_per_instance=cfg.max_attempts_per_instance,
+            territory_pool_path=cfg.territory_pool_path,
             region_pool_path=cfg.region_pool_path,
             region_pool_shuffle=cfg.region_pool_shuffle,
             region_pool_replacement_policy=cfg.region_pool_replacement_policy,
@@ -92,6 +94,7 @@ class AsyncInstancePool:
         regions_per_worker: int | None = None,
         multiprocessing_context: str = "spawn",
         get_timeout_s: float = 300.0,
+        territory_pool_path: str | Path | None = None,
         region_pool_path: str | Path | None = None,
         region_pool_shuffle: bool = True,
         region_pool_replacement_policy: str = "cycle",
@@ -110,6 +113,7 @@ class AsyncInstancePool:
             region_reuse_limit=int(region_reuse_limit),
             seed=seed,
             max_attempts_per_instance=max_attempts_per_instance,
+            territory_pool_path=territory_pool_path,
             region_pool_path=region_pool_path,
             region_pool_shuffle=bool(region_pool_shuffle),
             region_pool_replacement_policy=str(region_pool_replacement_policy),

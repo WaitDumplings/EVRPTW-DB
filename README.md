@@ -4,53 +4,58 @@ EVRPTW-DB is a dataset-and-benchmark repository for Electric Vehicle Routing Pro
 
 The project is organized around two deliverables:
 
-- **D: Dataset** - a real-data-calibrated hierarchical generator and generated EVRP-TW-D instances.
-- **B: Benchmark** - exact, metaheuristic, and reinforcement-learning solvers evaluated on the same instance schema.
+- **EVRPTW-D**: real-data-calibrated generated EVRP-TW datasets.
+- **EVRPTW-B**: exact, metaheuristic, and reinforcement-learning solvers evaluated on the same instance schema.
+
+The first released dataset profile is **AC-v1**: Amazon-Calibrated v1. This keeps the dataset family name stable (`EVRPTW-D`) while allowing later calibrated profiles such as `AC-v2` or non-Amazon profiles.
 
 ## Repository Layout
 
 ```text
 EVRPTW-DB/
   EVRPTW_Core/                  # shared schema, loaders, validation, metrics
-  EVRPTW_Dataset_Generator/     # hierarchical mother-board / active-day generator
-  EVRPTW_Dataset/               # generated datasets, grouped by dataset name / Cus / CS
-  EVRPTW_Benchmark/             # solver implementations and benchmark runner
+  EVRPTW_Dataset_Generator/     # service-territory / operating-day generator
+  EVRPTW_Dataset/               # generated EVRPTW-D releases, e.g. AC_v1
+  EVRPTW_Benchmark/             # solver implementations and benchmark runners
     Exact/
-      Gurobi_Solver/
     MetaHeuristics/
-      Greedy_Solver/
-      VNS_TS_Solver/
-      ALNS_Solver/
     Reinforcement_Learning/
-      TERRAN/
   docs/
 ```
 
-## Current Status
+## Dataset Framing
 
-- `EVRPTW_Dataset_Generator` contains the Amazon-calibrated hierarchical generator.
-- `EVRPTW_Dataset` is intentionally empty in git; generated instances should be produced locally or released separately.
-- `EVRPTW_Benchmark` currently contains the planned solver layout. Solver adapters and validation will be added next.
+Generation is two-stage:
 
-## Example Dataset Generation
+1. A **service territory graph** represents a stable city/region/delivery-station territory.
+2. An **operating-day instance** activates customers and charging stations from that territory, then samples demand, service time, time windows, and active travel matrices.
 
-```bash
-cd EVRPTW_Dataset_Generator
-python instance_generate.py \
-  --config_path configs/amazon_hierarchy.yaml \
-  --save_path ../EVRPTW_Dataset/Amazon_Calibrated_v1/Cus_1800/CS_12 \
-  --num_instances 1000 \
-  --num_customers 1800 \
-  --num_charging_stations 12 \
-  --num_regions 10 \
-  --mother_num_customers 5000 \
-  --mother_num_charging_stations 120 \
-  --region_reuse_limit 200 \
-  --seed 20260522
+Internal code still preserves legacy `mother_board_*` fields for backward compatibility, but public documentation and release manifests use service-territory terminology.
+
+## AC-v1 Layout
+
+```text
+EVRPTW_Dataset/
+  AC_v1/
+    train/service_territory_pool.pkl        # 1024 training service territories
+    eval/service_territory_pool.pkl         # held-out evaluation service territories
+    eval/AC_Tiny_5/instances.pkl
+    eval/AC_Small_15/instances.pkl
+    eval/AC_Medium_50/instances.pkl
+    eval/AC_Large_100/instances.pkl
+    eval/AC_XLarge_1000/instances.pkl
+    generation_timing.csv
+    dataset_manifest.json
 ```
 
-## Design Notes
+## Example
 
-- Dataset generation is two-stage: mother board = region/service territory, instance = one operating day.
-- Benchmark solvers must only read exported daily instances from `EVRPTW_Dataset`; they must not access inactive mother-board customers or inactive charging stations.
-- Shared validation and metrics will live in `EVRPTW_Core` to avoid schema drift between generator and solvers.
+```bash
+python EVRPTW_Dataset_Generator/prepare_ac_benchmark_suite.py \
+  --train-territories 1024 \
+  --eval-territories 256 \
+  --num-instances 1000 \
+  --seed 20260525
+```
+
+Benchmark solvers must only read exported operating-day instances from `EVRPTW_Dataset`; they must not access inactive territory customers or inactive charging stations.

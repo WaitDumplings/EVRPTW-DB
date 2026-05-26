@@ -5,7 +5,7 @@ This document explains how to calibrate the generator to a real last-mile datase
 The core interpretation is:
 
 ```text
-mother board = stable city / region / delivery-station service territory
+service territory graph = stable city / region / delivery-station service territory
 instance     = one active operating day sampled from that territory
 ```
 
@@ -28,7 +28,7 @@ Defensible points:
 
 Known boundary:
 
-- This is not a real GIS road network. If exact roads are available, they can replace the synthetic graph while keeping the same mother-board / active-day architecture.
+- This is not a real GIS road network. If exact roads are available, they can replace the synthetic graph while keeping the same service-territory / active-day architecture.
 
 ### 1.2 Customer Locations
 
@@ -97,7 +97,7 @@ This gives small instances enough diversity without destroying large-scale Amazo
 
 Amazon does not provide EV charging infrastructure. The generator therefore treats CS placement and activation as a modeled EV overlay.
 
-Mother-board CS are placed on arterial/corridor edges, not inside residential micro-zones. Daily CS are selected using a graph facility-location objective over active customers:
+Service-territory CS are placed on arterial/corridor edges, not inside residential micro-zones. Daily CS are selected using a graph facility-location objective over active customers:
 
 ```text
 J(S) = alpha * mean customer-to-nearest-CS distance
@@ -143,7 +143,7 @@ This is defensible because service time is empirically correlated with package c
 
 ### 1.7 Feasibility
 
-Mother-board validation checks structural reachability. Daily instance validation is authoritative:
+Service-territory validation checks structural reachability. Daily instance validation is authoritative:
 
 - active road distances are computed after active customers and active CS are selected;
 - inactive CS cannot appear in the active EV transition graph;
@@ -479,7 +479,7 @@ Use this order to avoid unstable calibration.
 
 Use this framing:
 
-> We model benchmark generation as a two-stage process. First, a city/region-level mother board is generated to represent a station service territory calibrated from real last-mile input-side statistics. Second, daily EVRP-TW-D instances are sampled from this fixed territory by activating a subset of customers and charging stations, then generating daily demand, service times, and time windows. This mirrors real last-mile operations, where the service territory is stable but daily orders vary.
+> We model benchmark generation as a two-stage process. First, a city/region-level service territory graph is generated to represent a station service territory calibrated from real last-mile input-side statistics. Second, daily EVRP-TW-D instances are sampled from this fixed territory by activating a subset of customers and charging stations, then generating daily demand, service times, and time windows. This mirrors real last-mile operations, where the service territory is stable but daily orders vary.
 
 For Amazon specifically:
 

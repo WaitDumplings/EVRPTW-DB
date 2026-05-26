@@ -10,8 +10,8 @@ The new benchmark path reads `.pkl` daily instances through `EVRPTW_Core`. We do
 
 ```bash
 python run_gurobi.py \
-  --dataset_path ../../../EVRPTW_Dataset/Amazon_Calibrated_v1/Cus_5/CS_2 \
-  --save_path ../../results/Amazon_Calibrated_v1/Cus_5/CS_2/Gurobi_Solver \
+  --dataset_path ../../../EVRPTW_Dataset/AC_v1/AC_Tiny_5 \
+  --save_path ../../results/AC_v1/AC_Tiny_5/Gurobi_Solver \
   --time_limit_s 900 \
   --checkpoints_s 60,300,900 \
   --cs_copies 3

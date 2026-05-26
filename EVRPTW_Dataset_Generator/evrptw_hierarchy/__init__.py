@@ -2,7 +2,7 @@
 
 The package implements a two-stage benchmark generator:
 
-1. A city/region mother board with a static road graph and latent demand pool.
+1. A city/region service-territory graph with a static road graph and latent demand pool.
 2. Daily EVRP-TW-D instances sampled from that region.
 """
 

@@ -4,8 +4,8 @@
 
 The generator separates region-level structure from daily operating uncertainty.
 
-- **Mother board**: a city/region/station service territory. It stores the road graph, depot, latent customer pool, community structure, and charging-station candidate pool.
-- **Daily instance**: one operating day sampled from a mother board. It activates customers and charging stations, then samples demand, service time, and time windows.
+- **Service territory graph**: a city/region/station service territory. It stores the road graph, depot, latent customer pool, community structure, and charging-station candidate pool.
+- **Daily instance**: one operating day sampled from a service territory graph. It activates customers and charging stations, then samples demand, service time, and time windows.
 
 This mirrors last-mile operations: the service territory is stable, while daily orders and available operating infrastructure vary.
 
@@ -33,7 +33,7 @@ with default `K_ref=18`, `N_ref=1800`, and `alpha=0.8`. Users may override it in
 
 Charging stations are placed on corridor/arterial road edges rather than inside customer micro-zones. This matches the operational assumption that public or fleet-accessible chargers are more likely on major roads and highway exits than in residential community interiors.
 
-The mother board stores a large candidate pool. Daily instances activate a smaller subset.
+The service territory graph stores a large candidate pool. Daily instances activate a smaller subset.
 
 ## Daily CS Activation
 
@@ -109,7 +109,7 @@ This keeps the benchmark as a pool of regions and a pool of daily instances.
 
 ## Feasibility Semantics
 
-Mother-board validation checks structural serviceability:
+Service-territory validation checks structural serviceability:
 
 - road graph connectivity from depot;
 - depot/customer/cluster battery reachability under the full CS pool;

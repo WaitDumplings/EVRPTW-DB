@@ -23,6 +23,8 @@ def pool_kwargs(cfg: dict[str, Any], seed: int, args: argparse.Namespace) -> dic
         region_reuse_limit=int(data.get("region_reuse_limit", 200)),
         seed=seed,
         max_attempts_per_instance=data.get("max_attempts_per_instance"),
+        territory_pool_path=args.territory_pool_path or data.get("territory_pool_path"),
+        region_pool_path=data.get("region_pool_path"),
     )
 
 
@@ -35,9 +37,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20260524)
     parser.add_argument("--num-customers", type=int, default=None)
     parser.add_argument("--num-charging-stations", type=int, default=None)
-    parser.add_argument("--mother-board-pool-size", type=int, default=None)
+    parser.add_argument("--mother-board-pool-size", "--service-territory-pool-size", dest="mother_board_pool_size", type=int, default=None)
     parser.add_argument("--mother-num-customers", type=int, default=None)
     parser.add_argument("--mother-num-charging-stations", type=int, default=None)
+    parser.add_argument("--territory-pool-path", type=str, default=None)
     parser.add_argument("--output", default="EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/logs/instance_prefetch_benchmark.csv")
     args = parser.parse_args()
 
@@ -81,7 +84,7 @@ def main() -> None:
         "num_workers": int(args.num_workers),
         "num_customers": int(async_kwargs["num_customers"]),
         "num_charging_stations": int(async_kwargs["num_charging_stations"]),
-        "mother_board_pool_size": int(async_kwargs["num_regions"]),
+        "service_territory_pool_size": int(async_kwargs["num_regions"]),
         "seq_init_s": seq_init_s,
         "seq_sample_s": seq_sample_s,
         "seq_sample_per_instance_s": seq_sample_s / max(n, 1),

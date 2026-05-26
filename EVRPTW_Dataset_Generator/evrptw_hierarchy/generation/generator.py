@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import MISSING, dataclass, field
 import json
+import pickle
 from pathlib import Path
 from typing import Any
 
@@ -168,7 +169,7 @@ class HierarchyDatasetGenerator:
         mother_num_customers: int,
         mother_num_charging_stations: int,
     ) -> dict[str, Any]:
-        """Generate and persist a reusable city/region mother-board pool."""
+        """Generate and persist a reusable service-territory graph pool."""
         root = ensure_dir(save_path)
         self.prepare_region_pool(
             num_regions=int(num_regions),
@@ -179,13 +180,25 @@ class HierarchyDatasetGenerator:
         usages = [_fresh_usage(board) for board in self.boards]
         region_rows = [summarize_region(board, usage) for board, usage in zip(self.boards, usages)]
         manifest = {
+            "dataset_family": "EVRPTW-D",
+            "dataset_version": "AC-v1",
+            "calibration_profile": "Amazon-Calibrated",
+            "pool_type": "service_territory_pool",
             "pool_path": str(root),
+            "num_service_territories": int(len(self.boards)),
             "num_regions": int(len(self.boards)),
+            "latent_customer_pool_size": int(mother_num_customers),
+            "cs_candidate_pool_size": int(mother_num_charging_stations),
             "mother_num_customers": int(mother_num_customers),
             "mother_num_charging_stations": int(mother_num_charging_stations),
             "seed": self.seed,
+            "service_territory_ids": [board.region_id for board in self.boards],
             "region_ids": [board.region_id for board in self.boards],
             "region_rows": region_rows,
+            "terminology": {
+                "service_territory_graph": "Stable city/region/delivery-station service territory.",
+                "legacy_internal_fields": ["mother_board_id"],
+            },
         }
         with (root / "manifest.json").open("w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)
@@ -198,19 +211,39 @@ class HierarchyDatasetGenerator:
         shuffle: bool = True,
         replacement_policy: str = "cycle",
     ) -> None:
-        """Load a reusable mother-board pool and activate up to ``num_regions`` boards.
+        """Load a reusable service-territory pool and activate up to ``num_regions`` boards.
 
-        ``num_regions`` controls the in-memory active region pool used by online
-        training. The full precomputed pool remains available for stale-region
+        ``num_regions`` controls the active service-territory pool used by online
+        training. The full precomputed pool remains available for stale-territory
         replacement, so a larger offline pool can support many training epochs
-        without regenerating region geometry.
+        without regenerating territory geometry.
         """
         root = Path(pool_path)
-        region_dir = root / "regions" if (root / "regions").exists() else root
-        board_paths = sorted(region_dir.glob("*_board.pkl"))
-        if not board_paths:
-            raise FileNotFoundError(f"No region board pickles found under {region_dir}")
-        boards = [_region_board_from_payload(load_pickle(path)) for path in board_paths]
+        boards: list[RegionBoard]
+        bundle_path = root if root.is_file() else root / "service_territory_pool.pkl"
+        if bundle_path.exists():
+            boards = []
+            with bundle_path.open("rb") as f:
+                first = pickle.load(f)
+                if isinstance(first, dict) and first.get("format") == "evrptw_service_territory_pool_v1":
+                    count = int(first.get("num_service_territories", 0))
+                    for _ in range(count):
+                        try:
+                            boards.append(_region_board_from_payload(pickle.load(f)))
+                        except EOFError:
+                            break
+                elif isinstance(first, dict) and "service_territories" in first:
+                    boards = [_region_board_from_payload(payload) for payload in first["service_territories"]]
+                else:
+                    boards = [_region_board_from_payload(first)]
+            if not boards:
+                raise FileNotFoundError(f"No service territory payloads found in {bundle_path}")
+        else:
+            region_dir = root / "regions" if (root / "regions").exists() else root
+            board_paths = sorted(region_dir.glob("*_board.pkl"))
+            if not board_paths:
+                raise FileNotFoundError(f"No service territory bundle or region board pickles found under {root}")
+            boards = [_region_board_from_payload(load_pickle(path)) for path in board_paths]
         if shuffle:
             order = self.rng.permutation(len(boards))
             boards = [boards[int(idx)] for idx in order]
@@ -231,7 +264,7 @@ class HierarchyDatasetGenerator:
         mother_num_customers: int,
         mother_num_charging_stations: int,
     ) -> None:
-        """Ensure the in-memory mother-board pool contains ``num_regions`` boards."""
+        """Ensure the in-memory service-territory pool contains ``num_regions`` boards."""
         while len(self.boards) < int(num_regions):
             slot = len(self.boards)
             self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
@@ -298,16 +331,22 @@ class HierarchyDatasetGenerator:
         region_reuse_limit: int,
         max_attempts_per_instance: int | None = None,
         save_plots: bool = True,
+        save_regions: bool = True,
+        dataset_metadata: dict[str, Any] | None = None,
+        clear_oracle_after_instance: bool = False,
+        bundle_instances: bool = True,
     ) -> dict[str, Any]:
         root = Path(save_path)
         ensure_dir(root)
-        instance_dir = ensure_dir(root / "instances" / f"Cus_{int(num_customers)}_CS_{int(num_charging_stations)}")
+        instance_dir = root / "instances" / f"Cus_{int(num_customers)}_CS_{int(num_charging_stations)}"
+        instances_path = root / "instances.pkl"
         plots_dir = ensure_dir(root / "analysis_outputs" / "plots")
 
         while len(self.boards) < int(num_regions):
             slot = len(self.boards)
             self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
-        self._save_regions(root)
+        if save_regions:
+            self._save_regions(root)
 
         sampler = ActiveDaySampler(self.config, self.vehicle, self.rng)
         max_attempts = int(max_attempts_per_instance or self.config.get("generation", {}).get("max_attempts_per_instance", 30))
@@ -315,61 +354,100 @@ class HierarchyDatasetGenerator:
         instance_rows: list[dict[str, Any]] = []
         plot_limit = int(self.config.get("visualization", {}).get("max_instance_plots", 10))
 
-        for instance_index in range(int(num_instances)):
-            outer_attempts = int(self.config.get("generation", {}).get("max_region_attempts_per_instance", 5))
-            last_error = "not_started"
-            instance = None
-            for outer_attempt in range(outer_attempts):
-                slot = self._select_region_slot(int(region_reuse_limit))
-                if self._is_stale(self.usages[slot], int(region_reuse_limit)):
-                    self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
-                    self._save_regions(root)
-                board = self.boards[slot]
-                usage = self.usages[slot]
-                oracle = self._oracle_for(board)
-                try:
-                    instance = sampler.build_instance(
-                        board=board,
-                        usage_index=usage.sampled_days + 1,
-                        instance_index=instance_index,
-                        num_customers=int(num_customers),
-                        num_charging_stations=int(num_charging_stations),
-                        max_attempts=max_attempts,
-                        oracle=oracle,
-                    )
-                    usage.record_day(instance.active_customer_ids, board.cluster_labels, int(self.config.get("freshness", {}).get("recent_window", 30)))
-                    break
-                except Exception as exc:  # Keep generation robust; failed candidates are reported, not saved.
-                    last_error = str(exc)
-                    failed_attempt_rows.append({
-                        "instance_index": instance_index,
-                        "outer_attempt": outer_attempt + 1,
-                        "region_id": board.region_id,
-                        "error": last_error,
-                    })
-                    self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
-                    self._save_regions(root)
-            if instance is None:
-                raise RuntimeError(f"Failed to generate instance_{instance_index:06d}: {last_error}")
+        bundle_file = None
+        if bundle_instances:
+            header = {
+                "format": "evrptw_instance_bundle_v1",
+                "dataset_metadata": dataset_metadata or {},
+                "num_instances": int(num_instances),
+                "num_customers": int(num_customers),
+                "num_charging_stations": int(num_charging_stations),
+            }
+            bundle_file = instances_path.open("wb")
+            pickle.dump(header, bundle_file, protocol=pickle.HIGHEST_PROTOCOL)
+        else:
+            ensure_dir(instance_dir)
 
-            save_pickle(instance_dir / f"{instance.instance_id}.pkl", instance)
-            row = summarize_instance(instance)
-            instance_rows.append(row)
-            if save_plots and instance_index < plot_limit:
-                write_region_svg(self.boards[slot], plots_dir / f"{instance.instance_id}_active_day.svg", instance=instance)
+        try:
+            for instance_index in range(int(num_instances)):
+                outer_attempts = int(self.config.get("generation", {}).get("max_region_attempts_per_instance", 5))
+                last_error = "not_started"
+                instance = None
+                board = None
+                slot = 0
+                for outer_attempt in range(outer_attempts):
+                    slot = self._select_region_slot(int(region_reuse_limit))
+                    if self._is_stale(self.usages[slot], int(region_reuse_limit)):
+                        self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
+                        if save_regions:
+                            self._save_regions(root)
+                    board = self.boards[slot]
+                    usage = self.usages[slot]
+                    oracle = self._oracle_for(board)
+                    try:
+                        instance = sampler.build_instance(
+                            board=board,
+                            usage_index=usage.sampled_days + 1,
+                            instance_index=instance_index,
+                            num_customers=int(num_customers),
+                            num_charging_stations=int(num_charging_stations),
+                            max_attempts=max_attempts,
+                            oracle=oracle,
+                        )
+                        usage.record_day(
+                            instance.active_customer_ids,
+                            board.cluster_labels,
+                            int(self.config.get("freshness", {}).get("recent_window", 30)),
+                        )
+                        break
+                    except Exception as exc:  # Keep generation robust; failed candidates are reported, not saved.
+                        last_error = str(exc)
+                        failed_attempt_rows.append({
+                            "instance_index": instance_index,
+                            "outer_attempt": outer_attempt + 1,
+                            "region_id": board.region_id,
+                            "error": last_error,
+                        })
+                        self._create_region(slot, int(mother_num_customers), int(mother_num_charging_stations))
+                        if save_regions:
+                            self._save_regions(root)
+                if instance is None or board is None:
+                    raise RuntimeError(f"Failed to generate instance_{instance_index:06d}: {last_error}")
 
-        self._save_regions(root)
+                if bundle_instances:
+                    assert bundle_file is not None
+                    pickle.dump(instance.to_pickle_dict(), bundle_file, protocol=pickle.HIGHEST_PROTOCOL)
+                else:
+                    save_pickle(instance_dir / f"{instance.instance_id}.pkl", instance)
+                row = summarize_instance(instance)
+                instance_rows.append(row)
+                if save_plots and instance_index < plot_limit:
+                    write_region_svg(self.boards[slot], plots_dir / f"{instance.instance_id}_active_day.svg", instance=instance)
+                if clear_oracle_after_instance:
+                    self.oracles.pop(board.region_id, None)
+        finally:
+            if bundle_file is not None:
+                bundle_file.close()
+
+        if save_regions:
+            self._save_regions(root)
         region_rows = [summarize_region(board, usage) for board, usage in zip(self.boards, self.usages)]
         write_reports(root, region_rows, instance_rows, failed_attempt_rows)
+        if dataset_metadata is not None:
+            metadata_dir = ensure_dir(root / "metadata")
+            with (metadata_dir / "dataset_manifest.json").open("w", encoding="utf-8") as f:
+                json.dump(dataset_metadata, f, indent=2)
         if save_plots:
             for idx, board in enumerate(self.boards[:plot_limit]):
-                write_region_svg(board, plots_dir / f"{board.region_id}_mother_board.svg")
+                write_region_svg(board, plots_dir / f"{board.region_id}_service_territory.svg")
 
         return {
             "save_path": str(root),
-            "instances_dir": str(instance_dir),
+            "instances_path": str(instances_path if bundle_instances else instance_dir),
+            "instances_dir": str(root if bundle_instances else instance_dir),
             "num_instances": int(num_instances),
             "num_regions_in_pool": int(len(self.boards)),
+            "num_service_territories_in_pool": int(len(self.boards)),
             "generated_instance_rows": instance_rows,
             "region_rows": region_rows,
             "failed_attempt_rows": failed_attempt_rows,

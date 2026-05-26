@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT))
 
-from evrptw_core.io import load_instance
+from evrptw_core.io import iter_instances
 
 from .async_instances import AsyncInstancePool
 from .data_pool import OnlineInstancePool
@@ -72,12 +72,30 @@ def _resolve_repo_path(path: str | Path | None) -> Path | None:
     return out if out.is_absolute() else REPO_ROOT / out
 
 
-def _instance_paths(eval_path: Path, num_customers: int, num_charging_stations: int) -> list[Path]:
-    if eval_path.is_file():
-        return [eval_path]
-    nested = eval_path / "instances" / f"Cus_{num_customers}_CS_{num_charging_stations}"
-    root = nested if nested.exists() else eval_path
-    return sorted(root.glob("instance_*.pkl"))
+def _eval_instance_batches(
+    eval_path: Path,
+    num_customers: int,
+    num_charging_stations: int,
+    batch_size: int,
+    limit: int | None = None,
+    num_batches_limit: int | None = None,
+):
+    max_count = None if limit is None else int(limit)
+    if num_batches_limit is not None:
+        by_batches = max(1, int(batch_size)) * int(num_batches_limit)
+        max_count = by_batches if max_count is None else min(max_count, by_batches)
+    batch = []
+    seen = 0
+    for instance in iter_instances(eval_path, num_customers=num_customers, num_charging_stations=num_charging_stations):
+        if max_count is not None and seen >= max_count:
+            break
+        batch.append(instance)
+        seen += 1
+        if len(batch) >= max(1, int(batch_size)):
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 def _pbrs_enabled(cfg: dict[str, Any]) -> bool:
@@ -179,8 +197,9 @@ def make_envs(cfg: dict[str, Any], seed: int):
         region_reuse_limit=int(data_cfg.get("region_reuse_limit", 200)),
         seed=seed,
         max_attempts_per_instance=data_cfg.get("max_attempts_per_instance"),
+        territory_pool_path=data_cfg.get("territory_pool_path"),
         region_pool_path=data_cfg.get("region_pool_path"),
-        region_pool_shuffle=bool(data_cfg.get("region_pool_shuffle", True)),
+        region_pool_shuffle=bool(data_cfg.get("territory_pool_shuffle", data_cfg.get("region_pool_shuffle", True))),
         region_pool_replacement_policy=str(data_cfg.get("region_pool_replacement_policy", "cycle")),
     )
     if bool(data_cfg.get("async_instance_prefetch", False)):
@@ -243,12 +262,33 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
             "eval_avg_runtime_s": np.nan,
             "eval_status": f"missing_eval_path:{eval_path}",
         }
-    paths = _instance_paths(eval_path, num_customers, num_cs)
-    if limit is not None:
-        paths = paths[: int(limit)]
-    if num_batches_limit is not None:
-        paths = paths[: batch_size * int(num_batches_limit)]
-    if not paths:
+    was_training = agent.training
+    agent.eval()
+    rows: list[dict[str, Any]] = []
+    num_batches = 0
+    seen_before_batch = 0
+    for instances in _eval_instance_batches(eval_path, num_customers, num_cs, batch_size, limit, num_batches_limit):
+        eval_env_cfg = dict(cfg.get("env", {}) or {})
+        if bool(eval_env_cfg.get("use_fast_env", True)):
+            eval_env_cfg["info_level"] = "full" if eval_save_routes else eval_info_level
+        envs = [make_terran_env(instance=instance, n_traj=n_traj, **eval_env_cfg) for instance in instances]
+        batch_rows = rollout_eval_batch(
+            agent,
+            envs,
+            decode_mode=decode_mode,
+            max_steps=max_steps,
+            device=device,
+            seed=seed + epoch * 1_000_000 + seen_before_batch,
+            include_routes=eval_save_routes,
+        )
+        for instance, row in zip(instances, batch_rows):
+            row["instance_id"] = instance.instance_id
+        rows.extend(batch_rows)
+        num_batches += 1
+        seen_before_batch += len(instances)
+    if not rows:
+        if was_training:
+            agent.train()
         return {
             "eval_num_instances": 0,
             "eval_n_traj": n_traj,
@@ -263,31 +303,6 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
             "eval_avg_runtime_s": np.nan,
             "eval_status": f"no_instances:{eval_path}",
         }
-
-    was_training = agent.training
-    agent.eval()
-    rows: list[dict[str, Any]] = []
-    num_batches = 0
-    for batch_start in range(0, len(paths), batch_size):
-        batch_paths = paths[batch_start : batch_start + batch_size]
-        instances = [load_instance(path) for path in batch_paths]
-        eval_env_cfg = dict(cfg.get("env", {}) or {})
-        if bool(eval_env_cfg.get("use_fast_env", True)):
-            eval_env_cfg["info_level"] = "full" if eval_save_routes else eval_info_level
-        envs = [make_terran_env(instance=instance, n_traj=n_traj, **eval_env_cfg) for instance in instances]
-        batch_rows = rollout_eval_batch(
-            agent,
-            envs,
-            decode_mode=decode_mode,
-            max_steps=max_steps,
-            device=device,
-            seed=seed + epoch * 1_000_000 + batch_start,
-            include_routes=eval_save_routes,
-        )
-        for instance, row in zip(instances, batch_rows):
-            row["instance_id"] = instance.instance_id
-        rows.extend(batch_rows)
-        num_batches += 1
     if was_training:
         agent.train()
 

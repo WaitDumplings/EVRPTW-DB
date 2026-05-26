@@ -314,7 +314,7 @@ class RegionGenerator:
         for node_id in customer_node_ids:
             # Candidate lists are only a pre-filter for daily CS activation.
             # The active instance still uses road shortest paths for all selected
-            # terminals. Euclidean pre-filtering keeps 5k-customer mother boards
+            # terminals. Euclidean pre-filtering keeps 5k-customer service territories
             # cheap to build while preserving local infrastructure candidates.
             euclid = np.linalg.norm(cs_points - road_nodes[int(node_id)], axis=1)
             cs_order = np.argsort(euclid)[:k]
@@ -382,7 +382,7 @@ class RegionGenerator:
             region_validation=feasibility,
             metadata={
                 "cluster_counts": counts.astype(int).tolist(),
-                "generation_model": "road_network_first_mother_board_v1",
+                "generation_model": "road_network_first_service_territory_v1",
             },
         )
         min_customer_rate = float(self.config.get("region", {}).get("min_customer_reachability_rate", 0.995))
