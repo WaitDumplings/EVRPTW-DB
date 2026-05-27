@@ -116,11 +116,22 @@ class HierarchyDatasetGenerator:
     def _oracle_for(self, board: RegionBoard) -> DistanceOracle:
         if board.region_id not in self.oracles:
             sp_cfg = self.config.get("shortest_path", {})
-            terminal_node_ids = np.concatenate([
-                np.asarray([board.depot_node_id], dtype=np.int32),
-                board.customer_node_ids.astype(np.int32),
-                board.cs_node_ids.astype(np.int32),
-            ])
+            depot_nodes = np.asarray([board.depot_node_id], dtype=np.int32)
+            if board.depot_candidate_node_ids is not None and len(board.depot_candidate_node_ids):
+                depot_nodes = np.unique(
+                    np.concatenate([depot_nodes, np.asarray(board.depot_candidate_node_ids, dtype=np.int32)])
+                ).astype(np.int32)
+            if str(board.metadata.get("customer_connection_mode", "")).startswith("lazy_"):
+                terminal_node_ids = np.concatenate([
+                    depot_nodes,
+                    board.cs_node_ids.astype(np.int32),
+                ])
+            else:
+                terminal_node_ids = np.concatenate([
+                    depot_nodes,
+                    board.customer_node_ids.astype(np.int32),
+                    board.cs_node_ids.astype(np.int32),
+                ])
             mode = str(sp_cfg.get("oracle_mode", "auto"))
             estimated_mb = terminal_node_ids.size * terminal_node_ids.size * 4.0 / (1024.0 * 1024.0)
             use_terminal = mode == "terminal_matrix" or (

@@ -17,6 +17,15 @@ def _finite_quantile(values: np.ndarray, q: float) -> float:
     return float(np.quantile(arr, q))
 
 
+def _optional_float(value: Any, default: float = float("nan")) -> float:
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def summarize_region(board: RegionBoard, usage: RegionUsage | None = None) -> dict[str, Any]:
     row: dict[str, Any] = {
         "region_id": board.region_id,
@@ -26,12 +35,25 @@ def summarize_region(board: RegionBoard, usage: RegionUsage | None = None) -> di
         "num_road_edges": int(len(board.road_edges)),
         "num_latent_customers": int(len(board.customers)),
         "num_charging_station_pool": int(len(board.charging_stations)),
+        "num_depot_candidates": int(0 if board.depot_candidate_node_ids is None else len(board.depot_candidate_node_ids)),
         "num_clusters": int(len(board.cluster_centers)),
         "num_micro_zones": int(np.max(board.micro_zone_labels) + 1) if len(board.micro_zone_labels) else 0,
         "customer_reachability_rate": float(board.region_validation.get("customer_reachability_rate", float("nan"))),
         "cluster_gateway_feasible_rate": float(board.region_validation.get("cluster_gateway_feasible_rate", float("nan"))),
         "road_connected_from_depot_rate": float(board.region_validation.get("road_connected_from_depot_rate", float("nan"))),
         "battery_range_km": float(board.region_validation.get("battery_range_km", float("nan"))),
+        "geospatial_profile": bool(board.metadata.get("geospatial_profile", False)),
+        "territory_id": board.metadata.get("territory_id", board.region_id),
+        "county_fips": board.metadata.get("county_fips", ""),
+        "customer_spacing_p10_km": _optional_float(board.region_validation.get("customer_spacing_p10_km")),
+        "customer_spacing_p50_km": _optional_float(board.region_validation.get("customer_spacing_p50_km")),
+        "customer_spacing_p90_km": _optional_float(board.region_validation.get("customer_spacing_p90_km")),
+        "customer_snap_p90_km": _optional_float(board.region_validation.get("customer_snap_p90_km")),
+        "charging_station_snap_p90_km": _optional_float(board.region_validation.get("charging_station_snap_p90_km")),
+        "depot_candidate_snap_p90_km": _optional_float(board.region_validation.get("depot_candidate_snap_p90_km")),
+        "customer_seed_count": int(board.region_validation.get("customer_seed_count", 0)),
+        "customer_community_count": int(board.region_validation.get("customer_community_count", 0)),
+        "occupancy_weight_entropy": _optional_float(board.region_validation.get("occupancy_weight_entropy")),
     }
     if usage is not None:
         row.update({
@@ -75,6 +97,11 @@ def summarize_instance(instance: ActiveInstance) -> dict[str, Any]:
         "p90_customer_to_nearest_cs_km": float(instance.cs_activation.get("p90_customer_to_nearest_cs_km", float("nan"))),
         "mean_cs_time_to_depot_s": float(np.mean(instance.cs_time_to_depot_s)) if len(instance.cs_time_to_depot_s) else 0.0,
         "p90_cs_time_to_depot_s": _finite_quantile(instance.cs_time_to_depot_s, 0.90),
+        "selected_depot_node_id": int(instance.metadata.get("depot_catchment", {}).get("selected_depot_node_id", -1)),
+        "depot_catchment_customer_count": int(instance.metadata.get("depot_catchment", {}).get("catchment_customer_count", 0)),
+        "depot_catchment_radius_km": _optional_float(
+            instance.metadata.get("depot_catchment", {}).get("catchment_radius_km", float("nan"))
+        ),
     }
 
 

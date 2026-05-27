@@ -10,6 +10,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.*
 
 # Generated datasets and benchmark outputs
 EVRPTW_Dataset/*
@@ -38,4 +39,3 @@ EVRPTW_Dataset_Generator/analysis_outputs/
 # RL training outputs
 EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/checkpoints/
 EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/logs/
-

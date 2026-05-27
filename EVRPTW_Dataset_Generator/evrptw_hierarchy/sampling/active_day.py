@@ -18,6 +18,17 @@ from evrptw_hierarchy.sampling.daily_models import (
 )
 
 
+def customer_connector_km(board: RegionBoard, customer_ids: np.ndarray) -> np.ndarray:
+    values = board.metadata.get("customer_connector_km")
+    ids = np.asarray(customer_ids, dtype=np.int32)
+    if values is None:
+        return np.zeros(ids.size, dtype=np.float32)
+    arr = np.asarray(values, dtype=np.float32)
+    if arr.size < len(board.customers):
+        return np.zeros(ids.size, dtype=np.float32)
+    return arr[ids].astype(np.float32, copy=False)
+
+
 @dataclass
 class ActiveDaySampler:
     config: dict[str, Any]
@@ -80,16 +91,39 @@ class ActiveDaySampler:
             }
         return target, meta
 
-    def sample_active_customers(self, board: RegionBoard, num_customers: int) -> np.ndarray:
+    def sample_active_customers(
+        self,
+        board: RegionBoard,
+        num_customers: int,
+        allowed_customer_ids: np.ndarray | None = None,
+    ) -> np.ndarray:
         n = len(board.customers)
         if num_customers > n:
             raise ValueError(f"num_customers={num_customers} exceeds service-territory customer pool {n}.")
+        if allowed_customer_ids is None:
+            allowed_mask = np.ones(n, dtype=bool)
+        else:
+            allowed = np.asarray(allowed_customer_ids, dtype=np.int32)
+            allowed = allowed[(allowed >= 0) & (allowed < n)]
+            allowed_mask = np.zeros(n, dtype=bool)
+            allowed_mask[allowed] = True
+            if int(np.count_nonzero(allowed_mask)) < int(num_customers):
+                raise ValueError(
+                    f"Depot catchment has {int(np.count_nonzero(allowed_mask))} customers, "
+                    f"less than requested num_customers={int(num_customers)}."
+                )
         cache = self._sampling_cache_for(board)
         cluster_labels = cache["cluster_labels"]
         micro_zone_labels = cache["micro_zone_labels"]
         cluster_count = int(cache["cluster_count"])
-        cluster_sizes = cache["cluster_sizes"]
-        cluster_indices = cache["cluster_indices"]
+        cluster_sizes = np.bincount(
+            cluster_labels[allowed_mask],
+            minlength=cluster_count,
+        ).astype(float)
+        cluster_indices = [
+            np.flatnonzero((cluster_labels == idx) & allowed_mask).astype(np.int32)
+            for idx in range(cluster_count)
+        ]
         cfg = self.config.get("active_customer_sampling", {})
         cluster_sigma = float(cfg.get("macro_activity_lognormal_sigma", 0.8))
         micro_sigma = float(cfg.get("micro_activity_lognormal_sigma", 0.5))
@@ -114,7 +148,7 @@ class ActiveDaySampler:
             active_cluster_target = min(active_cluster_target, cluster_count, int(num_customers))
             cluster_weights = cluster_activity * np.maximum(cluster_sizes, 1.0)
             cluster_weights = cluster_weights / max(float(cluster_weights.sum()), 1e-12)
-            available = list(range(cluster_count))
+            available = [idx for idx in range(cluster_count) if cluster_sizes[idx] > 0]
             selected_capacity = 0.0
             capacity_buffer = float(cfg.get("active_cluster_capacity_buffer", 1.08))
             while available and (len(selected_clusters) < active_cluster_target or selected_capacity < num_customers * capacity_buffer):
@@ -135,19 +169,19 @@ class ActiveDaySampler:
                 "cluster_count": int(cluster_count),
             })
         else:
-            cluster_mask = np.ones(n, dtype=bool)
+            cluster_mask = allowed_mask.copy()
             sampling_meta.update({
                 "active_cluster_target": int(cluster_count),
-                "selected_cluster_count": int(cluster_count),
-                "selected_cluster_capacity": int(n),
+                "selected_cluster_count": int(np.count_nonzero(cluster_sizes > 0)),
+                "selected_cluster_capacity": int(np.count_nonzero(allowed_mask)),
                 "capacity_buffer": 1.0,
                 "cluster_count": int(cluster_count),
             })
 
         base_weights = cluster_activity[cluster_labels] * micro_activity[micro_zone_labels]
-        weights = base_weights * cluster_mask.astype(float)
+        weights = base_weights * cluster_mask.astype(float) * allowed_mask.astype(float)
         if np.count_nonzero(weights) < num_customers:
-            weights = base_weights
+            weights = base_weights * allowed_mask.astype(float)
             selected_clusters = []
             sampling_meta["fallback_to_full_region"] = True
         else:
@@ -177,7 +211,7 @@ class ActiveDaySampler:
         if chosen:
             remaining_weights[np.asarray(chosen, dtype=int)] = 0.0
         if np.count_nonzero(remaining_weights) < remaining:
-            available_mask = np.ones(n, dtype=bool)
+            available_mask = allowed_mask.copy()
             if chosen:
                 available_mask[np.asarray(chosen, dtype=int)] = False
             pool = np.flatnonzero(available_mask)
@@ -189,19 +223,100 @@ class ActiveDaySampler:
         self.rng.shuffle(out)
         return out.astype(np.int32)
 
+    def _depot_candidates(self, board: RegionBoard) -> tuple[np.ndarray, list[dict[str, Any]]]:
+        nodes = board.depot_candidate_node_ids
+        if nodes is None or len(nodes) == 0:
+            return np.asarray([int(board.depot_node_id)], dtype=np.int32), [{"candidate_id": "depot_000", "source": "default_depot"}]
+        meta = list(board.depot_candidate_metadata or [])
+        if len(meta) < len(nodes):
+            meta.extend({} for _ in range(len(nodes) - len(meta)))
+        return np.asarray(nodes, dtype=np.int32), meta
+
+    def _select_depot_catchment(
+        self,
+        board: RegionBoard,
+        num_customers: int,
+        oracle: DistanceOracle,
+    ) -> tuple[int, np.ndarray | None, dict[str, Any]]:
+        geo_cfg = self.config.get("geospatial", {}).get("depot_catchment", {})
+        candidate_nodes, candidate_meta = self._depot_candidates(board)
+        if candidate_nodes.size <= 1 and not bool(board.metadata.get("geospatial_profile", False)):
+            return int(board.depot_node_id), None, {
+                "policy": "fixed_default_depot",
+                "selected_depot_node_id": int(board.depot_node_id),
+                "selected_depot_candidate_idx": 0,
+                "selected_depot_candidate": candidate_meta[0] if candidate_meta else {},
+                "catchment_radius_km": None,
+                "catchment_customer_count": int(len(board.customers)),
+            }
+
+        start_radius = float(geo_cfg.get("start_radius_km", 40.0))
+        max_radius = float(geo_cfg.get("max_radius_km", 55.0))
+        min_pool = int(geo_cfg.get("min_customer_pool", max(int(num_customers) * 20, 500)))
+        min_pool = max(int(num_customers), min_pool)
+        dist = oracle.matrix_between(candidate_nodes, board.customer_node_ids).astype(np.float32, copy=False)
+        catchments: list[tuple[int, float, np.ndarray]] = []
+        for idx in range(candidate_nodes.size):
+            row = dist[idx]
+            connector = customer_connector_km(board, np.arange(len(board.customers), dtype=np.int32))
+            if connector.size == row.size:
+                row = row + connector
+            within_start = np.flatnonzero(np.isfinite(row) & (row <= start_radius)).astype(np.int32)
+            if within_start.size >= min_pool:
+                catchments.append((idx, start_radius, within_start))
+                continue
+            within_max = np.flatnonzero(np.isfinite(row) & (row <= max_radius)).astype(np.int32)
+            if within_max.size >= int(num_customers):
+                catchments.append((idx, max_radius, within_max))
+
+        if not catchments:
+            finite_counts = np.sum(np.isfinite(dist), axis=1)
+            idx = int(np.argmax(finite_counts))
+            allowed = np.flatnonzero(np.isfinite(dist[idx])).astype(np.int32)
+            radius = float("inf")
+        else:
+            weights = np.asarray([max(len(ids), 1) for _, _, ids in catchments], dtype=np.float64)
+            weights = np.sqrt(weights)
+            weights = weights / max(float(weights.sum()), 1e-12)
+            pos = int(self.rng.choice(len(catchments), p=weights))
+            idx, radius, allowed = catchments[pos]
+
+        meta = candidate_meta[idx] if idx < len(candidate_meta) else {}
+        selected_node = int(candidate_nodes[idx])
+        return selected_node, allowed.astype(np.int32), {
+            "policy": "depot_candidate_road_catchment",
+            "selected_depot_node_id": selected_node,
+            "selected_depot_candidate_idx": int(idx),
+            "selected_depot_candidate": meta,
+            "catchment_start_radius_km": float(start_radius),
+            "catchment_max_radius_km": float(max_radius),
+            "catchment_radius_km": radius,
+            "catchment_customer_count": int(allowed.size),
+            "min_customer_pool": int(min_pool),
+        }
+
     def _active_distance_matrix(
         self,
         board: RegionBoard,
         active_customer_ids: np.ndarray,
         active_cs_ids: np.ndarray,
         oracle: DistanceOracle,
+        depot_node_id: int | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         terminal_node_ids = np.concatenate([
-            np.asarray([board.depot_node_id], dtype=np.int32),
+            np.asarray([board.depot_node_id if depot_node_id is None else int(depot_node_id)], dtype=np.int32),
             board.customer_node_ids[active_customer_ids],
             board.cs_node_ids[active_cs_ids],
         ])
         dist = oracle.matrix(terminal_node_ids)
+        connector = customer_connector_km(board, active_customer_ids)
+        if connector.size:
+            start = 1
+            stop = 1 + connector.size
+            dist = dist.astype(np.float32, copy=True)
+            dist[start:stop, :] += connector[:, None]
+            dist[:, start:stop] += connector[None, :]
+            np.fill_diagonal(dist, 0.0)
         return dist, terminal_node_ids
 
     def _shortest_time_matrix(
@@ -301,13 +416,24 @@ class ActiveDaySampler:
     ) -> ActiveInstance:
         last_error = "not_started"
         for attempt in range(int(max_attempts)):
-            active_customer_ids = self.sample_active_customers(board, num_customers)
+            depot_node_id, allowed_customer_ids, depot_meta = self._select_depot_catchment(board, num_customers, oracle)
+            active_customer_ids = self.sample_active_customers(
+                board,
+                num_customers,
+                allowed_customer_ids=allowed_customer_ids,
+            )
             day = sample_day_profile(self.config, self.rng)
             effective_speed = self.vehicle.design_speed_kmh * float(day["congestion_factor"])
             active_cs_ids, cs_meta = activate_charging_stations(
                 board, active_customer_ids, num_charging_stations, oracle, self.rng, self.config
             )
-            distance_matrix, terminal_node_ids = self._active_distance_matrix(board, active_customer_ids, active_cs_ids, oracle)
+            distance_matrix, terminal_node_ids = self._active_distance_matrix(
+                board,
+                active_customer_ids,
+                active_cs_ids,
+                oracle,
+                depot_node_id=depot_node_id,
+            )
             raw_time, transition, shortest_time = self._shortest_time_matrix(distance_matrix, num_customers, effective_speed)
             depot_to_customer = shortest_time[0, 1:1 + num_customers]
             customer_to_depot = shortest_time[1:1 + num_customers, 0]
@@ -351,7 +477,7 @@ class ActiveDaySampler:
                 working_end_s=int(day["working_end_min"]) * 60,
                 active_customer_ids=active_customer_ids,
                 active_cs_ids=active_cs_ids,
-                depot=board.road_nodes[board.depot_node_id].astype(np.float32),
+                depot=board.road_nodes[int(depot_node_id)].astype(np.float32),
                 customers=board.customers[active_customer_ids].astype(np.float32),
                 charging_stations=board.charging_stations[active_cs_ids].astype(np.float32),
                 distance_matrix_km=distance_matrix.astype(np.float32),
@@ -383,8 +509,10 @@ class ActiveDaySampler:
                     "service_territory_id": board.region_id,
                     "territory_graph_id": board.mother_board_id,
                     "terminal_node_ids": terminal_node_ids.astype(np.int32),
+                    "active_customer_connector_km": customer_connector_km(board, active_customer_ids).astype(np.float32),
                     "time_window_metadata": tw_meta,
                     "active_customer_sampling": self.last_active_sampling_metadata,
+                    "depot_catchment": depot_meta,
                     "last_error_before_success": last_error if attempt else "",
                     "charging_policy": "full_charge",
                     "saved_time_unit": "seconds",

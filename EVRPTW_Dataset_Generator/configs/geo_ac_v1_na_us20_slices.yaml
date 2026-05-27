@@ -1,0 +1,145 @@
+profile_name: Geo-AC-v1 / NA-US-20
+dataset_version: Geo-AC-v1
+split_method: anchored_voronoi_clipped_to_county
+description: >
+  Sub-county service territories for large county containers. Each child
+  territory is a county-clipped Voronoi cell around a named logistics/service
+  anchor. Unchanged territories keep the original county container and still
+  use depot-centered daily catchments downstream.
+
+latent_customer_policy:
+  rule: round_to_1000(clamp(occupied_housing_units / 4.4, 30000, 160000))
+  min: 30000
+  max: 160000
+  housing_units_per_latent_customer: 4.4
+  placement_mode: road_frontage
+  road_radius_km: 0.85
+  weight_sigma_km: 0.38
+  min_access_km: 0.004
+  max_access_km: 0.020
+  min_road_edge_length_km: 0.015
+  max_road_edge_length_km: 0.45
+
+outlier_filters:
+  remove_sparse_remote_community_seeds: true
+  remote_seed_nearest_neighbor_km: 15.0
+  remove_remote_depots_after_seed_filter: true
+  remote_depot_to_seed_km: 25.0
+  replenish_depots_after_filter: true
+  manual_depot_exclusions:
+    la_ca_san_gabriel_pomona_industry:
+      - bbox_lonlat: [-118.0, 34.18, -117.60, 34.50]
+        reason: manual QA removed northern open depots outside the retained San Gabriel customer core.
+    king_wa_seattle_eastside:
+      - bbox_lonlat: [-121.60, 47.40, -121.00, 47.80]
+        reason: manual QA removed eastern fallback depots too far from the Seattle/Eastside core.
+    king_wa_south_logistics:
+      - bbox_lonlat: [-121.65, 47.20, -121.00, 47.45]
+        reason: manual QA removed the eastern fallback depot too far from the South King logistics core.
+    cook_il_chicago_core:
+      - bbox_lonlat: [-87.65, 41.95, -87.10, 42.20]
+        reason: manual QA removed northeast fallback depots outside the Chicago core service pattern.
+
+unchanged_territories:
+  - austin_tx_travis_county
+  - boston_ma_middlesex_county
+  - new_york_ny_queens_county
+  - dallas_tx_dallas_county
+  - atlanta_ga_fulton_county
+
+slice_groups:
+  - parent_territory_id: los_angeles_ca_los_angeles_county
+    mainland_only: true
+    children:
+      - territory_id: la_ca_basin_southbay_lax
+        display_name: Los Angeles Basin / South Bay / LAX
+        service_area_name: Basin-SouthBay-LAX
+        anchor_lonlat: [-118.3530, 33.9416]
+        depot_candidate_count: 8
+      - territory_id: la_ca_gateway_long_beach_port
+        display_name: LA Gateway / Long Beach / Port
+        service_area_name: Gateway-LongBeach-Port
+        anchor_lonlat: [-118.1937, 33.7701]
+        depot_candidate_count: 8
+      - territory_id: la_ca_san_fernando_santa_clarita
+        display_name: San Fernando Valley / Santa Clarita
+        service_area_name: SanFernando-SantaClarita
+        anchor_lonlat: [-118.4676, 34.2746]
+        depot_candidate_count: 8
+      - territory_id: la_ca_san_gabriel_pomona_industry
+        display_name: San Gabriel / Pomona / Industry
+        service_area_name: SanGabriel-Pomona-Industry
+        anchor_lonlat: [-117.9353, 34.0390]
+        depot_candidate_count: 8
+      - territory_id: la_ca_antelope_valley
+        display_name: Antelope Valley
+        service_area_name: AntelopeValley
+        anchor_lonlat: [-118.1470, 34.6868]
+        depot_candidate_count: 6
+
+  - parent_territory_id: phoenix_az_maricopa_county
+    component_reassignments:
+      - from_territory_id: maricopa_az_east_valley
+        to_territory_id: maricopa_az_west_valley
+        bbox_lonlat: [-112.45, 32.45, -112.15, 33.15]
+        reason: manual QA assigns the disconnected southwest East Valley component to West Valley.
+    children:
+      - territory_id: maricopa_az_phoenix_core_north
+        display_name: Phoenix Core / North Valley / Scottsdale
+        service_area_name: PhoenixCore-NorthValley-Scottsdale
+        anchor_lonlat: [-112.0740, 33.4484]
+        depot_candidate_count: 8
+      - territory_id: maricopa_az_west_valley
+        display_name: Maricopa West Valley
+        service_area_name: WestValley
+        anchor_lonlat: [-112.3579, 33.4353]
+        depot_candidate_count: 8
+      - territory_id: maricopa_az_east_valley
+        display_name: Maricopa East Valley
+        service_area_name: EastValley
+        anchor_lonlat: [-111.8413, 33.3062]
+        depot_candidate_count: 8
+
+  - parent_territory_id: houston_tx_harris_county
+    children:
+      - territory_id: harris_tx_houston_core_northwest
+        display_name: Houston Core / Northwest
+        service_area_name: HoustonCore-Northwest
+        anchor_lonlat: [-95.4894, 29.8578]
+        depot_candidate_count: 8
+      - territory_id: harris_tx_west_southwest_katy
+        display_name: Harris West / Southwest / Katy
+        service_area_name: West-Southwest-Katy
+        anchor_lonlat: [-95.6500, 29.7400]
+        depot_candidate_count: 8
+      - territory_id: harris_tx_east_southeast_port
+        display_name: Harris East / Southeast / Port
+        service_area_name: East-Southeast-Port
+        anchor_lonlat: [-95.1255, 29.7355]
+        depot_candidate_count: 8
+
+  - parent_territory_id: seattle_wa_king_county
+    children:
+      - territory_id: king_wa_seattle_eastside
+        display_name: Seattle / Eastside
+        service_area_name: Seattle-Eastside
+        anchor_lonlat: [-122.2021, 47.6101]
+        depot_candidate_count: 8
+      - territory_id: king_wa_south_logistics
+        display_name: King County South Logistics
+        service_area_name: SouthLogistics
+        anchor_lonlat: [-122.2285, 47.3809]
+        depot_candidate_count: 8
+
+  - parent_territory_id: chicago_il_cook_county
+    children:
+      - territory_id: cook_il_chicago_core
+        display_name: Chicago Core / Lakefront
+        service_area_name: ChicagoCore-Lakefront
+        anchor_lonlat: [-87.6298, 41.8781]
+        depot_candidate_count: 8
+      - territory_id: cook_il_suburban_logistics
+        display_name: Cook County Suburban Logistics
+        service_area_name: SuburbanLogistics
+        anchor_lonlat: [-87.9042, 41.9786]
+        depot_candidate_count: 8

@@ -384,6 +384,9 @@ class RegionGenerator:
                 "cluster_counts": counts.astype(int).tolist(),
                 "generation_model": "road_network_first_service_territory_v1",
             },
+            depot_candidates=graph["road_nodes"][[int(graph["depot_node_id"])]].astype(np.float32),
+            depot_candidate_node_ids=np.asarray([int(graph["depot_node_id"])], dtype=np.int32),
+            depot_candidate_metadata=[{"candidate_id": "depot_000", "source": "synthetic_depot"}],
         )
         min_customer_rate = float(self.config.get("region", {}).get("min_customer_reachability_rate", 0.995))
         min_connected_rate = float(self.config.get("region", {}).get("min_road_connected_from_depot_rate", 1.0))

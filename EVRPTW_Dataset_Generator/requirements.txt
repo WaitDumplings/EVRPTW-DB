@@ -1,3 +1,13 @@
 numpy>=2.2,<2.3
 PyYAML
 scipy>=1.15,<1.16
+pandas
+networkx
+requests
+geopandas
+shapely
+pyproj
+osmnx
+duckdb
+pyarrow
+matplotlib

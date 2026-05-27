@@ -1,0 +1,1090 @@
+profile_name: Geo-AC-v1 / NA-US-20
+dataset_version: Geo-AC-v1
+instances_per_scale: 100
+region_reuse_limit: 200
+max_attempts_per_instance: 30
+scales:
+  5: 3
+  15: 3
+  50: 10
+  100: 20
+depot_catchment:
+  start_radius_km: 40.0
+  max_radius_km: 55.0
+  min_customer_pool: 500
+config_overrides:
+  shortest_path:
+    oracle_mode: source_cache
+  visualization:
+    max_instance_plots: 4
+territories:
+- territory_id: la_ca_basin_southbay_lax
+  display_name: Los Angeles Basin / South Bay / LAX
+  county_name: Los Angeles County
+  state: CA
+  county_fips: '06037'
+  bbox_lonlat:
+  - -118.9517
+  - 33.7037
+  - -117.6464
+  - 34.8233
+  area_size_km:
+  - - 0.0
+    - 121.0
+  - - 0.0
+    - 124.0
+  latent_customer_pool_size: 160000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/la_ca_basin_southbay_lax
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: osm_osmnx
+    chargers: afdc_nrel
+    depots: osm_poi_or_building
+    overture_release: latest
+  data_filters:
+    road_source: osm
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: osm_poi_or_building
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: Basin-SouthBay-LAX
+  parent_territory_id: los_angeles_ca_los_angeles_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -118.353
+  - 33.9416
+  subterritory_source:
+    parent_territory_id: los_angeles_ca_los_angeles_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -118.353
+    - 33.9416
+    mainland_only: true
+- territory_id: la_ca_gateway_long_beach_port
+  display_name: LA Gateway / Long Beach / Port
+  county_name: Los Angeles County
+  state: CA
+  county_fips: '06037'
+  bbox_lonlat:
+  - -118.9517
+  - 33.7037
+  - -117.6464
+  - 34.8233
+  area_size_km:
+  - - 0.0
+    - 121.0
+  - - 0.0
+    - 124.0
+  latent_customer_pool_size: 100000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/la_ca_gateway_long_beach_port
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: osm_osmnx
+    chargers: afdc_nrel
+    depots: osm_poi_or_building
+    overture_release: latest
+  data_filters:
+    road_source: osm
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: osm_poi_or_building
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: Gateway-LongBeach-Port
+  parent_territory_id: los_angeles_ca_los_angeles_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -118.1937
+  - 33.7701
+  subterritory_source:
+    parent_territory_id: los_angeles_ca_los_angeles_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -118.1937
+    - 33.7701
+    mainland_only: true
+- territory_id: la_ca_san_fernando_santa_clarita
+  display_name: San Fernando Valley / Santa Clarita
+  county_name: Los Angeles County
+  state: CA
+  county_fips: '06037'
+  bbox_lonlat:
+  - -118.9517
+  - 33.7037
+  - -117.6464
+  - 34.8233
+  area_size_km:
+  - - 0.0
+    - 121.0
+  - - 0.0
+    - 124.0
+  latent_customer_pool_size: 160000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/la_ca_san_fernando_santa_clarita
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: osm_osmnx
+    chargers: afdc_nrel
+    depots: osm_poi_or_building
+    overture_release: latest
+  data_filters:
+    road_source: osm
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: osm_poi_or_building
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: SanFernando-SantaClarita
+  parent_territory_id: los_angeles_ca_los_angeles_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -118.4676
+  - 34.2746
+  subterritory_source:
+    parent_territory_id: los_angeles_ca_los_angeles_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -118.4676
+    - 34.2746
+    mainland_only: true
+- territory_id: la_ca_san_gabriel_pomona_industry
+  display_name: San Gabriel / Pomona / Industry
+  county_name: Los Angeles County
+  state: CA
+  county_fips: '06037'
+  bbox_lonlat:
+  - -118.9517
+  - 33.7037
+  - -117.6464
+  - 34.8233
+  area_size_km:
+  - - 0.0
+    - 121.0
+  - - 0.0
+    - 124.0
+  latent_customer_pool_size: 160000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/la_ca_san_gabriel_pomona_industry
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: osm_osmnx
+    chargers: afdc_nrel
+    depots: osm_poi_or_building
+    overture_release: latest
+  data_filters:
+    road_source: osm
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: osm_poi_or_building
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: SanGabriel-Pomona-Industry
+  parent_territory_id: los_angeles_ca_los_angeles_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -117.9353
+  - 34.039
+  subterritory_source:
+    parent_territory_id: los_angeles_ca_los_angeles_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -117.9353
+    - 34.039
+    mainland_only: true
+- territory_id: la_ca_antelope_valley
+  display_name: Antelope Valley
+  county_name: Los Angeles County
+  state: CA
+  county_fips: '06037'
+  bbox_lonlat:
+  - -118.9517
+  - 33.7037
+  - -117.6464
+  - 34.8233
+  area_size_km:
+  - - 0.0
+    - 121.0
+  - - 0.0
+    - 124.0
+  latent_customer_pool_size: 30000
+  cs_candidate_pool_size: 82
+  depot_candidate_count: 6
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/la_ca_antelope_valley
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: osm_osmnx
+    chargers: afdc_nrel
+    depots: osm_poi_or_building
+    overture_release: latest
+  data_filters:
+    road_source: osm
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: osm_poi_or_building
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: AntelopeValley
+  parent_territory_id: los_angeles_ca_los_angeles_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -118.147
+  - 34.6868
+  subterritory_source:
+    parent_territory_id: los_angeles_ca_los_angeles_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -118.147
+    - 34.6868
+    mainland_only: true
+- territory_id: maricopa_az_phoenix_core_north
+  display_name: Phoenix Core / North Valley / Scottsdale
+  county_name: Maricopa County
+  state: AZ
+  county_fips: '04013'
+  bbox_lonlat:
+  - -113.3355
+  - 32.5054
+  - -111.0395
+  - 34.0489
+  area_size_km:
+  - - 0.0
+    - 214.0
+  - - 0.0
+    - 171.0
+  latent_customer_pool_size: 160000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/maricopa_az_phoenix_core_north
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: PhoenixCore-NorthValley-Scottsdale
+  parent_territory_id: phoenix_az_maricopa_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -112.074
+  - 33.4484
+  subterritory_source:
+    parent_territory_id: phoenix_az_maricopa_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -112.074
+    - 33.4484
+    mainland_only: false
+- territory_id: maricopa_az_west_valley
+  display_name: Maricopa West Valley
+  county_name: Maricopa County
+  state: AZ
+  county_fips: '04013'
+  bbox_lonlat:
+  - -113.3355
+  - 32.5054
+  - -111.0395
+  - 34.0489
+  area_size_km:
+  - - 0.0
+    - 214.0
+  - - 0.0
+    - 171.0
+  latent_customer_pool_size: 82000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/maricopa_az_west_valley
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: WestValley
+  parent_territory_id: phoenix_az_maricopa_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -112.3579
+  - 33.4353
+  subterritory_source:
+    parent_territory_id: phoenix_az_maricopa_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -112.3579
+    - 33.4353
+    mainland_only: false
+- territory_id: maricopa_az_east_valley
+  display_name: Maricopa East Valley
+  county_name: Maricopa County
+  state: AZ
+  county_fips: '04013'
+  bbox_lonlat:
+  - -113.3355
+  - 32.5054
+  - -111.0395
+  - 34.0489
+  area_size_km:
+  - - 0.0
+    - 214.0
+  - - 0.0
+    - 171.0
+  latent_customer_pool_size: 122000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/maricopa_az_east_valley
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: EastValley
+  parent_territory_id: phoenix_az_maricopa_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -111.8413
+  - 33.3062
+  subterritory_source:
+    parent_territory_id: phoenix_az_maricopa_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -111.8413
+    - 33.3062
+    mainland_only: false
+- territory_id: harris_tx_houston_core_northwest
+  display_name: Houston Core / Northwest
+  county_name: Harris County
+  state: TX
+  county_fips: '48201'
+  bbox_lonlat:
+  - -95.9604
+  - 29.4974
+  - -94.9087
+  - 30.17
+  area_size_km:
+  - - 0.0
+    - 102.0
+  - - 0.0
+    - 75.0
+  latent_customer_pool_size: 160000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/harris_tx_houston_core_northwest
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: HoustonCore-Northwest
+  parent_territory_id: houston_tx_harris_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -95.4894
+  - 29.8578
+  subterritory_source:
+    parent_territory_id: houston_tx_harris_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -95.4894
+    - 29.8578
+    mainland_only: false
+- territory_id: harris_tx_west_southwest_katy
+  display_name: Harris West / Southwest / Katy
+  county_name: Harris County
+  state: TX
+  county_fips: '48201'
+  bbox_lonlat:
+  - -95.9604
+  - 29.4974
+  - -94.9087
+  - 30.17
+  area_size_km:
+  - - 0.0
+    - 102.0
+  - - 0.0
+    - 75.0
+  latent_customer_pool_size: 98000
+  cs_candidate_pool_size: 107
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/harris_tx_west_southwest_katy
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: West-Southwest-Katy
+  parent_territory_id: houston_tx_harris_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -95.65
+  - 29.74
+  subterritory_source:
+    parent_territory_id: houston_tx_harris_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -95.65
+    - 29.74
+    mainland_only: false
+- territory_id: harris_tx_east_southeast_port
+  display_name: Harris East / Southeast / Port
+  county_name: Harris County
+  state: TX
+  county_fips: '48201'
+  bbox_lonlat:
+  - -95.9604
+  - 29.4974
+  - -94.9087
+  - 30.17
+  area_size_km:
+  - - 0.0
+    - 102.0
+  - - 0.0
+    - 75.0
+  latent_customer_pool_size: 102000
+  cs_candidate_pool_size: 93
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/harris_tx_east_southeast_port
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: East-Southeast-Port
+  parent_territory_id: houston_tx_harris_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -95.1255
+  - 29.7355
+  subterritory_source:
+    parent_territory_id: houston_tx_harris_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -95.1255
+    - 29.7355
+    mainland_only: false
+- territory_id: king_wa_seattle_eastside
+  display_name: Seattle / Eastside
+  county_name: King County
+  state: WA
+  county_fips: '53033'
+  bbox_lonlat:
+  - -122.5436
+  - 47.0859
+  - -121.065
+  - 47.7802
+  area_size_km:
+  - - 0.0
+    - 112.0
+  - - 0.0
+    - 77.0
+  latent_customer_pool_size: 153000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/king_wa_seattle_eastside
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: osm_osmnx
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: osm
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: Seattle-Eastside
+  parent_territory_id: seattle_wa_king_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -122.2021
+  - 47.6101
+  subterritory_source:
+    parent_territory_id: seattle_wa_king_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -122.2021
+    - 47.6101
+    mainland_only: false
+- territory_id: king_wa_south_logistics
+  display_name: King County South Logistics
+  county_name: King County
+  state: WA
+  county_fips: '53033'
+  bbox_lonlat:
+  - -122.5436
+  - 47.0859
+  - -121.065
+  - 47.7802
+  area_size_km:
+  - - 0.0
+    - 112.0
+  - - 0.0
+    - 77.0
+  latent_customer_pool_size: 60000
+  cs_candidate_pool_size: 135
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/king_wa_south_logistics
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: osm_osmnx
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: osm
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: SouthLogistics
+  parent_territory_id: seattle_wa_king_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -122.2285
+  - 47.3809
+  subterritory_source:
+    parent_territory_id: seattle_wa_king_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -122.2285
+    - 47.3809
+    mainland_only: false
+- territory_id: cook_il_chicago_core
+  display_name: Chicago Core / Lakefront
+  county_name: Cook County
+  state: IL
+  county_fips: '17031'
+  bbox_lonlat:
+  - -88.2636
+  - 41.4699
+  - -87.524
+  - 42.1543
+  area_size_km:
+  - - 0.0
+    - 62.0
+  - - 0.0
+    - 76.0
+  latent_customer_pool_size: 160000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/cook_il_chicago_core
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: ChicagoCore-Lakefront
+  parent_territory_id: chicago_il_cook_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -87.6298
+  - 41.8781
+  subterritory_source:
+    parent_territory_id: chicago_il_cook_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -87.6298
+    - 41.8781
+    mainland_only: false
+- territory_id: cook_il_suburban_logistics
+  display_name: Cook County Suburban Logistics
+  county_name: Cook County
+  state: IL
+  county_fips: '17031'
+  bbox_lonlat:
+  - -88.2636
+  - 41.4699
+  - -87.524
+  - 42.1543
+  area_size_km:
+  - - 0.0
+    - 62.0
+  - - 0.0
+    - 76.0
+  latent_customer_pool_size: 145000
+  cs_candidate_pool_size: 160
+  depot_candidate_count: 8
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/cook_il_suburban_logistics
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+    service_territory_split: county_clipped_anchor_voronoi
+  service_area_name: SuburbanLogistics
+  parent_territory_id: chicago_il_cook_county
+  split_method: anchored_voronoi_clipped_to_county
+  anchor_lonlat:
+  - -87.9042
+  - 41.9786
+  subterritory_source:
+    parent_territory_id: chicago_il_cook_county
+    split_method: anchored_voronoi_clipped_to_county
+    anchor_lonlat:
+    - -87.9042
+    - 41.9786
+    mainland_only: false
+- territory_id: austin_tx_travis_county
+  display_name: Austin
+  county_name: Travis County
+  state: TX
+  county_fips: '48453'
+  bbox_lonlat:
+  - -98.1737
+  - 30.0091
+  - -97.3696
+  - 30.6289
+  area_size_km:
+  - - 0.0
+    - 78.0
+  - - 0.0
+    - 69.0
+  latent_customer_pool_size: 133000
+  cs_candidate_pool_size: 140
+  depot_candidate_count: 6
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/austin_tx_travis_county
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: overture_transportation
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: 2026-05-20.0
+  data_filters:
+    road_source: overture
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+- territory_id: boston_ma_middlesex_county
+  display_name: Boston Metro
+  county_name: Middlesex County
+  state: MA
+  county_fips: '25017'
+  bbox_lonlat:
+  - -71.9005
+  - 42.1561
+  - -70.8867
+  - 42.7367
+  area_size_km:
+  - - 0.0
+    - 83.0
+  - - 0.0
+    - 65.0
+  latent_customer_pool_size: 144000
+  cs_candidate_pool_size: 140
+  depot_candidate_count: 6
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/boston_ma_middlesex_county
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+- territory_id: new_york_ny_queens_county
+  display_name: New York Metro
+  county_name: Queens County
+  state: NY
+  county_fips: '36081'
+  bbox_lonlat:
+  - -73.9626
+  - 40.4774
+  - -73.7003
+  - 40.8119
+  area_size_km:
+  - - 0.0
+    - 22.0
+  - - 0.0
+    - 37.0
+  latent_customer_pool_size: 160000
+  cs_candidate_pool_size: 120
+  depot_candidate_count: 6
+  depot_catchment:
+    start_radius_km: 22.0
+    max_radius_km: 34.0
+    min_customer_pool: 500
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/new_york_ny_queens_county
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2025
+    acs: ACS2024 5-year B25002_002E
+    roads: osm_osmnx
+    chargers: afdc_nrel
+    depots: osm_poi_or_building
+    overture_release: latest
+  data_filters:
+    road_source: osm
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: osm_poi_or_building
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+- territory_id: dallas_tx_dallas_county
+  display_name: Dallas
+  county_name: Dallas County
+  state: TX
+  county_fips: '48113'
+  bbox_lonlat:
+  - -97.0384
+  - 32.5459
+  - -96.4636
+  - 33.0238
+  area_size_km:
+  - - 0.0
+    - 53.0
+  - - 0.0
+    - 53.0
+  latent_customer_pool_size: 160000
+  cs_candidate_pool_size: 150
+  depot_candidate_count: 6
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/dallas_tx_dallas_county
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+- territory_id: atlanta_ga_fulton_county
+  display_name: Atlanta
+  county_name: Fulton County
+  state: GA
+  county_fips: '13121'
+  bbox_lonlat:
+  - -84.8876
+  - 33.502
+  - -84.0506
+  - 34.1539
+  area_size_km:
+  - - 0.0
+    - 77.0
+  - - 0.0
+    - 72.0
+  latent_customer_pool_size: 105000
+  cs_candidate_pool_size: 150
+  depot_candidate_count: 6
+  data_root: ../../EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20/atlanta_ga_fulton_county
+  source_files:
+    road_nodes_csv: normalized/road_nodes.csv
+    road_edges_csv: normalized/road_edges.csv
+    customer_seed_csv: normalized/customer_seed.csv
+    charging_station_csv: normalized/charging_station.csv
+    depot_candidate_csv: normalized/depot_candidate.csv
+    latent_customer_csv: normalized/latent_customer.csv
+  data_source_versions:
+    tiger_line: TIGER2024
+    acs: ACS2024 5-year B25002_002E
+    roads: tiger_line_roads
+    chargers: afdc_nrel
+    depots: fallback_center_region
+    overture_release: latest
+  data_filters:
+    road_source: tiger
+    road_network_type: drive
+    overpass_url: https://overpass-api.de/api
+    depot_source: fallback_center_region
+    chargers: fuel_type=ELEC, access=public, clipped_to_county
+    customer_seed: TIGER block-group representative points weighted by ACS B25002_002E
+territory_split:
+  source_config: geo_ac_v1_us10.with_sources.yaml
+  slice_config: geo_ac_v1_na_us20_slices.yaml
+  split_method: anchored_voronoi_clipped_to_county
+  territory_count: 20
+  latent_customer_policy:
+    rule: round_to_1000(clamp(occupied_housing_units / 4.4, 30000, 160000))
+    min: 30000
+    max: 160000
+    housing_units_per_latent_customer: 4.4
+    placement_mode: road_frontage
+    road_radius_km: 0.85
+    weight_sigma_km: 0.38
+    min_access_km: 0.004
+    max_access_km: 0.02
+    min_road_edge_length_km: 0.015
+    max_road_edge_length_km: 0.45
+  outlier_filters:
+    remove_sparse_remote_community_seeds: true
+    remote_seed_nearest_neighbor_km: 15.0
+    remove_remote_depots_after_seed_filter: true
+    remote_depot_to_seed_km: 25.0
+    replenish_depots_after_filter: true
+    manual_depot_exclusions:
+      la_ca_san_gabriel_pomona_industry:
+      - bbox_lonlat:
+        - -118.0
+        - 34.18
+        - -117.6
+        - 34.5
+        reason: manual QA removed northern open depots outside the retained San Gabriel
+          customer core.
+      king_wa_seattle_eastside:
+      - bbox_lonlat:
+        - -121.6
+        - 47.4
+        - -121.0
+        - 47.8
+        reason: manual QA removed eastern fallback depots too far from the Seattle/Eastside
+          core.
+      king_wa_south_logistics:
+      - bbox_lonlat:
+        - -121.65
+        - 47.2
+        - -121.0
+        - 47.45
+        reason: manual QA removed the eastern fallback depot too far from the South
+          King logistics core.
+      cook_il_chicago_core:
+      - bbox_lonlat:
+        - -87.65
+        - 41.95
+        - -87.1
+        - 42.2
+        reason: manual QA removed northeast fallback depots outside the Chicago core
+          service pattern.

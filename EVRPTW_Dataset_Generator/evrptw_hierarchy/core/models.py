@@ -46,6 +46,9 @@ class RegionBoard:
     cluster_candidate_cs_ids: list[np.ndarray]
     region_validation: dict[str, Any]
     metadata: dict[str, Any] = field(default_factory=dict)
+    depot_candidates: np.ndarray | None = None
+    depot_candidate_node_ids: np.ndarray | None = None
+    depot_candidate_metadata: list[dict[str, Any]] = field(default_factory=list)
 
     def to_pickle_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +72,9 @@ class RegionBoard:
             "cluster_candidate_cs_ids": self.cluster_candidate_cs_ids,
             "region_validation": self.region_validation,
             "metadata": self.metadata,
+            "depot_candidates": self.depot_candidates,
+            "depot_candidate_node_ids": self.depot_candidate_node_ids,
+            "depot_candidate_metadata": self.depot_candidate_metadata,
         }
 
 

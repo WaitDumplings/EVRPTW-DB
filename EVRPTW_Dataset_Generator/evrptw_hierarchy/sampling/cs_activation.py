@@ -8,14 +8,33 @@ from evrptw_hierarchy.core.models import RegionBoard
 from evrptw_hierarchy.graph.distance_oracle import DistanceOracle
 
 
+def _customer_connector_km(board: RegionBoard, customer_ids: np.ndarray) -> np.ndarray:
+    values = board.metadata.get("customer_connector_km")
+    ids = np.asarray(customer_ids, dtype=np.int32)
+    if values is None:
+        return np.zeros(ids.size, dtype=np.float32)
+    arr = np.asarray(values, dtype=np.float32)
+    if arr.size < len(board.customers):
+        return np.zeros(ids.size, dtype=np.float32)
+    return arr[ids].astype(np.float32, copy=False)
+
+
 def build_candidate_pool(board: RegionBoard, active_customer_ids: np.ndarray, max_candidates: int | None = None) -> np.ndarray:
-    del max_candidates
+    lazy_customer_candidates = len(board.customer_candidate_cs_ids) < len(board.customers)
     cs_count = len(board.charging_stations)
     candidate_mask = np.zeros(cs_count, dtype=bool)
     active_customer_ids = np.asarray(active_customer_ids, dtype=int)
-    for cid in active_customer_ids:
-        ids = np.asarray(board.customer_candidate_cs_ids[int(cid)], dtype=np.int32)
-        candidate_mask[ids] = True
+    if lazy_customer_candidates:
+        k = 8 if max_candidates is None else max(1, min(int(max_candidates), cs_count))
+        cs_points = board.road_nodes[board.cs_node_ids]
+        customer_points = board.road_nodes[board.customer_node_ids[active_customer_ids]]
+        for point in customer_points:
+            euclid = np.linalg.norm(cs_points - point.reshape(1, 2), axis=1)
+            candidate_mask[np.argsort(euclid, kind="mergesort")[:k]] = True
+    else:
+        for cid in active_customer_ids:
+            ids = np.asarray(board.customer_candidate_cs_ids[int(cid)], dtype=np.int32)
+            candidate_mask[ids] = True
     active_clusters = np.unique(board.cluster_labels[active_customer_ids])
     for cluster_id in active_clusters:
         ids = np.asarray(board.cluster_candidate_cs_ids[int(cluster_id)], dtype=np.int32)
@@ -42,6 +61,9 @@ def activate_charging_stations(
         customer_nodes = board.customer_node_ids[active_customer_ids]
         cs_nodes = board.cs_node_ids[selected]
         dist_customer_cs = oracle.matrix_between(customer_nodes, cs_nodes).astype(np.float32, copy=False)
+        connector = _customer_connector_km(board, active_customer_ids)
+        if connector.size:
+            dist_customer_cs = dist_customer_cs + connector[:, None]
         final_d = np.min(dist_customer_cs, axis=1) if dist_customer_cs.size else np.full(len(active_customer_ids), np.inf)
         finite_final = np.isfinite(final_d)
         safe_final = final_d[finite_final] if np.any(finite_final) else np.asarray([float("nan")])
@@ -76,6 +98,9 @@ def activate_charging_stations(
     cs_nodes = board.cs_node_ids[candidate_ids]
 
     dist_customer_cs = oracle.matrix_between(customer_nodes, cs_nodes).astype(np.float32, copy=False)
+    connector = _customer_connector_km(board, active_customer_ids)
+    if connector.size:
+        dist_customer_cs = dist_customer_cs + connector[:, None]
 
     cluster_labels = board.cluster_labels[active_customer_ids]
     cluster_weights = np.ones(len(active_customer_ids), dtype=np.float32)
