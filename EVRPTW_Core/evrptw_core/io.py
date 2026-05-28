@@ -1,12 +1,32 @@
 from __future__ import annotations
 
 import pickle
+import sys
 from pathlib import Path
 from typing import Any, Iterator
 
 from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution
 
 INSTANCE_BUNDLE_FORMAT = "evrptw_instance_bundle_v1"
+
+
+def _install_numpy_pickle_compat() -> None:
+    """Allow NumPy 2 pickles to load in NumPy 1.x environments."""
+    try:
+        import numpy.core as numpy_core
+    except Exception:
+        return
+
+    sys.modules.setdefault("numpy._core", numpy_core)
+    for name in ("multiarray", "umath", "numeric", "fromnumeric", "shape_base", "_multiarray_umath"):
+        try:
+            module = __import__(f"numpy.core.{name}", fromlist=["*"])
+        except Exception:
+            continue
+        sys.modules.setdefault(f"numpy._core.{name}", module)
+
+
+_install_numpy_pickle_compat()
 
 
 def _load_pickle_dict(path: str | Path) -> dict[str, Any]:
@@ -77,7 +97,9 @@ def iter_instance_dicts(
         search_root = nested if nested.exists() else root
     else:
         search_root = root / "instances" if (root / "instances").exists() else root
-    for path in sorted(search_root.glob("**/instance_*.pkl")):
+    bundle_paths = sorted(search_root.glob("**/instances.pkl"))
+    instance_paths = sorted(search_root.glob("**/instance_*.pkl"))
+    for path in [*bundle_paths, *instance_paths]:
         yield from _iter_instance_dicts_from_file(path)
 
 

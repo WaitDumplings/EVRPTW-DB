@@ -19,6 +19,19 @@ Customer ordering modes:
 - `earliest_due`: prioritize feasible customers with earlier due times.
 - `hybrid`: nearest-distance score with a small due-time term.
 
+Smoke test on the packaged validation split:
+
+```bash
+python EVRPTW_Benchmark/MetaHeuristics/Greedy_Solver/run_greedy.py \
+  --dataset_path EVRPTW_Dataset/dataset_v1/dataset/val \
+  --save_path EVRPTW_Benchmark/results/dataset_v1/val/Greedy_Solver_one_instance \
+  --scales Cus5 \
+  --max_instances 1 \
+  --num_workers 1 \
+  --customer_order nearest \
+  --seed 2026
+```
+
 The benchmark writes:
 
 ```text

@@ -45,6 +45,23 @@ def finite_or_none(value: float) -> float | None:
     return float(value) if math.isfinite(float(value)) else None
 
 
+def parse_scales(raw: str) -> set[str]:
+    scales: set[str] = set()
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        suffix = item[3:] if item.lower().startswith("cus") else item
+        scales.add(f"Cus{int(suffix)}")
+    return scales
+
+
+def payload_scale(payload: dict[str, Any]) -> str:
+    if "num_customers" in payload:
+        return f"Cus{int(payload['num_customers'])}"
+    return f"Cus{len(payload.get('customers', []))}"
+
+
 def solve_one(task: dict[str, Any]) -> dict[str, Any]:
     instance_source = str(task.get("instance_file", ""))
     instance_file = Path(instance_source) if instance_source else Path(".")
@@ -283,6 +300,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--max_instances", type=int, default=None)
+    parser.add_argument("--scales", default="", help="Optional comma-separated scale filter, e.g. Cus5,Cus15.")
     parser.add_argument("--predefine_route_number", type=int, default=3)
     parser.add_argument("--eta_feas", type=int, default=20, help="Feasibility-phase iteration budget. Legacy default: 700.")
     parser.add_argument("--eta_dist", type=int, default=20, help="Distance-phase iteration budget. Legacy default: 100.")
@@ -304,15 +322,21 @@ def main() -> None:
     solutions_dir = save_path / "solutions"
     solutions_dir.mkdir(parents=True, exist_ok=True)
 
-    instance_payloads = list(iter_instance_dicts(dataset_path))
-    if args.max_instances is not None:
-        instance_payloads = instance_payloads[: args.max_instances]
+    scale_filter = parse_scales(args.scales)
+    instance_payloads = []
+    for payload in iter_instance_dicts(dataset_path):
+        if scale_filter and payload_scale(payload) not in scale_filter:
+            continue
+        instance_payloads.append(payload)
+        if args.max_instances is not None and len(instance_payloads) >= int(args.max_instances):
+            break
     if not instance_payloads:
         print(f"No EVRPTW instances found under: {dataset_path}")
 
     num_workers = max(1, int(args.num_workers))
     print(
         f"VNS-TS benchmark schedule: instances={len(instance_payloads)}, num_workers={num_workers}, "
+        f"scales={sorted(scale_filter) if scale_filter else 'all'}, "
         f"eta_feas={args.eta_feas}, eta_dist={args.eta_dist}, tabu_iter={args.tabu_iter}, "
         f"predefine_route_number={args.predefine_route_number}, search_mode={args.search_mode}, "
         f"move_candidate_limit={args.move_candidate_limit}"

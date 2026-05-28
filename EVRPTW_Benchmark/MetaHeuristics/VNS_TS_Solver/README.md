@@ -15,8 +15,26 @@ Important parameters:
 - `--predefine_route_number`: route count used by the initial sweep construction.
 - `--eta_feas`, `--eta_dist`: outer VNS budgets for feasibility and distance phases.
 - `--tabu_iter`: inner tabu-search iterations per VNS perturbation.
+- `--scales`: optional comma-separated scale filter, for example `Cus5,Cus15`.
 
 The adapter keeps objective units in kilometers and time units in seconds. Energy consumption is computed as `distance_km * kWh_per_km`, matching the canonical dataset schema.
+
+Smoke test on the packaged validation split:
+
+```bash
+python EVRPTW_Benchmark/MetaHeuristics/VNS_TS_Solver/run_vns_ts.py \
+  --dataset_path EVRPTW_Dataset/dataset_v1/dataset/val \
+  --save_path EVRPTW_Benchmark/results/dataset_v1/val/VNS_TS_Solver_one_instance \
+  --scales Cus5 \
+  --max_instances 1 \
+  --num_workers 1 \
+  --seed 2026 \
+  --predefine_route_number 3 \
+  --eta_feas 5 \
+  --eta_dist 5 \
+  --tabu_iter 5 \
+  --search_mode fast
+```
 
 
 ## Search Modes

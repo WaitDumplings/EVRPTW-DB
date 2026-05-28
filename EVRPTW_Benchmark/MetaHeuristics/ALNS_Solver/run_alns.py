@@ -43,6 +43,23 @@ def finite_or_none(value: float) -> float | None:
     return float(value) if math.isfinite(float(value)) else None
 
 
+def parse_scales(raw: str) -> set[str]:
+    scales: set[str] = set()
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        suffix = item[3:] if item.lower().startswith("cus") else item
+        scales.add(f"Cus{int(suffix)}")
+    return scales
+
+
+def payload_scale(payload: dict[str, Any]) -> str:
+    if "num_customers" in payload:
+        return f"Cus{int(payload['num_customers'])}"
+    return f"Cus{len(payload.get('customers', []))}"
+
+
 def solve_one(task: dict[str, Any]) -> dict[str, Any]:
     instance_source = str(task.get("instance_file", ""))
     instance_file = Path(instance_source) if instance_source else Path(".")
@@ -215,6 +232,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--max_instances", type=int, default=None)
+    parser.add_argument("--scales", default="", help="Optional comma-separated scale filter, e.g. Cus5,Cus15.")
     parser.add_argument("--max_iters", type=int, default=None, help="Override ALNS max iterations. Default uses solver profile.")
     parser.add_argument("--delta_iters", type=int, default=None, help="Run only this many ALNS iterations.")
     parser.add_argument("--save_traceback", action="store_true")
@@ -226,7 +244,14 @@ def main() -> None:
     solutions_dir = save_path / "solutions"
     solutions_dir.mkdir(parents=True, exist_ok=True)
 
-    instance_payloads = list(iter_instance_dicts(dataset_path))
+    scale_filter = parse_scales(args.scales)
+    instance_payloads = []
+    for payload in iter_instance_dicts(dataset_path):
+        if scale_filter and payload_scale(payload) not in scale_filter:
+            continue
+        instance_payloads.append(payload)
+        if args.max_instances is not None and len(instance_payloads) >= int(args.max_instances):
+            break
     if args.max_instances is not None:
         instance_payloads = instance_payloads[: args.max_instances]
     if not instance_payloads:
@@ -235,6 +260,7 @@ def main() -> None:
     num_workers = max(1, int(args.num_workers))
     print(
         f"ALNS benchmark schedule: instances={len(instance_payloads)}, num_workers={num_workers}, "
+        f"scales={sorted(scale_filter) if scale_filter else 'all'}, "
         f"max_iters={args.max_iters}, delta_iters={args.delta_iters}"
     )
 

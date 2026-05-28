@@ -18,6 +18,20 @@ Optional iteration controls:
 
 - `--max_iters`: override the ALNS maximum iterations.
 - `--delta_iters`: run only a limited number of iterations.
+- `--scales`: optional comma-separated scale filter, for example `Cus5,Cus15`.
+
+Smoke test on the packaged validation split:
+
+```bash
+python EVRPTW_Benchmark/MetaHeuristics/ALNS_Solver/run_alns.py \
+  --dataset_path EVRPTW_Dataset/dataset_v1/dataset/val \
+  --save_path EVRPTW_Benchmark/results/dataset_v1/val/ALNS_Solver_one_instance \
+  --scales Cus5 \
+  --max_instances 1 \
+  --num_workers 1 \
+  --seed 2026 \
+  --delta_iters 20
+```
 
 Outputs:
 
