@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from evrptw_core.io import iter_instances
 
 from .async_instances import AsyncInstancePool
-from .data_pool import OnlineInstancePool
+from .data_pool import FixedDatasetInstancePool, OnlineInstancePool
 from .env_factory import make_terran_env
 from .models import Agent
 from .pbrs import PotentialRewardConfig
@@ -183,40 +183,76 @@ def build_pbrs_config(cfg: dict[str, Any]) -> PotentialRewardConfig | None:
     return config
 
 
+def _configure_dataset_reward_scale(cfg: dict[str, Any], pool: Any) -> None:
+    env_cfg = cfg.setdefault("env", {})
+    mode = str(env_cfg.get("reward_distance_scale_mode", "single_customer_repair_median"))
+    if not mode.startswith("dataset_"):
+        return
+    base_mode = mode[len("dataset_") :]
+    scale_fn = getattr(pool, "reward_distance_scale_km", None)
+    if not callable(scale_fn):
+        raise ValueError(
+            "reward_distance_scale_mode uses dataset_ prefix, but the training pool "
+            "does not provide dataset-level reward scale statistics."
+        )
+    scale = float(scale_fn(base_mode))
+    env_cfg["reward_distance_scale_mode"] = base_mode
+    env_cfg["reward_distance_scale_km"] = scale
+    cfg.setdefault("normalization", {})["reward_distance_scale_km"] = scale
+    cfg["normalization"]["reward_distance_scale_mode"] = mode
+    cfg["normalization"]["reward_distance_scale_base_mode"] = base_mode
+    cfg["normalization"]["reward_distance_scale_source"] = getattr(pool, "region_pool_status", "dataset")
+
+
 def make_envs(cfg: dict[str, Any], seed: int):
     data_cfg = cfg["data"]
     train_cfg = cfg["training"]
     num_envs = int(train_cfg.get("num_envs_per_gpu", 128))
-    common_pool_kwargs = dict(
-        config_path=data_cfg.get("generator_config", "configs/amazon_hierarchy.yaml"),
-        num_regions=int(data_cfg.get("mother_board_pool_size", 32)),
-        mother_num_customers=int(data_cfg.get("mother_num_customers", 5000)),
-        mother_num_charging_stations=int(data_cfg.get("mother_num_charging_stations", 120)),
-        num_customers=int(data_cfg.get("num_customers", 15)),
-        num_charging_stations=int(data_cfg.get("num_charging_stations", 3)),
-        region_reuse_limit=int(data_cfg.get("region_reuse_limit", 200)),
-        seed=seed,
-        max_attempts_per_instance=data_cfg.get("max_attempts_per_instance"),
-        territory_pool_path=data_cfg.get("territory_pool_path"),
-        region_pool_path=data_cfg.get("region_pool_path"),
-        region_pool_shuffle=bool(data_cfg.get("territory_pool_shuffle", data_cfg.get("region_pool_shuffle", True))),
-        region_pool_replacement_policy=str(data_cfg.get("region_pool_replacement_policy", "cycle")),
+    train_dataset_path = (
+        data_cfg.get("train_dataset_path")
+        or data_cfg.get("instance_dataset_path")
+        or data_cfg.get("fixed_train_path")
     )
-    if bool(data_cfg.get("async_instance_prefetch", False)):
-        workers = int(data_cfg.get("async_instance_workers", min(8, max(1, num_envs))))
-        queue_batches = int(data_cfg.get("async_instance_queue_batches", 2))
-        regions_per_worker = data_cfg.get("async_regions_per_worker", None)
-        pool = AsyncInstancePool(
-            **common_pool_kwargs,
-            num_workers=workers,
-            queue_size=max(workers * 2, num_envs * max(1, queue_batches)),
-            regions_per_worker=None if regions_per_worker is None else int(regions_per_worker),
-            multiprocessing_context=str(data_cfg.get("async_multiprocessing_context", "spawn")),
-            get_timeout_s=float(data_cfg.get("async_get_timeout_s", 300.0)),
+    if train_dataset_path not in (None, ""):
+        pool = FixedDatasetInstancePool(
+            dataset_path=train_dataset_path,
+            num_customers=int(data_cfg.get("num_customers", 15)),
+            num_charging_stations=int(data_cfg.get("num_charging_stations", 3)),
+            seed=seed,
+            sample_mode=str(data_cfg.get("train_sample_mode", "shuffle_cycle")),
         )
-        pool.start()
     else:
-        pool = OnlineInstancePool(**common_pool_kwargs)
+        common_pool_kwargs = dict(
+            config_path=data_cfg.get("generator_config", "configs/amazon_hierarchy.yaml"),
+            num_regions=int(data_cfg.get("mother_board_pool_size", 32)),
+            mother_num_customers=int(data_cfg.get("mother_num_customers", 5000)),
+            mother_num_charging_stations=int(data_cfg.get("mother_num_charging_stations", 120)),
+            num_customers=int(data_cfg.get("num_customers", 15)),
+            num_charging_stations=int(data_cfg.get("num_charging_stations", 3)),
+            region_reuse_limit=int(data_cfg.get("region_reuse_limit", 200)),
+            seed=seed,
+            max_attempts_per_instance=data_cfg.get("max_attempts_per_instance"),
+            territory_pool_path=data_cfg.get("territory_pool_path"),
+            region_pool_path=data_cfg.get("region_pool_path"),
+            region_pool_shuffle=bool(data_cfg.get("territory_pool_shuffle", data_cfg.get("region_pool_shuffle", True))),
+            region_pool_replacement_policy=str(data_cfg.get("region_pool_replacement_policy", "cycle")),
+        )
+        if bool(data_cfg.get("async_instance_prefetch", False)):
+            workers = int(data_cfg.get("async_instance_workers", min(8, max(1, num_envs))))
+            queue_batches = int(data_cfg.get("async_instance_queue_batches", 2))
+            regions_per_worker = data_cfg.get("async_regions_per_worker", None)
+            pool = AsyncInstancePool(
+                **common_pool_kwargs,
+                num_workers=workers,
+                queue_size=max(workers * 2, num_envs * max(1, queue_batches)),
+                regions_per_worker=None if regions_per_worker is None else int(regions_per_worker),
+                multiprocessing_context=str(data_cfg.get("async_multiprocessing_context", "spawn")),
+                get_timeout_s=float(data_cfg.get("async_get_timeout_s", 300.0)),
+            )
+            pool.start()
+        else:
+            pool = OnlineInstancePool(**common_pool_kwargs)
+    _configure_dataset_reward_scale(cfg, pool)
     pbrs_config = build_pbrs_config(cfg)
     env_cfg = dict(cfg.get("env", {}) or {})
     if bool(env_cfg.get("use_fast_env", True)):
@@ -231,7 +267,6 @@ def make_envs(cfg: dict[str, Any], seed: int):
         for _ in range(num_envs)
     ]
     return envs, pool
-
 
 def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: int, device: str | torch.device) -> dict[str, Any]:
     eval_cfg = cfg.get("evaluation", {})

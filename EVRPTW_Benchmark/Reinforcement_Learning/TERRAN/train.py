@@ -20,6 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-minibatches", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
     parser.add_argument("--service-territory-pool-size", "--mother-board-pool-size", dest="mother_board_pool_size", type=int, default=None)
+    parser.add_argument("--train-dataset-path", type=str, default=None, help="Fixed train split bundle or directory, e.g. EVRPTW_Dataset/dataset_v1/dataset/train/Cus15")
+    parser.add_argument("--train-sample-mode", type=str, default=None, choices=["shuffle_cycle", "cycle", "random"])
     parser.add_argument("--territory-pool-path", "--region-pool-path", dest="territory_pool_path", type=str, default=None)
     parser.add_argument("--territory-pool-shuffle", "--region-pool-shuffle", dest="territory_pool_shuffle", action="store_true")
     parser.add_argument("--no-territory-pool-shuffle", "--no-region-pool-shuffle", dest="no_territory_pool_shuffle", action="store_true")
@@ -53,6 +55,10 @@ def main() -> None:
     overrides: dict[str, Any] = {"data": {}, "training": {}, "evaluation": {}}
     if args.mother_board_pool_size is not None:
         overrides["data"]["mother_board_pool_size"] = args.mother_board_pool_size
+    if args.train_dataset_path is not None:
+        overrides["data"]["train_dataset_path"] = args.train_dataset_path
+    if args.train_sample_mode is not None:
+        overrides["data"]["train_sample_mode"] = args.train_sample_mode
     if args.territory_pool_path is not None:
         overrides["data"]["territory_pool_path"] = args.territory_pool_path
     if args.territory_pool_shuffle:

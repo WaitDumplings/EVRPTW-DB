@@ -39,3 +39,4 @@ EVRPTW_Dataset_Generator/analysis_outputs/
 # RL training outputs
 EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/checkpoints/
 EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/logs/
+EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/results/
