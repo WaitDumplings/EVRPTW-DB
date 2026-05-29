@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 import traceback
 from collections import defaultdict
@@ -111,6 +112,13 @@ def checkpoint_label(checkpoint_s: float | int | None) -> str:
 
 def scale_for_instance(instance: Any) -> str:
     return f"Cus{int(instance.num_customers)}"
+
+
+def instance_index(instance_id: str) -> int | None:
+    try:
+        return int(str(instance_id).rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return None
 
 
 def infer_split(dataset_path: Path) -> str:
@@ -406,9 +414,11 @@ def write_reference_route(
             for vehicle_id, route in enumerate(solution.routes)
         ],
     }
-    with path.open("w", encoding="utf-8") as f:
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(detail, f, indent=2)
         f.write("\n")
+    tmp_path.replace(path)
     return path
 
 
@@ -463,13 +473,52 @@ def write_reference_csvs(reference_root: Path, rows: list[dict[str, Any]]) -> No
 
     for split, split_rows in sorted(grouped.items()):
         path = reference_root / split / "solutions.csv"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        split_rows.sort(key=lambda row: (str(row.get("scale", "")), str(row.get("instance_id", ""))))
-        with path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=REFERENCE_FIELDNAMES)
-            writer.writeheader()
-            for row in split_rows:
-                writer.writerow({key: row.get(key, "") for key in REFERENCE_FIELDNAMES})
+        write_csv_atomic(
+            path,
+            split_rows,
+            REFERENCE_FIELDNAMES,
+            sort_key=lambda row: str(row.get("instance_id", "")),
+        )
+
+
+def read_csv_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def write_csv_atomic(
+    path: Path,
+    rows: list[dict[str, Any]],
+    fieldnames: list[str],
+    *,
+    sort_key: Any,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in sorted(rows, key=sort_key):
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+    tmp_path.replace(path)
+
+
+def upsert_instance_rows(
+    rows: list[dict[str, Any]],
+    new_rows: list[dict[str, Any]],
+    instance_id: str,
+) -> list[dict[str, Any]]:
+    kept = [row for row in rows if str(row.get("instance_id", "")) != instance_id]
+    kept.extend(new_rows)
+    return kept
+
+
+def load_reference_rows(reference_root: Path | None, split: str) -> list[dict[str, Any]]:
+    if reference_root is None:
+        return []
+    return read_csv_rows(reference_root / split / "solutions.csv")
 
 
 def checkpoint_sort_value(row: dict[str, Any]) -> float:
@@ -479,7 +528,7 @@ def checkpoint_sort_value(row: dict[str, Any]) -> float:
         return float("inf")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run the exact Gurobi EVRP-TW-D solver on pickle instances.")
     parser.add_argument("--dataset_path", required=True, help="Dataset root or one instance pickle file.")
     parser.add_argument("--save_path", required=True, help="Directory for benchmark summaries and solution pickles.")
@@ -490,7 +539,10 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=None, help="Optional Gurobi thread limit per model. Defaults to 1 when --workers > 1.")
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel worker processes. Default: 1.")
     parser.add_argument("--limit", type=int, default=None, help="Optional total instance limit after scale filtering.")
+    parser.add_argument("--start_index", type=int, default=None, help="Optional inclusive lower bound for the numeric instance id suffix.")
+    parser.add_argument("--end_index", type=int, default=None, help="Optional exclusive upper bound for the numeric instance id suffix.")
     parser.add_argument("--scales", default="", help="Optional comma-separated scale filter, e.g. Cus5,Cus15.")
+    parser.add_argument("--skip_completed", action="store_true", help="Skip instances already present in gurobi_summary.csv.")
     parser.add_argument("--reference_save_path", default="", help="Optional reference_solutions root for split/Cus*/solutions.csv and routes/*.json.")
     parser.add_argument("--reference_split", default="", help="Reference split name. Defaults to train/val/eval inferred from dataset_path.")
     parser.add_argument("--checkpoints_s", default="", help="Comma-separated seconds for incumbent snapshots, e.g. 60,300,900.")
@@ -499,7 +551,7 @@ def main() -> None:
     parser.add_argument("--distance_tolerance_rel", type=float, default=1e-8)
     parser.add_argument("--save_traceback", action="store_true", help="Store Python tracebacks in the summary CSV.")
     parser.add_argument("--verbose", action="store_true", help="Print per-instance progress.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     requested_checkpoints_s = parse_checkpoints(args.checkpoints_s)
     checkpoints_s, time_limit_s = resolve_time_schedule(requested_checkpoints_s, args.time_limit_s)
@@ -509,6 +561,12 @@ def main() -> None:
     limit = int(args.limit) if args.limit is not None else None
     if limit is not None and limit < 0:
         raise ValueError(f"--limit must be non-negative, got {limit}")
+    if args.start_index is not None and args.start_index < 0:
+        raise ValueError(f"--start_index must be non-negative, got {args.start_index}")
+    if args.end_index is not None and args.end_index < 0:
+        raise ValueError(f"--end_index must be non-negative, got {args.end_index}")
+    if args.start_index is not None and args.end_index is not None and args.start_index >= args.end_index:
+        raise ValueError(f"--start_index must be less than --end_index, got {args.start_index} >= {args.end_index}")
 
     print(
         f"Exact benchmark schedule: time_limit_s={time_limit_s:g}, "
@@ -519,6 +577,7 @@ def main() -> None:
     dataset_path = Path(args.dataset_path)
     save_path = Path(args.save_path)
     trace_path = save_path / "gurobi_time_trace.csv"
+    summary_path = save_path / "gurobi_summary.csv"
     solutions_dir = save_path / "solutions"
     checkpoint_dir = solutions_dir / "checkpoints"
     solutions_dir.mkdir(parents=True, exist_ok=True)
@@ -541,12 +600,30 @@ def main() -> None:
     )
 
     instance_files = discover_instance_files(dataset_path)
+    existing_summary_rows = read_csv_rows(summary_path)
+    completed_ids = {
+        str(row.get("instance_id", ""))
+        for row in existing_summary_rows
+        if str(row.get("status_name") or row.get("status") or "") not in {"", "ERROR", "INVALID_INSTANCE"}
+    }
     records: list[tuple[Path, Any]] = []
+    skipped_completed_count = 0
+    skipped_range_count = 0
     for instance_file in instance_files:
         for instance in iter_instances(instance_file):
             if limit is not None and len(records) >= limit:
                 break
             if scale_filter and scale_for_instance(instance) not in scale_filter:
+                continue
+            idx = instance_index(instance.instance_id)
+            if args.start_index is not None and (idx is None or idx < args.start_index):
+                skipped_range_count += 1
+                continue
+            if args.end_index is not None and (idx is None or idx >= args.end_index):
+                skipped_range_count += 1
+                continue
+            if args.skip_completed and instance.instance_id in completed_ids:
+                skipped_completed_count += 1
                 continue
             records.append((instance_file, instance))
         if limit is not None and len(records) >= limit:
@@ -556,37 +633,63 @@ def main() -> None:
         instance.instance_id: instance_info(instance, reference_split)
         for _, instance in records
     }
-    print(f"Loaded {len(records)} instances from {len(instance_files)} bundle/file(s).")
+    range_label = "all"
+    if args.start_index is not None or args.end_index is not None:
+        start_label = "" if args.start_index is None else str(args.start_index)
+        end_label = "" if args.end_index is None else str(args.end_index)
+        range_label = f"[{start_label}, {end_label})"
+    print(
+        f"Loaded {len(records)} instances from {len(instance_files)} bundle/file(s). "
+        f"index_range={range_label} skipped_range={skipped_range_count} "
+        f"skipped_completed={skipped_completed_count}"
+    )
 
-    summary_rows: list[dict[str, Any]] = []
-    time_rows: list[dict[str, Any]] = []
-    reference_rows: list[dict[str, Any]] = []
+    summary_rows: list[dict[str, Any]] = existing_summary_rows
+    time_rows: list[dict[str, Any]] = read_csv_rows(trace_path)
+    reference_rows: list[dict[str, Any]] = load_reference_rows(reference_root, reference_split)
 
     def consume_result(result: dict[str, Any]) -> None:
+        nonlocal summary_rows, time_rows, reference_rows
         instance_id = str(result["instance_id"])
         summary_row = dict(result["summary_row"])
         summary_row["time_trace_path"] = str(trace_path)
         solution_dict = result.get("solution")
         solution = EVRPTWSolution.from_dict(solution_dict) if solution_dict is not None else None
+        new_time_rows: list[dict[str, Any]] = []
 
         if solution is not None:
             solution_path = solutions_dir / f"{instance_id}_solution.pkl"
             save_solution(solution_path, solution)
             summary_row["solution_path"] = str(solution_path)
-            append_time_rows(time_rows, Path(summary_row.get("file") or dataset_path), instance_id, solution, checkpoint_dir)
+            append_time_rows(new_time_rows, Path(summary_row.get("file") or dataset_path), instance_id, solution, checkpoint_dir)
         else:
-            time_rows.extend(result.get("time_rows", []))
+            new_time_rows.extend(result.get("time_rows", []))
+
+        summary_rows = upsert_instance_rows(summary_rows, [summary_row], instance_id)
+        time_rows = upsert_instance_rows(time_rows, new_time_rows, instance_id)
 
         if reference_root is not None:
             info = instance_infos[instance_id]
             route_path = None
             if solution is not None and solution.routes:
                 route_path = write_reference_route(reference_root, info, solution, solver_version, time_limit_s)
-            reference_rows.append(
-                make_reference_row(info, summary_row, solution, reference_root, route_path, solver_version, time_limit_s)
-            )
+            reference_row = make_reference_row(info, summary_row, solution, reference_root, route_path, solver_version, time_limit_s)
+            reference_rows = upsert_instance_rows(reference_rows, [reference_row], instance_id)
 
-        summary_rows.append(summary_row)
+        write_csv_atomic(
+            summary_path,
+            summary_rows,
+            SUMMARY_FIELDNAMES,
+            sort_key=lambda row: str(row.get("instance_id", "")),
+        )
+        write_csv_atomic(
+            trace_path,
+            time_rows,
+            TIME_TRACE_FIELDNAMES,
+            sort_key=lambda row: (str(row.get("instance_id", "")), checkpoint_sort_value(row)),
+        )
+        if reference_root is not None:
+            write_reference_csvs(reference_root, reference_rows)
 
     if records and workers > 1:
         with ProcessPoolExecutor(max_workers=min(workers, len(records))) as executor:
@@ -615,24 +718,7 @@ def main() -> None:
                 row = result["summary_row"]
                 print(f"[{done_count}/{len(records)}] {result['instance_id']}: {row.get('status_name')} obj={row.get('objective_distance_km')}")
 
-    summary_rows.sort(key=lambda row: str(row.get("instance_id", "")))
-    time_rows.sort(key=lambda row: (str(row.get("instance_id", "")), checkpoint_sort_value(row)))
-
-    summary_path = save_path / "gurobi_summary.csv"
-    with summary_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=SUMMARY_FIELDNAMES)
-        writer.writeheader()
-        for row in summary_rows:
-            writer.writerow({key: row.get(key, "") for key in SUMMARY_FIELDNAMES})
-
-    with trace_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=TIME_TRACE_FIELDNAMES)
-        writer.writeheader()
-        for row in time_rows:
-            writer.writerow({key: row.get(key, "") for key in TIME_TRACE_FIELDNAMES})
-
     if reference_root is not None:
-        write_reference_csvs(reference_root, reference_rows)
         print(f"Saved reference solutions under: {reference_root / reference_split}")
 
     print(f"Saved summary: {summary_path}")
