@@ -6,6 +6,16 @@ Exact small-scale EVRP-TW-D solver using Gurobi and the canonical pickle instanc
 
 The new benchmark path reads `.pkl` daily instances through `EVRPTW_Core`. We do **not** use the legacy `.txt` parser as the primary format. A txt exporter can be added later only for backward compatibility.
 
+For multi-metric instances, the exact solver uses:
+
+- `distance_matrix_km` as the objective metric;
+- `raw_travel_time_matrix_s` as the direct arc travel-time metric when present, otherwise `distance / effective_speed`;
+- `energy_matrix_kwh` as the direct arc energy metric when present, otherwise `distance * vehicle.consumption_kwh_per_km`.
+
+The solver does not default to `shortest_time_matrix_s` for arc travel times, because the arc-flow MILP explicitly models charging-station visits and full-charge departure time. Using an EV transition or shortest-time matrix that already includes charging semantics can double-count charging.
+
+Solution metadata records the selected matrix sources and max matrix asymmetry diagnostics (`travel_time_matrix_source`, `energy_matrix_source`, `energy_asymmetry_max_kwh`, etc.). The same source/asymmetry diagnostics are also written to `gurobi_summary.csv`.
+
 ## Run
 
 ```bash

@@ -51,6 +51,7 @@ def activate_charging_stations(
     oracle: DistanceOracle,
     rng: np.random.Generator,
     config: dict[str, Any],
+    depot_node_id: int | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     cfg = config.get("cs_activation", {})
     k = int(num_charging_stations)
@@ -61,6 +62,18 @@ def activate_charging_stations(
         customer_nodes = board.customer_node_ids[active_customer_ids]
         cs_nodes = board.cs_node_ids[selected]
         dist_customer_cs = oracle.matrix_between(customer_nodes, cs_nodes).astype(np.float32, copy=False)
+        reachable = np.any(np.isfinite(dist_customer_cs), axis=0) if dist_customer_cs.size else np.zeros(selected.size, dtype=bool)
+        if depot_node_id is not None and selected.size:
+            depot_cs = oracle.matrix_between(np.asarray([int(depot_node_id)], dtype=np.int32), cs_nodes).astype(np.float32, copy=False)
+            reachable &= np.isfinite(depot_cs[0])
+        selected = selected[reachable]
+        cs_nodes = board.cs_node_ids[selected]
+        dist_customer_cs = dist_customer_cs[:, reachable]
+        if selected.size < k:
+            raise ValueError(
+                f"Only {int(selected.size)} charging stations are road-reachable from the active depot/customer component; "
+                f"requested {int(k)}."
+            )
         connector = _customer_connector_km(board, active_customer_ids)
         if connector.size:
             dist_customer_cs = dist_customer_cs + connector[:, None]
@@ -101,6 +114,31 @@ def activate_charging_stations(
     connector = _customer_connector_km(board, active_customer_ids)
     if connector.size:
         dist_customer_cs = dist_customer_cs + connector[:, None]
+    reachable = np.any(np.isfinite(dist_customer_cs), axis=0) if dist_customer_cs.size else np.zeros(candidate_ids.size, dtype=bool)
+    if depot_node_id is not None and candidate_ids.size:
+        depot_cs = oracle.matrix_between(np.asarray([int(depot_node_id)], dtype=np.int32), cs_nodes).astype(np.float32, copy=False)
+        reachable &= np.isfinite(depot_cs[0])
+    candidate_ids = candidate_ids[reachable]
+    dist_customer_cs = dist_customer_cs[:, reachable]
+    cs_nodes = board.cs_node_ids[candidate_ids]
+    if candidate_ids.size < k:
+        candidate_ids = np.arange(cs_count, dtype=np.int32)
+        cs_nodes = board.cs_node_ids[candidate_ids]
+        dist_customer_cs = oracle.matrix_between(customer_nodes, cs_nodes).astype(np.float32, copy=False)
+        if connector.size:
+            dist_customer_cs = dist_customer_cs + connector[:, None]
+        reachable = np.any(np.isfinite(dist_customer_cs), axis=0) if dist_customer_cs.size else np.zeros(candidate_ids.size, dtype=bool)
+        if depot_node_id is not None and candidate_ids.size:
+            depot_cs = oracle.matrix_between(np.asarray([int(depot_node_id)], dtype=np.int32), cs_nodes).astype(np.float32, copy=False)
+            reachable &= np.isfinite(depot_cs[0])
+        candidate_ids = candidate_ids[reachable]
+        dist_customer_cs = dist_customer_cs[:, reachable]
+        cs_nodes = board.cs_node_ids[candidate_ids]
+    if candidate_ids.size < k:
+        raise ValueError(
+            f"Only {int(candidate_ids.size)} charging stations are road-reachable from the active depot/customer component; "
+            f"requested {int(k)}."
+        )
 
     cluster_labels = board.cluster_labels[active_customer_ids]
     cluster_weights = np.ones(len(active_customer_ids), dtype=np.float32)

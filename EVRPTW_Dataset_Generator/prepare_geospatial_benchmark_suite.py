@@ -43,10 +43,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--territory-limit", type=int, default=None)
     parser.add_argument("--territory-id", action="append", default=None)
     parser.add_argument("--scales", default="", help="Comma-separated customer scales. Defaults to config scales.")
+    parser.add_argument(
+        "--split-name",
+        default="eval",
+        help="Dataset split directory and metadata label, e.g. train, validation_reference, eval, offline_industrial.",
+    )
     parser.add_argument("--instances-per-scale", type=int, default=None)
     parser.add_argument("--latent-customer-pool-size", type=int, default=None)
     parser.add_argument("--cs-candidate-pool-size", type=int, default=None)
     parser.add_argument("--skip-instances", action="store_true")
+    parser.add_argument("--skip-existing", action="store_true", help="Skip a territory/scale split when instances.pkl already has the requested count.")
     parser.add_argument("--plots", action="store_true")
     parser.add_argument("--require-real-sources", action="store_true", help="Fail if any territory would use fallback synthetic geospatial scaffolds.")
     return parser.parse_args()
@@ -94,8 +100,21 @@ def _scale_map(cfg: dict[str, Any], args: argparse.Namespace) -> dict[int, int]:
     raw = cfg.get("scales", {}) or {5: 3, 15: 3, 50: 10, 100: 20}
     out = {int(k): int(v) for k, v in raw.items()}
     if args.scales.strip():
-        requested = {int(item.strip()) for item in args.scales.split(",") if item.strip()}
-        out = {scale: out[scale] for scale in sorted(requested) if scale in out}
+        requested: dict[int, int] = {}
+        for item in args.scales.split(","):
+            token = item.strip()
+            if not token:
+                continue
+            if ":" in token:
+                scale_raw, cs_raw = token.split(":", 1)
+                requested[int(scale_raw.strip())] = int(cs_raw.strip())
+            else:
+                scale = int(token)
+                if scale in out:
+                    requested[scale] = out[scale]
+                else:
+                    requested[scale] = max(3, min(160, int(round(scale * 0.1))))
+        out = {scale: requested[scale] for scale in sorted(requested)}
     if not out:
         raise ValueError("No valid scales selected.")
     return out
@@ -191,12 +210,19 @@ def _write_pool(root: Path, board: RegionBoard, suite_cfg: dict[str, Any], spec:
     return manifest
 
 
-def _dataset_metadata(suite_cfg: dict[str, Any], spec: dict[str, Any], scale: int, num_cs: int, pool_path: Path) -> dict[str, Any]:
+def _dataset_metadata(
+    suite_cfg: dict[str, Any],
+    spec: dict[str, Any],
+    split_name: str,
+    scale: int,
+    num_cs: int,
+    pool_path: Path,
+) -> dict[str, Any]:
     return {
         "dataset_family": "EVRPTW-D",
         "dataset_version": "Geo-AC-v1",
         "profile_name": suite_cfg.get("profile_name", "Geo-AC-v1 / NA-US-10"),
-        "split": "eval",
+        "split": split_name,
         "territory_id": spec["territory_id"],
         "display_name": spec.get("display_name", spec["territory_id"]),
         "county_name": spec.get("county_name", ""),
@@ -235,12 +261,29 @@ def _write_timing_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({key: row.get(key, "") for key in fieldnames})
 
 
+def _existing_bundle_count(path: Path) -> int | None:
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    try:
+        with path.open("rb") as f:
+            header = pickle.load(f)
+    except Exception:
+        return None
+    if not isinstance(header, dict) or header.get("format") != "evrptw_instance_bundle_v1":
+        return None
+    try:
+        return int(header.get("num_instances"))
+    except Exception:
+        return None
+
+
 def main() -> None:
     args = parse_args()
     city_cfg = load_yaml(args.city_config)
     base_cfg = load_yaml(args.base_config)
     config_dir = args.city_config.resolve().parent
     output_root = Path(args.output_root)
+    split_name = str(args.split_name).strip() or "eval"
     territories = _selected_territories(city_cfg, args, config_dir)
     scales = _scale_map(city_cfg, args)
     instances_per_scale = int(args.instances_per_scale or city_cfg.get("instances_per_scale", 100))
@@ -285,10 +328,36 @@ def main() -> None:
             continue
 
         for scale, num_cs in scales.items():
-            suite_path = output_root / "eval" / str(spec["territory_id"]) / f"Cus_{scale}"
+            suite_path = output_root / split_name / str(spec["territory_id"]) / f"Cus_{scale}"
+            existing_count = _existing_bundle_count(suite_path / "instances.pkl")
+            if args.skip_existing and existing_count == int(instances_per_scale):
+                timing_rows.append({
+                    "stage": "operating_day_instances_skipped_existing",
+                    "territory_id": spec["territory_id"],
+                    "suite_name": f"Cus_{scale}",
+                    "num_instances": int(instances_per_scale),
+                    "num_customers": int(scale),
+                    "num_charging_stations": int(num_cs),
+                    "wall_time_s": 0.0,
+                    "output_path": str(suite_path / "instances.pkl"),
+                })
+                print(json.dumps({
+                    "territory": spec["territory_id"],
+                    "suite": f"Cus_{scale}",
+                    "instances_path": str(suite_path / "instances.pkl"),
+                    "skipped_existing": True,
+                }, indent=2))
+                continue
             generator = HierarchyDatasetGenerator(cfg, seed=seed + int(scale))
             generator.boards = [board]
             generator.usages = [_fresh_usage(board)]
+            generator.precomputed_boards = [board]
+            generator.precomputed_replacement_policy = "cycle"
+            generator.next_precomputed_index = 0
+            region_reuse_limit = max(
+                int(spec.get("region_reuse_limit", city_cfg.get("region_reuse_limit", 200))),
+                int(instances_per_scale) + 1,
+            )
             start = time.perf_counter()
             summary = generator.generate(
                 save_path=suite_path,
@@ -298,11 +367,11 @@ def main() -> None:
                 num_regions=1,
                 mother_num_customers=int(len(board.customers)),
                 mother_num_charging_stations=int(len(board.charging_stations)),
-                region_reuse_limit=int(spec.get("region_reuse_limit", city_cfg.get("region_reuse_limit", 200))),
+                region_reuse_limit=region_reuse_limit,
                 max_attempts_per_instance=spec.get("max_attempts_per_instance", city_cfg.get("max_attempts_per_instance", None)),
                 save_plots=bool(args.plots),
                 save_regions=False,
-                dataset_metadata=_dataset_metadata(city_cfg, spec, int(scale), int(num_cs), territory_root),
+                dataset_metadata=_dataset_metadata(city_cfg, spec, split_name, int(scale), int(num_cs), territory_root),
                 clear_oracle_after_instance=False,
             )
             elapsed = time.perf_counter() - start
@@ -323,6 +392,7 @@ def main() -> None:
         "dataset_family": "EVRPTW-D",
         "dataset_version": "Geo-AC-v1",
         "profile_name": city_cfg.get("profile_name", "Geo-AC-v1 / NA-US-10"),
+        "split_name": split_name,
         "territory_count": len(territories),
         "territories": [
             {

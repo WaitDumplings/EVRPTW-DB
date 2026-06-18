@@ -26,7 +26,10 @@ SUMMARY_FIELDNAMES = [
     "instance_id", "file", "status", "status_name", "feasible", "objective_distance_km",
     "vehicle_count", "runtime_s", "first_feasible_time_s", "mip_gap", "best_bound",
     "routes_json", "route_sequence_json", "solution_path", "time_trace_path",
-    "tie_break_applied", "stage1_best_distance_km", "distance_tolerance", "errors", "traceback",
+    "tie_break_applied", "stage1_best_distance_km", "distance_tolerance",
+    "travel_time_matrix_source", "energy_matrix_source",
+    "travel_time_asymmetry_max_s", "energy_asymmetry_max_kwh",
+    "errors", "traceback",
 ]
 
 TIME_TRACE_FIELDNAMES = [
@@ -268,6 +271,10 @@ def invalid_summary_row(instance: Any, instance_file: Path, errors: str) -> dict
         "tie_break_applied": "",
         "stage1_best_distance_km": "",
         "distance_tolerance": "",
+        "travel_time_matrix_source": "",
+        "energy_matrix_source": "",
+        "travel_time_asymmetry_max_s": "",
+        "energy_asymmetry_max_kwh": "",
         "errors": errors,
         "traceback": "",
     }
@@ -298,6 +305,10 @@ def error_summary_row(
         "tie_break_applied": "",
         "stage1_best_distance_km": "",
         "distance_tolerance": "",
+        "travel_time_matrix_source": "",
+        "energy_matrix_source": "",
+        "travel_time_asymmetry_max_s": "",
+        "energy_asymmetry_max_kwh": "",
         "errors": error,
         "traceback": traceback_text,
     }
@@ -323,6 +334,10 @@ def solved_summary_row(instance: Any, instance_file: Path, solution: EVRPTWSolut
         "tie_break_applied": solution.metadata.get("tie_break_applied"),
         "stage1_best_distance_km": solution.metadata.get("stage1_best_distance_km"),
         "distance_tolerance": solution.metadata.get("distance_tolerance"),
+        "travel_time_matrix_source": solution.metadata.get("travel_time_matrix_source"),
+        "energy_matrix_source": solution.metadata.get("energy_matrix_source"),
+        "travel_time_asymmetry_max_s": solution.metadata.get("travel_time_asymmetry_max_s"),
+        "energy_asymmetry_max_kwh": solution.metadata.get("energy_asymmetry_max_kwh"),
         "errors": json.dumps(solution.violations),
         "traceback": "",
     }

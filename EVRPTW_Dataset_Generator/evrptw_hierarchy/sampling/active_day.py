@@ -266,7 +266,7 @@ class ActiveDaySampler:
                 catchments.append((idx, start_radius, within_start))
                 continue
             within_max = np.flatnonzero(np.isfinite(row) & (row <= max_radius)).astype(np.int32)
-            if within_max.size >= int(num_customers):
+            if within_max.size >= min_pool:
                 catchments.append((idx, max_radius, within_max))
 
         if not catchments:
@@ -416,17 +416,27 @@ class ActiveDaySampler:
     ) -> ActiveInstance:
         last_error = "not_started"
         for attempt in range(int(max_attempts)):
-            depot_node_id, allowed_customer_ids, depot_meta = self._select_depot_catchment(board, num_customers, oracle)
-            active_customer_ids = self.sample_active_customers(
-                board,
-                num_customers,
-                allowed_customer_ids=allowed_customer_ids,
-            )
-            day = sample_day_profile(self.config, self.rng)
-            effective_speed = self.vehicle.design_speed_kmh * float(day["congestion_factor"])
-            active_cs_ids, cs_meta = activate_charging_stations(
-                board, active_customer_ids, num_charging_stations, oracle, self.rng, self.config
-            )
+            try:
+                depot_node_id, allowed_customer_ids, depot_meta = self._select_depot_catchment(board, num_customers, oracle)
+                active_customer_ids = self.sample_active_customers(
+                    board,
+                    num_customers,
+                    allowed_customer_ids=allowed_customer_ids,
+                )
+                day = sample_day_profile(self.config, self.rng)
+                effective_speed = self.vehicle.design_speed_kmh * float(day["congestion_factor"])
+                active_cs_ids, cs_meta = activate_charging_stations(
+                    board,
+                    active_customer_ids,
+                    num_charging_stations,
+                    oracle,
+                    self.rng,
+                    self.config,
+                    depot_node_id=depot_node_id,
+                )
+            except (RuntimeError, ValueError) as exc:
+                last_error = str(exc)
+                continue
             distance_matrix, terminal_node_ids = self._active_distance_matrix(
                 board,
                 active_customer_ids,

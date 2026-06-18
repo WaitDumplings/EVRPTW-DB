@@ -52,6 +52,27 @@ def validate_instance_structure(instance: EVRPTWInstance) -> ValidationResult:
         if np.max(np.abs(diagonal)) > 1e-5:
             warnings.append("distance_matrix_km diagonal is not zero")
 
+    optional_matrices = [
+        ("raw_travel_time_matrix_s", instance.raw_travel_time_matrix_s),
+        ("ev_transition_time_matrix_s", instance.ev_transition_time_matrix_s),
+        ("shortest_time_matrix_s", instance.shortest_time_matrix_s),
+        ("energy_matrix_kwh", instance.energy_matrix_kwh),
+    ]
+    present_optional_matrices: list[str] = []
+    for name, matrix in optional_matrices:
+        if matrix is None:
+            continue
+        present_optional_matrices.append(name)
+        if matrix.shape != (terminals, terminals):
+            errors.append(f"{name} must have shape ({terminals}, {terminals}), got {matrix.shape}")
+            continue
+        if np.any(~np.isfinite(matrix)):
+            warnings.append(f"{name} contains non-finite values")
+        if np.max(np.abs(np.diag(matrix))) > 1e-5:
+            warnings.append(f"{name} diagonal is not zero")
+        if np.any(matrix < -1e-7):
+            warnings.append(f"{name} contains negative values")
+
     return ValidationResult(
         success=not errors,
         errors=errors,
@@ -61,5 +82,6 @@ def validate_instance_structure(instance: EVRPTWInstance) -> ValidationResult:
             "num_charging_stations": m,
             "num_terminals": terminals,
             "working_horizon_s": int(instance.working_end_s - instance.working_start_s),
+            "optional_matrices": present_optional_matrices,
         },
     )

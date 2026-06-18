@@ -58,7 +58,7 @@ class GurobiEVRPTWSolver:
 
     def solve(self, instance: EVRPTWInstance) -> EVRPTWSolution:
         start = time.perf_counter()
-        model, node_map, x, distance_expr, vehicle_expr = self._build_model(instance)
+        model, node_map, x, distance_expr, vehicle_expr, metric_metadata = self._build_model(instance)
         self.model = model
         self.node_map = node_map
         self.x = x
@@ -158,10 +158,11 @@ class GurobiEVRPTWSolver:
                 "distance_tolerance": distance_tolerance,
                 "tie_break_gurobi_status": tie_break_status,
                 "tie_break_gurobi_status_name": tie_break_status_name,
+                **metric_metadata,
             },
         )
 
-    def _build_model(self, instance: EVRPTWInstance) -> tuple[Model, NodeMap, dict[tuple[int, int], Any], Any, Any]:
+    def _build_model(self, instance: EVRPTWInstance) -> tuple[Model, NodeMap, dict[tuple[int, int], Any], Any, Any, dict[str, Any]]:
         n = instance.num_customers
         m = instance.num_charging_stations
         cs_copies = max(1, int(self.config.cs_copies)) if m else 0
@@ -179,12 +180,9 @@ class GurobiEVRPTWSolver:
         node_map = NodeMap(solver_to_terminal, customer_nodes, cs_nodes, start_depot, end_depot)
 
         terminals = np.asarray(solver_to_terminal, dtype=int)
-        distance = instance.distance_matrix_km[np.ix_(terminals, terminals)].astype(float)
-        effective_speed = float(instance.speed_profile.get("effective_speed_kmh") or instance.vehicle.get("design_speed_kmh") or 40.0)
-        travel_s = distance / max(effective_speed, 1e-9) * 3600.0
+        distance, travel_s, energy_kwh, metric_metadata = self._resolve_arc_metric_matrices(instance, terminals)
 
         battery_capacity = float(instance.vehicle.get("battery_capacity_kwh", 100.0))
-        consumption = float(instance.vehicle.get("consumption_kwh_per_km", 0.404))
         cargo_capacity = float(instance.vehicle.get("cargo_capacity_cm3", np.inf))
         full_charge_s = float(instance.vehicle.get("full_charge_time_s", 0.0))
 
@@ -221,9 +219,9 @@ class GurobiEVRPTWSolver:
                     continue
                 if i in cs_nodes and j in cs_nodes and solver_to_terminal[i] == solver_to_terminal[j]:
                     continue
-                if not np.isfinite(distance[i, j]):
+                if not np.isfinite(distance[i, j]) or not np.isfinite(travel_s[i, j]) or not np.isfinite(energy_kwh[i, j]):
                     continue
-                if consumption * distance[i, j] > battery_capacity + 1e-7:
+                if energy_kwh[i, j] > battery_capacity + 1e-7:
                     continue
                 arcs.append((i, j))
 
@@ -260,7 +258,8 @@ class GurobiEVRPTWSolver:
         max_arc_time = float(np.nanmax(travel_s[np.isfinite(travel_s)])) if np.any(np.isfinite(travel_s)) else 0.0
         big_m_time = max(1.0, horizon + max_arc_time + float(np.max(service)) + full_charge_s + 1.0)
         big_m_load = max(1.0, cargo_capacity + float(np.sum(instance.demands_cm3)) + 1.0)
-        big_m_battery = max(1.0, battery_capacity + float(consumption * np.nanmax(distance[np.isfinite(distance)])) + 1.0)
+        max_arc_energy = float(np.nanmax(energy_kwh[np.isfinite(energy_kwh)])) if np.any(np.isfinite(energy_kwh)) else 0.0
+        big_m_battery = max(1.0, battery_capacity + max_arc_energy + 1.0)
 
         for i, j in arcs:
             model.addConstr(
@@ -271,7 +270,7 @@ class GurobiEVRPTWSolver:
                 load[j] >= load[i] + float(demand[j]) - big_m_load * (1 - x[i, j]),
                 name=f"load_{i}_{j}",
             )
-            energy = float(consumption * distance[i, j])
+            energy = float(energy_kwh[i, j])
             if i in recharge_nodes:
                 model.addConstr(
                     battery[j] <= battery_capacity - energy + big_m_battery * (1 - x[i, j]),
@@ -283,7 +282,65 @@ class GurobiEVRPTWSolver:
                     name=f"battery_{i}_{j}",
                 )
 
-        return model, node_map, x, distance_expr, vehicle_expr
+        return model, node_map, x, distance_expr, vehicle_expr, metric_metadata
+
+    def _resolve_arc_metric_matrices(
+        self,
+        instance: EVRPTWInstance,
+        terminals: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+        """Return distance, direct travel time, and energy matrices for MILP arcs.
+
+        The arc-flow MILP explicitly models charging-station visits and adds the
+        full-charge departure time at CS nodes. Therefore it should consume the
+        raw direct travel-time matrix, not an EV transition/shortest-time matrix
+        that may already include charging semantics.
+        """
+
+        distance = instance.distance_matrix_km[np.ix_(terminals, terminals)].astype(float)
+
+        if instance.raw_travel_time_matrix_s is not None:
+            travel_s = instance.raw_travel_time_matrix_s[np.ix_(terminals, terminals)].astype(float)
+            travel_time_source = "raw_travel_time_matrix_s"
+        else:
+            effective_speed = float(
+                instance.speed_profile.get("effective_speed_kmh")
+                or instance.vehicle.get("design_speed_kmh")
+                or 40.0
+            )
+            travel_s = distance / max(effective_speed, 1e-9) * 3600.0
+            travel_time_source = "distance_over_effective_speed"
+
+        if instance.energy_matrix_kwh is not None:
+            energy_kwh = instance.energy_matrix_kwh[np.ix_(terminals, terminals)].astype(float)
+            energy_source = "energy_matrix_kwh"
+        else:
+            consumption = float(instance.vehicle.get("consumption_kwh_per_km", 0.404))
+            energy_kwh = distance * consumption
+            energy_source = "distance_times_vehicle_consumption"
+
+        metric_metadata = {
+            "distance_matrix_source": "distance_matrix_km",
+            "travel_time_matrix_source": travel_time_source,
+            "energy_matrix_source": energy_source,
+            "ev_transition_time_matrix_available": instance.ev_transition_time_matrix_s is not None,
+            "shortest_time_matrix_available": instance.shortest_time_matrix_s is not None,
+            "distance_asymmetry_max_km": self._max_asymmetry(distance),
+            "travel_time_asymmetry_max_s": self._max_asymmetry(travel_s),
+            "energy_asymmetry_max_kwh": self._max_asymmetry(energy_kwh),
+        }
+        return distance, travel_s, energy_kwh, metric_metadata
+
+    @staticmethod
+    def _max_asymmetry(matrix: np.ndarray) -> float | None:
+        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+            return None
+        with np.errstate(invalid="ignore"):
+            diff = np.abs(matrix - matrix.T)
+        finite = diff[np.isfinite(diff)]
+        if finite.size == 0:
+            return None
+        return float(np.max(finite))
 
     @staticmethod
     def _route_distance_km(routes: list[list[int]], instance: EVRPTWInstance) -> float:

@@ -223,6 +223,7 @@ class GeospatialTerritoryBuilder:
                 explicit_lengths[tuple(sorted((u, v)))] = float(row["length_km"])
         if not edge_set:
             raise ValueError(f"{spec['territory_id']} has no usable road edges.")
+        topology_repair_edge_count = self._repair_nearby_road_components(base_nodes, edge_set, spec)
 
         seed_points = _coords_from_rows(seed_rows, spec)
         if seed_points.shape[0] == 0:
@@ -307,6 +308,7 @@ class GeospatialTerritoryBuilder:
             {
                 "source_mode": "standard_geospatial_csv",
                 "num_depot_candidates": int(len(depot_candidate_node_ids)),
+                "topology_repair_edge_count": int(topology_repair_edge_count),
                 "customer_connection_mode": customer_connection_mode,
                 **self._customer_connector_summary(customer_connector_km),
                 **self._customer_spacing_summary(customers),
@@ -354,6 +356,7 @@ class GeospatialTerritoryBuilder:
             depot_candidate_node_ids=depot_candidate_node_ids.astype(np.int32),
             depot_candidate_metadata=depot_meta,
         )
+        self._repair_depot_candidates_for_customer_components(board, spec)
         return self._relabel_board(board, spec, "standard_geospatial_csv")
 
     def _append_terminals(
@@ -371,6 +374,192 @@ class GeospatialTerritoryBuilder:
             add_unique_edge(edge_set, node_id, int(base_idx))
             out.append(node_id)
         return np.asarray(out, dtype=np.int32)
+
+    def _component_labels(self, num_nodes: int, edges: np.ndarray) -> np.ndarray:
+        adjacency: list[list[int]] = [[] for _ in range(int(num_nodes))]
+        for u_raw, v_raw in np.asarray(edges, dtype=np.int32):
+            u = int(u_raw)
+            v = int(v_raw)
+            if u == v or u < 0 or v < 0 or u >= num_nodes or v >= num_nodes:
+                continue
+            adjacency[u].append(v)
+            adjacency[v].append(u)
+        labels = np.full(int(num_nodes), -1, dtype=np.int32)
+        component_id = 0
+        for start in range(int(num_nodes)):
+            if labels[start] >= 0:
+                continue
+            stack = [start]
+            labels[start] = component_id
+            while stack:
+                node = stack.pop()
+                for nxt in adjacency[node]:
+                    if labels[nxt] < 0:
+                        labels[nxt] = component_id
+                        stack.append(nxt)
+            component_id += 1
+        return labels
+
+    def _repair_nearby_road_components(
+        self,
+        base_nodes: np.ndarray,
+        edge_set: set[tuple[int, int]],
+        spec: dict[str, Any],
+    ) -> int:
+        road_source = str((spec.get("data_filters", {}) or {}).get("road_source", "")).lower()
+        default_gap = 0.08 if road_source in {"tiger", "overture"} else 0.0
+        max_gap = float(spec.get("road_topology_repair_max_gap_km", default_gap))
+        if max_gap <= 0.0 or len(base_nodes) < 2:
+            return 0
+        try:
+            from scipy.spatial import cKDTree
+        except Exception:
+            return 0
+
+        edge_arr = np.asarray(sorted(edge_set), dtype=np.int32)
+        labels = self._component_labels(len(base_nodes), edge_arr)
+        if int(labels.max()) <= 0:
+            return 0
+        parent = np.arange(max(int(labels.max()) + 1, 1), dtype=np.int32)
+
+        def find(x: int) -> int:
+            root = int(x)
+            while int(parent[root]) != root:
+                root = int(parent[root])
+            while int(parent[int(x)]) != int(x):
+                nxt = int(parent[int(x)])
+                parent[int(x)] = root
+                x = nxt
+            return root
+
+        def union(a: int, b: int) -> bool:
+            ra = find(a)
+            rb = find(b)
+            if ra == rb:
+                return False
+            parent[rb] = ra
+            return True
+
+        query_k = int(spec.get("road_topology_repair_query_k", 8))
+        max_added = int(spec.get("road_topology_repair_max_edges", max(len(base_nodes), 1)))
+        points = np.asarray(base_nodes, dtype=np.float64)
+        tree = cKDTree(points)
+        distances, indices = tree.query(
+            points,
+            k=min(query_k + 1, len(base_nodes)),
+            distance_upper_bound=max_gap,
+        )
+        if np.ndim(distances) == 1:
+            distances = distances[:, None]
+            indices = indices[:, None]
+
+        node_count = len(base_nodes)
+        candidates: list[tuple[float, int, int]] = []
+        for u in range(node_count):
+            for dist, v_raw in zip(distances[u], indices[u]):
+                v = int(v_raw)
+                if v >= node_count or v <= u or not np.isfinite(dist):
+                    continue
+                cu = int(labels[u])
+                cv = int(labels[v])
+                if cu >= 0 and cv >= 0 and cu != cv:
+                    candidates.append((float(dist), u, v))
+        candidates.sort(key=lambda item: item[0])
+
+        added = 0
+        for _, u, v in candidates:
+            cu = int(labels[u])
+            cv = int(labels[v])
+            if cu < 0 or cv < 0 or not union(cu, cv):
+                continue
+            add_unique_edge(edge_set, int(u), int(v))
+            added += 1
+            if added >= max_added:
+                break
+        return int(added)
+
+    def _repair_depot_candidates_for_customer_components(self, board: RegionBoard, spec: dict[str, Any]) -> None:
+        if board.depot_candidate_node_ids is None or len(board.depot_candidate_node_ids) == 0:
+            return
+        labels = self._component_labels(len(board.road_nodes), board.road_edges)
+        customer_components = labels[np.asarray(board.customer_node_ids, dtype=np.int32)]
+        component_customer_counts = np.bincount(
+            customer_components[customer_components >= 0],
+            minlength=max(int(labels.max()) + 1, 1),
+        )
+        desired_count = int(spec.get("depot_candidate_count", len(board.depot_candidate_node_ids)))
+        desired_count = max(desired_count, min(len(board.depot_candidate_node_ids), 1))
+        min_connected = int(
+            spec.get(
+                "min_depot_connected_customers",
+                max(1000, int(spec.get("max_supported_customer_scale", 1000))),
+            )
+        )
+        original_nodes = np.asarray(board.depot_candidate_node_ids, dtype=np.int32)
+        original_meta = list(board.depot_candidate_metadata or [{} for _ in original_nodes])
+        kept_nodes: list[int] = []
+        kept_meta: list[dict[str, Any]] = []
+        for idx, node in enumerate(original_nodes.tolist()):
+            comp = int(labels[int(node)])
+            connected = int(component_customer_counts[comp]) if 0 <= comp < len(component_customer_counts) else 0
+            if connected < min_connected:
+                continue
+            meta = dict(original_meta[idx] if idx < len(original_meta) else {})
+            meta["connected_customer_count"] = connected
+            meta["component_id"] = comp
+            kept_nodes.append(int(node))
+            kept_meta.append(meta)
+
+        if len(kept_nodes) < desired_count:
+            gateway_nodes = np.asarray(board.cluster_gateway_node_ids, dtype=np.int32)
+            gateway_components = labels[gateway_nodes]
+            gateway_ok = np.asarray(
+                [
+                    0 <= int(comp) < len(component_customer_counts)
+                    and int(component_customer_counts[int(comp)]) >= min_connected
+                    for comp in gateway_components
+                ],
+                dtype=bool,
+            )
+            candidate_nodes = gateway_nodes[gateway_ok]
+            if candidate_nodes.size == 0:
+                valid_components = np.flatnonzero(component_customer_counts >= min_connected)
+                if valid_components.size == 0:
+                    valid_components = np.asarray([int(np.argmax(component_customer_counts))], dtype=np.int32)
+                customer_nodes = np.asarray(board.customer_node_ids, dtype=np.int32)
+                candidate_nodes = customer_nodes[np.isin(labels[customer_nodes], valid_components)]
+            candidate_nodes = np.unique(candidate_nodes.astype(np.int32))
+            needed = max(desired_count - len(kept_nodes), 0)
+            if candidate_nodes.size and needed:
+                local = _spread_node_ids(board.road_nodes[candidate_nodes], needed)
+                for local_idx in local.tolist():
+                    node = int(candidate_nodes[int(local_idx)])
+                    if node in kept_nodes:
+                        continue
+                    comp = int(labels[node])
+                    connected = int(component_customer_counts[comp]) if 0 <= comp < len(component_customer_counts) else 0
+                    kept_nodes.append(node)
+                    kept_meta.append(
+                        {
+                            "candidate_id": f"fallback_component_{len(kept_nodes) - 1:03d}",
+                            "source": "customer_component_fallback_depot",
+                            "category": "fallback_customer_component_gateway",
+                            "connected_customer_count": connected,
+                            "component_id": comp,
+                        }
+                    )
+                    if len(kept_nodes) >= desired_count:
+                        break
+
+        if not kept_nodes:
+            return
+        board.depot_candidate_node_ids = np.asarray(kept_nodes, dtype=np.int32)
+        board.depot_candidates = board.road_nodes[board.depot_candidate_node_ids].astype(np.float32)
+        board.depot_candidate_metadata = kept_meta
+        board.depot_node_id = int(board.depot_candidate_node_ids[0])
+        board.region_validation["num_depot_candidates"] = int(len(kept_nodes))
+        board.region_validation["depot_candidate_repair_policy"] = "customer_component_connectivity_filter"
+        board.region_validation["min_depot_connected_customers"] = int(min_connected)
 
     def _labels_from_customer_rows(self, rows: list[dict[str, str]]) -> tuple[np.ndarray, np.ndarray]:
         community_lookup: dict[str, int] = {}

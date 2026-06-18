@@ -6,6 +6,12 @@ from typing import Any
 import numpy as np
 
 
+def _optional_matrix(value: Any) -> np.ndarray | None:
+    if value is None:
+        return None
+    return np.asarray(value, dtype=np.float32)
+
+
 @dataclass(frozen=True)
 class EVRPTWInstance:
     """Canonical daily-instance schema used by both Dataset and Benchmark.
@@ -32,6 +38,10 @@ class EVRPTWInstance:
     tw_s: np.ndarray
     cs_time_to_depot_s: np.ndarray
     vehicle: dict[str, Any]
+    raw_travel_time_matrix_s: np.ndarray | None = None
+    ev_transition_time_matrix_s: np.ndarray | None = None
+    shortest_time_matrix_s: np.ndarray | None = None
+    energy_matrix_kwh: np.ndarray | None = None
     speed_profile: dict[str, Any] = field(default_factory=dict)
     cs_activation: dict[str, Any] = field(default_factory=dict)
     greedy_audit: dict[str, Any] = field(default_factory=dict)
@@ -58,6 +68,10 @@ class EVRPTWInstance:
             tw_s=np.asarray(data["tw_s"], dtype=np.float32),
             cs_time_to_depot_s=np.asarray(data["cs_time_to_depot_s"], dtype=np.float32),
             vehicle=dict(data.get("vehicle", {})),
+            raw_travel_time_matrix_s=_optional_matrix(data.get("raw_travel_time_matrix_s")),
+            ev_transition_time_matrix_s=_optional_matrix(data.get("ev_transition_time_matrix_s")),
+            shortest_time_matrix_s=_optional_matrix(data.get("shortest_time_matrix_s")),
+            energy_matrix_kwh=_optional_matrix(data.get("energy_matrix_kwh")),
             speed_profile=dict(data.get("speed_profile", {})),
             cs_activation=dict(data.get("cs_activation", {})),
             greedy_audit=dict(data.get("greedy_audit", {})),
