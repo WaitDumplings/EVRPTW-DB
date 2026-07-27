@@ -135,6 +135,19 @@ congestion:
   std_factor: 0.06
   min_factor: 0.25
   max_factor: 0.6
+day_congestion_multiplier:
+  enabled: true
+  distribution: truncated_normal
+  weekday:
+    mean: 1.0
+    std: 0.08
+    min: 0.85
+    max: 1.2
+  weekend:
+    mean: 0.95
+    std: 0.05
+    min: 0.85
+    max: 1.12
 demand:
   max_packages_per_stop: 72
   package_count_negative_binomial:

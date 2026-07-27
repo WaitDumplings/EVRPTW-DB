@@ -424,7 +424,9 @@ class ActiveDaySampler:
                     allowed_customer_ids=allowed_customer_ids,
                 )
                 day = sample_day_profile(self.config, self.rng)
-                effective_speed = self.vehicle.design_speed_kmh * float(day["congestion_factor"])
+                base_effective_speed = self.vehicle.design_speed_kmh * float(day["congestion_factor"])
+                day_multiplier = float(day.get("day_congestion_multiplier", 1.0))
+                effective_speed = base_effective_speed / max(day_multiplier, 1e-12)
                 active_cs_ids, cs_meta = activate_charging_stations(
                     board,
                     active_customer_ids,
@@ -444,7 +446,15 @@ class ActiveDaySampler:
                 oracle,
                 depot_node_id=depot_node_id,
             )
-            raw_time, transition, shortest_time = self._shortest_time_matrix(distance_matrix, num_customers, effective_speed)
+            raw_time, transition, shortest_time = self._shortest_time_matrix(
+                distance_matrix,
+                num_customers,
+                base_effective_speed,
+            )
+            if abs(day_multiplier - 1.0) > 1e-12:
+                raw_time = (raw_time * day_multiplier).astype(np.float32, copy=False)
+                transition = (transition * day_multiplier).astype(np.float32, copy=False)
+                shortest_time = (shortest_time * day_multiplier).astype(np.float32, copy=False)
             depot_to_customer = shortest_time[0, 1:1 + num_customers]
             customer_to_depot = shortest_time[1:1 + num_customers, 0]
             if not np.all(np.isfinite(depot_to_customer)) or not np.all(np.isfinite(customer_to_depot)):
@@ -510,7 +520,10 @@ class ActiveDaySampler:
                 speed_profile={
                     "design_speed_kmh": self.vehicle.design_speed_kmh,
                     "congestion_factor": float(day["congestion_factor"]),
+                    "base_effective_speed_kmh": float(base_effective_speed),
+                    "day_congestion_multiplier": float(day_multiplier),
                     "effective_speed_kmh": float(effective_speed),
+                    "effective_speed_definition": "base_effective_speed_kmh / day_congestion_multiplier",
                 },
                 cs_activation=cs_meta,
                 greedy_audit=audit,
@@ -527,6 +540,16 @@ class ActiveDaySampler:
                     "charging_policy": "full_charge",
                     "saved_time_unit": "seconds",
                     "internal_generation_time_unit": "minutes",
+                    "day_congestion": {
+                        "profile": str(day["day_type"]),
+                        "day_multiplier": float(day_multiplier),
+                        "multiplier_distribution": day.get("day_congestion_metadata", {}),
+                        "application": "raw_travel_time_matrix_s = base_time_matrix_s * day_multiplier",
+                        "scope": "instance_global_time_matrix_scalar",
+                        "affects_distance_matrix": False,
+                        "affects_energy_matrix": False,
+                        "path_basis": "distance_shortest_path",
+                    },
                     "time_matrix_storage": {
                         "distance_matrix_km": True,
                         "raw_travel_time_matrix_s": save_raw_time,

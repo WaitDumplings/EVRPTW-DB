@@ -40,11 +40,59 @@ def sample_day_profile(config: dict, rng: np.random.Generator) -> dict:
         float(congestion.get("min_factor", 0.25)),
         float(congestion.get("max_factor", 0.60)),
     )
+    multiplier, multiplier_meta = sample_day_congestion_multiplier(config, str(day_type), rng)
     return {
         "day_type": day_type,
         "working_start_min": working_start,
         "working_end_min": working_end,
         "congestion_factor": factor,
+        "day_congestion_multiplier": multiplier,
+        "day_congestion_metadata": multiplier_meta,
+    }
+
+
+def sample_day_congestion_multiplier(config: dict, day_type: str, rng: np.random.Generator) -> tuple[float, dict]:
+    cfg = config.get("day_congestion_multiplier", {})
+    if not cfg:
+        return 1.0, {
+            "enabled": False,
+            "profile": day_type,
+            "day_multiplier": 1.0,
+            "distribution": "disabled",
+        }
+    enabled = bool(cfg.get("enabled", True))
+    if not enabled:
+        return 1.0, {
+            "enabled": False,
+            "profile": day_type,
+            "day_multiplier": 1.0,
+            "distribution": "disabled",
+        }
+
+    profile_cfg = cfg.get(day_type, cfg.get("weekday", {}))
+    distribution = str(profile_cfg.get("distribution", cfg.get("distribution", "truncated_normal")))
+    mean = float(profile_cfg.get("mean", 1.0))
+    std = float(profile_cfg.get("std", 0.0))
+    low = float(profile_cfg.get("min", cfg.get("min", 1.0)))
+    high = float(profile_cfg.get("max", cfg.get("max", 1.0)))
+    if distribution == "truncated_normal":
+        value = sample_trunc_normal(rng, mean, std, low, high)
+    elif distribution == "lognormal":
+        sigma = max(std, 0.0)
+        raw = float(rng.lognormal(mean=np.log(max(mean, 1e-9)), sigma=sigma))
+        value = float(np.clip(raw, low, high))
+    else:
+        raise ValueError(f"Unsupported day_congestion_multiplier distribution: {distribution}")
+    return float(value), {
+        "enabled": True,
+        "profile": day_type,
+        "day_multiplier": float(value),
+        "distribution": distribution,
+        "mean": mean,
+        "std": std,
+        "min": low,
+        "max": high,
+        "scope": "instance_global_time_matrix_scalar",
     }
 
 

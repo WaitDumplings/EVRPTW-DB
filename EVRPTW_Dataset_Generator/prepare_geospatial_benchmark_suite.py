@@ -55,6 +55,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-existing", action="store_true", help="Skip a territory/scale split when instances.pkl already has the requested count.")
     parser.add_argument("--plots", action="store_true")
     parser.add_argument("--require-real-sources", action="store_true", help="Fail if any territory would use fallback synthetic geospatial scaffolds.")
+    parser.add_argument("--save-raw-travel-time-matrix", action="store_true", help="Persist raw_travel_time_matrix_s in generated instance bundles.")
+    parser.add_argument("--save-ev-transition-time-matrix", action="store_true", help="Persist EV transition-time matrix in generated instance bundles.")
+    parser.add_argument("--save-shortest-time-matrix", action="store_true", help="Persist charging-aware shortest-time matrix in generated instance bundles.")
     return parser.parse_args()
 
 
@@ -299,6 +302,15 @@ def main() -> None:
             _require_real_source_files(spec)
         seed = int(args.seed) + territory_index * 10_000
         cfg = _config_for_spec(base_cfg, city_cfg, spec)
+        storage_override = {}
+        if args.save_raw_travel_time_matrix:
+            storage_override["save_raw_travel_time_matrix"] = True
+        if args.save_ev_transition_time_matrix:
+            storage_override["save_ev_transition_time_matrix"] = True
+        if args.save_shortest_time_matrix:
+            storage_override["save_shortest_time_matrix"] = True
+        if storage_override:
+            cfg = deep_update(cfg, {"storage": storage_override})
         vehicle = vehicle_from_config(cfg)
         rng = np.random.default_rng(seed)
         builder = GeospatialTerritoryBuilder(cfg, vehicle, rng)

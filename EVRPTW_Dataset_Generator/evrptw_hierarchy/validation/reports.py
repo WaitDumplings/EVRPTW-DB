@@ -82,6 +82,7 @@ def summarize_instance(instance: ActiveInstance) -> dict[str, Any]:
         "working_end_s": int(instance.working_end_s),
         "effective_speed_kmh": float(instance.speed_profile.get("effective_speed_kmh", float("nan"))),
         "congestion_factor": float(instance.speed_profile.get("congestion_factor", float("nan"))),
+        "day_congestion_multiplier": float(instance.speed_profile.get("day_congestion_multiplier", 1.0)),
         "total_demand_cm3": float(np.sum(instance.demands_cm3)),
         "mean_demand_cm3": float(np.mean(instance.demands_cm3)) if len(instance.demands_cm3) else 0.0,
         "mean_package_count": float(np.mean(instance.package_counts)) if len(instance.package_counts) else 0.0,
