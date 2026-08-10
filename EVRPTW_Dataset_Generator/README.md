@@ -74,7 +74,10 @@ data/
       Pennsylvania.geojson
     afdc/
       afdc_us_public_available_electric.csv
-      afdc_us_public_available_electric_resolved.csv   # preferred, generated below
+      afdc_census_address_anchors.csv
+      afdc_us_public_available_electric_resolved_v2.csv # preferred, generated below
+    osm/
+      osm_charging_pois_top10.csv
     hpms-edge-matches/                                 # optional
       san-diego.parquet
       ...
@@ -141,7 +144,7 @@ python scripts/resolve_afdc_coordinates.py \
   --afdc data/sources/afdc/afdc_us_public_available_electric.csv \
   --census-results data/sources/afdc/afdc_census_address_anchors.csv \
   --osm-pois data/sources/osm/osm_charging_pois_top10.csv \
-  --output data/sources/afdc/afdc_us_public_available_electric_resolved.csv
+  --output data/sources/afdc/afdc_us_public_available_electric_resolved_v2.csv
 ```
 
 Resolution precedence is: reviewed manual override, exact normalized OSM
@@ -149,6 +152,13 @@ charging-POI address match, then raw AFDC coordinate. Census output is retained
 as an address-access anchor and QA comparison; it is not mislabeled as the
 exact charger location. An optional manual override CSV must contain
 `afdc_id,resolved_longitude,resolved_latitude,review_note`.
+
+The U.S. preflight requires both Census and OSM evidence in the resolution
+manifest. A file is not accepted merely because its name contains `resolved`.
+Every station receives one of four explicit tiers: reviewed exact geometry,
+OSM exact-address geometry, Census-address-corroborated but exact geometry
+unverified, or uncorroborated source coordinate. The last tier is retained for
+audit but excluded from the default benchmark candidate pool.
 
 ### 4. Optional HPMS edge evidence
 
@@ -200,6 +210,16 @@ bash scripts/build_top10_cle.sh --stages roads buildings depots cles package ind
 bash scripts/build_top10_cle.sh --cities san-diego --continue-on-error
 ```
 
+After a directed-connectivity or facility-evidence policy migration, refresh
+the frozen access ledgers without repeating NSI download or footprint matching:
+
+```bash
+python scripts/build_top10_cle.py \
+  --stages cles package index \
+  --refresh-protected-connectivity \
+  --replace-release-package
+```
+
 The default profile separates rebuildable work artifacts from portable dataset
 artifacts:
 
@@ -228,6 +248,30 @@ separate fields.
 An existing verified package is reused. The packager refuses to overwrite an
 existing invalid or stale package; use a new versioned release root after inputs
 or policies change.
+
+Generate the numeric tables used by the dataset/benchmark appendix directly
+from the portable cohort manifests:
+
+```bash
+python scripts/build_cle_appendix_tables.py --replace
+```
+
+The generated CSV, JSON, and Markdown files are stored under
+`EVRPTW_Dataset/CLE_v1/us_top10/appendix_tables/`. They distinguish source
+locations, evidence-qualified candidate pools, distance QA tails, and SCC
+quarantines.
+
+For a small, version-controlled paper snapshot, write the same tables to the
+documentation tree after the ten portable packages have been verified:
+
+```bash
+python scripts/build_cle_appendix_tables.py \
+  --output-dir docs/generated/us_top10_cle_v1 \
+  --replace
+```
+
+The generated manifest records every source city-manifest hash, so a later
+rebuild can be distinguished from the exact cohort used for a paper table.
 
 One package can be checked independently of all source and work directories:
 

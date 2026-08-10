@@ -199,4 +199,38 @@ def resolve_afdc_coordinates(
     result["raw_to_address_anchor_m"] = raw_to_address
     result["raw_to_osm_poi_m"] = raw_to_osm
     result["coordinate_review_note"] = notes
+    result["coordinate_validation_tier"] = np.select(
+        [
+            result["location_resolution_status"].eq("resolved_manual_review"),
+            result["location_resolution_status"].eq("resolved_osm_exact_address"),
+            result["address_anchor_source"].eq("us_census_geocoder"),
+        ],
+        [
+            "V1_manual_reviewed_exact",
+            "V2_osm_exact_address",
+            "V3_census_address_corroborated",
+        ],
+        default="V0_uncorroborated_source_coordinate",
+    )
+    result["coordinate_validation_status"] = np.select(
+        [
+            result["coordinate_validation_tier"].isin(
+                {"V1_manual_reviewed_exact", "V2_osm_exact_address"}
+            ),
+            result["coordinate_validation_tier"].eq(
+                "V3_census_address_corroborated"
+            ),
+        ],
+        [
+            "exact_geometry_corroborated",
+            "address_corroborated_exact_geometry_unverified",
+        ],
+        default="uncorroborated_source_coordinate",
+    )
+    result["coordinate_candidate_eligible"] = result[
+        "coordinate_validation_status"
+    ].ne("uncorroborated_source_coordinate")
+    result["coordinate_release_eligible"] = result[
+        "coordinate_validation_status"
+    ].eq("exact_geometry_corroborated")
     return result

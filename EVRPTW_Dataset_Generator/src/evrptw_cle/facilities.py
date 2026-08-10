@@ -11,11 +11,17 @@ from typing import Any
 
 import geopandas as gpd
 import numpy as np
+import osmnx as ox
 import pandas as pd
 import shapely
 from shapely.strtree import STRtree
 
 from .customer_access import _projection_offsets_json, build_eligible_physical_edges
+from .protected_connectivity import (
+    build_directed_component_index,
+    connectivity_summary,
+    label_projection_connectivity,
+)
 from .util import sha256_file, write_json
 
 
@@ -160,6 +166,12 @@ def _filter_afdc_city(
         raw["location_resolution_status"] = (
             "raw_retained_no_corroborating_exact_geometry"
         )
+        raw["coordinate_validation_tier"] = (
+            "V0_uncorroborated_source_coordinate"
+        )
+        raw["coordinate_validation_status"] = "uncorroborated_source_coordinate"
+        raw["coordinate_candidate_eligible"] = False
+        raw["coordinate_release_eligible"] = False
     points = gpd.GeoDataFrame(
         raw,
         geometry=gpd.points_from_xy(longitude, latitude),
@@ -255,6 +267,15 @@ def build_facility_layers(
         raise FileExistsError(f"Refusing to overwrite facility output: {output_dir}")
     boundary_frame = gpd.read_file(boundary_path).to_crs("EPSG:4326")
     boundary = boundary_frame.geometry.union_all()
+    afdc_resolution_manifest_path = afdc_path.with_suffix(".manifest.json")
+    afdc_resolution_manifest = None
+    if afdc_resolution_manifest_path.is_file():
+        afdc_resolution_manifest = json.loads(
+            afdc_resolution_manifest_path.read_text(encoding="utf-8")
+        )
+        recorded_hash = afdc_resolution_manifest.get("output", {}).get("sha256")
+        if recorded_hash and recorded_hash != sha256_file(afdc_path):
+            raise ValueError("AFDC table and coordinate-resolution manifest hashes differ")
     depot_summary = json.loads(depot_summary_path.read_text(encoding="utf-8"))
     if depot_summary.get("city_slug") != city_slug:
         raise ValueError("Depot summary city_slug differs from requested city")
@@ -267,25 +288,35 @@ def build_facility_layers(
         raise ValueError("Depot audit used a different operational graph hash")
 
     edges = build_eligible_physical_edges(graph_path, area_crs)
+    component_index = build_directed_component_index(ox.load_graphml(graph_path))
     chargers = _normalize_chargers(_filter_afdc_city(afdc_path, boundary, city_slug))
     chargers["facility_anchor_id"] = chargers["charger_id"]
     chargers = _anchor_points_to_edges(chargers, edges, area_crs)
+    chargers = label_projection_connectivity(chargers, component_index)
     chargers["road_access_distance_qa_flag"] = (
         chargers["road_access_distance_m"] > max_road_access_m
     )
-    chargers["road_anchor_eligible"] = True
+    chargers["road_anchor_eligible"] = chargers[
+        "protected_roundtrip_eligible"
+    ].astype(bool)
     chargers["charger_candidate_eligible"] = (
         chargers["restricted_public"].ne(True)
         & chargers["reference_charge_mode"].ne("unsupported_or_unresolved")
+        & chargers["coordinate_candidate_eligible"].astype(bool)
+        & chargers["road_anchor_eligible"]
     )
     chargers["charger_release_eligible"] = False
     chargers["release_blocker"] = np.select(
         [
+            ~chargers["coordinate_candidate_eligible"].astype(bool),
+            ~chargers["road_anchor_eligible"].astype(bool),
             chargers["restricted_public"].eq(True),
             chargers["reference_charge_mode"].eq("unsupported_or_unresolved"),
             chargers["medium_duty_vehicle_class_status"].eq("not_supported"),
         ],
         [
+            "coordinate_not_corroborated",
+            "outside_reference_directed_scc",
             "restricted_public_access",
             "connector_unresolved",
             "maximum_vehicle_class_light_duty",
@@ -296,10 +327,13 @@ def build_facility_layers(
     depots = _read_depots(depot_candidates_path, boundary, city_slug)
     depots["facility_anchor_id"] = depots["candidate_id"].astype(str)
     depots = _anchor_points_to_edges(depots, edges, area_crs)
+    depots = label_projection_connectivity(depots, component_index)
     depots["road_access_distance_qa_flag"] = (
         depots["road_access_distance_m"] > max_road_access_m
     )
-    depots["road_anchor_eligible"] = True
+    depots["road_anchor_eligible"] = depots[
+        "protected_roundtrip_eligible"
+    ].astype(bool)
     depots["strict_depot_candidate_eligible"] = (
         depots["strict_candidate_eligible"].astype(bool)
         & depots["road_anchor_eligible"]
@@ -323,12 +357,21 @@ def build_facility_layers(
         chargers.to_parquet(charger_path, index=False)
         depots.to_parquet(depot_path, index=False)
         manifest = {
-            "schema": "evrptw_city_facility_layers_v2",
+            "schema": "evrptw_city_facility_layers_v3",
             "status": "cle_build_candidates_not_release_eligible",
             "generated_utc": datetime.now(UTC).isoformat(),
             "city_slug": city_slug,
             "inputs": {
                 "afdc": {"path": str(afdc_path.resolve()), "sha256": sha256_file(afdc_path)},
+                "afdc_resolution_manifest": (
+                    {
+                        "path": str(afdc_resolution_manifest_path.resolve()),
+                        "sha256": sha256_file(afdc_resolution_manifest_path),
+                        "schema": afdc_resolution_manifest.get("schema"),
+                    }
+                    if afdc_resolution_manifest is not None
+                    else None
+                ),
                 "depot_candidates": {
                     "path": str(depot_candidates_path.resolve()),
                     "sha256": sha256_file(depot_candidates_path),
@@ -350,6 +393,9 @@ def build_facility_layers(
                 "distance_policy": "retain all; flag the distance tail for coordinate/access review",
                 "projection_contract": "per-directed-edge offsets retained for exact active-facility edge splitting",
                 "connector_contract": "facility point to road projection is bidirectional with equal instance-assigned speed",
+                "protected_roundtrip_policy": (
+                    "default benchmark candidates must inherit the largest directed road SCC"
+                ),
             },
             "charging": {
                 "inside_boundary_public_available_site_count": len(chargers),
@@ -358,6 +404,34 @@ def build_facility_layers(
                     chargers["road_access_distance_qa_flag"].sum()
                 ),
                 "candidate_eligible_count": int(chargers["charger_candidate_eligible"].sum()),
+                "coordinate_candidate_eligible_count": int(
+                    chargers["coordinate_candidate_eligible"].sum()
+                ),
+                "coordinate_exact_geometry_count": int(
+                    chargers["coordinate_validation_status"].eq(
+                        "exact_geometry_corroborated"
+                    ).sum()
+                ),
+                "coordinate_address_only_count": int(
+                    chargers["coordinate_validation_status"].eq(
+                        "address_corroborated_exact_geometry_unverified"
+                    ).sum()
+                ),
+                "coordinate_uncorroborated_count": int(
+                    chargers["coordinate_validation_status"].eq(
+                        "uncorroborated_source_coordinate"
+                    ).sum()
+                ),
+                "coordinate_validation_tier_counts": {
+                    str(key): int(value)
+                    for key, value in chargers["coordinate_validation_tier"]
+                    .value_counts()
+                    .sort_index()
+                    .items()
+                },
+                "protected_connectivity": connectivity_summary(
+                    chargers, component_index
+                ),
                 "release_eligible_count": 0,
                 "ccs1_site_count": int(chargers["has_ccs1"].sum()),
                 "j1772_site_count": int(chargers["has_j1772"].sum()),
@@ -370,6 +444,9 @@ def build_facility_layers(
                     depots["road_access_distance_qa_flag"].sum()
                 ),
                 "candidate_eligible_count": int(depots["depot_candidate_eligible"].sum()),
+                "protected_connectivity": connectivity_summary(
+                    depots, component_index
+                ),
                 "strict_candidate_eligible_count": int(
                     depots["strict_depot_candidate_eligible"].sum()
                 ),

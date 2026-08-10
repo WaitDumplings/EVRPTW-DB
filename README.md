@@ -104,6 +104,11 @@ and schemas are frozen.
 - Road extension uses real OSM roads only; outside-city roads are transit-only.
 - Customer/facility access-distance values are QA references, not arbitrary
   hard-deletion thresholds.
+- Every road projection is labeled by directed SCC. Default instance depots,
+  customers, and charging stations must share the reference SCC; source rows
+  outside it are retained with quarantine labels.
+- AFDC coordinate evidence is tiered. Census validates an address anchor but is
+  never presented as an exact charging-space coordinate.
 - Legal speed, reference vehicle running speed, and Stage-2 operational speed
   are separate fields.
 - Solver code may read only exported active instances, never inactive CLE

@@ -22,6 +22,12 @@ def _read_optional(path: Path | None) -> pd.DataFrame | None:
     return pd.read_csv(path, low_memory=False)
 
 
+def _input_record(path: Path | None) -> dict[str, str] | None:
+    if path is None:
+        return None
+    return {"path": str(path.resolve()), "sha256": sha256_file(path)}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--afdc", type=Path, required=True)
@@ -29,8 +35,13 @@ def main() -> None:
     parser.add_argument("--osm-pois", type=Path)
     parser.add_argument("--manual-overrides", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace only the named generated output and its manifest.",
+    )
     args = parser.parse_args()
-    if args.output.exists():
+    if args.output.exists() and not args.replace:
         raise FileExistsError(f"refusing to overwrite resolved AFDC table: {args.output}")
     result = resolve_afdc_coordinates(
         pd.read_csv(args.afdc, low_memory=False),
@@ -41,15 +52,27 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(args.output, index=False)
     manifest = {
-        "schema": "evrptw_afdc_coordinate_resolution_v1",
+        "schema": "evrptw_afdc_coordinate_resolution_v2",
         "generated_utc": datetime.now(UTC).isoformat(),
         "row_count": len(result),
         "resolution_status_counts": result["location_resolution_status"].value_counts().to_dict(),
+        "coordinate_validation_tier_counts": result[
+            "coordinate_validation_tier"
+        ].value_counts().to_dict(),
+        "coordinate_validation_status_counts": result[
+            "coordinate_validation_status"
+        ].value_counts().to_dict(),
+        "coordinate_candidate_eligible_count": int(
+            result["coordinate_candidate_eligible"].sum()
+        ),
+        "coordinate_release_eligible_count": int(
+            result["coordinate_release_eligible"].sum()
+        ),
         "inputs": {
-            "afdc": {"path": str(args.afdc.resolve()), "sha256": sha256_file(args.afdc)},
-            "census_results": str(args.census_results.resolve()) if args.census_results else None,
-            "osm_pois": str(args.osm_pois.resolve()) if args.osm_pois else None,
-            "manual_overrides": str(args.manual_overrides.resolve()) if args.manual_overrides else None,
+            "afdc": _input_record(args.afdc),
+            "census_results": _input_record(args.census_results),
+            "osm_pois": _input_record(args.osm_pois),
+            "manual_overrides": _input_record(args.manual_overrides),
         },
         "output": {"path": str(args.output.resolve()), "sha256": sha256_file(args.output)},
         "semantic_limit": (

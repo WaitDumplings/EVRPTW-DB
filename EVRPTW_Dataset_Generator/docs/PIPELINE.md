@@ -51,6 +51,8 @@ SHA-256 hashes, row counts, and unresolved QA states before assembly.
    OSM roads connect the retained city roads and pass both thresholds.
 7. Mark all nodes/edges outside the service boundary `transit_only=true`. They
    can connect a route but cannot host a service location or facility.
+8. Compute stable directed SCC labels. The largest directed SCC is the Stage-1
+   reference service SCC; smaller SCCs remain in the road artifact for audit.
 
 This is a weak-connectivity construction gate, not a claim that every directed
 node pair is mutually reachable. Directed strong-component statistics are
@@ -67,12 +69,17 @@ draws synthetic intercomponent roads.
    matches from the same PBF snapshot.
 4. Resolve geometry with explicit precedence: reviewed manual override, OSM
    exact-address match, raw AFDC. Census is QA/address access only.
-5. Spatially retain sites inside the service boundary.
-6. Store L2/DC-fast port counts, connector tokens, access restrictions, and
+5. Assign a coordinate-evidence tier. Census corroboration does not convert an
+   AFDC point into exact charger geometry; uncorroborated rows remain visible
+   but cannot enter the default candidate pool.
+6. Spatially retain sites inside the service boundary.
+7. Store L2/DC-fast port counts, connector tokens, access restrictions, and
    maximum vehicle class separately. A Tesla/NACS site is not removed merely
    because the reference vehicle connector policy is unresolved.
-7. Project every anchorable site to the nearest eligible physical road. Keep
+8. Project every anchorable site to the nearest eligible physical road. Keep
    all distances; `>250 m` is a QA flag only.
+9. Label the exact projection by directed SCC and quarantine it from the
+   default pool unless it inherits the reference SCC.
 
 AFDC does not consistently provide per-port power. Missing kW remains missing;
 the CLE does not infer a charging curve or claim that every public site can
@@ -129,6 +136,10 @@ than deleted.
 8. Project the resolved building boundary to the nearest eligible physical road
    and materialize a road projection node plus symmetric bidirectional access
    connector. `>200 m` is a QA flag, not a deletion rule.
+9. Infer the SCC inherited by the exact directed-edge split. Retain all source
+   locations, but only reference-SCC projections are default instance
+   candidates. A bidirectional connector alone is not proof of road-network
+   round-trip reachability.
 
 The CLE stores `residential_units` and location type as activation covariates.
 It does not store realized package count, demand, service time, or time window.
@@ -174,6 +185,13 @@ The verifier recomputes hashes, counts, ID uniqueness, Stage-1 inactivity,
 positive finite speed/travel-time values, reference-speed legal caps, and
 facility/customer release semantics. Technical verification and external
 real-world validation are intentionally separate statuses.
+
+For each Stage-2 instance, the selected depot, active customers, and permitted
+charging stations must inherit the same reference SCC. The current customer
+access materializer independently checks `reference road -> customer` and
+`customer -> reference road` after virtual edge splitting. The Stage-2 facility
+materializer must apply the same post-materialization check to the selected
+depot and charging stations before matrices are accepted.
 
 After technical verification, the packager:
 

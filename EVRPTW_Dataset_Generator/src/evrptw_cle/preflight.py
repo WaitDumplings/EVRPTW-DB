@@ -161,6 +161,56 @@ def preflight_profile(
                 "resolved AFDC file is absent; raw coordinates will be retained with "
                 "explicit unresolved/raw-source labels"
             )
+        elif profile.get("charging_policy", {}).get(
+            "coordinate_evidence_required", False
+        ):
+            resolution_manifest_path = selected_afdc.with_suffix(".manifest.json")
+            afdc_record["resolution_manifest"] = _record_file(
+                resolution_manifest_path
+            )
+            if not resolution_manifest_path.is_file():
+                errors.append(
+                    f"resolved AFDC input lacks its resolution manifest: {resolution_manifest_path}"
+                )
+            else:
+                resolution_manifest = read_json(resolution_manifest_path)
+                resolution_inputs = resolution_manifest.get("inputs", {})
+                required_inputs = profile.get("charging_policy", {}).get(
+                    "required_resolution_inputs", []
+                )
+                missing_evidence = []
+                for name in required_inputs:
+                    evidence = resolution_inputs.get(name)
+                    if not isinstance(evidence, dict) or not evidence.get(
+                        "sha256"
+                    ):
+                        missing_evidence.append(name)
+                        continue
+                    evidence_path = Path(str(evidence.get("path", "")))
+                    if not evidence_path.is_file() or sha256_file(
+                        evidence_path
+                    ) != evidence["sha256"]:
+                        errors.append(
+                            f"resolved AFDC coordinate evidence is unavailable or stale: {name}"
+                        )
+                if missing_evidence:
+                    errors.append(
+                        "resolved AFDC input lacks required coordinate evidence: "
+                        f"{sorted(missing_evidence)}"
+                    )
+                resolved_hash = resolution_manifest.get("output", {}).get("sha256")
+                if resolved_hash != afdc_record.get("sha256"):
+                    errors.append(
+                        "resolved AFDC table hash differs from its resolution manifest"
+                    )
+                status_counts = resolution_manifest.get(
+                    "coordinate_validation_status_counts", {}
+                )
+                afdc_record["coordinate_validation_status_counts"] = status_counts
+                if not status_counts:
+                    errors.append(
+                        "resolved AFDC manifest predates coordinate-validation tiers"
+                    )
 
     hpms_root = resolve_from(generator_root, source_paths["hpms_edge_match_root"])
     if not hpms_root.exists():

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -141,6 +142,7 @@ def _cle_command(
     output_root: Path,
     nsi_workers: int,
     refresh_facilities: bool,
+    refresh_protected_connectivity: bool,
     hpms_edge_evidence_root: Path | None,
     vehicle_speed_cap_kph: float | None,
     include_pilot_speed_scenarios: bool,
@@ -181,6 +183,8 @@ def _cle_command(
         command.append("--include-pilot-speed-scenarios")
     if refresh_facilities:
         command.append("--refresh-facilities")
+    if refresh_protected_connectivity:
+        command.append("--refresh-protected-connectivity")
     return command
 
 
@@ -366,6 +370,16 @@ def main() -> None:
         action="store_true",
         help="Rebuild CLE facility layers and dependent QA from depot inputs.",
     )
+    parser.add_argument(
+        "--refresh-protected-connectivity",
+        action="store_true",
+        help="Refresh customer/facility SCC labels and dependent CLE manifests.",
+    )
+    parser.add_argument(
+        "--replace-release-package",
+        action="store_true",
+        help="Replace only the selected generated city package directories.",
+    )
     parser.add_argument("--continue-on-error", action="store_true")
     args = parser.parse_args()
 
@@ -492,6 +506,7 @@ def main() -> None:
                         output_root=work_root,
                         nsi_workers=args.nsi_workers,
                         refresh_facilities=args.refresh_facilities,
+                        refresh_protected_connectivity=args.refresh_protected_connectivity,
                         hpms_edge_evidence_root=hpms_edge_evidence_root,
                         vehicle_speed_cap_kph=vehicle_speed_cap_kph,
                         include_pilot_speed_scenarios=args.include_pilot_speed_scenarios,
@@ -517,6 +532,9 @@ def main() -> None:
             slug = str(item["slug"])
             print(f"PACKAGE {slug}", flush=True)
             try:
+                destination = release_root / "cities" / slug
+                if args.replace_release_package and destination.exists():
+                    shutil.rmtree(destination)
                 package_result = package_cle(
                     source_cle_dir=work_root / "cles" / slug,
                     graph_path=work_root
@@ -524,7 +542,7 @@ def main() -> None:
                     / slug
                     / "graph_operational.graphml",
                     road_manifest_path=work_root / "cities" / slug / "manifest.json",
-                    destination_cle_dir=release_root / "cities" / slug,
+                    destination_cle_dir=destination,
                 )
                 print(json.dumps(package_result, ensure_ascii=False, indent=2))
             except (FileNotFoundError, FileExistsError, ValueError) as error:

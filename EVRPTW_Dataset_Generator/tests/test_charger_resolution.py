@@ -63,6 +63,8 @@ def test_resolution_precedence_and_raw_geometry_are_auditable() -> None:
     assert result.loc[1, "address_anchor_source"] == "us_census_geocoder"
     assert result.loc[1, "resolved_longitude"] == pytest.approx(-118.003)
     assert result.loc[1, "resolved_geometry_source"] == "manual_reviewed_override"
+    assert result.loc[1, "coordinate_validation_tier"] == "V1_manual_reviewed_exact"
+    assert bool(result.loc[1, "coordinate_release_eligible"])
     assert result.loc[1, "matched_osm_charging_id"] == "n9"
     assert result.loc[1, "raw_to_address_anchor_m"] > 0
     assert result.loc[2, "resolved_geometry_source"] == "afdc_raw"
@@ -70,3 +72,7 @@ def test_resolution_precedence_and_raw_geometry_are_auditable() -> None:
         result.loc[2, "location_resolution_status"]
         == "raw_retained_no_corroborating_exact_geometry"
     )
+    assert result.loc[2, "coordinate_validation_status"] == (
+        "uncorroborated_source_coordinate"
+    )
+    assert not bool(result.loc[2, "coordinate_candidate_eligible"])

@@ -17,6 +17,11 @@ import shapely
 from shapely.strtree import STRtree
 
 from .nsi import DELIVERY_ROAD_CLASSES, EXCLUDED_ANCHOR_ROAD_CLASSES, _as_bool, _parse_multivalue
+from .protected_connectivity import (
+    build_directed_component_index,
+    connectivity_summary,
+    label_projection_connectivity,
+)
 from .util import sha256_file, write_json
 
 
@@ -332,7 +337,16 @@ def _write_service_access_contract(
         "service_access_connector_id",
     ]
     service_nodes = anchored[
-        identity + ["building_access_lon", "building_access_lat"]
+        identity
+        + [
+            "building_access_lon",
+            "building_access_lat",
+            "anchor_scc_id",
+            "reference_scc_id",
+            "anchor_in_reference_scc",
+            "protected_roundtrip_eligible",
+            "protected_roundtrip_status",
+        ]
     ].copy()
     service_nodes = gpd.GeoDataFrame(
         service_nodes,
@@ -351,6 +365,11 @@ def _write_service_access_contract(
             "road_projection_offset_m_from_physical_start",
             "physical_edge_geometry_length_m",
             "directed_projection_offsets",
+            "anchor_scc_id",
+            "reference_scc_id",
+            "anchor_in_reference_scc",
+            "protected_roundtrip_eligible",
+            "protected_roundtrip_status",
         ]
     ].copy()
     projection_nodes = projection_nodes.drop_duplicates(
@@ -370,6 +389,11 @@ def _write_service_access_contract(
             "connector_bidirectional",
             "connector_speed_symmetry",
             "connector_speed_policy",
+            "anchor_scc_id",
+            "reference_scc_id",
+            "anchor_in_reference_scc",
+            "protected_roundtrip_eligible",
+            "protected_roundtrip_status",
         ]
     ].copy()
     connectors["from_node_id"] = connectors["service_access_node_id"]
@@ -439,6 +463,9 @@ def build_footprint_access_audit(
     locations = gpd.read_parquet(location_path)
     edges = build_eligible_physical_edges(graph_path, area_crs)
     anchored = attach_footprint_access(locations, edges, area_crs)
+    graph = ox.load_graphml(graph_path)
+    component_index = build_directed_component_index(graph)
+    anchored = label_projection_connectivity(anchored, component_index)
     output_path = output_dir / "footprint_road_access_candidates.parquet"
     anchored.to_parquet(output_path, index=False)
     access_contract = _write_service_access_contract(anchored, output_dir)
@@ -465,9 +492,16 @@ def build_footprint_access_audit(
             "projection_contract": "per-directed-edge fractional offset retained for exact active-stop edge splitting",
             "connector_contract": "service access point to road projection is a virtual bidirectional connector with equal speed in both directions",
             "connector_speed_policy": "assigned at instance generation; Stage 1 stores geometry and symmetry only",
+            "directed_roundtrip_policy": (
+                "default benchmark candidates must inherit the largest directed road SCC; "
+                "all other source locations are retained with quarantine labels"
+            ),
         },
         "summary": {
             "candidate_location_count": len(anchored),
+            "protected_connectivity": connectivity_summary(
+                anchored, component_index
+            ),
             "distance_quantiles_m": {
                 key: float(value)
                 for key, value in zip(
@@ -496,9 +530,64 @@ def build_footprint_access_audit(
             "Virtual nodes are stored as compact ledgers; only an active instance subset is materialized into a routing graph.",
             "Connector speed magnitude remains an instance policy; Stage 1 freezes only equal bidirectional connector-speed semantics.",
             "G2 Microsoft/NSI geometry matches still require manual audit.",
+            "SCC eligibility is a routing-topology gate and does not validate location provenance.",
         ],
     }
     write_json(output_dir / "footprint_road_access_audit.json", report)
+    return report
+
+
+def refresh_footprint_access_connectivity(
+    *,
+    graph_path: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Relabel a frozen access layer after adding the directed SCC contract.
+
+    Geometry matching and nearest-edge projection are unchanged.  This is the
+    reproducible migration path for an already generated CLE cohort.
+    """
+
+    candidate_path = output_dir / "footprint_road_access_candidates.parquet"
+    report_path = output_dir / "footprint_road_access_audit.json"
+    if not candidate_path.is_file() or not report_path.is_file():
+        raise FileNotFoundError("Existing customer access candidate/report files are required")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    graph_sha = sha256_file(graph_path)
+    if report.get("inputs", {}).get("graph_sha256") != graph_sha:
+        raise ValueError("Customer access audit and operational graph hashes differ")
+
+    anchored = gpd.read_parquet(candidate_path)
+    graph = ox.load_graphml(graph_path)
+    component_index = build_directed_component_index(graph)
+    anchored = label_projection_connectivity(anchored, component_index)
+    anchored.to_parquet(candidate_path, index=False)
+    access_contract = _write_service_access_contract(anchored, output_dir)
+
+    report["schema"] = "evrptw_customer_footprint_access_audit_v3"
+    report["generated_utc"] = datetime.now(UTC).isoformat()
+    report["status"] = "protected_connectivity_labeled_not_release_eligible"
+    report.setdefault("edge_contract", {})["directed_roundtrip_policy"] = (
+        "default benchmark candidates must inherit the largest directed road SCC; "
+        "all other source locations are retained with quarantine labels"
+    )
+    report.setdefault("summary", {})["protected_connectivity"] = connectivity_summary(
+        anchored, component_index
+    )
+    report["access_contract_row_counts"] = access_contract["row_counts"]
+    report["outputs"] = {
+        "footprint_road_access_candidates": str(candidate_path),
+        **access_contract["paths"],
+    }
+    report["output_sha256"] = {
+        "footprint_road_access_candidates": sha256_file(candidate_path),
+        **access_contract["sha256"],
+    }
+    limitations = report.setdefault("known_limitations", [])
+    note = "SCC eligibility is a routing-topology gate and does not validate location provenance."
+    if note not in limitations:
+        limitations.append(note)
+    write_json(report_path, report)
     return report
 
 

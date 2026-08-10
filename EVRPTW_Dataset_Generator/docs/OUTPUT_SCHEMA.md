@@ -39,6 +39,7 @@ EVRPTW_Dataset_Generator/work/us-top10-v1/
 EVRPTW_Dataset/CLE_v1/us_top10/
   cle_index.json
   cle_index.csv
+  appendix_tables/                    # paper-ready cohort tables
   cities/<city>/
     manifest.json
     source_registry.json
@@ -105,10 +106,18 @@ should rely on these concepts:
 latent_service_location_id, geometry, service_location_type,
 residential_units, geometry_evidence_tier, physical_edge_id,
 directed_edge_refs, road_access_distance_m,
-road_access_distance_qa_flag, cle_candidate_eligible, active_customer
+road_access_distance_qa_flag, anchor_scc_id, reference_scc_id,
+protected_roundtrip_eligible, cle_candidate_eligible,
+cle_default_instance_eligible, active_customer
 ```
 
 `active_customer` must be false for every Stage-1 row.
+
+Facility tables use the same SCC fields. Charger rows additionally retain
+`coordinate_validation_tier`, `coordinate_validation_status`, raw AFDC
+coordinates, optional Census address anchors, optional exact-address OSM
+geometry, and the final resolved geometry. Source retention and default
+benchmark eligibility are separate flags.
 
 ## Manifest semantics
 

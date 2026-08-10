@@ -32,6 +32,40 @@ def _is_within(path: Path, root: Path) -> bool:
     return resolved_path == resolved_root or resolved_root in resolved_path.parents
 
 
+def _portable_provenance(value: Any) -> Any:
+    """Replace absolute build paths with basenames while preserving hashes."""
+
+    if isinstance(value, dict):
+        return {key: _portable_provenance(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_portable_provenance(item) for item in value]
+    if isinstance(value, str) and Path(value).is_absolute():
+        return Path(value).name or "filesystem-root-redacted"
+    return value
+
+
+def _rewrite_portable_provenance_manifest(path: Path) -> None:
+    payload = _portable_provenance(_read_json(path))
+    payload["portable_provenance_path_policy"] = (
+        "absolute build paths removed; source basenames and hashes retained"
+    )
+    write_json(path, payload)
+
+
+def _absolute_json_paths(value: Any, prefix: str = "") -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            paths.extend(_absolute_json_paths(item, child))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            paths.extend(_absolute_json_paths(item, f"{prefix}[{index}]"))
+    elif isinstance(value, str) and Path(value).is_absolute():
+        paths.append(prefix)
+    return paths
+
+
 def _packaged_source_registry(
     source_registry_path: Path,
     packaged_paths: dict[str, Path],
@@ -78,28 +112,43 @@ def _prepare_customer_layer(
     road_anchor_present = frame["physical_edge_id"].notna() & pd.to_numeric(
         frame["road_access_distance_m"], errors="coerce"
     ).notna()
+    roundtrip_eligible = frame["protected_roundtrip_eligible"].astype(bool)
     road_distance_qa_flag = (
         pd.to_numeric(frame["road_access_distance_m"], errors="coerce")
         > candidate_access_threshold_m
     )
     frame["geometry_rule_candidate_eligible"] = geometry_candidate
     frame["geometry_core_eligible"] = geometry_candidate & ~g2_pending
-    frame["road_access_candidate_eligible"] = road_anchor_present
+    frame["road_access_candidate_eligible"] = (
+        road_anchor_present & roundtrip_eligible
+    )
     frame["road_access_distance_qa_flag"] = road_distance_qa_flag
     frame["road_access_default_eligible"] = False
-    frame["cle_candidate_eligible"] = geometry_candidate & road_anchor_present
+    frame["cle_candidate_eligible"] = (
+        geometry_candidate & road_anchor_present & roundtrip_eligible
+    )
+    frame["cle_default_instance_eligible"] = (
+        frame["geometry_core_eligible"]
+        & frame["road_access_candidate_eligible"]
+    )
     frame["customer_release_eligible"] = False
     frame["access_qa_reference_m"] = candidate_access_threshold_m
 
     reasons = []
-    for is_g2, anchor_ok, distance_flag in zip(
-        g2_pending, road_anchor_present, road_distance_qa_flag, strict=True
+    for is_g2, anchor_ok, roundtrip_ok, distance_flag in zip(
+        g2_pending,
+        road_anchor_present,
+        roundtrip_eligible,
+        road_distance_qa_flag,
+        strict=True,
     ):
         row_reasons = []
         if is_g2:
             row_reasons.append("g2_manual_geometry_audit_pending")
         if not anchor_ok:
             row_reasons.append("no_eligible_physical_road_anchor")
+        if not roundtrip_ok:
+            row_reasons.append("outside_reference_directed_scc")
         if distance_flag:
             row_reasons.append("road_access_distance_tail_requires_review")
         reasons.append(";".join(row_reasons))
@@ -118,6 +167,15 @@ def _prepare_customer_layer(
         "g1_location_count": int((frame["geometry_evidence_tier"] == "G1_containment").sum()),
         "g2_manual_audit_pending_location_count": int(g2_pending.sum()),
         "road_access_distance_qa_flag_count": int(road_distance_qa_flag.sum()),
+        "protected_roundtrip_eligible_location_count": int(
+            roundtrip_eligible.sum()
+        ),
+        "protected_roundtrip_quarantined_location_count": int(
+            (~roundtrip_eligible).sum()
+        ),
+        "default_instance_eligible_location_count": int(
+            frame["cle_default_instance_eligible"].sum()
+        ),
         "release_eligible_location_count": 0,
         "service_location_type_counts": {
             str(key): int(value)
@@ -251,6 +309,9 @@ def assemble_cle(
     access_200 = access_audit["summary"]["threshold_sensitivity"][
         str(int(candidate_access_threshold_m))
     ]
+    customer_connectivity = access_audit["summary"]["protected_connectivity"]
+    depot_connectivity = facility_manifest["depots"]["protected_connectivity"]
+    charger_connectivity = facility_manifest["charging"]["protected_connectivity"]
     gates = [
         {
             "gate": "road_boundary_and_connectivity",
@@ -315,10 +376,64 @@ def assemble_cle(
             },
         },
         {
+            "gate": "protected_anchor_roundtrip_connectivity",
+            "status": "passed_with_quarantine",
+            "evidence": {
+                "reference_scc_id": customer_connectivity["reference_scc_id"],
+                "reference_scc_node_share": customer_connectivity[
+                    "reference_scc_node_share"
+                ],
+                "customer_roundtrip_eligible_count": customer_connectivity[
+                    "roundtrip_eligible_anchor_count"
+                ],
+                "customer_roundtrip_quarantined_count": customer_connectivity[
+                    "roundtrip_quarantined_anchor_count"
+                ],
+                "depot_roundtrip_eligible_count": depot_connectivity[
+                    "roundtrip_eligible_anchor_count"
+                ],
+                "depot_roundtrip_quarantined_count": depot_connectivity[
+                    "roundtrip_quarantined_anchor_count"
+                ],
+                "charger_roundtrip_eligible_count": charger_connectivity[
+                    "roundtrip_eligible_anchor_count"
+                ],
+                "charger_roundtrip_quarantined_count": charger_connectivity[
+                    "roundtrip_quarantined_anchor_count"
+                ],
+                "instance_rule": (
+                    "selected depot, customers, and charging stations must share the "
+                    "reference SCC before distance/time matrices are generated"
+                ),
+            },
+        },
+        {
             "gate": "depot_release",
             "status": "blocked",
             "candidate_count": facility_manifest["depots"]["candidate_eligible_count"],
             "blocker": "no candidate has current last-mile-function verification",
+        },
+        {
+            "gate": "charging_coordinate_validation",
+            "status": "blocked",
+            "candidate_count": facility_manifest["charging"][
+                "candidate_eligible_count"
+            ],
+            "evidence": {
+                "exact_geometry_count": facility_manifest["charging"][
+                    "coordinate_exact_geometry_count"
+                ],
+                "address_only_count": facility_manifest["charging"][
+                    "coordinate_address_only_count"
+                ],
+                "uncorroborated_count": facility_manifest["charging"][
+                    "coordinate_uncorroborated_count"
+                ],
+            },
+            "blocker": (
+                "address-only and uncorroborated station geometries remain provenance-"
+                "labeled candidates; exact-site/tail review has not passed"
+            ),
         },
         {
             "gate": "charging_release",
@@ -430,6 +545,12 @@ def assemble_cle(
                 "ordinary_residential_record_count"
             ],
             "latent_service_location_candidates": customer_summary["location_count"],
+            "default_instance_eligible_service_locations": customer_summary[
+                "default_instance_eligible_location_count"
+            ],
+            "roundtrip_quarantined_service_locations": customer_summary[
+                "protected_roundtrip_quarantined_location_count"
+            ],
             "unique_road_projection_nodes": access_audit["access_contract_row_counts"][
                 "road_projection_nodes"
             ],
@@ -437,7 +558,13 @@ def assemble_cle(
                 "service_access_connectors"
             ],
             "charger_candidates": facility_manifest["charging"]["candidate_eligible_count"],
+            "roundtrip_quarantined_chargers": facility_manifest["charging"][
+                "protected_connectivity"
+            ]["roundtrip_quarantined_anchor_count"],
             "depot_candidates": facility_manifest["depots"]["candidate_eligible_count"],
+            "roundtrip_quarantined_depots": facility_manifest["depots"][
+                "protected_connectivity"
+            ]["roundtrip_quarantined_anchor_count"],
             "strict_depot_candidates": facility_manifest["depots"].get(
                 "strict_candidate_eligible_count", 0
             ),
@@ -503,9 +630,12 @@ def package_cle(
             )
             == source_candidate_manifest_sha256
         )
-        same_roads = all(
-            existing_manifest.get("output_sha256", {}).get(name) == digest
-            for name, digest in expected_input_hashes.items()
+        package = existing_manifest.get("package", {})
+        same_roads = (
+            package.get("source_operational_graph_sha256")
+            == expected_input_hashes["operational_graph"]
+            and package.get("source_road_manifest_sha256")
+            == expected_input_hashes["road_manifest"]
         )
         if existing["passed"] and same_candidate and same_roads:
             return {
@@ -531,6 +661,16 @@ def package_cle(
         packaged_road_manifest = graph_dir / "road_manifest.json"
         shutil.copy2(graph_path, packaged_graph)
         shutil.copy2(road_manifest_path, packaged_road_manifest)
+        packaged_facility_manifest = (
+            staging_dir / "infrastructure/facility_manifest.json"
+        )
+        packaged_speed_manifest = staging_dir / "profiles/speed_manifest.json"
+        for provenance_manifest in (
+            packaged_road_manifest,
+            packaged_facility_manifest,
+            packaged_speed_manifest,
+        ):
+            _rewrite_portable_provenance_manifest(provenance_manifest)
 
         graph_reference_path = graph_dir / "graph_reference.json"
         write_json(
@@ -579,6 +719,12 @@ def package_cle(
             "portable": True,
             "runtime_path_policy": "relative_to_cle_root",
             "source_candidate_manifest_sha256": source_candidate_manifest_sha256,
+            "source_operational_graph_sha256": expected_input_hashes[
+                "operational_graph"
+            ],
+            "source_road_manifest_sha256": expected_input_hashes[
+                "road_manifest"
+            ],
         }
         manifest["outputs"].update(
             {
@@ -586,6 +732,8 @@ def package_cle(
                 "operational_graph": "graph/graph_operational.graphml",
                 "road_manifest": "graph/road_manifest.json",
                 "source_registry": "source_registry.json",
+                "facility_manifest": "infrastructure/facility_manifest.json",
+                "speed_manifest": "profiles/speed_manifest.json",
             }
         )
         for name in (
@@ -593,6 +741,8 @@ def package_cle(
             "operational_graph",
             "road_manifest",
             "source_registry",
+            "facility_manifest",
+            "speed_manifest",
         ):
             manifest["output_sha256"][name] = sha256_file(
                 staging_dir / manifest["outputs"][name]
@@ -678,6 +828,18 @@ def _verify_portability(cle_dir: Path, manifest: dict[str, Any]) -> list[str]:
                     errors.append(f"source registry uses an absolute path for {name}")
                 elif not _is_within(source_registry_path.parent / relative, cle_dir):
                     errors.append(f"source registry path escapes CLE root for {name}")
+    for output_name in ("road_manifest", "facility_manifest", "speed_manifest"):
+        relative = outputs.get(output_name)
+        if not relative:
+            continue
+        path = cle_dir / str(relative)
+        if not path.is_file():
+            continue
+        absolute_fields = _absolute_json_paths(_read_json(path))
+        if absolute_fields:
+            errors.append(
+                f"portable {output_name} retains absolute paths: {absolute_fields[:5]}"
+            )
     if not manifest.get("package", {}).get("portable"):
         errors.append("manifest does not declare a portable package")
     return errors
@@ -690,6 +852,18 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
     manifest = _read_json(manifest_path)
     errors: list[str] = []
     warnings: list[str] = []
+
+    def has_columns(
+        frame: pd.DataFrame,
+        required: set[str],
+        layer_name: str,
+    ) -> bool:
+        missing = sorted(required - set(frame.columns))
+        if missing:
+            errors.append(f"{layer_name} omits required columns: {missing}")
+            return False
+        return True
+
     for name, relative in manifest.get("outputs", {}).items():
         path = cle_dir / relative
         if not path.exists():
@@ -725,12 +899,30 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
         )
         if expected_locations is not None and len(locations) != expected_locations:
             errors.append("latent service-location count differs from manifest")
-        if locations["latent_service_location_id"].duplicated().any():
-            errors.append("latent_service_location_id is not unique")
-        if locations["active_customer"].astype(bool).any():
-            errors.append("Stage 1 CLE contains active customers")
-        if locations["customer_release_eligible"].astype(bool).any():
-            errors.append("release-gated CLE contains release-eligible customers")
+        if has_columns(
+            locations,
+            {
+                "latent_service_location_id",
+                "active_customer",
+                "customer_release_eligible",
+                "cle_candidate_eligible",
+                "protected_roundtrip_eligible",
+            },
+            "latent service-location layer",
+        ):
+            if locations["latent_service_location_id"].duplicated().any():
+                errors.append("latent_service_location_id is not unique")
+            if locations["active_customer"].astype(bool).any():
+                errors.append("Stage 1 CLE contains active customers")
+            if locations["customer_release_eligible"].astype(bool).any():
+                errors.append("release-gated CLE contains release-eligible customers")
+            if (
+                locations["cle_candidate_eligible"].astype(bool)
+                & ~locations["protected_roundtrip_eligible"].astype(bool)
+            ).any():
+                errors.append(
+                    "customer candidate pool includes an anchor outside the reference SCC"
+                )
         for output_name, id_column, expected_key in (
             (
                 "service_access_nodes",
@@ -763,19 +955,61 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
     )
     if charger_path.exists():
         chargers = gpd.read_parquet(charger_path)
-        if chargers["charger_id"].duplicated().any():
-            errors.append("charger_id is not unique")
-        if chargers["charger_release_eligible"].astype(bool).any():
-            errors.append("release-gated CLE contains release-eligible chargers")
+        if has_columns(
+            chargers,
+            {
+                "charger_id",
+                "charger_release_eligible",
+                "charger_candidate_eligible",
+                "protected_roundtrip_eligible",
+                "coordinate_candidate_eligible",
+            },
+            "charger layer",
+        ):
+            if chargers["charger_id"].duplicated().any():
+                errors.append("charger_id is not unique")
+            if chargers["charger_release_eligible"].astype(bool).any():
+                errors.append("release-gated CLE contains release-eligible chargers")
+            if (
+                chargers["charger_candidate_eligible"].astype(bool)
+                & ~chargers["protected_roundtrip_eligible"].astype(bool)
+            ).any():
+                errors.append(
+                    "charger candidate pool includes an anchor outside the reference SCC"
+                )
+            if (
+                chargers["charger_candidate_eligible"].astype(bool)
+                & ~chargers["coordinate_candidate_eligible"].astype(bool)
+            ).any():
+                errors.append(
+                    "charger candidate pool includes an uncorroborated coordinate"
+                )
     depot_path = cle_dir / manifest.get("outputs", {}).get(
         "depots", "infrastructure/depots.parquet"
     )
     if depot_path.exists():
         depots = gpd.read_parquet(depot_path)
-        if depots["candidate_id"].duplicated().any():
-            errors.append("depot candidate_id is not unique")
-        if depots["depot_release_eligible"].astype(bool).any():
-            errors.append("release-gated CLE contains release-eligible depots")
+        if has_columns(
+            depots,
+            {
+                "candidate_id",
+                "depot_release_eligible",
+                "depot_candidate_eligible",
+                "protected_roundtrip_eligible",
+            },
+            "depot layer",
+        ):
+            if depots["candidate_id"].duplicated().any():
+                errors.append("depot candidate_id is not unique")
+            if depots["depot_release_eligible"].astype(bool).any():
+                errors.append("release-gated CLE contains release-eligible depots")
+            if (
+                depots["depot_candidate_eligible"].astype(bool)
+                & ~depots["protected_roundtrip_eligible"].astype(bool)
+            ).any():
+                errors.append(
+                    "depot candidate pool includes an anchor outside the reference SCC"
+                )
     speed_path = cle_dir / manifest.get("outputs", {}).get(
         "directed_legal_speeds", "profiles/directed_legal_speeds.parquet"
     )
@@ -820,6 +1054,13 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
             errors.append("QA report incorrectly marks the CLE release eligible")
         if report.get("blocked_gate_count") != manifest.get("release_blocker_count"):
             errors.append("QA and manifest release-blocker counts differ")
+        gate_names = {item.get("gate") for item in report.get("gates", [])}
+        for required_gate in (
+            "charging_coordinate_validation",
+            "protected_anchor_roundtrip_connectivity",
+        ):
+            if required_gate not in gate_names:
+                errors.append(f"QA report omits required gate {required_gate}")
     portability_errors = _verify_portability(cle_dir, manifest)
     technical_verification_passed = not errors
     if require_portable:

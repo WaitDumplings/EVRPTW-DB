@@ -14,6 +14,8 @@ import pandas as pd
 from shapely.geometry import LineString
 from shapely.ops import substring
 
+from .protected_connectivity import build_directed_component_index
+
 
 def _edge_lookup(graph: nx.MultiDiGraph) -> dict[tuple[str, str, str], tuple[Any, Any, Any]]:
     return {
@@ -63,6 +65,16 @@ def materialize_active_service_graph(
     if set(selected_connectors["latent_service_location_id"].astype(str)) != active:
         missing = sorted(active - set(selected_connectors["latent_service_location_id"].astype(str)))
         raise KeyError(f"Unknown active service locations: {missing[:5]}")
+    if "protected_roundtrip_eligible" in selected_connectors:
+        invalid = selected_connectors.loc[
+            ~selected_connectors["protected_roundtrip_eligible"].astype(bool),
+            "latent_service_location_id",
+        ].astype(str)
+        if not invalid.empty:
+            raise ValueError(
+                "Active locations include projections outside the reference directed SCC: "
+                f"{invalid.head(5).tolist()}"
+            )
     selected_services = service_nodes.loc[
         service_nodes["latent_service_location_id"].astype(str).isin(active)
     ].copy()
@@ -75,6 +87,14 @@ def materialize_active_service_graph(
     if set(selected_projections["road_projection_node_id"].astype(str)) != projection_ids:
         raise KeyError("A connector references a missing road projection node")
 
+    component_index = build_directed_component_index(graph)
+    reference_nodes = [
+        node
+        for node in graph.nodes
+        if component_index.node_to_scc[str(node)]
+        == component_index.reference_scc_id
+    ]
+    reference_node = min(reference_nodes, key=str)
     result = graph.copy()
     graph_crs = result.graph.get("crs", "EPSG:4326")
     service_wgs = selected_services.to_crs(graph_crs)
@@ -184,6 +204,18 @@ def materialize_active_service_graph(
             unreachable.append(service_id)
     if unreachable:
         raise RuntimeError(f"Materialized service nodes lack bidirectional access: {unreachable[:5]}")
+    forward_reachable = nx.descendants(result, reference_node) | {reference_node}
+    reverse_reachable = nx.ancestors(result, reference_node) | {reference_node}
+    roundtrip_unreachable = sorted(
+        service_id
+        for service_id in selected_services["service_access_node_id"].astype(str)
+        if service_id not in forward_reachable or service_id not in reverse_reachable
+    )
+    if roundtrip_unreachable:
+        raise RuntimeError(
+            "Materialized service nodes fail reference-SCC round-trip access: "
+            f"{roundtrip_unreachable[:5]}"
+        )
 
     audit = {
         "active_service_location_count": len(active),
@@ -195,5 +227,8 @@ def materialize_active_service_graph(
         "connector_speed_kph": connector_speed_kph,
         "connector_speed_symmetry": "equal_both_directions",
         "oneway_policy": "original directed edges split only; no reverse road edges synthesized",
+        "reference_road_node_id": str(reference_node),
+        "protected_roundtrip_checked": True,
+        "protected_roundtrip_failure_count": 0,
     }
     return result, audit

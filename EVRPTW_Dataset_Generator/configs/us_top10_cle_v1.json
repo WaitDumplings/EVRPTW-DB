@@ -9,7 +9,7 @@
   "source_paths": {
     "microsoft_building_root": "data/sources/microsoft-us-building-footprints",
     "afdc_raw_csv": "data/sources/afdc/afdc_us_public_available_electric.csv",
-    "afdc_resolved_csv": "data/sources/afdc/afdc_us_public_available_electric_resolved.csv",
+    "afdc_resolved_csv": "data/sources/afdc/afdc_us_public_available_electric_resolved_v2.csv",
     "hpms_edge_match_root": "data/sources/hpms-edge-matches"
   },
   "work_root": "work/us-top10-v1",
@@ -28,7 +28,10 @@
     "access": "public",
     "accepted_modes": ["L2", "DC_FAST"],
     "road_access_distance_policy": "retain_all_and_flag_tail",
-    "coordinate_policy": "retain_raw_afdc_and_use_reviewable_resolved_geometry_when_supported"
+    "coordinate_policy": "retain_raw_afdc_and_use_reviewable_resolved_geometry_when_supported",
+    "coordinate_evidence_required": true,
+    "required_resolution_inputs": ["census_results", "osm_pois"],
+    "unresolved_coordinate_policy": "retain_in_source_layer_but_exclude_from_default_candidate_pool"
   },
   "depot_policy": {
     "tier_a": "explicit_dispatch_or_carrier_facility_evidence",

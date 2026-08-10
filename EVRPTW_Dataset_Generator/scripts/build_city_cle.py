@@ -15,7 +15,10 @@ from evrptw_cle.cle import (
     assemble_cle,
     verify_cle,
 )
-from evrptw_cle.customer_access import build_footprint_access_audit
+from evrptw_cle.customer_access import (
+    build_footprint_access_audit,
+    refresh_footprint_access_connectivity,
+)
 from evrptw_cle.customer_spatial import (
     audit_unmatched_nearest_footprints,
     build_microsoft_nsi_spatial_pilot,
@@ -106,6 +109,14 @@ def main() -> None:
         help=(
             "Rebuild the city facility directory from the current AFDC and depot "
             "candidate inputs, then refresh dependent route QA and final manifests."
+        ),
+    )
+    parser.add_argument(
+        "--refresh-protected-connectivity",
+        action="store_true",
+        help=(
+            "Relabel the frozen customer-access layer with directed SCC fields, rebuild "
+            "facility SCC labels, and refresh dependent CLE manifests."
         ),
     )
     parser.add_argument(
@@ -235,10 +246,22 @@ def main() -> None:
                 "Existing customer-access audit belongs to a different road graph; "
                 "use a new --customer-access-root"
             )
+    if args.refresh_protected_connectivity:
+        _step(
+            "customer-roundtrip",
+            "label every frozen edge projection against the reference directed SCC",
+        )
+        refresh_footprint_access_connectivity(
+            graph_path=graph,
+            output_dir=access_dir,
+        )
 
     facility_dir = cle_dir / "infrastructure"
     facility_manifest = facility_dir / "facility_manifest.json"
-    if args.refresh_facilities and facility_dir.exists():
+    refresh_facilities = (
+        args.refresh_facilities or args.refresh_protected_connectivity
+    )
+    if refresh_facilities and facility_dir.exists():
         _step("facilities", "remove the targeted stale facility layer before rebuild")
         shutil.rmtree(facility_dir)
     if not facility_manifest.exists():
@@ -282,7 +305,7 @@ def main() -> None:
     else:
         _step("speed", "reuse directed legal-speed layer")
 
-    refresh_speed_route_qa = args.refresh_speed_route_qa or args.refresh_facilities
+    refresh_speed_route_qa = args.refresh_speed_route_qa or refresh_facilities
     speed_route_audit = cle_dir / "qa/static_speed_route_audit.json"
     if args.include_pilot_speed_scenarios and (
         not speed_route_audit.exists() or refresh_speed_route_qa
