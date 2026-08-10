@@ -38,6 +38,87 @@ class SingleCustomerCertificates:
     customer_transition_energy_margin_kwh: np.ndarray
 
 
+@dataclass(frozen=True)
+class FullStateRouteCache:
+    """Shortest-time caches between full-battery infrastructure states.
+
+    Position zero is the depot and the remaining positions are charging
+    stations.  ``to_depot_s[q]`` is the shortest duration from station ``q``
+    while full to the depot, including any required intermediate CS visits and
+    their full-charge durations.
+    """
+
+    terminal_indices: np.ndarray
+    transition_cost_s: np.ndarray
+    from_depot_s: np.ndarray
+    to_depot_s: np.ndarray
+    from_depot_predecessor: np.ndarray
+    to_depot_reverse_predecessor: np.ndarray
+
+
+def _build_full_state_route_cache(
+    *,
+    customer_count: int,
+    running_time_matrix_s: np.ndarray,
+    running_time_energy_matrix_kwh: np.ndarray,
+    charging_power_kw: np.ndarray,
+    battery_capacity_kwh: float,
+    charging_efficiency: float,
+) -> FullStateRouteCache:
+    """Cache directed depot/CS travel under full-charge semantics.
+
+    An arc ending at a CS restores the energy consumed since its full-state
+    origin.  Reverse Dijkstra from the depot therefore gives every full CS's
+    fastest return, with multi-hop charging when a direct return is impossible.
+    A separate forward cache is required because the road matrices are
+    directed and a customer need not be reachable directly from the depot.
+    """
+    terminal_count = running_time_matrix_s.shape[0]
+    charger_nodes = np.arange(1 + customer_count, terminal_count, dtype=np.int32)
+    full_nodes = np.concatenate([np.asarray([0], dtype=np.int32), charger_nodes])
+    full_time = running_time_matrix_s[np.ix_(full_nodes, full_nodes)].astype(float)
+    full_energy = running_time_energy_matrix_kwh[
+        np.ix_(full_nodes, full_nodes)
+    ].astype(float)
+
+    transition_cost = np.full_like(full_time, np.inf, dtype=float)
+    np.fill_diagonal(transition_cost, 0.0)
+    for destination in range(1, len(full_nodes)):
+        allowed = full_energy[:, destination] <= battery_capacity_kwh + 1e-9
+        recharge_s = (
+            full_energy[:, destination]
+            / (float(charging_power_kw[destination - 1]) * charging_efficiency)
+            * 3600.0
+        )
+        transition_cost[allowed, destination] = (
+            full_time[allowed, destination] + recharge_s[allowed]
+        )
+    depot_allowed = full_energy[:, 0] <= battery_capacity_kwh + 1e-9
+    transition_cost[depot_allowed, 0] = full_time[depot_allowed, 0]
+    transition_cost[0, 0] = 0.0
+
+    from_depot, from_predecessor = dijkstra(
+        transition_cost,
+        directed=True,
+        indices=0,
+        return_predecessors=True,
+    )
+    to_depot, to_reverse_predecessor = dijkstra(
+        transition_cost.T,
+        directed=True,
+        indices=0,
+        return_predecessors=True,
+    )
+    return FullStateRouteCache(
+        terminal_indices=full_nodes,
+        transition_cost_s=transition_cost,
+        from_depot_s=np.asarray(from_depot, dtype=float),
+        to_depot_s=np.asarray(to_depot, dtype=float),
+        from_depot_predecessor=np.asarray(from_predecessor),
+        to_depot_reverse_predecessor=np.asarray(to_reverse_predecessor),
+    )
+
+
 def _truncated_normal(
     rng: np.random.Generator,
     *,
@@ -225,43 +306,15 @@ def _single_customer_certificates(
 
     customer_nodes = np.arange(1, 1 + customer_count, dtype=np.int32)
     charger_nodes = np.arange(1 + customer_count, terminal_count, dtype=np.int32)
-    full_nodes = np.concatenate([np.asarray([0], dtype=np.int32), charger_nodes])
-    full_time = running_time_matrix_s[np.ix_(full_nodes, full_nodes)].astype(float)
-    full_energy = running_time_energy_matrix_kwh[np.ix_(full_nodes, full_nodes)].astype(float)
-
-    # An edge arriving at a charging station includes the time required to
-    # restore the energy spent since the previous full-battery state. Arrival
-    # at the depot ends the route and therefore has no charging time.
-    full_state_cost = np.full_like(full_time, np.inf, dtype=float)
-    np.fill_diagonal(full_state_cost, 0.0)
-    for destination in range(1, len(full_nodes)):
-        allowed = full_energy[:, destination] <= battery_capacity_kwh + 1e-9
-        recharge_s = (
-            full_energy[:, destination]
-            / (float(charging_power_kw[destination - 1]) * charging_efficiency)
-            * 3600.0
-        )
-        full_state_cost[allowed, destination] = (
-            full_time[allowed, destination] + recharge_s[allowed]
-        )
-    depot_allowed = full_energy[:, 0] <= battery_capacity_kwh + 1e-9
-    full_state_cost[depot_allowed, 0] = full_time[depot_allowed, 0]
-    full_state_cost[0, 0] = 0.0
-
-    from_depot, from_depot_predecessor = dijkstra(
-        full_state_cost,
-        directed=True,
-        indices=0,
-        return_predecessors=True,
+    cache = _build_full_state_route_cache(
+        customer_count=customer_count,
+        running_time_matrix_s=running_time_matrix_s,
+        running_time_energy_matrix_kwh=running_time_energy_matrix_kwh,
+        charging_power_kw=charging_power_kw,
+        battery_capacity_kwh=battery_capacity_kwh,
+        charging_efficiency=charging_efficiency,
     )
-    to_depot, to_depot_reverse_predecessor = dijkstra(
-        full_state_cost.T,
-        directed=True,
-        indices=0,
-        return_predecessors=True,
-    )
-    from_depot = np.asarray(from_depot, dtype=float)
-    to_depot = np.asarray(to_depot, dtype=float)
+    full_nodes = cache.terminal_indices
 
     def predecessor_charger_count(predecessors: np.ndarray, node: int) -> int:
         count = 0
@@ -297,11 +350,11 @@ def _single_customer_certificates(
                 running_time_energy_matrix_kwh[source_node, customer_node]
             )
             if (
-                not np.isfinite(from_depot[source_position])
+                not np.isfinite(cache.from_depot_s[source_position])
                 or inbound_energy > battery_capacity_kwh + 1e-9
             ):
                 continue
-            arrival = float(from_depot[source_position]) + float(
+            arrival = float(cache.from_depot_s[source_position]) + float(
                 running_time_matrix_s[source_node, customer_node]
             )
 
@@ -322,7 +375,7 @@ def _single_customer_certificates(
             combined_energy = inbound_energy + outbound_energy
             allowed = (
                 (combined_energy <= battery_capacity_kwh + 1e-9)
-                & np.isfinite(to_depot[1:])
+                & np.isfinite(cache.to_depot_s[1:])
             )
             if allowed.any():
                 recharge_s = (
@@ -333,7 +386,7 @@ def _single_customer_certificates(
                 via_cs = (
                     running_time_matrix_s[customer_node, charger_nodes[allowed]].astype(float)
                     + recharge_s
-                    + to_depot[1:][allowed]
+                    + cache.to_depot_s[1:][allowed]
                 )
                 local = int(np.argmin(via_cs))
                 if float(via_cs[local]) < candidate_return:
@@ -350,14 +403,14 @@ def _single_customer_certificates(
                 best_return = candidate_return
                 best_requires_charging = source_position != 0 or candidate_post_charge
                 pre_visit_count = predecessor_charger_count(
-                    np.asarray(from_depot_predecessor), source_position
+                    cache.from_depot_predecessor, source_position
                 )
                 post_visit_count = 0
                 if candidate_post_charge:
                     post_visit_count = 1 + max(
                         0,
                         predecessor_charger_count(
-                            np.asarray(to_depot_reverse_predecessor),
+                            cache.to_depot_reverse_predecessor,
                             candidate_post_position,
                         )
                         - 1,

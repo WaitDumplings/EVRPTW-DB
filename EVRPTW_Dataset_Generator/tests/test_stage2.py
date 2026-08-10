@@ -430,3 +430,53 @@ def test_feasibility_certificate_can_use_full_charge_station() -> None:
     assert certificate_uses_charger
     assert attributes.feasibility_energy_margin_kwh[0] == pytest.approx(20.0)
     assert attributes.report["feasibility_gate"]["requires_charging_count"] == 1
+
+
+def test_feasibility_certificate_uses_multihop_full_cs_return_cache() -> None:
+    profile = load_reference_profile(
+        Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+    )
+    customers = pd.DataFrame(
+        {"residential_units": [1], "service_location_type": ["house"]}
+    )
+    # Terminal order: depot, customer, CS-A, CS-B.  After depot -> customer,
+    # neither customer -> depot nor customer -> CS-B is energy-feasible.  The
+    # only feasible return is customer -> CS-A -> CS-B -> depot.  In
+    # particular, CS-A cannot reach the depot on one battery and therefore
+    # exercises the cached multi-hop full-CS-to-depot path.
+    travel_time = np.asarray(
+        [
+            [0.0, 500.0, 900.0, 600.0],
+            [900.0, 0.0, 400.0, 900.0],
+            [900.0, 900.0, 0.0, 600.0],
+            [600.0, 900.0, 900.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    energy = np.asarray(
+        [
+            [0.0, 50.0, 150.0, 60.0],
+            [150.0, 0.0, 40.0, 150.0],
+            [150.0, 150.0, 0.0, 60.0],
+            [60.0, 150.0, 150.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    attributes = build_view_attributes(
+        customers,
+        day_type="weekday",
+        package_seed=31,
+        service_time_seed=32,
+        time_window_seed=33,
+        operating_start_s=8 * 3600,
+        operating_end_s=24 * 3600,
+        running_time_matrix_s=travel_time,
+        running_time_energy_matrix_kwh=energy,
+        charging_power_kw=np.asarray([100.0, 100.0], dtype=np.float32),
+        profile=profile,
+    )
+    assert bool(attributes.feasibility_requires_charging[0]) is True
+    assert attributes.feasibility_first_post_customer_charger_terminal_index[0] == 2
+    assert attributes.feasibility_charging_visit_count[0] == 2
+    assert attributes.feasibility_energy_margin_kwh[0] == pytest.approx(10.0)
+    assert attributes.report["feasibility_gate"]["passed"] is True

@@ -521,6 +521,22 @@ full-battery terminal, first post-customer charger, and customer-transition
 energy margin. It is a sufficient unlimited-fleet certificate, not an optimizer
 hint or an action mask.
 
+The gate does not run Greedy, ALNS, or another optimization solver. For each
+view it first builds a directed graph over the depot and active charging
+stations, where an arc into a CS includes the time needed to restore the energy
+used since the preceding full-battery state. Forward Dijkstra caches the
+shortest depot-to-every-full-state durations; reverse Dijkstra caches the
+shortest every-full-CS-to-depot durations and automatically permits multiple
+CS hops. For customer `c`, the gate enumerates the last inbound full state `p`
+and the first outbound CS `q`. The shared battery segment is accepted only if
+`energy(p,c) + energy(c,q) <= battery_capacity`; charging at `q` restores that
+entire accumulated amount before the cached full-state return is used. A
+direct customer-to-depot case is evaluated separately. Waiting, service time,
+the customer time window, return before the operating-horizon end, and the
+one-customer volume-capacity condition are then checked. Under the frozen
+unlimited-fleet and infinite-port contract, one certified route per customer
+is a constructive feasible solution for the complete instance.
+
 ### 6. Verify and load a view
 
 ```bash

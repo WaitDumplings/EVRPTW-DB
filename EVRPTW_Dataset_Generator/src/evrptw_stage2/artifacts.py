@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .orders import _single_customer_certificates
+
 MATRIX_NAMES = (
     "distance_matrix_km",
     "distance_path_travel_time_s",
@@ -120,6 +122,87 @@ def load_materialized_view(
     return payload
 
 
+def _verify_view_feasibility_certificate(payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    customer_count = len(payload["customers"])
+    certificate = payload["feasibility_certificate"]
+    if any(len(values) != customer_count for values in certificate.values()):
+        return ["feasibility-certificate length mismatch"]
+
+    arrival = certificate["certificate_service_arrival_time_s"]
+    return_duration = certificate["return_duration_s"]
+    margin = certificate["customer_transition_energy_margin_kwh"]
+    if not np.isfinite(arrival).all():
+        errors.append("non-finite feasibility arrival time")
+    if not np.isfinite(return_duration).all():
+        errors.append("non-finite feasibility return duration")
+    if np.any(margin < -1e-5):
+        errors.append("negative feasibility energy margin")
+
+    vehicle = payload["vehicle"]
+    charging = payload["charging_policy"]
+    recomputed = _single_customer_certificates(
+        customer_count=customer_count,
+        running_time_matrix_s=payload["running_time_shortest_matrix_s"],
+        running_time_energy_matrix_kwh=payload["running_time_path_energy_kwh"],
+        charging_power_kw=payload["charging_power_kw"],
+        battery_capacity_kwh=float(vehicle["battery_capacity_kwh"]),
+        charging_efficiency=float(charging["charging_efficiency"]),
+    )
+    expected_arrival = (
+        float(payload["working_start_s"]) + recomputed.arrival_elapsed_s
+    ).astype(np.float32)
+    float_checks = (
+        ("service-arrival time", arrival, expected_arrival),
+        ("return duration", return_duration, recomputed.return_duration_s),
+        (
+            "energy margin",
+            margin,
+            recomputed.customer_transition_energy_margin_kwh,
+        ),
+    )
+    for label, stored, expected in float_checks:
+        if not np.allclose(stored, expected, rtol=1e-6, atol=1e-4, equal_nan=False):
+            errors.append(f"stored feasibility {label} does not match recomputation")
+    exact_checks = (
+        (
+            "requires-charging flags",
+            certificate["requires_charging"],
+            recomputed.requires_charging,
+        ),
+        (
+            "charging-visit counts",
+            certificate["charging_visit_count"],
+            recomputed.charging_visit_count,
+        ),
+        (
+            "inbound full-state indices",
+            certificate["inbound_full_state_terminal_index"],
+            recomputed.inbound_full_state_terminal_index,
+        ),
+        (
+            "first post-customer charger indices",
+            certificate["first_post_customer_charger_terminal_index"],
+            recomputed.first_post_customer_charger_terminal_index,
+        ),
+    )
+    for label, stored, expected in exact_checks:
+        if not np.array_equal(stored, expected):
+            errors.append(f"stored feasibility {label} do not match recomputation")
+
+    service_start = np.maximum(arrival, payload["tw_s"][:, 0])
+    if np.any(service_start > payload["tw_s"][:, 1] + 1e-5):
+        errors.append("certificate violates a customer time window")
+    route_end = service_start + payload["service_time_s"] + return_duration
+    if np.any(route_end > float(payload["working_end_s"]) + 1e-5):
+        errors.append("certificate returns after the operating horizon")
+    if np.any(payload["demands_cm3"] > float(vehicle["cargo_capacity_cm3"]) + 1e-5):
+        errors.append("one-customer demand exceeds vehicle volume capacity")
+    if np.any(payload["charging_power_kw"] <= 0.0):
+        errors.append("charging power must be positive")
+    return errors
+
+
 def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
     root = Path(family_dir)
     manifest = _read_json(root / "family_manifest.json")
@@ -162,6 +245,9 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
     if len(view_ids) != int(manifest["view_count"]):
         errors.append("view_count does not match view_ids")
     scale_counts: dict[str, int] = {}
+    certified_customer_count = 0
+    requires_charging_customer_count = 0
+    maximum_charging_visit_count = 0
     for view_id in view_ids:
         try:
             payload = load_materialized_view(root, view_id)
@@ -179,14 +265,17 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
             if payload["tw_s"].shape != (customer_count, 2):
                 errors.append(f"{view_id}: time-window shape mismatch")
             certificate = payload["feasibility_certificate"]
-            if any(len(values) != customer_count for values in certificate.values()):
-                errors.append(f"{view_id}: feasibility-certificate length mismatch")
-            if not np.isfinite(certificate["earliest_service_time_s"]).all():
-                errors.append(f"{view_id}: non-finite feasibility arrival time")
-            if not np.isfinite(certificate["return_duration_s"]).all():
-                errors.append(f"{view_id}: non-finite feasibility return duration")
-            if np.any(certificate["customer_transition_energy_margin_kwh"] < -1e-5):
-                errors.append(f"{view_id}: negative feasibility energy margin")
+            for error in _verify_view_feasibility_certificate(payload):
+                errors.append(f"{view_id}: {error}")
+            certified_customer_count += customer_count
+            requires_charging_customer_count += int(
+                certificate["requires_charging"].sum()
+            )
+            if customer_count:
+                maximum_charging_visit_count = max(
+                    maximum_charging_visit_count,
+                    int(certificate["charging_visit_count"].max()),
+                )
             if payload["runtime_mask"] is not None:
                 errors.append(f"{view_id}: runtime mask must not be stored")
         except Exception as error:  # noqa: BLE001 - verifier reports every broken view it can.
@@ -205,6 +294,9 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
         "terminal_count": terminal_count,
         "view_count": len(view_ids),
         "view_counts_by_scale": scale_counts,
+        "certified_customer_count": certified_customer_count,
+        "requires_charging_customer_count": requires_charging_customer_count,
+        "maximum_charging_visit_count": maximum_charging_visit_count,
         "matrix_total_bytes": int(manifest["matrix_total_bytes"]),
         "matrix_metrics": matrix_metrics,
     }
