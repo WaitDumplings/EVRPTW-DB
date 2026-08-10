@@ -10,6 +10,16 @@ import numpy as np
 import pandas as pd
 from scipy.sparse.csgraph import dijkstra
 
+FULL_CS_TO_DEPOT_CACHE_CONTRACT = {
+    "semantics": "full_departure_cs_to_depot_fastest_feasible_time_v1",
+    "time_matrix": "running_time_shortest_matrix_s",
+    "energy_matrix": "running_time_path_energy_kwh",
+    "intermediate_full_charge_policy": "full_charge_linear_v1",
+    "allows_multiple_cs_hops": True,
+    "origin_cs_charge_time_included": False,
+    "depot_charge_time_included": False,
+}
+
 
 @dataclass(frozen=True)
 class ViewAttributes:
@@ -24,6 +34,7 @@ class ViewAttributes:
     feasibility_inbound_full_state_terminal_index: np.ndarray
     feasibility_first_post_customer_charger_terminal_index: np.ndarray
     feasibility_energy_margin_kwh: np.ndarray
+    full_cs_to_depot_time_s: np.ndarray
     report: dict[str, Any]
 
 
@@ -36,6 +47,7 @@ class SingleCustomerCertificates:
     inbound_full_state_terminal_index: np.ndarray
     first_post_customer_charger_terminal_index: np.ndarray
     customer_transition_energy_margin_kwh: np.ndarray
+    full_cs_to_depot_time_s: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -444,6 +456,7 @@ def _single_customer_certificates(
             first_post_customer_charger_terminal_index
         ),
         customer_transition_energy_margin_kwh=transition_margin.astype(np.float32),
+        full_cs_to_depot_time_s=cache.to_depot_s[1:].astype(np.float32),
     )
 
 
@@ -529,6 +542,8 @@ def build_view_attributes(
             f"energy={int((~route_energy_feasible).sum())}, "
             f"capacity={int((~capacity_feasible).sum())}"
         )
+    cached_returns = certificates.full_cs_to_depot_time_s.astype(float)
+    finite_cached_returns = cached_returns[np.isfinite(cached_returns)]
     report = {
         "schema": "cle_evrptw_view_attribute_report_v1",
         "day_type": day_type,
@@ -541,6 +556,27 @@ def build_view_attributes(
         "service_time_s_mean": float(service.mean()),
         "service_time_s_p90": float(np.quantile(service, 0.90)),
         "time_windows": time_window_report,
+        "full_cs_to_depot_cache": {
+            "semantics": "full_departure_cs_to_depot_fastest_feasible_time_v1",
+            "charging_station_count": len(cached_returns),
+            "finite_return_count": len(finite_cached_returns),
+            "unreachable_return_count": int((~np.isfinite(cached_returns)).sum()),
+            "minimum_time_s": (
+                float(finite_cached_returns.min())
+                if len(finite_cached_returns)
+                else None
+            ),
+            "median_time_s": (
+                float(np.median(finite_cached_returns))
+                if len(finite_cached_returns)
+                else None
+            ),
+            "maximum_time_s": (
+                float(finite_cached_returns.max())
+                if len(finite_cached_returns)
+                else None
+            ),
+        },
         "feasibility_gate": {
             "policy": (
                 "unlimited_fleet_individual_service_with_optional_full_charge_"
@@ -575,5 +611,6 @@ def build_view_attributes(
         feasibility_energy_margin_kwh=(
             certificates.customer_transition_energy_margin_kwh
         ),
+        full_cs_to_depot_time_s=certificates.full_cs_to_depot_time_s,
         report=report,
     )

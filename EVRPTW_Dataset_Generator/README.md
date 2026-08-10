@@ -537,6 +537,29 @@ one-customer volume-capacity condition are then checked. Under the frozen
 unlimited-fleet and infinite-port contract, one certified route per customer
 is a constructive feasible solution for the complete instance.
 
+The reverse-Dijkstra result is also stored as
+`full_cs_to_depot_time_s[K]`, aligned with the active charging-station order.
+Entry `q` means: depart CS `q` full and reach the depot in the fastest
+energy-feasible time, including travel, any intermediate CS hops, and charging
+at those intermediate stations, but excluding charging at origin `q` and at
+the depot. It uses `running_time_shortest_matrix_s` together with the matching
+`running_time_path_energy_kwh`; it does not use the distance-shortest path
+family. An unreachable full-CS return is stored as infinity and remains masked.
+
+At runtime, if the vehicle has battery `b` after serving customer `c`, the
+return-feasibility calculation becomes the minimum of the feasible direct
+return and, for every reachable CS `q`:
+
+```text
+time(c,q)
++ ((battery_capacity - b + energy(c,q)) / (efficiency * power[q])) * 3600
++ full_cs_to_depot_time_s[q]
+```
+
+The CS candidate is allowed only when `energy(c,q) <= b`. Thus the cache removes
+recursive CS-hop search from dynamic mask construction without storing a mask
+or assuming that the vehicle reaches the first CS full.
+
 ### 6. Verify and load a view
 
 ```bash
@@ -620,7 +643,7 @@ CLE_EVRPTW_v1/
       view_manifest.json
       terminal_parent_indices.npy
       customer_attributes.npz
-      charging_power_kw.npy
+      charging_attributes.npz            # power + full-CS-to-depot time cache
 ```
 
 The official plan contains 7,100 parent families and 172,100 logical views.

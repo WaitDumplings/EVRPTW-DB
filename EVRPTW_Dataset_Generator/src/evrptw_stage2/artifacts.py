@@ -9,7 +9,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .orders import _single_customer_certificates
+from .orders import (
+    FULL_CS_TO_DEPOT_CACHE_CONTRACT,
+    _build_full_state_route_cache,
+    _single_customer_certificates,
+)
 
 MATRIX_NAMES = (
     "distance_matrix_km",
@@ -53,14 +57,45 @@ def load_materialized_view(
         matrices[name] = np.asarray(parent[np.ix_(parent_indices, parent_indices)])
     with np.load(view_root / view_manifest["customer_attributes"], allow_pickle=False) as data:
         attributes = {key: data[key] for key in data.files}
-    charging_power = np.load(
-        view_root / view_manifest["charging_power"], allow_pickle=False
-    ).astype(np.float32, copy=False)
     customer_count = int(view_manifest["customer_count"])
     charger_count = int(view_manifest["charging_station_count"])
+    if "charging_attributes" in view_manifest:
+        cache_contract = view_manifest.get("full_cs_to_depot_cache", {})
+        if cache_contract != FULL_CS_TO_DEPOT_CACHE_CONTRACT:
+            raise ValueError("Full-CS-to-depot cache contract mismatch")
+        with np.load(
+            view_root / view_manifest["charging_attributes"], allow_pickle=False
+        ) as data:
+            charging_power = data["charging_power_kw"].astype(
+                np.float32, copy=False
+            )
+            full_cs_to_depot_time = data["full_cs_to_depot_time_s"].astype(
+                np.float32, copy=False
+            )
+        full_cs_cache_source = "stored"
+    else:
+        # Backward-compatible loading for non-release v1 pilots. New artifacts
+        # always store this vector in charging_attributes.npz.
+        charging_power = np.load(
+            view_root / view_manifest["charging_power"], allow_pickle=False
+        ).astype(np.float32, copy=False)
+        cache = _build_full_state_route_cache(
+            customer_count=customer_count,
+            running_time_matrix_s=matrices["running_time_shortest_matrix_s"],
+            running_time_energy_matrix_kwh=matrices["running_time_path_energy_kwh"],
+            charging_power_kw=charging_power,
+            battery_capacity_kwh=float(
+                view_manifest["vehicle"]["battery_capacity_kwh"]
+            ),
+            charging_efficiency=float(
+                view_manifest["charging_policy"]["charging_efficiency"]
+            ),
+        )
+        full_cs_to_depot_time = cache.to_depot_s[1:].astype(np.float32)
+        full_cs_cache_source = "computed_legacy_v1"
     coordinates = terminals[["longitude", "latitude"]].to_numpy(dtype=np.float32)
     payload = {
-        "schema": "cle_evrptw_loaded_view_v1",
+        "schema": "cle_evrptw_loaded_view_v2",
         "instance_id": view_id,
         "family_id": str(family_manifest["family_id"]),
         "city_slug": str(family_manifest["city_slug"]),
@@ -102,6 +137,7 @@ def load_materialized_view(
             ].astype(np.float32, copy=False),
         },
         "charging_power_kw": charging_power,
+        "full_cs_to_depot_time_s": full_cs_to_depot_time,
         "vehicle": dict(view_manifest["vehicle"]),
         "charging_policy": dict(view_manifest["charging_policy"]),
         "runtime_mask": None,
@@ -112,6 +148,8 @@ def load_materialized_view(
             "track_id": view_manifest["track_id"],
             "non_release_pilot": bool(view_manifest["non_release_pilot"]),
             "reference_profile_id": family_manifest["reference_profile_id"],
+            "source_view_schema": str(view_manifest["schema"]),
+            "full_cs_to_depot_cache_source": full_cs_cache_source,
         },
         **matrices,
     }
@@ -119,6 +157,10 @@ def load_materialized_view(
         raise ValueError("Loaded customer coordinate shape mismatch")
     if payload["charging_stations"].shape != (charger_count, 2):
         raise ValueError("Loaded charging-station coordinate shape mismatch")
+    if payload["charging_power_kw"].shape != (charger_count,):
+        raise ValueError("Loaded charging-power shape mismatch")
+    if payload["full_cs_to_depot_time_s"].shape != (charger_count,):
+        raise ValueError("Loaded full-CS-to-depot cache shape mismatch")
     return payload
 
 
@@ -138,6 +180,11 @@ def _verify_view_feasibility_certificate(payload: dict[str, Any]) -> list[str]:
         errors.append("non-finite feasibility return duration")
     if np.any(margin < -1e-5):
         errors.append("negative feasibility energy margin")
+    cached_return = payload["full_cs_to_depot_time_s"]
+    if np.isnan(cached_return).any():
+        errors.append("full-CS-to-depot cache contains NaN")
+    if np.any(cached_return < -1e-5):
+        errors.append("full-CS-to-depot cache contains negative time")
 
     vehicle = payload["vehicle"]
     charging = payload["charging_policy"]
@@ -189,6 +236,14 @@ def _verify_view_feasibility_certificate(payload: dict[str, Any]) -> list[str]:
     for label, stored, expected in exact_checks:
         if not np.array_equal(stored, expected):
             errors.append(f"stored feasibility {label} do not match recomputation")
+    if not np.allclose(
+        cached_return,
+        recomputed.full_cs_to_depot_time_s,
+        rtol=1e-6,
+        atol=1e-4,
+        equal_nan=False,
+    ):
+        errors.append("stored full-CS-to-depot cache does not match recomputation")
 
     service_start = np.maximum(arrival, payload["tw_s"][:, 0])
     if np.any(service_start > payload["tw_s"][:, 1] + 1e-5):
@@ -248,6 +303,9 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
     certified_customer_count = 0
     requires_charging_customer_count = 0
     maximum_charging_visit_count = 0
+    stored_full_cs_cache_view_count = 0
+    legacy_computed_full_cs_cache_view_count = 0
+    unreachable_full_cs_return_count = 0
     for view_id in view_ids:
         try:
             payload = load_materialized_view(root, view_id)
@@ -267,6 +325,17 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
             certificate = payload["feasibility_certificate"]
             for error in _verify_view_feasibility_certificate(payload):
                 errors.append(f"{view_id}: {error}")
+            if payload["metadata"]["full_cs_to_depot_cache_source"] == "stored":
+                stored_full_cs_cache_view_count += 1
+            else:
+                legacy_computed_full_cs_cache_view_count += 1
+                if not bool(manifest.get("non_release_pilot", False)):
+                    errors.append(
+                        f"{view_id}: official view does not store full-CS-to-depot cache"
+                    )
+            unreachable_full_cs_return_count += int(
+                (~np.isfinite(payload["full_cs_to_depot_time_s"])).sum()
+            )
             certified_customer_count += customer_count
             requires_charging_customer_count += int(
                 certificate["requires_charging"].sum()
@@ -282,6 +351,11 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
             errors.append(f"{view_id}: {error}")
     if bool(manifest.get("non_release_pilot", False)):
         warnings.append("Family is a non-release pilot and cannot be published as an official split.")
+    if legacy_computed_full_cs_cache_view_count:
+        warnings.append(
+            "Legacy v1 views do not store the full-CS-to-depot cache; the loader "
+            "recomputed it for verification. Regenerated v2 views store it."
+        )
     if manifest.get("reference_profile_status") != "release_calibrated":
         warnings.append("Reference operations profile is not release calibrated.")
     return {
@@ -297,6 +371,11 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
         "certified_customer_count": certified_customer_count,
         "requires_charging_customer_count": requires_charging_customer_count,
         "maximum_charging_visit_count": maximum_charging_visit_count,
+        "stored_full_cs_cache_view_count": stored_full_cs_cache_view_count,
+        "legacy_computed_full_cs_cache_view_count": (
+            legacy_computed_full_cs_cache_view_count
+        ),
+        "unreachable_full_cs_return_count": unreachable_full_cs_return_count,
         "matrix_total_bytes": int(manifest["matrix_total_bytes"]),
         "matrix_metrics": matrix_metrics,
     }

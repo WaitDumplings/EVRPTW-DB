@@ -107,8 +107,10 @@ deterministic family/view plans, unit-aware customer activation, depot-aware
 catchments, nested charger selection independent of daily active-customer IDs,
 directed edge-level weekday/weekend road states, projected-edge
 routing, dual path matrix families, volume/package/service/time-window
-attributes, a sufficient feasibility gate, a consumer loader, and a structural
-verifier.
+attributes, a sufficient feasibility gate, a stored full-CS-to-depot
+fastest-feasible-time cache for dynamic mask acceleration, a consumer loader,
+and a structural verifier. The cache is static instance data, not a stored
+runtime action mask.
 
 This is currently a **non-release vertical slice**, not an official dataset.
 The ten existing CLE packages are technically portable but still declare open

@@ -10,10 +10,11 @@ import pandas as pd
 import pytest
 from shapely.geometry import Point, Polygon
 
+from evrptw_stage2.artifacts import load_materialized_view, verify_materialized_family
 from evrptw_stage2.community import build_customer_split
 from evrptw_stage2.config import load_stage2_config
 from evrptw_stage2.materialize import view_parent_terminal_indices
-from evrptw_stage2.orders import build_view_attributes
+from evrptw_stage2.orders import FULL_CS_TO_DEPOT_CACHE_CONTRACT, build_view_attributes
 from evrptw_stage2.planning import build_generation_plan, materialization_attempt_inputs
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.reader import CLEEligibilityError, load_portable_cle
@@ -387,6 +388,7 @@ def test_view_attributes_use_volume_and_pass_sufficient_feasibility() -> None:
     assert (attributes.package_counts >= 1).all()
     assert (attributes.demands_cm3 > 0).all()
     assert attributes.time_windows_s.shape == (2, 2)
+    assert attributes.full_cs_to_depot_time_s.shape == (1,)
     assert attributes.report["feasibility_gate"]["passed"] is True
 
 
@@ -479,4 +481,146 @@ def test_feasibility_certificate_uses_multihop_full_cs_return_cache() -> None:
     assert attributes.feasibility_first_post_customer_charger_terminal_index[0] == 2
     assert attributes.feasibility_charging_visit_count[0] == 2
     assert attributes.feasibility_energy_margin_kwh[0] == pytest.approx(10.0)
+    assert attributes.full_cs_to_depot_time_s.tolist() == pytest.approx(
+        [3360.0, 600.0]
+    )
+    assert attributes.report["full_cs_to_depot_cache"]["finite_return_count"] == 2
+    assert attributes.report["full_cs_to_depot_cache"]["maximum_time_s"] == pytest.approx(
+        3360.0
+    )
     assert attributes.report["feasibility_gate"]["passed"] is True
+
+
+def test_v2_view_stores_and_loads_full_cs_to_depot_cache(tmp_path: Path) -> None:
+    profile = load_reference_profile(
+        Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+    )
+    family = tmp_path / "family"
+    view = family / "views" / "view-1"
+    matrices_dir = family / "matrices"
+    view.mkdir(parents=True)
+    matrices_dir.mkdir()
+    pd.DataFrame(
+        {
+            "source_id": ["depot", "customer", "charger"],
+            "longitude": [-117.0, -117.1, -117.2],
+            "latitude": [32.7, 32.8, 32.9],
+        }
+    ).to_parquet(family / "terminal_index.parquet", index=False)
+    travel_time = np.asarray(
+        [[0.0, 600.0, 500.0], [600.0, 0.0, 300.0], [500.0, 300.0, 0.0]],
+        dtype=np.float32,
+    )
+    energy = np.asarray(
+        [[0.0, 60.0, 40.0], [60.0, 0.0, 20.0], [40.0, 20.0, 0.0]],
+        dtype=np.float32,
+    )
+    distance = travel_time / 100.0
+    matrix_values = {
+        "distance_matrix_km": distance,
+        "distance_path_travel_time_s": travel_time,
+        "distance_path_energy_kwh": energy,
+        "running_time_shortest_matrix_s": travel_time,
+        "running_time_path_distance_km": distance,
+        "running_time_path_energy_kwh": energy,
+    }
+    matrix_files = {}
+    for name, values in matrix_values.items():
+        relative = f"matrices/{name}.npy"
+        np.save(family / relative, values, allow_pickle=False)
+        matrix_files[name] = relative
+
+    attributes = build_view_attributes(
+        pd.DataFrame(
+            {"residential_units": [1], "service_location_type": ["house"]}
+        ),
+        day_type="weekday",
+        package_seed=41,
+        service_time_seed=42,
+        time_window_seed=43,
+        operating_start_s=8 * 3600,
+        operating_end_s=24 * 3600,
+        running_time_matrix_s=travel_time,
+        running_time_energy_matrix_kwh=energy,
+        charging_power_kw=np.asarray([100.0], dtype=np.float32),
+        profile=profile,
+    )
+    np.save(view / "terminal_parent_indices.npy", np.arange(3, dtype=np.int32))
+    np.savez_compressed(
+        view / "customer_attributes.npz",
+        package_counts=attributes.package_counts,
+        demands_cm3=attributes.demands_cm3,
+        service_time_s=attributes.service_time_s,
+        time_windows_s=attributes.time_windows_s,
+        feasible_arrival_time_s=attributes.feasible_arrival_time_s,
+        feasible_return_duration_s=attributes.feasible_return_duration_s,
+        feasibility_requires_charging=attributes.feasibility_requires_charging,
+        feasibility_charging_visit_count=attributes.feasibility_charging_visit_count,
+        feasibility_inbound_full_state_terminal_index=(
+            attributes.feasibility_inbound_full_state_terminal_index
+        ),
+        feasibility_first_post_customer_charger_terminal_index=(
+            attributes.feasibility_first_post_customer_charger_terminal_index
+        ),
+        feasibility_energy_margin_kwh=attributes.feasibility_energy_margin_kwh,
+    )
+    np.savez_compressed(
+        view / "charging_attributes.npz",
+        charging_power_kw=np.asarray([100.0], dtype=np.float32),
+        full_cs_to_depot_time_s=attributes.full_cs_to_depot_time_s,
+    )
+    view_manifest = {
+        "schema": "cle_evrptw_materialized_view_v2",
+        "view_id": "view-1",
+        "family_id": "family-1",
+        "consumer_cohort_id": "core/train",
+        "split_id": "train",
+        "track_id": "train",
+        "day_type": "weekday",
+        "scale_id": "cus1",
+        "customer_count": 1,
+        "charging_station_count": 1,
+        "operating_horizon_s": [8 * 3600, 24 * 3600],
+        "terminal_parent_indices": "terminal_parent_indices.npy",
+        "customer_attributes": "customer_attributes.npz",
+        "charging_attributes": "charging_attributes.npz",
+        "full_cs_to_depot_cache": dict(FULL_CS_TO_DEPOT_CACHE_CONTRACT),
+        "vehicle": {
+            "battery_capacity_kwh": 100.0,
+            "cargo_capacity_cm3": float(profile["vehicle"]["cargo_capacity_cm3"]),
+            "unlimited_fleet": True,
+        },
+        "charging_policy": dict(profile["charging"]),
+        "non_release_pilot": True,
+    }
+    (view / "view_manifest.json").write_text(
+        json.dumps(view_manifest), encoding="utf-8"
+    )
+    family_manifest = {
+        "schema": "cle_evrptw_materialized_matrix_family_v1",
+        "family_id": "family-1",
+        "city_slug": "test-city",
+        "terminal_index": "terminal_index.parquet",
+        "terminal_count": 3,
+        "matrix_files": matrix_files,
+        "view_ids": ["view-1"],
+        "view_count": 1,
+        "matrix_total_bytes": sum(
+            int((family / relative).stat().st_size)
+            for relative in matrix_files.values()
+        ),
+        "non_release_pilot": True,
+        "reference_profile_id": profile["profile_id"],
+        "reference_profile_status": profile["profile_status"],
+    }
+    (family / "family_manifest.json").write_text(
+        json.dumps(family_manifest), encoding="utf-8"
+    )
+
+    loaded = load_materialized_view(family, "view-1")
+    assert loaded["metadata"]["full_cs_to_depot_cache_source"] == "stored"
+    assert loaded["full_cs_to_depot_time_s"].tolist() == pytest.approx([500.0])
+    report = verify_materialized_family(family)
+    assert report["passed"] is True
+    assert report["stored_full_cs_cache_view_count"] == 1
+    assert report["unreachable_full_cs_return_count"] == 0

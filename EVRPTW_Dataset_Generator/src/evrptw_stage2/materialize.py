@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Stage2Config
-from .orders import build_view_attributes
+from .orders import FULL_CS_TO_DEPOT_CACHE_CONTRACT, build_view_attributes
 from .reader import PortableCLE
 from .road_state import build_family_road_state
 from .routing import PhysicalRoadNetwork, RoutingMatrices
@@ -169,9 +169,13 @@ def materialize_family(
                 ),
                 feasibility_energy_margin_kwh=attributes.feasibility_energy_margin_kwh,
             )
-            np.save(view_dir / "charging_power_kw.npy", charging_power, allow_pickle=False)
+            np.savez_compressed(
+                view_dir / "charging_attributes.npz",
+                charging_power_kw=charging_power,
+                full_cs_to_depot_time_s=attributes.full_cs_to_depot_time_s,
+            )
             view_manifest = {
-                "schema": "cle_evrptw_materialized_view_v1",
+                "schema": "cle_evrptw_materialized_view_v2",
                 "view_id": view_id,
                 "family_id": family_id,
                 "consumer_cohort_id": str(view["consumer_cohort_id"]),
@@ -190,7 +194,8 @@ def materialize_family(
                 "parent_matrix_files": matrix_files,
                 "terminal_parent_indices": "terminal_parent_indices.npy",
                 "customer_attributes": "customer_attributes.npz",
-                "charging_power": "charging_power_kw.npy",
+                "charging_attributes": "charging_attributes.npz",
+                "full_cs_to_depot_cache": dict(FULL_CS_TO_DEPOT_CACHE_CONTRACT),
                 "vehicle": {
                     "vehicle_id": str(profile["vehicle"]["vehicle_id"]),
                     "battery_capacity_kwh": float(profile["energy"]["battery_capacity_kwh"]),
