@@ -1,0 +1,36 @@
+{
+  "city_slug": "san-diego",
+  "display_name": "San Diego",
+  "query": "San Diego, California, USA",
+  "census_name": "San Diego city",
+  "census_place_geoid": "0666000",
+  "county_geoids": [
+    "06073"
+  ],
+  "boundary_source": "2025 U.S. Census TIGER/Line Places",
+  "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
+  "admin_boundary_semantics": "city proper only",
+  "land_boundary_semantics": "city proper minus official AREAWATER polygons",
+  "place_source_file": "place/tl_2025_06_place.zip",
+  "place_source_sha256": "2b59dc5d54c69c7a451795401fc2a1c1c68b172f1d912d3486080e04a83e23e8",
+  "county_source_file": "county/tl_2025_us_county.zip",
+  "county_source_sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+  "land_mask_qa": {
+    "census_land_area_km2": 844.408062,
+    "census_water_area_km2": 42.068473,
+    "derived_admin_area_km2": 885.7715607323004,
+    "derived_land_area_km2": 843.7364060804583,
+    "derived_removed_water_area_km2": 42.035154651842944,
+    "land_area_relative_error_vs_census": 0.0007954162800753986,
+    "water_area_relative_error_vs_census": 0.0007920027940414114,
+    "land_mask_valid": true,
+    "land_mask_empty": false,
+    "areawater_sources": [
+      {
+        "county_geoid": "06073",
+        "file": "areawater/tl_2025_06073_areawater.zip",
+        "sha256": "36bd03012b775391d0947dba239c6b4f3a90f4a8acbc7e6fa7639658bae0b26e"
+      }
+    ]
+  }
+}

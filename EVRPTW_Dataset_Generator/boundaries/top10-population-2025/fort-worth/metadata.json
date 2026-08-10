@@ -1,0 +1,60 @@
+{
+  "city_slug": "fort-worth",
+  "display_name": "Fort Worth",
+  "query": "Fort Worth, Texas, USA",
+  "census_name": "Fort Worth city",
+  "census_place_geoid": "4827000",
+  "county_geoids": [
+    "48121",
+    "48251",
+    "48367",
+    "48439",
+    "48497"
+  ],
+  "boundary_source": "2025 U.S. Census TIGER/Line Places",
+  "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
+  "admin_boundary_semantics": "city proper only",
+  "land_boundary_semantics": "city proper minus official AREAWATER polygons",
+  "place_source_file": "place/tl_2025_48_place.zip",
+  "place_source_sha256": "5a0c4d49641f69028ee9f5c343bf09936ec00a378e5e6393115b106bab935e13",
+  "county_source_file": "county/tl_2025_us_county.zip",
+  "county_source_sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+  "land_mask_qa": {
+    "census_land_area_km2": 911.703455,
+    "census_water_area_km2": 21.192896,
+    "derived_admin_area_km2": 932.7023006573071,
+    "derived_land_area_km2": 911.514778736996,
+    "derived_removed_water_area_km2": 21.187521920308367,
+    "land_area_relative_error_vs_census": 0.0002069491587085686,
+    "water_area_relative_error_vs_census": 0.00025357929806448263,
+    "land_mask_valid": true,
+    "land_mask_empty": false,
+    "areawater_sources": [
+      {
+        "county_geoid": "48121",
+        "file": "areawater/tl_2025_48121_areawater.zip",
+        "sha256": "1f288fe437116ef3d04c30a556c44a976c327ef6fa92b5df1a06c42c6d42cd61"
+      },
+      {
+        "county_geoid": "48251",
+        "file": "areawater/tl_2025_48251_areawater.zip",
+        "sha256": "c9dfea47388d7d177e732d26a92faffaa8bcc200c882f248c2429916eb70679e"
+      },
+      {
+        "county_geoid": "48367",
+        "file": "areawater/tl_2025_48367_areawater.zip",
+        "sha256": "6de986057c9a14da9657d0d5df4891132f717b7a7dabbb5ce3ff8967dd30490e"
+      },
+      {
+        "county_geoid": "48439",
+        "file": "areawater/tl_2025_48439_areawater.zip",
+        "sha256": "43e89bc5a2bd79775b5e1185be838c94e6fa0a45e9ebf85494c8278349509e6d"
+      },
+      {
+        "county_geoid": "48497",
+        "file": "areawater/tl_2025_48497_areawater.zip",
+        "sha256": "a6a5ec2371de155119cbb2506329cd5140e3a530a69f78ea70f4665033d0b90a"
+      }
+    ]
+  }
+}

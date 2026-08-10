@@ -1,0 +1,36 @@
+{
+  "city_slug": "philadelphia",
+  "display_name": "Philadelphia",
+  "query": "Philadelphia, Pennsylvania, USA",
+  "census_name": "Philadelphia city",
+  "census_place_geoid": "4260000",
+  "county_geoids": [
+    "42101"
+  ],
+  "boundary_source": "2025 U.S. Census TIGER/Line Places",
+  "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
+  "admin_boundary_semantics": "city proper only",
+  "land_boundary_semantics": "city proper minus official AREAWATER polygons",
+  "place_source_file": "place/tl_2025_42_place.zip",
+  "place_source_sha256": "b9b8a25b906bc0c338cc4cfea45d8e5de12247a913cbd821b93368c55e2e9dc5",
+  "county_source_file": "county/tl_2025_us_county.zip",
+  "county_source_sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+  "land_mask_qa": {
+    "census_land_area_km2": 347.900745,
+    "census_water_area_km2": 20.969567,
+    "derived_admin_area_km2": 368.57686621441826,
+    "derived_land_area_km2": 347.6239925445505,
+    "derived_removed_water_area_km2": 20.952873669869657,
+    "land_area_relative_error_vs_census": 0.0007954925634020173,
+    "water_area_relative_error_vs_census": 0.0007960741454672094,
+    "land_mask_valid": true,
+    "land_mask_empty": false,
+    "areawater_sources": [
+      {
+        "county_geoid": "42101",
+        "file": "areawater/tl_2025_42101_areawater.zip",
+        "sha256": "5f6ac9bfe3a853c5ae988fe1c71deae36d64a4e2aa5896c26298b85e0b679a95"
+      }
+    ]
+  }
+}

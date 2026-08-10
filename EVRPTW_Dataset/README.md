@@ -6,12 +6,43 @@ through a dataset hosting service, release artifact, or Git LFS-style workflow.
 
 The current profiles are:
 
+- **CLE-v1 / US Top 10**: portable city-level road, service-location,
+  infrastructure, access, and reference-speed environments used as Stage-1
+  inputs to future instance generation.
 - **AC-v1**: Amazon-calibrated synthetic service-territory benchmark.
 - **Geo-AC-v1 / NA-US-20**: real-geography semi-synthetic benchmark. Public
   geospatial data determines road networks, communities, latent customer
   positions, charging stations, and depot candidates. Amazon calibration is used
   only for operating-day demand, service-time, time-window, and activation
   behavior.
+
+## CLE-v1 / US Top 10 Layout
+
+```text
+EVRPTW_Dataset/
+  CLE_v1/
+    us_top10/
+      cle_index.json
+      cle_index.csv
+      cities/
+        san-diego/
+          manifest.json
+          source_registry.json
+          boundary/
+          graph/
+            graph_reference.json
+            graph_operational.graphml
+            road_manifest.json
+          service_locations/
+          infrastructure/
+          profiles/
+          qa/
+```
+
+Each city directory is a self-contained portable package. Its manifest records
+technical verification, portability verification, and scientific
+`release_eligible` status separately. Generator caches and intermediate layers
+are not part of this directory.
 
 ## AC-v1 Layout
 

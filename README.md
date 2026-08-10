@@ -1,103 +1,112 @@
 # EVRPTW-DB
 
-EVRPTW-DB is a dataset-and-benchmark repository for Electric Vehicle Routing Problems with Time Windows (EVRP-TW).
+EVRPTW-DB is a dataset and benchmark project for practical Electric Vehicle
+Routing Problems with Time Windows. Its central design is to separate a
+reusable real-geography environment from the operating-day instances sampled
+on top of it.
 
-The project is organized around two deliverables:
+## Two-stage data model
 
-- **EVRPTW-D**: real-data-calibrated generated EVRP-TW datasets.
-- **EVRPTW-B**: exact, metaheuristic, and reinforcement-learning solvers evaluated on the same instance schema.
+### Stage 1: City Logistics Environment (CLE)
 
-The first released dataset profile is **AC-v1**: Amazon-Calibrated v1. This keeps the dataset family name stable (`EVRPTW-D`) while allowing later calibrated profiles such as `AC-v2` or non-Amazon profiles.
+A CLE freezes the static city-level substrate:
 
-The geospatial profile is **Geo-AC-v1**: a real-geography,
-semi-synthetic North American benchmark that uses public road networks,
-Census/ACS occupancy, public charging infrastructure, depot/industrial
-candidates, road-frontage latent customers, and the same Amazon-calibrated
-operating-day sampler. Amazon calibration affects daily demand, service time,
-time windows, and activation behavior; it does not determine customer
-locations.
+- a land-only city service boundary and a real directed OSM routing graph;
+- latent residential service locations with house/apartment evidence;
+- candidate depot and public charging-site layers;
+- edge-level legal and commercial-vehicle reference running speeds;
+- road-access connectors, provenance, checksums, and QA/release gates.
 
-## Repository Layout
+It deliberately contains no active customer, package count, demand, service
+time, or realized time window.
+
+### Stage 2: EVRPTW instances
+
+An instance will select active locations and facilities, sample package demand,
+service time, and one time window per active location, choose a vehicle/fleet
+policy, create one static directed weekday or weekend speed realization, and
+export shortest-distance plus fastest-time matrices and path references.
+
+This separation lets many instances reuse one large physical graph without
+copying it into every instance and prevents latent future information from
+leaking into solver inputs.
+
+## Repository layout
 
 ```text
 EVRPTW-DB/
-  EVRPTW_Core/                  # shared schema, loaders, validation, metrics
-  EVRPTW_Dataset_Generator/     # service-territory / operating-day generator
-  EVRPTW_Dataset/               # generated EVRPTW-D releases, e.g. AC_v1
-  EVRPTW_Benchmark/             # solver implementations and benchmark runners
+  EVRPTW_Core/                  # shared schemas, loaders, validation, metrics
+  EVRPTW_Dataset_Generator/     # CLE generator and source-adapter pipeline
+  EVRPTW_Dataset/               # versioned CLE/instance release artifacts
+  EVRPTW_Benchmark/             # exact, metaheuristic, and RL solvers
     Exact/
     MetaHeuristics/
     Reinforcement_Learning/
-  docs/
 ```
 
-## Dataset Framing
+## U.S. reference implementation
 
-Generation is two-stage:
+The first CLE profile targets ten U.S. city-proper service areas: New York
+City, Los Angeles, Chicago, Houston, Phoenix, Philadelphia, San Antonio, San
+Diego, Dallas, and Fort Worth.
 
-1. A **service territory graph** represents a stable city/region/delivery-station territory.
-2. An **operating-day instance** activates customers and charging stations from that territory, then samples demand, service time, time windows, and active travel matrices.
+It integrates public/freely accessible sources with distinct roles:
 
-Internal code still preserves legacy `mother_board_*` fields for backward compatibility, but public documentation and release manifests use service-territory terminology.
+- Census TIGER/Line Place and Area Hydrography boundaries;
+- OpenStreetMap roads and facility tags from frozen Geofabrik PBFs;
+- Microsoft USBuildingFootprints geometry;
+- USACE National Structure Inventory residential occupancy/unit evidence;
+- NREL Alternative Fuels Data Center charging sites;
+- optional high-confidence FHWA HPMS edge evidence;
+- an explicitly documented NREL Fleet DNA running-speed prior.
 
-## AC-v1 Layout
+The result is best described as a **real-geography, public-data-integrated,
+semi-synthetic benchmark substrate**. Public data grounds topology, geometry,
+facility candidates, and statistical priors; Stage 2 will still generate
+operating-day demand and time windows. The project does not claim that every
+OSM warehouse is a verified Amazon depot, every public charger can serve a
+Rivian EDV, or every generated order is an observed delivery.
 
-```text
-EVRPTW_Dataset/
-  AC_v1/
-    train/service_territory_pool.pkl        # 1024 training service territories
-    eval/service_territory_pool.pkl         # held-out evaluation service territories
-    eval/AC_Tiny_5/instances.pkl
-    eval/AC_Small_15/instances.pkl
-    eval/AC_Medium_50/instances.pkl
-    eval/AC_Large_100/instances.pkl
-    eval/AC_XLarge_1000/instances.pkl
-    generation_timing.csv
-    dataset_manifest.json
-```
+## Quick start
 
-## Example
+Source preparation, exact required filenames, data licenses, frozen thresholds,
+and one-command generation are documented in
+[`EVRPTW_Dataset_Generator/README.md`](EVRPTW_Dataset_Generator/README.md).
+
+After sources pass preflight:
 
 ```bash
-python EVRPTW_Dataset_Generator/prepare_ac_benchmark_suite.py \
-  --train-territories 1024 \
-  --eval-territories 256 \
-  --num-instances 1000 \
-  --seed 20260525
+cd EVRPTW_Dataset_Generator
+conda env create -f environment.yml
+conda activate evrptw-cle
+bash scripts/build_top10_cle.sh
 ```
 
-Geo-AC-v1:
+The build keeps raw sources, caches, and debug artifacts under
+`EVRPTW_Dataset_Generator/`, then packages one self-contained CLE per city under
+`EVRPTW_Dataset/CLE_v1/us_top10/`. The release-side verifier requires the
+operational GraphML and all runtime paths to remain inside the city package.
+Large source files and generated GraphML/GeoParquet artifacts are intentionally
+excluded from ordinary Git history and should be distributed with versioned
+checksum manifests.
 
-```bash
-export CENSUS_API_KEY=...
-export NREL_API_KEY=...
-conda run -n maojie python EVRPTW_Dataset_Generator/prepare_public_geodata.py \
-  --city-config EVRPTW_Dataset_Generator/configs/geo_ac_v1_us10.yaml \
-  --output-root EVRPTW_Dataset/Geo_AC_v1/source_data \
-  --config-out EVRPTW_Dataset_Generator/configs/geo_ac_v1_us10.with_sources.yaml
+## Current migration status
 
-conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_geospatial_subterritories \
-  --source-config EVRPTW_Dataset_Generator/configs/geo_ac_v1_us10.with_sources.yaml \
-  --slice-config EVRPTW_Dataset_Generator/configs/geo_ac_v1_na_us20_slices.yaml \
-  --output-root EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20 \
-  --config-out EVRPTW_Dataset_Generator/configs/geo_ac_v1_na_us20.with_sources.yaml
+The new Generator implements Stage 1 and its U.S. reference adapter. The legacy
+`evrptw_hierarchy` Stage-2 code remains only because existing TERRAN utilities
+still import it. It is explicitly separated from the new CLE pipeline; the
+future CLE-to-instance generator will replace it after its sampling semantics
+and schemas are frozen.
 
-conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_geospatial_benchmark_suite \
-  --city-config EVRPTW_Dataset_Generator/configs/geo_ac_v1_na_us20.with_sources.yaml \
-  --output-root EVRPTW_Dataset/Geo_AC_v1/eval_standard_20 \
-  --require-real-sources \
-  --instances-per-scale 20
+## Reproducibility and release policy
 
-conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_geo_ac_release_metadata \
-  --source-root EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20 \
-  --eval-root EVRPTW_Dataset/Geo_AC_v1/eval_standard_20
-```
-
-The official Geo-AC-v1 release profile is **NA-US-20**: 20 service territories,
-fixed `Cus5/Cus15/Cus50/Cus100` evaluation suites, and 20 operating-day
-instances per territory-scale pair. The large generated CSVs, QA maps, and
-instance pickle files are ignored by git and should be published through a
-dataset hosting service or release artifact. The GitHub repository keeps the
-generator, configs, documentation, and small reproducibility assets.
-
-Benchmark solvers must only read exported operating-day instances from `EVRPTW_Dataset`; they must not access inactive territory customers or inactive charging stations.
+- Every frozen input and generated layer is hash-addressed in manifests.
+- Road extension uses real OSM roads only; outside-city roads are transit-only.
+- Customer/facility access-distance values are QA references, not arbitrary
+  hard-deletion thresholds.
+- Legal speed, reference vehicle running speed, and Stage-2 operational speed
+  are separate fields.
+- Solver code may read only exported active instances, never inactive CLE
+  locations or future scenario state.
+- Generated OSM derivatives must retain attribution and comply with ODbL.
+- An explicit repository code license must be selected before public release.

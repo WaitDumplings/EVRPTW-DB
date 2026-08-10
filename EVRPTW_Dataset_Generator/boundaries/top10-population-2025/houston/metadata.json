@@ -1,0 +1,54 @@
+{
+  "city_slug": "houston",
+  "display_name": "Houston",
+  "query": "Houston, Texas, USA",
+  "census_name": "Houston city",
+  "census_place_geoid": "4835000",
+  "county_geoids": [
+    "48157",
+    "48201",
+    "48339",
+    "48473"
+  ],
+  "boundary_source": "2025 U.S. Census TIGER/Line Places",
+  "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
+  "admin_boundary_semantics": "city proper only",
+  "land_boundary_semantics": "city proper minus official AREAWATER polygons",
+  "place_source_file": "place/tl_2025_48_place.zip",
+  "place_source_sha256": "5a0c4d49641f69028ee9f5c343bf09936ec00a378e5e6393115b106bab935e13",
+  "county_source_file": "county/tl_2025_us_county.zip",
+  "county_source_sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+  "land_mask_qa": {
+    "census_land_area_km2": 1659.712399,
+    "census_water_area_km2": 80.864235,
+    "derived_admin_area_km2": 1741.485668186922,
+    "derived_land_area_km2": 1660.5981612126275,
+    "derived_removed_water_area_km2": 80.88750697428968,
+    "land_area_relative_error_vs_census": 0.000533684157063052,
+    "water_area_relative_error_vs_census": 0.0002877906937434762,
+    "land_mask_valid": true,
+    "land_mask_empty": false,
+    "areawater_sources": [
+      {
+        "county_geoid": "48157",
+        "file": "areawater/tl_2025_48157_areawater.zip",
+        "sha256": "b9d9311377b753621295a22a8d4b8fe5872bc4d7122cc43263fbd0cdda6e5ce9"
+      },
+      {
+        "county_geoid": "48201",
+        "file": "areawater/tl_2025_48201_areawater.zip",
+        "sha256": "f7f6744142f025426a235849c5ec7d96eadda9f7f0d02fae07a63b9e2f4add7e"
+      },
+      {
+        "county_geoid": "48339",
+        "file": "areawater/tl_2025_48339_areawater.zip",
+        "sha256": "057d37fe2132710eb7e008befdc13c62da0d5b6efa4c1ac3a571e9a5f0ecc16f"
+      },
+      {
+        "county_geoid": "48473",
+        "file": "areawater/tl_2025_48473_areawater.zip",
+        "sha256": "73fbde0a4dfdf1dbd764e3cd1cf0bd59f10d45f15f647ccf13d615c95748b707"
+      }
+    ]
+  }
+}

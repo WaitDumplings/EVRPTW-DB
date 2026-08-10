@@ -1,0 +1,70 @@
+{
+  "schema": "evrptw_cle_build_profile_v1",
+  "profile_id": "us_top10_cle_v1",
+  "artifact_name": "City Logistics Environment",
+  "artifact_abbreviation": "CLE",
+  "country_adapter": "us_public_data_v1",
+  "city_preset": "configs/top10_us_cities_population_v1.json",
+  "building_registry": "configs/top10_building_extraction_v1.json",
+  "source_paths": {
+    "microsoft_building_root": "data/sources/microsoft-us-building-footprints",
+    "afdc_raw_csv": "data/sources/afdc/afdc_us_public_available_electric.csv",
+    "afdc_resolved_csv": "data/sources/afdc/afdc_us_public_available_electric_resolved.csv",
+    "hpms_edge_match_root": "data/sources/hpms-edge-matches"
+  },
+  "work_root": "work/us-top10-v1",
+  "release_root": "../EVRPTW_Dataset/CLE_v1/us_top10",
+  "road_policy": {
+    "network_type": "drive",
+    "routing_buffer_ladder_km": [0, 1, 2, 5, 10, 20],
+    "minimum_city_node_coverage": 0.99,
+    "minimum_city_physical_road_length_coverage": 0.995,
+    "outside_service_boundary_policy": "transit_only",
+    "synthetic_intercomponent_edges": false
+  },
+  "charging_policy": {
+    "fuel_type": "ELEC",
+    "status": "E",
+    "access": "public",
+    "accepted_modes": ["L2", "DC_FAST"],
+    "road_access_distance_policy": "retain_all_and_flag_tail",
+    "coordinate_policy": "retain_raw_afdc_and_use_reviewable_resolved_geometry_when_supported"
+  },
+  "depot_policy": {
+    "tier_a": "explicit_dispatch_or_carrier_facility_evidence",
+    "tier_b": "warehouse_or_logistics_proxy",
+    "tier_c": "exclude_from_default_candidate_pool",
+    "minimum_area_hard_filter_m2": null,
+    "reference_area_flag_m2": 1000,
+    "area_policy": "continuous_attribute_and_sensitivity_flag_not_ground_truth"
+  },
+  "service_location_policy": {
+    "geometry_source": "Microsoft USBuildingFootprints",
+    "attribute_source": "USACE NSI 2026",
+    "g1": "NSI point covered by Microsoft polygon",
+    "g2_max_distance_m": 10,
+    "g2_max_area_factor": 4,
+    "multi_building_complex_policy": "no_automatic_merge_without_independent_site_evidence",
+    "road_access_distance_policy": "retain_all_and_flag_tail"
+  },
+  "speed_profile": {
+    "profile_id": "us_hpms_nrel_v1",
+    "functional_class_priority": ["high_confidence_hpms_f_system", "osm_highway_fallback"],
+    "legal_speed_priority": [
+      "osm_directional_maxspeed",
+      "osm_generic_maxspeed",
+      "high_confidence_hpms_speed_limit",
+      "hierarchical_imputation"
+    ],
+    "nrel_source": {
+      "report": "NREL/TP-5400-65921",
+      "doi": "10.2172/1397153",
+      "table": 14,
+      "statistic": "Average Driving Speed profile means for FDNA clusters 3, 2, and 1",
+      "hmu_mapping_status": "explicit US adapter assumption, not an NREL road-label assignment"
+    },
+    "nrel_mode_speed_mph": {"H": 48.57, "M": 33.64, "U": 22.62},
+    "vehicle_speed_cap_kph": null,
+    "instance_operational_scenarios": "stage_2"
+  }
+}

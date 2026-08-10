@@ -1,0 +1,48 @@
+{
+  "city_slug": "san-antonio",
+  "display_name": "San Antonio",
+  "query": "San Antonio, Texas, USA",
+  "census_name": "San Antonio city",
+  "census_place_geoid": "4865000",
+  "county_geoids": [
+    "48029",
+    "48091",
+    "48325"
+  ],
+  "boundary_source": "2025 U.S. Census TIGER/Line Places",
+  "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
+  "admin_boundary_semantics": "city proper only",
+  "land_boundary_semantics": "city proper minus official AREAWATER polygons",
+  "place_source_file": "place/tl_2025_48_place.zip",
+  "place_source_sha256": "5a0c4d49641f69028ee9f5c343bf09936ec00a378e5e6393115b106bab935e13",
+  "county_source_file": "county/tl_2025_us_county.zip",
+  "county_source_sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+  "land_mask_qa": {
+    "census_land_area_km2": 1292.34882,
+    "census_water_area_km2": 14.854213,
+    "derived_admin_area_km2": 1306.2295250127418,
+    "derived_land_area_km2": 1291.3861202797018,
+    "derived_removed_water_area_km2": 14.843404733052006,
+    "land_area_relative_error_vs_census": 0.0007449225049768609,
+    "water_area_relative_error_vs_census": 0.0007276229947688247,
+    "land_mask_valid": true,
+    "land_mask_empty": false,
+    "areawater_sources": [
+      {
+        "county_geoid": "48029",
+        "file": "areawater/tl_2025_48029_areawater.zip",
+        "sha256": "36d92490d164c1edeedd48c5d1bd9f1d2e4b99077ec442b4ea9b9f03eeb9bee0"
+      },
+      {
+        "county_geoid": "48091",
+        "file": "areawater/tl_2025_48091_areawater.zip",
+        "sha256": "fc6fb00d9739ec837e2b38f6daf8b283ef30b6684f7df1bef1fd87427d157b4f"
+      },
+      {
+        "county_geoid": "48325",
+        "file": "areawater/tl_2025_48325_areawater.zip",
+        "sha256": "660751ad2f62426dd68dbe702a41a4690a9c8c61c9deaaaddc47087b00c8c559"
+      }
+    ]
+  }
+}

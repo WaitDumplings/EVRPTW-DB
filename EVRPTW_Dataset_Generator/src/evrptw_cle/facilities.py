@@ -1,0 +1,397 @@
+"""Build road-anchored charging and depot candidate layers for one city."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+import shapely
+from shapely.strtree import STRtree
+
+from .customer_access import _projection_offsets_json, build_eligible_physical_edges
+from .util import sha256_file, write_json
+
+
+def _number(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce").fillna(0).astype(int)
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return None
+    normalized = str(value).strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    return None
+
+
+def _connector_tokens(value: Any) -> set[str]:
+    if value is None or pd.isna(value):
+        return set()
+    return {
+        token.strip().upper()
+        for token in str(value).replace(",", " ").split()
+        if token.strip()
+    }
+
+
+def _anchor_points_to_edges(
+    points: gpd.GeoDataFrame,
+    edges: gpd.GeoDataFrame,
+    area_crs: str,
+) -> gpd.GeoDataFrame:
+    """Project facility points to eligible physical directed-road geometries."""
+
+    projected = points.to_crs(area_crs).reset_index(drop=True)
+    edge_frame = edges.to_crs(area_crs).reset_index(drop=True)
+    point_geometries = np.asarray(projected.geometry.to_numpy(), dtype=object)
+    edge_geometries = np.asarray(edge_frame.geometry.to_numpy(), dtype=object)
+    tree = STRtree(edge_geometries)
+    nearest_indices = np.asarray(tree.nearest(point_geometries), dtype=int)
+    matched_geometries = edge_geometries[nearest_indices]
+    connectors = shapely.shortest_line(point_geometries, matched_geometries)
+    anchors_local = shapely.get_point(connectors, -1)
+    anchors_wgs84 = gpd.GeoSeries(anchors_local, crs=area_crs).to_crs("EPSG:4326")
+    distances = np.asarray(shapely.distance(point_geometries, matched_geometries), dtype=float)
+    matched = edge_frame.iloc[nearest_indices].reset_index(drop=True)
+    physical_offsets_m = np.asarray(
+        shapely.line_locate_point(matched_geometries, anchors_local), dtype=float
+    )
+    physical_lengths_m = np.asarray(shapely.length(matched_geometries), dtype=float)
+
+    result = points.reset_index(drop=True).copy()
+    for field in (
+        "physical_edge_id",
+        "directed_edge_refs",
+        "directed_edge_ref_count",
+        "edge_u",
+        "edge_v",
+        "edge_key",
+        "highway",
+        "road_name",
+        "oneway",
+    ):
+        result[field] = matched[field].to_numpy()
+    result["road_anchor_method"] = "facility_point_to_operational_edge_projection"
+    result["road_access_distance_m"] = distances
+    result["road_anchor_lon"] = anchors_wgs84.x.to_numpy(dtype=float)
+    result["road_anchor_lat"] = anchors_wgs84.y.to_numpy(dtype=float)
+    result["physical_edge_geometry_length_m"] = physical_lengths_m
+    result["road_projection_offset_m_from_physical_start"] = physical_offsets_m
+    result["road_projection_fraction_from_physical_start"] = np.divide(
+        physical_offsets_m,
+        physical_lengths_m,
+        out=np.zeros_like(physical_offsets_m),
+        where=physical_lengths_m > 0,
+    ).clip(0.0, 1.0)
+    result["directed_projection_offsets"] = [
+        _projection_offsets_json(refs, offset, length)
+        for refs, offset, length in zip(
+            result["directed_edge_refs"],
+            physical_offsets_m,
+            physical_lengths_m,
+            strict=True,
+        )
+    ]
+    result["road_projection_node_id"] = [
+        "road_projection_"
+        + hashlib.sha1(f"{physical_id}|{fraction:.9f}".encode()).hexdigest()[:20]
+        for physical_id, fraction in zip(
+            result["physical_edge_id"],
+            result["road_projection_fraction_from_physical_start"],
+            strict=True,
+        )
+    ]
+    result["facility_access_node_id"] = (
+        "facility_access_" + result["facility_anchor_id"].astype(str)
+    )
+    result["facility_access_connector_id"] = (
+        "facility_connector_" + result["facility_anchor_id"].astype(str)
+    )
+    result["connector_length_m"] = distances
+    result["connector_bidirectional"] = True
+    result["connector_speed_symmetry"] = "equal_both_directions"
+    result["connector_speed_policy"] = "assigned_at_instance_generation"
+    return gpd.GeoDataFrame(result, geometry="geometry", crs=points.crs)
+
+
+def _filter_afdc_city(
+    afdc_path: Path,
+    boundary: Any,
+    city_slug: str,
+) -> gpd.GeoDataFrame:
+    raw = pd.read_csv(afdc_path, low_memory=False)
+    required = {
+        "Fuel Type Code": {"ELEC"},
+        "Status Code": {"E"},
+        "Access Code": {"public"},
+        "Country": {"US"},
+    }
+    for column, expected in required.items():
+        observed = set(raw[column].dropna().astype(str).unique())
+        if observed != expected:
+            raise ValueError(
+                f"AFDC snapshot is not prefiltered as declared for {column}: {observed}"
+            )
+    if {"resolved_longitude", "resolved_latitude"} <= set(raw.columns):
+        longitude = pd.to_numeric(raw["resolved_longitude"], errors="coerce").fillna(
+            pd.to_numeric(raw["Longitude"], errors="coerce")
+        )
+        latitude = pd.to_numeric(raw["resolved_latitude"], errors="coerce").fillna(
+            pd.to_numeric(raw["Latitude"], errors="coerce")
+        )
+    else:
+        longitude = pd.to_numeric(raw["Longitude"], errors="coerce")
+        latitude = pd.to_numeric(raw["Latitude"], errors="coerce")
+        raw["raw_afdc_longitude"] = longitude
+        raw["raw_afdc_latitude"] = latitude
+        raw["resolved_longitude"] = longitude
+        raw["resolved_latitude"] = latitude
+        raw["resolved_geometry_source"] = "afdc_raw"
+        raw["location_resolution_status"] = (
+            "raw_retained_no_corroborating_exact_geometry"
+        )
+    points = gpd.GeoDataFrame(
+        raw,
+        geometry=gpd.points_from_xy(longitude, latitude),
+        crs="EPSG:4326",
+    )
+    selected = points.loc[points.geometry.covered_by(boundary)].copy().reset_index(drop=True)
+    selected["city_slug"] = city_slug
+    return selected
+
+
+def _normalize_chargers(frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    result = frame.copy()
+    result["charger_id"] = "afdc_" + result["ID"].astype(int).astype(str)
+    result["l1_ports"] = _number(result["EV Level1 EVSE Num"])
+    result["l2_ports"] = _number(result["EV Level2 EVSE Num"])
+    result["dc_fast_ports"] = _number(result["EV DC Fast Count"])
+    result["restricted_public"] = result["Restricted Access"].map(_bool_or_none)
+    connector_sets = result["EV Connector Types"].map(_connector_tokens)
+    result["has_ccs1"] = connector_sets.map(lambda values: "J1772COMBO" in values)
+    result["has_j1772"] = connector_sets.map(lambda values: "J1772" in values)
+    result["has_nacs"] = connector_sets.map(lambda values: "TESLA" in values)
+    result["has_chademo"] = connector_sets.map(lambda values: "CHADEMO" in values)
+    result["reference_charge_mode"] = np.select(
+        [
+            result["dc_fast_ports"] > 0,
+            result["l2_ports"] > 0,
+        ],
+        ["dc_fast", "ac_level2"],
+        default="unsupported_or_unresolved",
+    )
+    result["reference_vehicle_connector_compatibility"] = np.select(
+        [result["has_ccs1"], result["has_j1772"], result["has_nacs"]],
+        ["ccs1_present", "j1772_present", "nacs_only_or_present"],
+        default="unresolved",
+    )
+    maximum_class = result["Maximum Vehicle Class"].fillna("").astype(str).str.upper()
+    result["medium_duty_vehicle_class_status"] = np.select(
+        [maximum_class.isin(["MD", "HD"]), maximum_class.eq("LD")],
+        ["supported", "not_supported"],
+        default="unknown",
+    )
+    result["station_power_kw"] = np.nan
+    result["station_power_status"] = "not_reported_in_afdc_snapshot"
+    return result
+
+
+def _read_depots(
+    depot_candidates_path: Path,
+    boundary: Any,
+    city_slug: str,
+) -> gpd.GeoDataFrame:
+    frame = pd.read_csv(depot_candidates_path)
+    frame = frame.loc[frame["city_slug"].astype(str) == city_slug].copy()
+    if frame.empty:
+        raise ValueError(f"No depot candidates for {city_slug}")
+    required = {
+        "benchmark_depot_class",
+        "strict_candidate_eligible",
+        "optional_candidate_eligible",
+        "cle_candidate_eligible",
+    }
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(
+            "Depot candidates predate the strict/optional contract; missing columns: "
+            f"{sorted(missing)}"
+        )
+    points = gpd.GeoDataFrame(
+        frame,
+        geometry=gpd.points_from_xy(frame["longitude"], frame["latitude"]),
+        crs="EPSG:4326",
+    )
+    if not bool(points.geometry.covered_by(boundary).all()):
+        raise ValueError("A retained depot candidate falls outside the frozen service boundary")
+    return points
+
+
+def build_facility_layers(
+    *,
+    city_slug: str,
+    afdc_path: Path,
+    depot_candidates_path: Path,
+    depot_summary_path: Path,
+    boundary_path: Path,
+    graph_path: Path,
+    output_dir: Path,
+    area_crs: str,
+    max_road_access_m: float = 250.0,
+) -> dict[str, Any]:
+    """Build candidate facility layers; release eligibility remains evidence-gated."""
+
+    if output_dir.exists():
+        raise FileExistsError(f"Refusing to overwrite facility output: {output_dir}")
+    boundary_frame = gpd.read_file(boundary_path).to_crs("EPSG:4326")
+    boundary = boundary_frame.geometry.union_all()
+    depot_summary = json.loads(depot_summary_path.read_text(encoding="utf-8"))
+    if depot_summary.get("city_slug") != city_slug:
+        raise ValueError("Depot summary city_slug differs from requested city")
+    if depot_summary.get("source", {}).get("boundary_sha256") != sha256_file(boundary_path):
+        raise ValueError("Depot audit used a different service boundary")
+    if depot_summary.get("graph_gate", {}).get("graph_path") != str(graph_path.resolve()):
+        raise ValueError("Depot audit used a different operational graph")
+    recorded_depot_graph_sha = depot_summary.get("graph_gate", {}).get("graph_sha256")
+    if recorded_depot_graph_sha and recorded_depot_graph_sha != sha256_file(graph_path):
+        raise ValueError("Depot audit used a different operational graph hash")
+
+    edges = build_eligible_physical_edges(graph_path, area_crs)
+    chargers = _normalize_chargers(_filter_afdc_city(afdc_path, boundary, city_slug))
+    chargers["facility_anchor_id"] = chargers["charger_id"]
+    chargers = _anchor_points_to_edges(chargers, edges, area_crs)
+    chargers["road_access_distance_qa_flag"] = (
+        chargers["road_access_distance_m"] > max_road_access_m
+    )
+    chargers["road_anchor_eligible"] = True
+    chargers["charger_candidate_eligible"] = (
+        chargers["restricted_public"].ne(True)
+        & chargers["reference_charge_mode"].ne("unsupported_or_unresolved")
+    )
+    chargers["charger_release_eligible"] = False
+    chargers["release_blocker"] = np.select(
+        [
+            chargers["restricted_public"].eq(True),
+            chargers["reference_charge_mode"].eq("unsupported_or_unresolved"),
+            chargers["medium_duty_vehicle_class_status"].eq("not_supported"),
+        ],
+        [
+            "restricted_public_access",
+            "connector_unresolved",
+            "maximum_vehicle_class_light_duty",
+        ],
+        default="station_power_and_vehicle_compatibility_not_fully_verified",
+    )
+
+    depots = _read_depots(depot_candidates_path, boundary, city_slug)
+    depots["facility_anchor_id"] = depots["candidate_id"].astype(str)
+    depots = _anchor_points_to_edges(depots, edges, area_crs)
+    depots["road_access_distance_qa_flag"] = (
+        depots["road_access_distance_m"] > max_road_access_m
+    )
+    depots["road_anchor_eligible"] = True
+    depots["strict_depot_candidate_eligible"] = (
+        depots["strict_candidate_eligible"].astype(bool)
+        & depots["road_anchor_eligible"]
+    )
+    depots["optional_depot_candidate_eligible"] = (
+        depots["optional_candidate_eligible"].astype(bool)
+        & depots["road_anchor_eligible"]
+    )
+    depots["depot_candidate_eligible"] = (
+        depots["cle_candidate_eligible"].astype(bool)
+        & depots["road_anchor_eligible"]
+    )
+    depots["depot_release_eligible"] = False
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f"{city_slug}-facilities-", dir=output_dir.parent) as temp:
+        staged = Path(temp) / output_dir.name
+        staged.mkdir()
+        charger_path = staged / "chargers.parquet"
+        depot_path = staged / "depots.parquet"
+        chargers.to_parquet(charger_path, index=False)
+        depots.to_parquet(depot_path, index=False)
+        manifest = {
+            "schema": "evrptw_city_facility_layers_v2",
+            "status": "cle_build_candidates_not_release_eligible",
+            "generated_utc": datetime.now(UTC).isoformat(),
+            "city_slug": city_slug,
+            "inputs": {
+                "afdc": {"path": str(afdc_path.resolve()), "sha256": sha256_file(afdc_path)},
+                "depot_candidates": {
+                    "path": str(depot_candidates_path.resolve()),
+                    "sha256": sha256_file(depot_candidates_path),
+                },
+                "depot_summary": {
+                    "path": str(depot_summary_path.resolve()),
+                    "sha256": sha256_file(depot_summary_path),
+                },
+                "boundary": {
+                    "path": str(boundary_path.resolve()),
+                    "sha256": sha256_file(boundary_path),
+                },
+                "graph": {"path": str(graph_path.resolve()), "sha256": sha256_file(graph_path)},
+            },
+            "road_anchor": {
+                "method": "facility point to eligible operational physical edge projection",
+                "eligible_physical_edge_count": len(edges),
+                "distance_qa_reference_m": max_road_access_m,
+                "distance_policy": "retain all; flag the distance tail for coordinate/access review",
+                "projection_contract": "per-directed-edge offsets retained for exact active-facility edge splitting",
+                "connector_contract": "facility point to road projection is bidirectional with equal instance-assigned speed",
+            },
+            "charging": {
+                "inside_boundary_public_available_site_count": len(chargers),
+                "road_anchor_eligible_count": int(chargers["road_anchor_eligible"].sum()),
+                "road_access_distance_qa_flag_count": int(
+                    chargers["road_access_distance_qa_flag"].sum()
+                ),
+                "candidate_eligible_count": int(chargers["charger_candidate_eligible"].sum()),
+                "release_eligible_count": 0,
+                "ccs1_site_count": int(chargers["has_ccs1"].sum()),
+                "j1772_site_count": int(chargers["has_j1772"].sum()),
+                "restricted_public_site_count": int(chargers["restricted_public"].eq(True).sum()),
+                "power_policy": "AFDC snapshot has no station kW field; do not invent charge rates",
+            },
+            "depots": {
+                "retained_candidate_count": len(depots),
+                "road_access_distance_qa_flag_count": int(
+                    depots["road_access_distance_qa_flag"].sum()
+                ),
+                "candidate_eligible_count": int(depots["depot_candidate_eligible"].sum()),
+                "strict_candidate_eligible_count": int(
+                    depots["strict_depot_candidate_eligible"].sum()
+                ),
+                "optional_candidate_eligible_count": int(
+                    depots["optional_depot_candidate_eligible"].sum()
+                ),
+                "release_eligible_count": 0,
+                "release_policy": (
+                    "strict OSM candidates and optional warehouse proxies remain separate; "
+                    "manual/current last-mile function verification is required for release"
+                ),
+            },
+            "outputs": {
+                "chargers": "chargers.parquet",
+                "depots": "depots.parquet",
+            },
+        }
+        write_json(staged / "facility_manifest.json", manifest)
+        manifest["output_sha256"] = {
+            name: sha256_file(staged / relative)
+            for name, relative in manifest["outputs"].items()
+        }
+        write_json(staged / "facility_manifest.json", manifest)
+        staged.replace(output_dir)
+    return manifest

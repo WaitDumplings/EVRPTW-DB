@@ -19,7 +19,10 @@ EVRPTW_Dataset/*
 EVRPTW_Benchmark/results/*
 !EVRPTW_Benchmark/results/README.md
 !EVRPTW_Benchmark/results/.gitkeep
+EVRPTW_Dataset_Generator/analysis/
 EVRPTW_Dataset_Generator/analysis_outputs/
+EVRPTW_Dataset_Generator/data/
+EVRPTW_Dataset_Generator/work/
 
 # Large generated artifacts
 *.pkl
@@ -36,6 +39,7 @@ EVRPTW_Dataset_Generator/analysis_outputs/
 .DS_Store
 .vscode/
 .idea/
+
 # RL training outputs
 EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/checkpoints/
 EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/logs/

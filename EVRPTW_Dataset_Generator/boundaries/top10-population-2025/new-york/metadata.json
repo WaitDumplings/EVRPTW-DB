@@ -1,0 +1,60 @@
+{
+  "city_slug": "new-york",
+  "display_name": "New York City",
+  "query": "New York City, New York, USA",
+  "census_name": "New York city",
+  "census_place_geoid": "3651000",
+  "county_geoids": [
+    "36005",
+    "36047",
+    "36061",
+    "36081",
+    "36085"
+  ],
+  "boundary_source": "2025 U.S. Census TIGER/Line Places",
+  "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
+  "admin_boundary_semantics": "city proper only",
+  "land_boundary_semantics": "city proper minus official AREAWATER polygons",
+  "place_source_file": "place/tl_2025_36_place.zip",
+  "place_source_sha256": "4f667ef3a40f1569b58a37052e2464053436bd5e978b34ca333e8185a6a6808d",
+  "county_source_file": "county/tl_2025_us_county.zip",
+  "county_source_sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+  "land_mask_qa": {
+    "census_land_area_km2": 778.246264,
+    "census_water_area_km2": 445.342854,
+    "derived_admin_area_km2": 1222.8563566378643,
+    "derived_land_area_km2": 777.7817477496635,
+    "derived_removed_water_area_km2": 445.07460888820225,
+    "land_area_relative_error_vs_census": 0.0005968756572617839,
+    "water_area_relative_error_vs_census": 0.000602333930787065,
+    "land_mask_valid": true,
+    "land_mask_empty": false,
+    "areawater_sources": [
+      {
+        "county_geoid": "36005",
+        "file": "areawater/tl_2025_36005_areawater.zip",
+        "sha256": "d75cf18daf9eb86e72641ed4f40f067e6757cd40d696028b9dc006dd5cc7a99e"
+      },
+      {
+        "county_geoid": "36047",
+        "file": "areawater/tl_2025_36047_areawater.zip",
+        "sha256": "084b7538bbd196b86d6638790eaad18e14e541503a968b7736c9c3ecad4bd015"
+      },
+      {
+        "county_geoid": "36061",
+        "file": "areawater/tl_2025_36061_areawater.zip",
+        "sha256": "84f6cc65a48aac2363b8a5a971bf06044dc866a84a89ce94f09ae466eca12cd8"
+      },
+      {
+        "county_geoid": "36081",
+        "file": "areawater/tl_2025_36081_areawater.zip",
+        "sha256": "c368ff58f4b1846ecb84d8f2724b5a1c02afe18efdf36a5a72db9b76f3a59978"
+      },
+      {
+        "county_geoid": "36085",
+        "file": "areawater/tl_2025_36085_areawater.zip",
+        "sha256": "3ce61f7f7d9eb5d9ce74d63b94902b806796bef6ae8512eee3e87b42434dd2be"
+      }
+    ]
+  }
+}

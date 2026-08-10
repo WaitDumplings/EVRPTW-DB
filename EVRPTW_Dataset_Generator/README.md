@@ -1,135 +1,308 @@
-# EVRPTW-D Dataset Generator
+# EVRPTW City Logistics Environment Generator
 
-This package implements the EVRPTW-D two-stage generator. The current release profile is **AC-v1** (Amazon-Calibrated v1).
+This directory builds the static, city-level geospatial substrate used by
+EVRPTW-DB. We call that Stage-1 artifact a **City Logistics Environment
+(CLE)**. A CLE is not an EVRPTW instance: it contains the reusable physical
+environment from which many operating-day instances can later be sampled.
 
-1. A **service territory graph** represents a stable city/region/delivery-station territory. It stores a road graph, depot, latent customer pool, community structure, and charging-station candidate pool.
-2. An **operating-day instance** activates customers and charging stations from a territory, then samples demand, service time, time windows, and active EV travel data.
+The implementation is split into a country-independent core and a documented
+U.S. reference adapter. The adapter demonstrates one reproducible realization
+for ten U.S. cities; another country can provide different source adapters
+while preserving the canonical CLE schema.
 
-The benchmark framing is:
+## Stage boundary
 
-> We first sample a city/region-level service territory, then sample daily operating instances from that territory.
+| Stage 1: CLE (this package) | Stage 2: instance generation |
+| --- | --- |
+| Frozen service boundary and routing envelope | Active customer subset |
+| Directed OSM topology and real road geometry | Package count, volume, and demand |
+| Latent residential service locations and types | One time window per active location |
+| Candidate depots and public charging sites | Service time and vehicle/fleet policy |
+| Legal and reference running speed per directed edge | Weekday/weekend static speed realization |
+| Source hashes, QA flags, and release gates | Distance/time/path matrices and feasibility checks |
 
-Legacy code fields such as `mother_board_id` are retained for compatibility, but public manifests and documentation use service-territory terminology.
+Package count is intentionally absent from a CLE. `Cus100` means 100 distinct
+active physical service locations; one apartment location may later receive
+many packages and therefore have larger demand and service time.
 
-## Prepare AC-v1
+## U.S. reference cohort
+
+The frozen profile `configs/us_top10_cle_v1.json` contains city-proper service
+areas for New York City, Los Angeles, Chicago, Houston, Phoenix, Philadelphia,
+San Antonio, San Diego, Dallas, and Fort Worth. It does not silently replace a
+city with its metropolitan area.
+
+The included boundary assets are land-only service masks derived from 2025
+U.S. Census TIGER/Line Place and Area Hydrography data. Water is excluded from
+service-location placement. Real OSM roads outside the service boundary may be
+retained only as `transit_only` routing edges when needed for connectivity.
+
+## Install
+
+The recommended environment includes `osmium-tool`, which is required for
+reproducible extraction from frozen PBF files.
 
 ```bash
-conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_ac_benchmark_suite \
-  --train-territories 1024 \
-  --eval-territories 256 \
-  --num-instances 1000 \
-  --seed 20260525
+cd EVRPTW_Dataset_Generator
+conda env create -f environment.yml
+conda activate evrptw-cle
 ```
 
-This creates single-file pickle bundles:
+Alternatively, install Python dependencies with `pip install -e .`; install
+`osmium` separately through the operating system.
+
+## Required source layout
+
+Large source and generated files are not committed. Prepare this layout:
 
 ```text
-EVRPTW_Dataset/AC_v1/
-  train/service_territory_pool.pkl
-  eval/service_territory_pool.pkl
-  eval/AC_Tiny_5/instances.pkl
-  eval/AC_Small_15/instances.pkl
-  eval/AC_Medium_50/instances.pkl
-  eval/AC_Large_100/instances.pkl
-  eval/AC_XLarge_1000/instances.pkl
-  generation_timing.csv
-  dataset_manifest.json
+data/
+  sources/
+    geofabrik/
+      new-york-latest.osm.pbf
+      socal-latest.osm.pbf
+      illinois-latest.osm.pbf
+      texas-latest.osm.pbf
+      arizona-latest.osm.pbf
+      pennsylvania-latest.osm.pbf
+    microsoft-us-building-footprints/
+      NewYork.geojson
+      California.geojson
+      Illinois.geojson
+      Texas.geojson
+      Arizona.geojson
+      Pennsylvania.geojson
+    afdc/
+      afdc_us_public_available_electric.csv
+      afdc_us_public_available_electric_resolved.csv   # preferred, generated below
+    hpms-edge-matches/                                 # optional
+      san-diego.parquet
+      ...
 ```
 
-## Reusable Service-Territory Pools
+The six Microsoft state files are sufficient for this ten-city cohort. The
+building registry stores their expected file sizes and SHA-256 hashes. The
+files provide footprint geometry, not house/apartment labels; NSI supplies the
+residential occupancy and unit evidence.
 
-For repeated RL training runs, territory generation can be moved offline and reused across customer scales:
+### 1. Freeze OSM PBFs
 
 ```bash
-conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_region_pool \
-  --num-territories 1024 \
-  --latent-customer-pool-size 5000 \
-  --cs-candidate-pool-size 120 \
-  --seed 20260525
+python scripts/fetch_pbf_sources.py \
+  --preset configs/top10_us_cities_population_v1.json \
+  --manifest data/sources/geofabrik/source_manifest.json
 ```
 
-Default output:
+The preset contains the Geofabrik URLs and reuses four state/regional files
+across cities. Every build records file hashes and the PBF replication
+timestamp when available.
+
+### 2. Place Microsoft US Building Footprints
+
+Download the six state GeoJSON files from Microsoft USBuildingFootprints and
+place them under `data/sources/microsoft-us-building-footprints/` with the exact
+names shown above. Do not edit the files in place. If Microsoft publishes a new
+snapshot whose hash differs from `configs/top10_building_extraction_v1.json`,
+validate the schema and create a new registry version rather than silently
+changing the old one.
+
+### 3. Freeze and resolve AFDC charging sites
+
+Get a free NREL API key, then download the U.S. public, available electric-site
+snapshot:
+
+```bash
+export NREL_API_KEY=YOUR_KEY
+python scripts/download_afdc_snapshot.py
+```
+
+If a complete AFDC CSV export has already been frozen, normalize it with the
+same declared filters instead of downloading it again:
+
+```bash
+python scripts/filter_afdc_snapshot.py \
+  --input /path/to/alt_fuel_stations.csv \
+  --output data/sources/afdc/afdc_us_public_available_electric.csv
+```
+
+Extract exact-address OSM charging POIs from the same PBF snapshots and obtain
+address anchors from the public Census batch geocoder:
+
+```bash
+python scripts/extract_osm_charging_pois.py
+python scripts/geocode_afdc_addresses_census.py \
+  --afdc data/sources/afdc/afdc_us_public_available_electric.csv
+```
+
+Resolve coordinates without discarding provenance:
+
+```bash
+python scripts/resolve_afdc_coordinates.py \
+  --afdc data/sources/afdc/afdc_us_public_available_electric.csv \
+  --census-results data/sources/afdc/afdc_census_address_anchors.csv \
+  --osm-pois data/sources/osm/osm_charging_pois_top10.csv \
+  --output data/sources/afdc/afdc_us_public_available_electric_resolved.csv
+```
+
+Resolution precedence is: reviewed manual override, exact normalized OSM
+charging-POI address match, then raw AFDC coordinate. Census output is retained
+as an address-access anchor and QA comparison; it is not mislabeled as the
+exact charger location. An optional manual override CSV must contain
+`afdc_id,resolved_longitude,resolved_latitude,review_note`.
+
+### 4. Optional HPMS edge evidence
+
+The core does not hide raw HPMS-to-OSM conflation. A U.S. speed adapter may
+provide one normalized file per city with:
 
 ```text
-EVRPTW_Dataset/AC_v1/train/service_territory_pool.pkl
+edge_id,F_SYSTEM,SPEED_LIMIT,match_confidence
 ```
 
-Downstream trainers can pass this path as `territory_pool_path`. If the pool cannot be read or contains fewer territories than requested, training falls back to online generation.
+`edge_u,edge_v,edge_key` may replace `edge_id`. `SPEED_LIMIT` is in mph, and
+only `high`, `verified`, `accepted`, or numeric confidence at least 0.8 can
+affect the canonical layer. When this optional table is absent, the pipeline
+uses OSM `highway=*` for H/M/U classification and OSM `maxspeed` plus transparent
+within-city hierarchical imputation for legal speeds.
 
-## Documentation
+### 5. NSI
 
-- [Design rationale](docs/design_rationale.md) explains the two-stage service-territory / active-day model.
-- [Calibration guideline](docs/calibration_guideline.md) explains parameter meanings and how to calibrate the generator to a new real last-mile dataset.
-- [Amazon depot-day scale reference](docs/amazon_depot_day_scale.md) records observed station-territory and daily active-customer scales.
-- [Geo-AC-v1 geospatial profile](docs/geospatial_profile.md) documents county containers, source-file conventions, and depot catchment semantics.
-- [Geo-AC-v1 public data pipeline](docs/data_pipeline.md) documents the Census/ACS/OSM/AFDC ETL, API keys, optional subterritory slicing, and release layout.
+No manual NSI download is required. The build queries the public USACE NSI API
+in deterministic 5 km tiles, caches the raw compressed responses, and hashes
+them. Re-running from the frozen cache does not call the API again.
 
-## Stored Matrices
+## Preflight
 
-Service territories do not store active-day time windows or charging-aware shortest-time matrices. Each operating-day instance computes these after active customers and active charging stations are selected, so inactive charging stations cannot leak into instance travel times. By default, instance pickle files persist `distance_matrix_km` and `cs_time_to_depot_s`; raw travel-time, EV transition-time, and shortest-time matrices in seconds are computed during generation/audit but not saved unless enabled in `storage`.
-
-Amazon historical route size is used only as a proxy for active community demand scale. Amazon route count, actual route sequence, route duration, and route cost are never used as generated vehicle targets or solution priors.
-
-## Prepare Geo-AC-v1
-
-Geo-AC-v1 is the real-geography semi-synthetic profile. It uses county
-containers for public geospatial source data, optional subterritory slicing for
-large counties, road-frontage latent customers, and depot-centered road
-catchments for operating-day instances.
-
-The spatial layer comes from public data. Amazon-derived calibration is used
-only for daily operating attributes such as demand, service time, time windows,
-and activation rates; it does not determine customer locations.
-
-First prepare normalized public geodata CSVs:
+Run the read-only source and configuration gate before a long build:
 
 ```bash
-export CENSUS_API_KEY=...
-export NREL_API_KEY=...
-conda run -n maojie python EVRPTW_Dataset_Generator/prepare_public_geodata.py \
-  --city-config EVRPTW_Dataset_Generator/configs/geo_ac_v1_us10.yaml \
-  --output-root EVRPTW_Dataset/Geo_AC_v1/source_data \
-  --config-out EVRPTW_Dataset_Generator/configs/geo_ac_v1_us10.with_sources.yaml
+python scripts/preflight_cle_sources.py \
+  --profile configs/us_top10_cle_v1.json \
+  --output work/us-top10-v1/qa/preflight.json
 ```
 
-For the official NA-US-20 profile, split large county containers and generate
-road-frontage latent customers:
+Missing required sources, boundary/hash mismatches, incompatible AFDC columns,
+or a missing `osmium` executable fail the gate. Missing HPMS matches generate a
+warning because the documented OSM fallback remains valid.
+
+## Build all ten CLEs
+
+After preflight passes:
 
 ```bash
-conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_geospatial_subterritories \
-  --source-config EVRPTW_Dataset_Generator/configs/geo_ac_v1_us10.with_sources.yaml \
-  --slice-config EVRPTW_Dataset_Generator/configs/geo_ac_v1_na_us20_slices.yaml \
-  --output-root EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20 \
-  --config-out EVRPTW_Dataset_Generator/configs/geo_ac_v1_na_us20.with_sources.yaml
+bash scripts/build_top10_cle.sh
 ```
 
-Then generate service-territory pools and fixed evaluation operating-day
-instances from those CSV files:
+The runner is resumable and supports explicit stages:
 
 ```bash
-conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_geospatial_benchmark_suite \
-  --city-config EVRPTW_Dataset_Generator/configs/geo_ac_v1_na_us20.with_sources.yaml \
-  --output-root EVRPTW_Dataset/Geo_AC_v1/eval_standard_20 \
-  --require-real-sources \
-  --instances-per-scale 20
-
-conda run -n maojie python -m EVRPTW_Dataset_Generator.prepare_geo_ac_release_metadata \
-  --source-root EVRPTW_Dataset/Geo_AC_v1/source_data_na_us20 \
-  --eval-root EVRPTW_Dataset/Geo_AC_v1/eval_standard_20
+bash scripts/build_top10_cle.sh --stages roads buildings depots cles package index
+bash scripts/build_top10_cle.sh --cities san-diego --continue-on-error
 ```
 
-The official fixed evaluation split is `20 territories x 4 scales x 20
-instances = 1600` operating-day instances. The source data directory remains
-the reusable geospatial dataset; the eval directory is a fixed benchmark split.
+The default profile separates rebuildable work artifacts from portable dataset
+artifacts:
 
-The ETL writes standardized local CSV inputs for roads, customer occupancy
-seeds, public charging stations, and depot candidates. The downstream generator
-still supports a deterministic county-shaped scaffold for development, but
-publication runs should pass `--require-real-sources`.
+```text
+EVRPTW_Dataset_Generator/
+  data/sources/                 # frozen source inputs
+  work/us-top10-v1/             # roads, caches, intermediate layers, debug CLEs
+EVRPTW_Dataset/
+  CLE_v1/us_top10/
+    cle_index.{json,csv}
+    cities/<city>/              # self-contained portable CLE packages
+```
 
-To prepare a new North American county/city, copy
-`configs/template_new_city.yaml`, set the county FIPS and display metadata, run
-`prepare_public_geodata.py`, and then run the benchmark suite builder. If the
-county is very large or internally heterogeneous, create a slice config and run
-`prepare_geospatial_subterritories.py` as an optional step before generating
-instances.
+The `cles` stage assembles and technically verifies one debug CLE per city under
+`work/us-top10-v1/cles/`. The `package` stage copies the verified operational
+GraphML and road manifest into the CLE, removes machine-local runtime references,
+runs strict portability verification in a staging directory, and atomically
+promotes the result to `EVRPTW_Dataset/CLE_v1/us_top10/cities/`.
+
+`work/us-top10-v1/top10_cle_index.{json,csv}` reports technical work-artifact
+status. `EVRPTW_Dataset/CLE_v1/us_top10/cle_index.{json,csv}` reports strict
+portable-package status. A portable package may still have open scientific
+release gates; `portable_package_verified` and `release_eligible` are deliberately
+separate fields.
+
+An existing verified package is reused. The packager refuses to overwrite an
+existing invalid or stale package; use a new versioned release root after inputs
+or policies change.
+
+One package can be checked independently of all source and work directories:
+
+```bash
+python scripts/package_cle.py \
+  --destination-cle ../EVRPTW_Dataset/CLE_v1/us_top10/cities/san-diego \
+  --verify-only
+```
+
+## Build a road graph for another city
+
+The core road module can resolve an arbitrary qualified city name through OSM:
+
+```bash
+evrptw-cle build \
+  --city "Boston, Massachusetts, USA" \
+  --slug boston \
+  --output-root data/custom-cities
+```
+
+For a reproducible release, provide a frozen administrative boundary,
+land/service mask, and regional PBF with `--boundary-file`,
+`--query-mask-file`, and `--pbf-file`. A complete CLE for a city outside the
+U.S. ten-city registry additionally needs compatible building, residential,
+facility, and speed adapters described in `docs/PORTABILITY.md`.
+
+## Frozen policies that are easy to misread
+
+- Connectivity is measured against the city-proper road graph. If the largest
+  weak component covers less than 99% of city nodes or less than 99.5% of city
+  physical-road length, the routing envelope is tried at 1, 2, 5, 10, then 20
+  km. Only real OSM roads are added. Outside-city roads are `transit_only`.
+- Customer-to-road 200 m and facility-to-road 250 m values are QA references,
+  not deletion thresholds. All anchorable rows are retained and the distance
+  tail is flagged for review.
+- Depot Tier A is explicit dispatch/carrier-facility evidence. Tier B is a
+  warehouse/logistics proxy. Tier C is excluded. Building area is retained as
+  a continuous feature; 1,000 m2 is a sensitivity flag, not a hard truth rule.
+- NSI ordinary residential records (`RES1`, `RES2`, `RES3`) are grouped by a
+  shared NSI structure identifier and classified from residential-unit
+  evidence as `house`, `manufactured_home`, `small_apt`, `medium_apt`, or
+  `large_apt`. Microsoft polygons supply geometry. Nearby polygons are not
+  automatically merged into an apartment complex without independent site
+  evidence.
+- Customer, depot, and charger access is projected to the nearest eligible
+  physical road. The new connector is bidirectional and symmetric, while the
+  original OSM one-way topology is preserved.
+- Stage 1 stores legal speed and reference running speed, not time-dependent
+  traffic. Stage 2 will create one static directed weekday or weekend speed
+  realization per instance.
+
+Detailed contracts are in:
+
+- `docs/PIPELINE.md`
+- `docs/DATA_SOURCES.md`
+- `docs/OUTPUT_SCHEMA.md`
+- `docs/PORTABILITY.md`
+- `docs/LEGACY_STAGE2.md`
+
+## Tests
+
+```bash
+pytest
+python -m compileall -q src scripts tests
+```
+
+The unit suite tests connectivity, boundary and source gates, building
+extraction, NSI classification, geometry matching, directed access anchors,
+facility policies, AFDC coordinate resolution, speed semantics, assembly, and
+visualization.
+
+## Legacy Stage-2 compatibility
+
+`evrptw_hierarchy/`, `prepare_region_pool.py`,
+`prepare_ac_benchmark_suite.py`, and `instance_generate.py` are retained only
+because existing TERRAN experiments import them. They are not the new CLE
+pipeline and should not be used to describe the future real-road instance
+generator. See `docs/LEGACY_STAGE2.md`.

@@ -1,0 +1,131 @@
+{
+  "schema": "evrptw_customer_location_contract_v1",
+  "gate_id": "GATE_02_CUSTOMER_LOCATION_CONTRACT",
+  "preset_id": "top10_us_cities_population_v1",
+  "stage_semantics": {
+    "latent_service_location": "one fixed physical delivery stop in the City Logistics Environment",
+    "active_customer": "a latent service location activated by a Stage 2 instance",
+    "cus_n": "N distinct active physical service locations, not N packages, households, residents, or dwelling units"
+  },
+  "physical_location": {
+    "official_base": "Microsoft USBuildingFootprints polygon",
+    "attribute_source": "USACE National Structure Inventory 2026 Base",
+    "rule_development_city": "los-angeles",
+    "held_out_city_policy": "apply the frozen Los Angeles rule unchanged to the other nine cities",
+    "core_match_methods": {
+      "G1_containment": "NSI point covered by Microsoft footprint polygon",
+      "G2_near_area_consistent": "nearest Microsoft footprint within 10 m and footprint-area factor at most 4, subject to manual audit"
+    },
+    "unmatched_policy": "preserve in the audit universe but quarantine from the official core",
+    "minimum_city_unit_weighted_core_match_share": 0.95,
+    "minimum_type_unit_weighted_core_match_share": 0.90,
+    "grouping_key": "microsoft_building_id",
+    "stacked_nsi_policy": "retain source rows, merge one physical footprint, and sum nonduplicated residential-unit evidence"
+  },
+  "residential_scope": {
+    "included_nsi_occtype_prefixes": ["RES1", "RES2", "RES3"],
+    "excluded_nsi_occtype_prefixes": ["RES4", "RES5", "RES6"],
+    "mixed_use_policy": "retain with mixed_use_flag; residential unit evidence only",
+    "default_house_allowed": false
+  },
+  "units": {
+    "semantic_label": "modeled residential-unit point estimate, not verified dwelling count",
+    "positive_resunits_rule": "use summed nonduplicated positive NSI resunits",
+    "zero_resunits_rule": "use the conservative lower bound implied by NSI occtype and record the interval",
+    "bands": [
+      {"id": "unit_1", "lower": 1, "upper": 1},
+      {"id": "units_2_4", "lower": 2, "upper": 4},
+      {"id": "units_5_19", "lower": 5, "upper": 19},
+      {"id": "units_20_49", "lower": 20, "upper": 49},
+      {"id": "units_50_plus", "lower": 50, "upper": null}
+    ],
+    "service_location_types": {
+      "house": "one-unit ordinary residence excluding RES2",
+      "manufactured_home": "one-unit RES2 structure",
+      "small_apt": "2-4 modeled residential units",
+      "medium_apt": "5-19 modeled residential units",
+      "large_apt": "20 or more modeled residential units"
+    }
+  },
+  "evidence_tiers": {
+    "geometry": {
+      "G1_containment": "exact point-in-Microsoft-footprint containment",
+      "G2_near_area_consistent": "nearest footprint within 10 m and area factor at most 4",
+      "G0_quarantine": "unmatched, ambiguous, or failed geometry evidence"
+    },
+    "units": {
+      "U1_positive_resunits": "positive NSI resunits",
+      "U2_occtype_interval": "conservative NSI occupancy interval fallback"
+    },
+    "combined_core_values": ["G1_U1", "G1_U2", "G2_U1", "G2_U2"]
+  },
+  "road_access": {
+    "eligible_graph": "graph_operational; inside-city, non-transit-only delivery edges only",
+    "optional_terminal_sensitivity": {
+      "artifact": "graph_terminal_access.graphml",
+      "source": "the same frozen OSM PBF as graph_operational",
+      "release_role": "experimental appendix only; not required by Gate 2 v1 and never used to raise the official cover rate",
+      "semantics": "real OSM service/private-local ways retained only for sensitivity analysis; never eligible as through-route shortcuts",
+      "topological_connection_tolerance_m": 2,
+      "default_access_tiers": ["explicit_yes", "destination_or_customers", "permissive", "unspecified"],
+      "permit_required_tier": "retain for a separately reported delivery-permission sensitivity; excluded from the default profile",
+      "prohibited_policy": "access=no, motor_vehicle=no, or motorcar=no after tag-precedence resolution is excluded"
+    },
+    "anchor_precedence": [
+      "footprint_boundary_to_operational_edge_projection"
+    ],
+    "candidate_thresholds_m": [25, 50, 100, 200],
+    "selection_status": "pending_ten_city_footprint_access_audit",
+    "selected_threshold_m": null,
+    "selection_rule": {
+      "coverage": "choose the smallest candidate reaching at least 99% unit-weighted coverage in every city on graph_operational",
+      "minimum_city_unit_weighted_coverage": 0.99,
+      "type_coverage": "report every service-location type, but do not make small-type coverage a v1 hard gate",
+      "manual_audit": "inverse-probability-weighted plausible-access share must be at least 95% in every city and at least 90% in every service-location type; publish binomial uncertainty intervals",
+      "minimum_samples_per_city": 100,
+      "minimum_samples_per_city_type": 20,
+      "tail_sampling": "stratify by city, service-location type, anchor method, and distance band; oversample the selected-threshold band and rejected records"
+    },
+    "over_threshold_policy": "quarantine; never create a long synthetic driving edge",
+    "directionality": "split the matched directed operational edge at a virtual access point, preserve u/v/key and legal direction, and never add customer-customer edges",
+    "private_access_reporting": "optional appendix sensitivity only; never use private/service ways to make official v1 pass"
+  },
+  "required_location_columns": [
+    "latent_service_location_id",
+    "microsoft_building_id",
+    "geometry_source",
+    "geometry_match_method",
+    "geometry_match_distance_m",
+    "footprint_area_factor",
+    "geometry_evidence_tier",
+    "nsi_fd_ids",
+    "raw_nsi_occtypes",
+    "raw_nsi_resunits_sum",
+    "residential_units",
+    "residential_units_lower",
+    "residential_units_upper",
+    "units_evidence",
+    "unit_evidence_tier",
+    "residential_unit_band",
+    "service_location_type",
+    "type_evidence",
+    "mixed_use_flag",
+    "source_confidence_tier",
+    "geometry_core_eligible",
+    "road_anchor_method",
+    "physical_edge_id",
+    "directed_edge_refs",
+    "edge_u",
+    "edge_v",
+    "edge_key",
+    "road_access_distance_m",
+    "road_anchor_lon",
+    "road_anchor_lat",
+    "access_threshold_m",
+    "road_access_default_eligible",
+    "customer_release_eligible",
+    "quarantine_reason",
+    "active_customer",
+    "geometry"
+  ]
+}

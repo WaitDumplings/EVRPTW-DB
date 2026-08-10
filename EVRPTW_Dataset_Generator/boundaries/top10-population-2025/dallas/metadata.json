@@ -1,0 +1,60 @@
+{
+  "city_slug": "dallas",
+  "display_name": "Dallas",
+  "query": "Dallas, Texas, USA",
+  "census_name": "Dallas city",
+  "census_place_geoid": "4819000",
+  "county_geoids": [
+    "48085",
+    "48113",
+    "48121",
+    "48257",
+    "48397"
+  ],
+  "boundary_source": "2025 U.S. Census TIGER/Line Places",
+  "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
+  "admin_boundary_semantics": "city proper only",
+  "land_boundary_semantics": "city proper minus official AREAWATER polygons",
+  "place_source_file": "place/tl_2025_48_place.zip",
+  "place_source_sha256": "5a0c4d49641f69028ee9f5c343bf09936ec00a378e5e6393115b106bab935e13",
+  "county_source_file": "county/tl_2025_us_county.zip",
+  "county_source_sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+  "land_mask_qa": {
+    "census_land_area_km2": 879.780729,
+    "census_water_area_km2": 113.87075,
+    "derived_admin_area_km2": 993.9316795919335,
+    "derived_land_area_km2": 880.0093030714572,
+    "derived_removed_water_area_km2": 113.9223765204772,
+    "land_area_relative_error_vs_census": 0.0002598079997922605,
+    "water_area_relative_error_vs_census": 0.00045337824223697055,
+    "land_mask_valid": true,
+    "land_mask_empty": false,
+    "areawater_sources": [
+      {
+        "county_geoid": "48085",
+        "file": "areawater/tl_2025_48085_areawater.zip",
+        "sha256": "cc7d88c66203cf1c6e9d5845c820ae46a3ea24d29f169c20da3aefc22bf353d6"
+      },
+      {
+        "county_geoid": "48113",
+        "file": "areawater/tl_2025_48113_areawater.zip",
+        "sha256": "f3525d8f167b9296f240d2f57f82f00362361026dd54c3602170135421c3c00e"
+      },
+      {
+        "county_geoid": "48121",
+        "file": "areawater/tl_2025_48121_areawater.zip",
+        "sha256": "1f288fe437116ef3d04c30a556c44a976c327ef6fa92b5df1a06c42c6d42cd61"
+      },
+      {
+        "county_geoid": "48257",
+        "file": "areawater/tl_2025_48257_areawater.zip",
+        "sha256": "8f5b3cec0e61c1c857fc8cdb2af013fae06527d8b8c951554c13343e938944c1"
+      },
+      {
+        "county_geoid": "48397",
+        "file": "areawater/tl_2025_48397_areawater.zip",
+        "sha256": "1bfc571a93b809140f7a14f8ae635dc06eb848bf1f4ada6ef5ccc5aae85fbab9"
+      }
+    ]
+  }
+}
