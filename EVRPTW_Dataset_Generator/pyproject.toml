@@ -19,6 +19,7 @@ dependencies = [
   "pyarrow>=15,<22",
   "pyogrio>=0.9,<1",
   "requests>=2.31,<3",
+  "scipy>=1.12,<2",
   "shapely>=2.0,<3",
 ]
 
@@ -30,9 +31,10 @@ dev = [
 
 [project.scripts]
 evrptw-cle = "evrptw_cle.cli:main"
+evrptw-stage2 = "evrptw_stage2.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/evrptw_cle"]
+packages = ["src/evrptw_cle", "src/evrptw_stage2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

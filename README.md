@@ -20,12 +20,14 @@ A CLE freezes the static city-level substrate:
 It deliberately contains no active customer, package count, demand, service
 time, or realized time window.
 
-### Stage 2: EVRPTW instances
+### Stage 2: CLE-EVRPTW instances
 
-An instance will select active locations and facilities, sample package demand,
-service time, and one time window per active location, choose a vehicle/fleet
-policy, create one static directed weekday or weekend speed realization, and
-export shortest-distance plus fastest-time matrices and path references.
+An instance selects active locations and facilities, samples package demand,
+service time, and one time window per active location, chooses a vehicle/fleet
+policy, creates one static directed weekday or weekend speed realization, and
+exports distance-path and running-time-path matrices. Scale views reuse one
+parent matrix family and therefore do not copy the city graph or lower-scale
+matrices.
 
 This separation lets many instances reuse one large physical graph without
 copying it into every instance and prevents latent future information from
@@ -62,7 +64,7 @@ It integrates public/freely accessible sources with distinct roles:
 
 The result is best described as a **real-geography, public-data-integrated,
 semi-synthetic benchmark substrate**. Public data grounds topology, geometry,
-facility candidates, and statistical priors; Stage 2 will still generate
+facility candidates, and statistical priors; Stage 2 still generates
 operating-day demand and time windows. The project does not claim that every
 OSM warehouse is a verified Amazon depot, every public charger can serve a
 Rivian EDV, or every generated order is an observed delivery.
@@ -82,6 +84,12 @@ conda activate evrptw-cle
 bash scripts/build_top10_cle.sh
 ```
 
+The CLE-backed Stage-2 reference runner, its community split, and non-release
+San Diego vertical-slice commands are documented in the Generator README under
+**Stage 2: CLE to operating-day instances**. Official generation is deliberately
+blocked while the CLE scientific release gates and U.S. operations-profile
+calibration remain open.
+
 The build keeps raw sources, caches, and debug artifacts under
 `EVRPTW_Dataset_Generator/`, then packages one self-contained CLE per city under
 `EVRPTW_Dataset/CLE_v1/us_top10/`. The release-side verifier requires the
@@ -90,17 +98,29 @@ Large source files and generated GraphML/GeoParquet artifacts are intentionally
 excluded from ordinary Git history and should be distributed with versioned
 checksum manifests.
 
-## Current migration status
+## Current implementation status
 
-The new Generator implements Stage 1 and its U.S. reference adapter. The legacy
-`evrptw_hierarchy` Stage-2 code remains only because existing TERRAN utilities
-still import it. It is explicitly separated from the new CLE pipeline; the
-future CLE-to-instance generator will replace it after its sampling semantics
-and schemas are frozen.
+The new Generator implements both the Stage-1 CLE boundary and a separate
+`evrptw_stage2` package. Stage 2 now has a strict portable-CLE reader,
+official-versus-pilot gates, Census-block-group community partitioning,
+deterministic family/view plans, unit-aware customer activation, depot-aware
+catchments, nested charger selection independent of daily active-customer IDs,
+directed edge-level weekday/weekend road states, projected-edge
+routing, dual path matrix families, volume/package/service/time-window
+attributes, a sufficient feasibility gate, a consumer loader, and a structural
+verifier.
+
+This is currently a **non-release vertical slice**, not an official dataset.
+The ten existing CLE packages are technically portable but still declare open
+scientific release blockers, and the U.S. instance profile is labeled
+`development_calibration`. Both gates must pass before the runner accepts
+`--mode official`.
 
 ## Reproducibility and release policy
 
-- Every frozen input and generated layer is hash-addressed in manifests.
+- Routine research runs record versioned source/profile IDs, seeds, and manifest
+  references. A complete byte-level checksum audit is deferred to the final
+  release workflow.
 - Road extension uses real OSM roads only; outside-city roads are transit-only.
 - Customer/facility access-distance values are QA references, not arbitrary
   hard-deletion thresholds.

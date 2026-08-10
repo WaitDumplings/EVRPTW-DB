@@ -1,9 +1,14 @@
-# EVRPTW City Logistics Environment Generator
+# EVRPTW CLE and Instance Generator
 
-This directory builds the static, city-level geospatial substrate used by
-EVRPTW-DB. We call that Stage-1 artifact a **City Logistics Environment
-(CLE)**. A CLE is not an EVRPTW instance: it contains the reusable physical
-environment from which many operating-day instances can later be sampled.
+This directory contains two deliberately separate pipelines:
+
+1. **Stage 1** builds the static city-level **City Logistics Environment
+   (CLE)**.
+2. **Stage 2** consumes only a portable CLE package and creates deterministic
+   operating-day matrix families plus scale views.
+
+A CLE is not an EVRPTW instance. It contains the reusable physical environment;
+active orders and daily road conditions exist only in Stage 2.
 
 The implementation is split into a country-independent core and a documented
 U.S. reference adapter. The adapter demonstrates one reproducible realization
@@ -12,14 +17,14 @@ while preserving the canonical CLE schema.
 
 ## Stage boundary
 
-| Stage 1: CLE (this package) | Stage 2: instance generation |
+| Stage 1: CLE | Stage 2: instance generation |
 | --- | --- |
 | Frozen service boundary and routing envelope | Active customer subset |
 | Directed OSM topology and real road geometry | Package count, volume, and demand |
 | Latent residential service locations and types | One time window per active location |
 | Candidate depots and public charging sites | Service time and vehicle/fleet policy |
 | Legal and reference running speed per directed edge | Weekday/weekend static speed realization |
-| Source hashes, QA flags, and release gates | Distance/time/path matrices and feasibility checks |
+| Source manifests, QA flags, and release gates | Distance/time/energy matrices and feasibility checks |
 
 Package count is intentionally absent from a CLE. `Cus100` means 100 distinct
 active physical service locations; one apartment location may later receive
@@ -320,16 +325,294 @@ facility, and speed adapters described in `docs/PORTABILITY.md`.
   physical road. The new connector is bidirectional and symmetric, while the
   original OSM one-way topology is preserved.
 - Stage 1 stores legal speed and reference running speed, not time-dependent
-  traffic. Stage 2 will create one static directed weekday or weekend speed
+  traffic. Stage 2 creates one static directed weekday or weekend speed
   realization per instance.
 
-Detailed contracts are in:
+Detailed Stage-1 contracts are in:
 
 - `docs/PIPELINE.md`
 - `docs/DATA_SOURCES.md`
 - `docs/OUTPUT_SCHEMA.md`
 - `docs/PORTABILITY.md`
 - `docs/LEGACY_STAGE2.md`
+
+## Stage 2: CLE to operating-day instances
+
+The new CLE-backed implementation is `src/evrptw_stage2/`. It does not call or
+silently fall back to the legacy synthetic `evrptw_hierarchy` generator.
+
+### Current release status
+
+Two independent gates are enforced:
+
+- `official` requires every CLE manifest to have `release_eligible=true` and
+  uses only customer/depot/charger release-eligible rows.
+- `non_release_pilot` may use existing candidate/default eligibility rows, but
+  every plan, family, view, report, and warning is stamped as non-release.
+
+At the current repository snapshot, the ten portable CLEs pass technical and
+portability checks but still have scientific release blockers. The U.S.
+operations profile is also `development_calibration`. Therefore the commands
+below use `non_release_pilot`; the code refuses to relabel these artifacts as
+official data.
+
+### Stage-2 configuration files
+
+- `configs/cle_evrptw_stage2_v1.json` freezes cities, split tracks, scales,
+  seeds, the 08:00--24:00 horizon, 5:2 weekday/weekend ratio, volume units, and
+  the matrix-family/view contract.
+- `configs/us_reference_instance_profile_v1.json` is the replaceable U.S.
+  parameter adapter for activation, road-state variation, the Rivian reference
+  energy/charging model, packages, service time, and time windows.
+- `configs/us_census_block_groups_v1.json` maps the ten training cities plus
+  Jacksonville to seven public Census TIGER/Line block-group files.
+
+The protocol config and U.S. profile are separate on purpose. Another country
+can preserve the canonical CLE/instance schemas while supplying different
+building, charger, speed, community, and operations adapters.
+
+### 1. Download community boundaries
+
+The customer split uses complete Census block group plus road-SCC subgroups.
+Download all seven state archives once:
+
+```bash
+python scripts/fetch_census_block_groups.py \
+  --preset configs/us_census_block_groups_v1.json \
+  --output-dir data/sources/census_block_groups_2025
+```
+
+The research downloader records URL, vintage, byte count, and ZIP integrity.
+It intentionally does not run a full release checksum audit during routine
+pilot iteration.
+
+### 2. Preflight a portable CLE
+
+```bash
+evrptw-stage2 preflight \
+  --config configs/cle_evrptw_stage2_v1.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v1/us_top10 \
+  --mode non_release_pilot \
+  --cities san-diego
+```
+
+The reader rejects absolute or escaping manifest paths, unsupported schemas,
+unverified portable packages, missing speed fields, and insufficient eligible
+customer/depot/charger pools. Requesting `official` additionally enforces all
+scientific release gates.
+
+### 3. Freeze the 80/20 complete-community split
+
+```bash
+evrptw-stage2 build-customer-split \
+  --config configs/cle_evrptw_stage2_v1.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v1/us_top10 \
+  --mode non_release_pilot \
+  --city san-diego \
+  --block-groups data/sources/census_block_groups_2025/tl_2025_06_bg.zip \
+  --output-dir work/stage2-pilot-v1/customer_splits/san-diego
+```
+
+The assignment unit is a complete `Census block group x anchor SCC` community.
+No community can cross train and held-out pools. The deterministic allocator
+first constrains held-out service-location count to the requested 20%, then
+chooses among close candidates using house/apartment and unit-band balance.
+`customer_split_manifest.parquet` is the only location-pool ledger consumed by
+Stage 2.
+
+### 4. Build the family/view plan
+
+```bash
+evrptw-stage2 plan \
+  --config configs/cle_evrptw_stage2_v1.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v1/us_top10 \
+  --mode non_release_pilot \
+  --cities san-diego \
+  --tracks train validation test1_new_seed test2_heldout_locations unseen_scale_same_cities \
+  --pilot-families-per-city 2 \
+  --output-root work/stage2-pilot-v1/generation_plan
+```
+
+Official planning requires all ten training cities and Jacksonville. Pilot
+planning requires an explicit reduced family count, so an accidental pilot can
+never inherit official counts.
+
+| Scale | Role | Train views | Validation | Tests |
+| --- | --- | ---: | ---: | --- |
+| Cus50 / CS10 | compatibility and budgeted-MIP | 100,000 | 500 | Test-1: 500 |
+| Cus100 / CS20 | core | 50,000 | 500 | Test-1/2/3: 500 each |
+| Cus500 / CS50 | core | 10,000 | 500 | Test-1/2/3: 500 each |
+| Cus1000 / CS50 | core parent | 5,000 | 500 | Test-1/2/3: 500 each |
+| Cus2000 / CS50 | unseen-scale scalability | 0 | 0 | same-city test: 100 |
+
+Each training scale has exactly five million active-customer exposures. One
+Cus1000 parent permutation produces 20 disjoint Cus50 blocks, 10 Cus100 blocks,
+2 Cus500 blocks, and 1 Cus1000 view. CS10 and CS20 are prefixes of the selected
+CS50 order. Cus50 has its own consumer folders while retaining the same parent
+family ownership, so a matrix family never belongs to more than one split.
+
+Test meanings are fixed:
+
+- Test-1: new seeds, same cities, train location pool;
+- Test-2: ten cities, complete held-out communities only;
+- Test-3: Jacksonville, never used by the ten-city training cohort;
+- Cus2000: same-city unseen-scale test only.
+
+### 5. Materialize one matrix family
+
+```bash
+evrptw-stage2 materialize-family \
+  --config configs/cle_evrptw_stage2_v1.json \
+  --profile configs/us_reference_instance_profile_v1.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v1/us_top10 \
+  --mode non_release_pilot \
+  --plan-root work/stage2-pilot-v1/generation_plan \
+  --family-id <family_id> \
+  --customer-split work/stage2-pilot-v1/customer_splits/san-diego/customer_split_manifest.parquet \
+  --output-root work/stage2-pilot-v1/materialized
+```
+
+Family materialization performs these steps in order:
+
+1. deterministically samples weekday/weekend at 5:2;
+2. samples one eligible Tier-A/B depot so depot identity is not fixed;
+3. constructs an expandable depot catchment from the split-eligible latent
+   location pool;
+4. before daily customer activation, greedily orders 50 compatible CS
+   candidates against complete-community centroids in that catchment; this
+   does not use the day's exact customer IDs, and the first 10/20/50 form a
+   nested sequence;
+5. activates communities, then locations within them using a
+   residential-unit-aware order probability and depot-distance decay;
+6. realizes every directed road edge as
+   `min(legal speed, reference speed x hierarchical day/corridor/segment/direction factor)`;
+7. computes speed-sensitive Rivian reference energy per edge;
+8. uses each terminal's directed edge projection offset plus its bidirectional
+   connector, without converting OSM one-way edges to two-way;
+9. evaluates geometry-only straight/right/left/U-turn penalties and excludes
+   signal timing;
+10. builds six parent matrices: distance-path distance/time/energy and
+   running-time-path time/distance/energy;
+11. samples packages, volume demand, service time, and one customer time window;
+12. applies an unlimited-fleet single-customer constructive feasibility gate
+    with zero or more optional full-charge CS visits before and after service;
+    and
+13. writes lower-scale index views without runtime masks or copied matrices.
+
+The current U.S. development profile starts the depot catchment at 40 km and
+expands it in 10 km increments only when the eligible pool is too small. This
+is a configurable pilot parameter, not an asserted industry-standard radius;
+official calibration and sensitivity reporting remain part of the profile
+release gate.
+
+The running-time path currently minimizes directed edge running time and then
+evaluates turn penalties on that selected path. The manifest states
+`turn_penalty_in_running_time_path_optimization=false`; it must not be described
+as an exact turn-expanded shortest path until that optional model is added.
+
+AFDC station power is used when reported, otherwise the city/mode median is
+used. If an entire city/mode has no reported power, official generation fails.
+The current San Diego pilot has no reported power in its frozen AFDC table, so
+pilot mode visibly falls back to the Rivian AC 11 kW or DC 100 kW cap.
+
+Each view stores a compact feasibility certificate per customer: the selected
+route's service-arrival time, return duration, charging-visit count, inbound
+full-battery terminal, first post-customer charger, and customer-transition
+energy margin. It is a sufficient unlimited-fleet certificate, not an optimizer
+hint or an action mask.
+
+### 6. Verify and load a view
+
+```bash
+evrptw-stage2 verify-family \
+  --family-dir work/stage2-pilot-v1/materialized/families/<family_id>
+```
+
+Python consumers use:
+
+```python
+from evrptw_stage2.artifacts import load_materialized_view
+
+instance = load_materialized_view(
+    "work/stage2-pilot-v1/materialized/families/<family_id>",
+    "<view_id>",
+)
+```
+
+The loader slices parent matrices by `terminal_parent_indices.npy` and returns
+depot/customer/CS coordinates, package counts, volume demand, service time,
+time windows, CS power, the compact constructive feasibility certificate, and
+all six matrices. `runtime_mask` is always `None`; environments compute masks
+from state and stored time/energy data.
+
+### Batch runner
+
+The resumable runner joins all preceding steps. This command reproduces a
+small San Diego vertical slice and reuses already verified families:
+
+```bash
+python scripts/build_stage2_instances.py \
+  --config configs/cle_evrptw_stage2_v1.json \
+  --profile configs/us_reference_instance_profile_v1.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v1/us_top10 \
+  --block-group-preset configs/us_census_block_groups_v1.json \
+  --block-group-source-dir data/sources/census_block_groups_2025 \
+  --output-root work/stage2-pilot-v1 \
+  --mode non_release_pilot \
+  --cities san-diego \
+  --tracks train validation test1_new_seed test2_heldout_locations unseen_scale_same_cities \
+  --pilot-families-per-city 2 \
+  --max-families 1
+```
+
+The run report records materialization and verification wall time, matrix
+bytes, terminal-pair throughput, and process peak RSS. In the current
+non-release San Diego pilot, a newly materialized 1,051-terminal six-matrix
+family took 39.46 seconds, occupied 26,511,192 matrix bytes, and the runner's
+process peak RSS was 2,314,223,616 bytes. These are local pilot measurements,
+not a cross-platform performance guarantee.
+
+A failed family attempt never leaves a partial family directory. The runner
+writes `rejections/<family_id>.json` with the reason, attempt number/seed, and
+deterministic next-attempt seed. By default one new attempt is made per run;
+`--max-attempts-per-family` may explicitly allow more. An accepted replacement
+keeps the planned family/view IDs and records both the base seed and accepted
+attempt seed in its manifests.
+
+For an official run, omit pilot counts and city/track reductions and use
+`--mode official`. That command remains blocked until all eleven CLE inputs and
+the operations profile are release eligible.
+
+### Stage-2 artifact layout and storage
+
+```text
+CLE_EVRPTW_v1/
+  customer_splits/<city>/
+    customer_split_manifest.parquet
+    community_manifest.parquet
+    customer_split_report.json
+  generation_plan/
+    split_registry.json
+    core/.../{family_index,view_index}.parquet
+    compatibility_cus50/.../view_index.parquet
+    scalability_cus2000/.../{family_index,view_index}.parquet
+  materialized/families/<family_id>/
+    family_manifest.json
+    terminal_index.parquet
+    matrices/*.npy
+    views/<view_id>/
+      view_manifest.json
+      terminal_parent_indices.npy
+      customer_attributes.npz
+      charging_power_kw.npy
+```
+
+The official plan contains 7,100 parent families and 172,100 logical views.
+Six uncompressed float32 parent matrices are projected at 195,668,810,400 bytes
+(182.23 GiB); the corresponding three-matrix design is 97,834,405,200 bytes
+(91.12 GiB). `split_registry.json` records both numbers. Choosing whether all
+six matrices belong in the published training release is therefore an explicit
+benchmark-design decision, not a hidden implementation detail.
 
 ## Tests
 
@@ -340,13 +623,14 @@ python -m compileall -q src scripts tests
 
 The unit suite tests connectivity, boundary and source gates, building
 extraction, NSI classification, geometry matching, directed access anchors,
-facility policies, AFDC coordinate resolution, speed semantics, assembly, and
-visualization.
+facility policies, AFDC coordinate resolution, speed semantics, assembly,
+visualization, Stage-2 release gates, complete-community splits, family/view
+counts, edge-projection routing, view attributes, and feasibility.
 
 ## Legacy Stage-2 compatibility
 
 `evrptw_hierarchy/`, `prepare_region_pool.py`,
 `prepare_ac_benchmark_suite.py`, and `instance_generate.py` are retained only
 because existing TERRAN experiments import them. They are not the new CLE
-pipeline and should not be used to describe the future real-road instance
+pipeline and must not be used to describe the CLE-backed real-road instance
 generator. See `docs/LEGACY_STAGE2.md`.

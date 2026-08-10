@@ -8,7 +8,10 @@ The current profiles are:
 
 - **CLE-v1 / US Top 10**: portable city-level road, service-location,
   infrastructure, access, and reference-speed environments used as Stage-1
-  inputs to future instance generation.
+  inputs.
+- **CLE-EVRPTW-v1**: the new CLE-backed matrix-family/view layout. The current
+  generated artifact is a non-release San Diego vertical slice; official
+  train/validation/test generation remains gated.
 - **AC-v1**: Amazon-calibrated synthetic service-territory benchmark.
 - **Geo-AC-v1 / NA-US-20**: real-geography semi-synthetic benchmark. Public
   geospatial data determines road networks, communities, latent customer
@@ -43,6 +46,30 @@ Each city directory is a self-contained portable package. Its manifest records
 technical verification, portability verification, and scientific
 `release_eligible` status separately. Generator caches and intermediate layers
 are not part of this directory.
+
+## CLE-EVRPTW-v1 Layout
+
+```text
+EVRPTW_Dataset/
+  CLE_EVRPTW_v1/
+    customer_splits/<city>/
+    generation_plan/
+    materialized/families/<family_id>/
+      family_manifest.json
+      terminal_index.parquet
+      matrices/
+      views/<view_id>/
+```
+
+One family owns the parent terminal order and matrices. Cus50, Cus100, and
+Cus500 views store only indices into the Cus1000 parent; Cus2000 is a separate
+test-only parent. View artifacts store volume demand, package count, service
+time, one time window per active location, selected CS power, and a compact
+single-customer feasibility certificate with optional full-charge CS visits.
+They do not store dynamic masks or a copy of the city graph.
+
+Until all release gates close, development output belongs under
+`EVRPTW_Dataset_Generator/work/` and must retain `non_release_pilot=true`.
 
 ## AC-v1 Layout
 
