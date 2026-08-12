@@ -12,7 +12,10 @@
 | Address anchor | U.S. Census Geocoder | Optional but recommended | Address-level coordinate QA | Not exact EVSE geometry |
 | Road class/legal speed | FHWA HPMS | Optional | High-confidence functional class and missing legal-speed evidence | Requires explicit OSM conflation; local-road coverage is incomplete |
 | Commercial-vehicle speed prior | NREL Fleet DNA report NREL/TP-5400-65921 | Built-in versioned profile | Three Average Driving Speed profile means | Mode-level prior, not Amazon/Rivian edge observation |
-| Operating-day statistics | Amazon Last Mile Routing Research Challenge 2021 | Stage 2 only | Future time-window, demand, activation and service-time calibration | Does not determine CLE geography |
+| Day/road-type speed-factor structure | U.S. EPA MOVES | Stage 2 U.S. adapter | Restricted/unrestricted access and weekday/weekend calibration strata | Current numerical factor table is still development calibration |
+| Operating-day statistics | Amazon Last Mile Routing Research Challenge 2021 | Stage 2 only | Package volume, service-time and time-window aggregate calibration | Coordinates are obfuscated; no house/apartment label |
+| Reference EV specification | Rivian Commercial Van Delivery 700 Reference Guide | Stage 2 U.S. adapter | 18.5 m3 cargo, 100 kWh battery, 257 km range, 11/100 kW AC/DC caps | Reference configuration, not route telemetry |
+| Energy resource model | Classical EVRPTW literature | Stage 2 V1 contract | Constant `h = battery/range` and linear path-distance energy | Deliberately omits payload, weather, HVAC and speed dependence |
 
 Official/source entry points:
 
@@ -24,13 +27,25 @@ Official/source entry points:
 - AFDC API: <https://developer.nrel.gov/docs/transportation/alt-fuel-stations-v1/>
 - FHWA HPMS: <https://www.fhwa.dot.gov/policyinformation/hpms.cfm>
 - NREL report DOI: <https://doi.org/10.2172/1397153>
+- EPA MOVES algorithms: <https://www.epa.gov/moves/moves-algorithms>
+- Amazon ARCD paper: <https://doi.org/10.1287/trsc.2022.1173>
+- Rivian Commercial Van Reference Guide:
+  <https://assets.ctfassets.net/2md5qhoeajym/5FQcJgfAOa4vDYu9rWwEYO/2fa75339d6e533532ba08bf395275015/RCV-QuickRef-v17.pdf>
+- Schneider et al. EVRPTW formulation:
+  <https://doi.org/10.1287/trsc.2013.0490>
+
+Stage-2 model details and the distinction between observed specifications,
+calibrated priors, and benchmark assumptions are in
+[STAGE2_INSTANCE_MODEL.md](STAGE2_INSTANCE_MODEL.md).
 
 ## Provenance rules
 
 1. Raw source files are immutable within a profile version.
-2. Every local file used by a build has a SHA-256 hash in a manifest.
-3. API responses are cached, hashed, and reused. A later live response is a new
-   source snapshot, not an in-place update.
+2. Routine research builds record versioned source/profile IDs and source
+   references. A complete SHA-256 audit is required for the final release
+   package, not for every exploratory run.
+3. API responses are cached and reused. A later live response is a new source
+   snapshot, not an in-place update; final-release caches are hashed.
 4. Native fields are preserved beside canonical fields. Examples include OSM
    `highway`, HPMS `F_SYSTEM`, AFDC connector text, and NSI `occtype`.
 5. Automatic coordinate resolution never deletes raw coordinates.

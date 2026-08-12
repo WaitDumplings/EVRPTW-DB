@@ -4,13 +4,14 @@ Benchmark solvers are organized by method family.
 
 ```text
 Exact/Gurobi_Solver
-MetaHeuristics/Greedy_Solver
 MetaHeuristics/VNS_TS_Solver
 MetaHeuristics/ALNS_Solver
 Reinforcement_Learning/TERRAN
 ```
 
-Each solver should eventually expose a common interface:
+Exact and metaheuristic runners consume the CLE-backed Stage-2
+`view_index.parquet` plus its `materialized/families` store. They expose a
+common solver interface:
 
 ```python
 solve(instance, config) -> solution

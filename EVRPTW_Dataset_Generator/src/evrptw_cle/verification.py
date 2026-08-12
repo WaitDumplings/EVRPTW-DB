@@ -69,12 +69,16 @@ def verify_city_output(city_dir: Path) -> dict[str, Any]:
                     "operational_directed_edge_count"
                 ):
                     errors.append("operational graph edge count differs from manifest")
-        if operational_summary.get("city_node_coverage", 0.0) < operational_summary.get(
+        if operational_summary.get(
+            "coverage_gate_city_node_coverage",
+            operational_summary.get("city_node_coverage", 0.0),
+        ) < operational_summary.get(
             "min_city_node_coverage", 1.0
         ):
             errors.append("operational city-node coverage gate failed")
         if operational_summary.get(
-            "city_physical_road_length_coverage", 0.0
+            "coverage_gate_city_physical_road_length_coverage",
+            operational_summary.get("city_physical_road_length_coverage", 0.0),
         ) < operational_summary.get("min_city_physical_road_length_coverage", 1.0):
             errors.append("operational city-road-length coverage gate failed")
     return {"passed": not errors, "errors": errors, "city_dir": str(city_dir)}

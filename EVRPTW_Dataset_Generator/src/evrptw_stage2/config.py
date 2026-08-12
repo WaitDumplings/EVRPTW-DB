@@ -84,13 +84,13 @@ class Stage2Config:
             errors.append("V1 matrix path policy must be the frozen distance-shortest policy")
         if (
             self.running_time_path_policy
-            != "directed_shortest_edge_running_time_then_turn_evaluated_v1"
+            != "directed_turn_aware_shortest_running_time_v2"
         ):
             errors.append("V1 running-time path policy does not match the frozen adapter")
-        if self.matrix_bundle_id != "dual_path_six_matrix_v1":
-            errors.append("V1 matrix bundle must be dual_path_six_matrix_v1")
-        if self.stored_parent_matrix_count != 6:
-            errors.append("V1 dual-path matrix families must contain six parent matrices")
+        if self.matrix_bundle_id != "dual_path_four_matrix_v2":
+            errors.append("V1 matrix bundle must be dual_path_four_matrix_v2")
+        if self.stored_parent_matrix_count != 4:
+            errors.append("V1 dual-path matrix families must contain four parent matrices")
         expected = {
             "cus50": (50, 10, 100_000, 500),
             "cus100": (100, 20, 50_000, 500),
@@ -124,8 +124,8 @@ class Stage2Config:
             errors.append("V1 validation must use 500 parent families")
         if self.core_test_parent_family_count != 500:
             errors.append("Each V1 core test track must use 500 parent families")
-        if self.scalability_parent_family_count != 100:
-            errors.append("V1 Cus2000 scalability test must use 100 parent families")
+        if self.scalability_parent_family_count != 500:
+            errors.append("V1 Cus2000 scalability test must use 500 parent families")
         if self.vehicle_dc_cap_kw != 100.0 or self.vehicle_ac_l2_cap_kw != 11.0:
             errors.append("V1 reference charge caps must be DC 100 kW and AC L2 11 kW")
         if errors:

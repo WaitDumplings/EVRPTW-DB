@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from tqdm import tqdm
 import numpy as np
 
@@ -184,7 +185,11 @@ class ALNS_Solver:
                 "Q": instance["env"]["battery_capacity"],
                 "C": instance["env"]["loading_capacity"],
                 "r": instance["env"]["consumption_per_distance"],
-                "g": 1.0 / instance["env"]["charging_speed"],
+                "g": (
+                    0.0
+                    if math.isinf(float(instance["env"]["charging_speed"]))
+                    else 1.0 / float(instance["env"]["charging_speed"])
+                ),
                 "v": instance["env"]["speed"],
             }
 
@@ -235,6 +240,33 @@ class ALNS_Solver:
                 )
         else:
             self.time_matrix = self.dist_matrix / max(1e-12, self.v)
+
+        if format == "tensor" and "energy_matrix_kwh" in instance:
+            self.energy_matrix = np.asarray(instance["energy_matrix_kwh"], dtype=float)
+            expected_shape = (len(self.nodes), len(self.nodes))
+            if self.energy_matrix.shape != expected_shape:
+                raise ValueError(
+                    f"energy_matrix_kwh shape {self.energy_matrix.shape} does not match node shape {expected_shape}"
+                )
+        else:
+            self.energy_matrix = self.dist_matrix * self.r
+
+        self.station_charge_minutes_per_kwh: Dict[int, float] = {}
+        if format == "tensor":
+            power = np.asarray(instance.get("charging_power_kw", []), dtype=float)
+            efficiency = float(instance.get("charging_efficiency", 1.0))
+            if power.shape != (self.n_stations,):
+                raise ValueError(
+                    f"charging_power_kw shape {power.shape} does not match {(self.n_stations,)}"
+                )
+            if not 0.0 < efficiency <= 1.0:
+                raise ValueError("charging_efficiency must be in (0, 1]")
+            if np.any(~np.isfinite(power)) or np.any(power <= 0.0):
+                raise ValueError("charging_power_kw must contain finite positive values")
+            self.station_charge_minutes_per_kwh = {
+                node: 60.0 / (efficiency * float(power[offset]))
+                for offset, node in enumerate(self.station_indices)
+            }
 
         # ------------------------------------------------------------------
         # Parameters
@@ -356,6 +388,7 @@ class ALNS_Solver:
         self.best_routes: List[List[int]] = []
         self.global_value: float = float("inf")
         self.visited: List[bool] = [False] * self.n_customers
+        self.terminated_by_time_limit = False
 
         if checkpoint is not None:
             self.load_checkpoint(checkpoint)
@@ -444,6 +477,8 @@ class ALNS_Solver:
         initial_routes: Optional[List[List[int]]] = None,
         delta_iters: Optional[int] = None,
         resume: bool = False,
+        time_limit_s: Optional[float] = None,
+        incumbent_callback: Optional[Callable[[float, float, List[List[int]]], None]] = None,
     ):
         """
         Three modes:
@@ -451,6 +486,23 @@ class ALNS_Solver:
         2) warm start:       resume=False, initial_routes=...
         3) checkpoint resume: resume=True
         """
+
+        solve_start = time.perf_counter()
+        deadline = (
+            None
+            if time_limit_s is None
+            else solve_start + max(0.0, float(time_limit_s))
+        )
+        self.terminated_by_time_limit = False
+
+        def report_incumbent() -> None:
+            if incumbent_callback is None or not np.isfinite(self.global_value):
+                return
+            incumbent_callback(
+                time.perf_counter() - solve_start,
+                float(self.global_value),
+                [list(route) for route in self.best_routes],
+            )
 
         # ------------------------------------------------------------
         # Build / restore starting search state
@@ -482,6 +534,7 @@ class ALNS_Solver:
             self.global_value = self.objective_value(current)
             self.temperature = self._initial_temperature(self.global_value)
             self.cur_iter = 1
+            report_incumbent()
 
         else:
             current = self._construct_initial_solution()
@@ -500,6 +553,7 @@ class ALNS_Solver:
             self.global_value = self.objective_value(current)
             self.temperature = self._initial_temperature(self.global_value)
             self.cur_iter = 1
+            report_incumbent()
 
         # ------------------------------------------------------------
         # Decide how far to run this time
@@ -520,6 +574,9 @@ class ALNS_Solver:
         route_removal_burst = 0
 
         for it in (range(start_iter, target_iter + 1)):
+            if deadline is not None and time.perf_counter() >= deadline:
+                self.terminated_by_time_limit = True
+                break
             reward = self.r4
             accepted = False
 
@@ -580,6 +637,7 @@ class ALNS_Solver:
                 if current_distance + 1e-9 < self.global_value:
                     self.global_value = current_distance
                     self.best_routes = [list(r) for r in current]
+                    report_incumbent()
 
             self.temperature *= self.cooling_rate
 
@@ -596,6 +654,10 @@ class ALNS_Solver:
             # keep checkpoint state updated every iteration
             self.current_routes = [list(r) for r in current]
             self.cur_iter = it + 1
+
+            if deadline is not None and time.perf_counter() >= deadline:
+                self.terminated_by_time_limit = True
+                break
 
         print(
             f"Initial value: {initial_value}, iter {start_iter}->{target_iter}, best value: {self.global_value}",
@@ -749,7 +811,8 @@ class ALNS_Solver:
 
             if j in self.station_indices:
                 recharge_amount = self.Q - battery
-                time = start + recharge_amount * self.g
+                minutes_per_kwh = self.station_charge_minutes_per_kwh.get(j, self.g)
+                time = start + recharge_amount * minutes_per_kwh
                 battery = self.Q
             elif j == 0:
                 time = start
@@ -1754,7 +1817,7 @@ class ALNS_Solver:
         return val
 
     def _energy(self, i: int, j: int) -> float:
-        return float(self.dist_matrix[i, j]) * self.r
+        return float(self.energy_matrix[i, j])
 
     def _travel_time(self, i: int, j: int) -> float:
         return float(self.time_matrix[i, j])

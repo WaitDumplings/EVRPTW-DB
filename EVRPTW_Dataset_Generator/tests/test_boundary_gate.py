@@ -81,7 +81,7 @@ def _build_fixture(tmp_path: Path, *, land_outside: bool = False) -> tuple[Path,
     _write_json(
         boundary_root / "manifest.json",
         {
-            "preset_id": "top10_us_cities_population_v1",
+            "preset_id": "us_11city_population_v1",
             "boundary_source": "2025 U.S. Census TIGER/Line Places",
             "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
             "semantics": "admin boundary is city proper; land boundary is admin minus AREAWATER",
@@ -92,7 +92,7 @@ def _build_fixture(tmp_path: Path, *, land_outside: bool = False) -> tuple[Path,
     _write_json(
         preset_path,
         {
-            "preset_id": "top10_us_cities_population_v1",
+            "preset_id": "us_11city_population_v1",
             "selection_semantics": "Frozen city proper, not metro area.",
             "boundary_vintage": "2025 U.S. Census TIGER/Line Places and Area Hydrography",
             "cities": [

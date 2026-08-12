@@ -308,7 +308,7 @@ def _resolve_charging_power(
     *,
     city_chargers: pd.DataFrame | None = None,
     profile: Mapping[str, Any],
-    non_release_pilot: bool,
+    generation_mode: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     result = chargers.copy()
     charging = profile["charging"]
@@ -332,9 +332,9 @@ def _resolve_charging_power(
         elif mode in mode_medians and pd.notna(mode_medians[mode]):
             resolved.append(min(float(mode_medians[mode]), cap))
             sources.append("city_mode_median_capped_by_vehicle")
-        elif non_release_pilot:
+        elif generation_mode in {"research", "non_release_pilot"}:
             resolved.append(cap)
-            sources.append("non_release_pilot_vehicle_mode_cap_fallback")
+            sources.append(f"{generation_mode}_vehicle_mode_cap_fallback")
         else:
             raise ValueError(
                 f"No reported or city-mode median station power is available for {mode}; "
@@ -345,9 +345,10 @@ def _resolve_charging_power(
     return result, {
         "reported_power_count": int(sum(source.startswith("reported") for source in sources)),
         "city_mode_median_count": int(sum(source.startswith("city_mode") for source in sources)),
-        "pilot_vehicle_cap_fallback_count": int(
-            sum(source.startswith("non_release") for source in sources)
+        "vehicle_mode_cap_fallback_count": int(
+            sum(source.endswith("vehicle_mode_cap_fallback") for source in sources)
         ),
+        "generation_mode": generation_mode,
         "city_mode_reported_power_medians_kw": {
             str(key): float(value) for key, value in mode_medians.items() if pd.notna(value)
         },
@@ -484,7 +485,7 @@ def select_family_terminals(
         selected_chargers,
         city_chargers=chargers,
         profile=profile,
-        non_release_pilot=cle.non_release_pilot,
+        generation_mode=cle.mode,
     )
     selected_customers, customer_metadata = _select_customer_rows(
         catchment_customers,

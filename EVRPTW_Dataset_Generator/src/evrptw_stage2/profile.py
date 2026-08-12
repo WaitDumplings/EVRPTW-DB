@@ -20,11 +20,13 @@ def load_reference_profile(path: str | Path, *, official: bool = False) -> dict[
     if (int(weights["weekday_weight"]), int(weights["weekend_weight"])) != (5, 2):
         raise ValueError("The V1 U.S. profile must use the frozen weekday/weekend ratio 5:2")
     energy = payload["energy"]
-    shares = sum(
-        float(energy[key]) for key in ("rolling_share", "aerodynamic_share", "auxiliary_share")
-    )
-    if abs(shares - 1.0) > 1e-9:
-        raise ValueError("Energy-model shares must sum to one")
+    battery = float(energy["battery_capacity_kwh"])
+    range_km = float(energy["nominal_range_km"])
+    specific = float(energy["specific_energy_consumption_kwh_per_km"])
+    if abs(specific - battery / range_km) > 1e-9:
+        raise ValueError("Linear energy coefficient must equal battery_capacity / nominal_range")
+    if payload["vehicle"]["cargo_capacity_cm3"] != 18_500_000.0:
+        raise ValueError("The Delivery 700 reference cargo capacity must be 18.5 m3")
     charging = payload["charging"]
     if float(charging["dc_vehicle_cap_kw"]) != 100.0:
         raise ValueError("The V1 Rivian reference DC charging cap must be 100 kW")

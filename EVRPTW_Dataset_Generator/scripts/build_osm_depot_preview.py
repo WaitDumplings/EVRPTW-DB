@@ -866,7 +866,7 @@ def main() -> None:
     parser.add_argument("--city-slug", default="los-angeles")
     parser.add_argument("--city-label")
     parser.add_argument(
-        "--boundary-root", type=Path, default=Path("boundaries/top10-population-2025")
+        "--boundary-root", type=Path, default=Path("boundaries/us-11city-2025")
     )
     parser.add_argument("--city-root", type=Path, default=Path("data/cities"))
     parser.add_argument(
@@ -935,6 +935,13 @@ def main() -> None:
     anchored, graph, graph_summary = _anchor_candidates(
         candidates, graph_path, args.max_road_snap_m, city_slug
     )
+
+    # Recheck the final point representation after the projected road-anchoring
+    # round trip.  For polygons touching a complex land boundary, recomputing a
+    # representative point after CRS transforms can place it just outside even
+    # though the pre-anchor representative point passed the boundary filter.
+    boundary_geometry = boundary.geometry.union_all()
+    anchored = anchored.loc[anchored.geometry.covered_by(boundary_geometry)].copy()
 
     point_output = anchored.copy()
     point_output[OUTPUT_COLUMNS].to_csv(

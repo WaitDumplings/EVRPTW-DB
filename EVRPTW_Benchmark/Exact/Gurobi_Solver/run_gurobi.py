@@ -13,50 +13,60 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
+sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Dataset_Generator" / "src"))
 
-from evrptw_core.io import iter_instances, save_solution
+from evrptw_core.io import save_solution
 from evrptw_core.schema import EVRPTWSolution, solution_route_sequence
 from evrptw_core.validation import validate_instance_structure
-from gurobi_solver import GurobiEVRPTWSolver, GurobiSolverConfig
+from gurobi_solver import (
+    STANDARD_BENCHMARK_CHECKPOINTS_S,
+    GurobiEVRPTWSolver,
+    GurobiSolverConfig,
+)
+from stage2_adapter import (
+    Stage2ViewTask,
+    load_stage2_instance,
+    missing_family_directories,
+    read_stage2_tasks,
+)
 
 
 DEFAULT_EXACT_TIME_LIMIT_S = 7200.0
 
 SUMMARY_FIELDNAMES = [
-    "instance_id", "file", "status", "status_name", "feasible", "objective_distance_km",
+    "instance_id", "file", "family_id", "city_slug", "split_id", "track_id",
+    "scale_id", "day_type", "status", "status_name", "feasible", "objective_distance_km",
+    "benchmark_status", "benchmark_completed", "has_incumbent",
     "vehicle_count", "runtime_s", "first_feasible_time_s", "mip_gap", "best_bound",
     "routes_json", "route_sequence_json", "solution_path", "time_trace_path",
     "tie_break_applied", "stage1_best_distance_km", "distance_tolerance",
     "travel_time_matrix_source", "energy_matrix_source",
     "travel_time_asymmetry_max_s", "energy_asymmetry_max_kwh",
+    "charging_time_model", "charging_power_min_kw", "charging_power_max_kw",
+    "route_validation_passed", "charging_visit_count", "total_charging_time_s",
     "errors", "traceback",
 ]
 
 TIME_TRACE_FIELDNAMES = [
     "instance_id", "file", "checkpoint_s", "elapsed_s", "reached_checkpoint", "status",
+    "benchmark_status",
     "has_incumbent", "first_feasible_time_s", "objective_distance_km", "best_bound", "mip_gap",
     "vehicle_count", "routes_json", "route_sequence_json", "checkpoint_solution_path", "source", "errors",
+    "route_validation_passed", "route_validation_json",
+    "diagnostic_objective_distance_km", "diagnostic_routes_json",
 ]
+
+TERMINAL_BENCHMARK_STATUSES = {
+    "COMPLETED_OPTIMAL",
+    "COMPLETED_WITH_INCUMBENT",
+    "NO_FEASIBLE_SOLUTION",
+}
 
 REFERENCE_FIELDNAMES = [
     "instance_key", "split", "scale", "instance_id", "region_id", "status", "objective",
     "is_certified_optimal", "lower_bound", "optimality_gap", "runtime_sec", "solver_name",
     "solver_version", "time_limit_sec", "solution_path", "notes",
 ]
-
-
-def discover_instance_files(dataset_path: Path) -> list[Path]:
-    if dataset_path.is_file():
-        return [dataset_path]
-
-    direct = dataset_path / "instances.pkl"
-    if direct.exists():
-        return [direct]
-
-    search_root = dataset_path / "instances" if (dataset_path / "instances").exists() else dataset_path
-    paths = set(search_root.glob("**/instances.pkl"))
-    paths.update(search_root.glob("**/instance_*.pkl"))
-    return sorted(paths)
 
 
 def parse_checkpoints(raw: str) -> tuple[float, ...]:
@@ -93,8 +103,17 @@ def resolve_time_schedule(
     requested_time_limit_s: float | None,
 ) -> tuple[tuple[float, ...], float]:
     if not requested_checkpoints_s:
-        time_limit_s = float(requested_time_limit_s) if requested_time_limit_s is not None else DEFAULT_EXACT_TIME_LIMIT_S
-        return (time_limit_s,), time_limit_s
+        if requested_time_limit_s is None:
+            return STANDARD_BENCHMARK_CHECKPOINTS_S, DEFAULT_EXACT_TIME_LIMIT_S
+        time_limit_s = float(requested_time_limit_s)
+        checkpoints_s = tuple(
+            checkpoint_s
+            for checkpoint_s in STANDARD_BENCHMARK_CHECKPOINTS_S
+            if checkpoint_s <= time_limit_s
+        )
+        if not checkpoints_s or checkpoints_s[-1] != time_limit_s:
+            checkpoints_s = (*checkpoints_s, time_limit_s)
+        return checkpoints_s, time_limit_s
 
     last_checkpoint_s = max(requested_checkpoints_s)
     if requested_time_limit_s is None:
@@ -113,36 +132,20 @@ def checkpoint_label(checkpoint_s: float | int | None) -> str:
     return f"{value:g}s".replace(".", "p")
 
 
-def scale_for_instance(instance: Any) -> str:
-    return f"Cus{int(instance.num_customers)}"
-
-
-def instance_index(instance_id: str) -> int | None:
-    try:
-        return int(str(instance_id).rsplit("_", 1)[1])
-    except (IndexError, ValueError):
-        return None
-
-
 def infer_split(dataset_path: Path) -> str:
     for part in reversed(dataset_path.parts):
-        if part in {"train", "val", "eval"}:
+        if part in {"train", "val", "test", "eval"}:
             return part
     return "eval"
 
 
-def instance_info(instance: Any, split: str) -> dict[str, str]:
-    scale = scale_for_instance(instance)
-    metadata = instance.metadata or {}
-    instance_key = metadata.get("reference_solution_key") or metadata.get("instance_key")
-    if not instance_key:
-        instance_key = f"{split}/{scale}/{instance.instance_id}"
+def stage2_task_info(task: Stage2ViewTask) -> dict[str, str]:
     return {
-        "instance_key": str(instance_key),
-        "split": split,
-        "scale": scale,
-        "instance_id": str(instance.instance_id),
-        "region_id": str(instance.region_id),
+        "instance_key": f"{task.consumer_cohort_id}/{task.view_id}",
+        "split": task.split_id,
+        "scale": task.scale_label,
+        "instance_id": task.view_id,
+        "region_id": task.city_slug,
     }
 
 
@@ -177,6 +180,8 @@ def write_checkpoint_solution(
             "best_bound": snapshot.get("best_bound"),
             "mip_gap": snapshot.get("mip_gap"),
             "solver_status": snapshot.get("solver_status"),
+            "benchmark_status": snapshot.get("benchmark_status"),
+            "route_validation": snapshot.get("route_validation"),
             "source": snapshot.get("source"),
         },
     )
@@ -207,6 +212,7 @@ def append_time_rows(
             "elapsed_s": snapshot.get("elapsed_s"),
             "reached_checkpoint": snapshot.get("reached_checkpoint"),
             "status": snapshot.get("solver_status"),
+            "benchmark_status": snapshot.get("benchmark_status"),
             "has_incumbent": snapshot.get("has_incumbent"),
             "first_feasible_time_s": first_feasible_time_s,
             "objective_distance_km": snapshot.get("objective_distance_km"),
@@ -218,6 +224,19 @@ def append_time_rows(
             "checkpoint_solution_path": checkpoint_solution_path,
             "source": snapshot.get("source"),
             "errors": "",
+            "route_validation_passed": snapshot.get(
+                "route_validation_passed"
+            ),
+            "route_validation_json": json.dumps(
+                snapshot.get("route_validation"),
+                sort_keys=True,
+            ),
+            "diagnostic_objective_distance_km": snapshot.get(
+                "diagnostic_objective_distance_km"
+            ),
+            "diagnostic_routes_json": json.dumps(
+                snapshot.get("diagnostic_routes", [])
+            ),
         })
 
 
@@ -237,6 +256,7 @@ def append_error_time_rows(
             "elapsed_s": "",
             "reached_checkpoint": False,
             "status": status,
+            "benchmark_status": status,
             "has_incumbent": False,
             "first_feasible_time_s": "",
             "objective_distance_km": "",
@@ -248,16 +268,30 @@ def append_error_time_rows(
             "checkpoint_solution_path": "",
             "source": "error",
             "errors": error,
+            "route_validation_passed": "",
+            "route_validation_json": "",
+            "diagnostic_objective_distance_km": "",
+            "diagnostic_routes_json": "[]",
         })
 
 
 def invalid_summary_row(instance: Any, instance_file: Path, errors: str) -> dict[str, Any]:
+    metadata = instance.metadata or {}
     return {
         "instance_id": instance.instance_id,
         "file": str(instance_file),
+        "family_id": metadata.get("family_id", instance.mother_board_id),
+        "city_slug": metadata.get("city_slug", instance.region_id),
+        "split_id": metadata.get("split_id", ""),
+        "track_id": metadata.get("track_id", ""),
+        "scale_id": metadata.get("scale_id", f"cus{instance.num_customers}"),
+        "day_type": instance.day_type,
         "status": "INVALID_INSTANCE",
         "status_name": "INVALID_INSTANCE",
         "feasible": False,
+        "benchmark_status": "INVALID_INSTANCE",
+        "benchmark_completed": False,
+        "has_incumbent": False,
         "objective_distance_km": "",
         "vehicle_count": "",
         "runtime_s": "",
@@ -275,6 +309,12 @@ def invalid_summary_row(instance: Any, instance_file: Path, errors: str) -> dict
         "energy_matrix_source": "",
         "travel_time_asymmetry_max_s": "",
         "energy_asymmetry_max_kwh": "",
+        "charging_time_model": "",
+        "charging_power_min_kw": "",
+        "charging_power_max_kw": "",
+        "route_validation_passed": "",
+        "charging_visit_count": "",
+        "total_charging_time_s": "",
         "errors": errors,
         "traceback": "",
     }
@@ -289,9 +329,18 @@ def error_summary_row(
     return {
         "instance_id": instance_id,
         "file": str(instance_file),
+        "family_id": "",
+        "city_slug": "",
+        "split_id": "",
+        "track_id": "",
+        "scale_id": "",
+        "day_type": "",
         "status": "ERROR",
         "status_name": "ERROR",
         "feasible": False,
+        "benchmark_status": "ERROR",
+        "benchmark_completed": False,
+        "has_incumbent": False,
         "objective_distance_km": "",
         "vehicle_count": "",
         "runtime_s": "",
@@ -309,18 +358,35 @@ def error_summary_row(
         "energy_matrix_source": "",
         "travel_time_asymmetry_max_s": "",
         "energy_asymmetry_max_kwh": "",
+        "charging_time_model": "",
+        "charging_power_min_kw": "",
+        "charging_power_max_kw": "",
+        "route_validation_passed": "",
+        "charging_visit_count": "",
+        "total_charging_time_s": "",
         "errors": error,
         "traceback": traceback_text,
     }
 
 
 def solved_summary_row(instance: Any, instance_file: Path, solution: EVRPTWSolution) -> dict[str, Any]:
+    metadata = instance.metadata or {}
+    route_validation = solution.metadata.get("route_validation") or {}
     return {
         "instance_id": instance.instance_id,
         "file": str(instance_file),
+        "family_id": metadata.get("family_id", instance.mother_board_id),
+        "city_slug": metadata.get("city_slug", instance.region_id),
+        "split_id": metadata.get("split_id", ""),
+        "track_id": metadata.get("track_id", ""),
+        "scale_id": metadata.get("scale_id", f"cus{instance.num_customers}"),
+        "day_type": instance.day_type,
         "status": solution.metadata.get("gurobi_status"),
         "status_name": solution.metadata.get("gurobi_status_name"),
         "feasible": solution.feasible,
+        "benchmark_status": solution.metadata.get("benchmark_status"),
+        "benchmark_completed": solution.metadata.get("benchmark_completed"),
+        "has_incumbent": solution.metadata.get("has_incumbent"),
         "objective_distance_km": solution.objective_distance_km,
         "vehicle_count": solution.vehicle_count,
         "runtime_s": solution.runtime_s,
@@ -338,21 +404,28 @@ def solved_summary_row(instance: Any, instance_file: Path, solution: EVRPTWSolut
         "energy_matrix_source": solution.metadata.get("energy_matrix_source"),
         "travel_time_asymmetry_max_s": solution.metadata.get("travel_time_asymmetry_max_s"),
         "energy_asymmetry_max_kwh": solution.metadata.get("energy_asymmetry_max_kwh"),
+        "charging_time_model": solution.metadata.get("charging_time_model"),
+        "charging_power_min_kw": solution.metadata.get("charging_power_min_kw"),
+        "charging_power_max_kw": solution.metadata.get("charging_power_max_kw"),
+        "route_validation_passed": route_validation.get("passed"),
+        "charging_visit_count": route_validation.get("charging_visit_count"),
+        "total_charging_time_s": route_validation.get("total_charging_time_s"),
         "errors": json.dumps(solution.violations),
         "traceback": "",
     }
 
 
 def solve_instance_task(
-    instance: Any,
+    task: Stage2ViewTask,
     solver_config: GurobiSolverConfig,
     instance_file_raw: str,
     checkpoints_s: tuple[float, ...],
     save_traceback: bool,
 ) -> dict[str, Any]:
     instance_file = Path(instance_file_raw)
-    instance_id = instance.instance_id
+    instance_id = task.instance_id
     try:
+        instance = load_stage2_instance(task)
         validation = validate_instance_structure(instance)
         if not validation.success:
             errors = json.dumps(validation.errors)
@@ -503,6 +576,31 @@ def read_csv_rows(path: Path) -> list[dict[str, Any]]:
         return list(csv.DictReader(f))
 
 
+def is_terminal_summary_row(row: dict[str, Any]) -> bool:
+    """Return whether --skip_completed should retain this completed attempt."""
+
+    benchmark_status = str(row.get("benchmark_status") or "")
+    solver_status = str(row.get("status_name") or row.get("status") or "")
+    if benchmark_status in TERMINAL_BENCHMARK_STATUSES:
+        return True
+    if benchmark_status == "UNFINISHED_NO_INCUMBENT":
+        # A full budget with no incumbent is a terminal benchmark observation;
+        # an interruption is resumable and must not be skipped.
+        return solver_status == "TIME_LIMIT"
+    if benchmark_status:
+        return False
+
+    # Backward-compatible handling for summaries written before the explicit
+    # benchmark_status column existed.
+    return solver_status in {
+        "OPTIMAL",
+        "TIME_LIMIT",
+        "INFEASIBLE",
+        "INF_OR_UNBD",
+        "UNBOUNDED",
+    }
+
+
 def write_csv_atomic(
     path: Path,
     rows: list[dict[str, Any]],
@@ -544,24 +642,44 @@ def checkpoint_sort_value(row: dict[str, Any]) -> float:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Run the exact Gurobi EVRP-TW-D solver on pickle instances.")
-    parser.add_argument("--dataset_path", required=True, help="Dataset root or one instance pickle file.")
-    parser.add_argument("--save_path", required=True, help="Directory for benchmark summaries and solution pickles.")
-    parser.add_argument("--time_limit_s", type=float, default=None, help="Max solve time in seconds. Defaults to max checkpoint, or 7200 when checkpoints are empty.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the exact Gurobi EVRP-TW-D solver on a CLE-backed Stage-2 "
+            "view index (directly generated or reconstructed from release IDs)."
+        )
+    )
+    parser.add_argument(
+        "--dataset_path",
+        required=True,
+        help=(
+            "Stage-2 view_index.parquet or a directory containing canonical "
+            "view indices."
+        ),
+    )
+    parser.add_argument(
+        "--family_root",
+        default="",
+        help=(
+            "Stage-2 materialized/families directory. It is inferred when "
+            "the view index is inside the canonical Instances_v1 tree."
+        ),
+    )
+    parser.add_argument("--save_path", required=True, help="Directory for benchmark summaries and route snapshots.")
+    parser.add_argument("--time_limit_s", type=float, default=None, help="Max solve time in seconds. Default: 7200.")
     parser.add_argument("--mip_gap", type=float, default=0.0)
-    parser.add_argument("--cs_copies", type=int, default=3, help="Number of dummy copies per active charging station. Default: 3.")
+    parser.add_argument("--cs_copies", type=int, default=2, help="Number of dummy copies per active charging station. Default: 2.")
     parser.add_argument("--output_flag", type=int, default=0)
     parser.add_argument("--threads", type=int, default=None, help="Optional Gurobi thread limit per model. Defaults to 1 when --workers > 1.")
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel worker processes. Default: 1.")
     parser.add_argument("--limit", type=int, default=None, help="Optional total instance limit after scale filtering.")
-    parser.add_argument("--start_index", type=int, default=None, help="Optional inclusive lower bound for the numeric instance id suffix.")
-    parser.add_argument("--end_index", type=int, default=None, help="Optional exclusive upper bound for the numeric instance id suffix.")
+    parser.add_argument("--start_index", type=int, default=None, help="Inclusive stable Stage-2 view-index row position.")
+    parser.add_argument("--end_index", type=int, default=None, help="Exclusive stable Stage-2 view-index row position.")
     parser.add_argument("--scales", default="", help="Optional comma-separated scale filter, e.g. Cus5,Cus15.")
     parser.add_argument("--skip_completed", action="store_true", help="Skip instances already present in gurobi_summary.csv.")
     parser.add_argument("--reference_save_path", default="", help="Optional reference_solutions root for split/Cus*/solutions.csv and routes/*.json.")
-    parser.add_argument("--reference_split", default="", help="Reference split name. Defaults to train/val/eval inferred from dataset_path.")
-    parser.add_argument("--checkpoints_s", default="", help="Comma-separated seconds for incumbent snapshots, e.g. 60,300,900.")
-    parser.add_argument("--tie_break_vehicle_count", action=argparse.BooleanOptionalAction, default=True, help="Within optimal distance tolerance, minimize vehicle count. Default: true.")
+    parser.add_argument("--reference_split", default="", help="Reference split name. Defaults to the Stage-2 index split.")
+    parser.add_argument("--checkpoints_s", default="", help="Comma-separated seconds for incumbent snapshots. Default: 60,300,900,3600,7200.")
+    parser.add_argument("--tie_break_vehicle_count", action=argparse.BooleanOptionalAction, default=False, help="Optional secondary vehicle-count solve after distance optimality. Disabled by default for anytime benchmarking.")
     parser.add_argument("--distance_tolerance_abs", type=float, default=1e-6)
     parser.add_argument("--distance_tolerance_rel", type=float, default=1e-8)
     parser.add_argument("--save_traceback", action="store_true", help="Store Python tracebacks in the summary CSV.")
@@ -582,6 +700,8 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(f"--end_index must be non-negative, got {args.end_index}")
     if args.start_index is not None and args.end_index is not None and args.start_index >= args.end_index:
         raise ValueError(f"--start_index must be less than --end_index, got {args.start_index} >= {args.end_index}")
+    if args.cs_copies < 1:
+        raise ValueError(f"--cs_copies must be at least 1, got {args.cs_copies}")
 
     print(
         f"Exact benchmark schedule: time_limit_s={time_limit_s:g}, "
@@ -599,7 +719,6 @@ def main(argv: list[str] | None = None) -> None:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     reference_root = Path(args.reference_save_path) if args.reference_save_path else None
-    reference_split = args.reference_split.strip() or infer_split(dataset_path)
     solver_version = gurobi_version_string()
 
     solver_config = GurobiSolverConfig(
@@ -614,39 +733,67 @@ def main(argv: list[str] | None = None) -> None:
         threads=threads,
     )
 
-    instance_files = discover_instance_files(dataset_path)
     existing_summary_rows = read_csv_rows(summary_path)
     completed_ids = {
         str(row.get("instance_id", ""))
         for row in existing_summary_rows
-        if str(row.get("status_name") or row.get("status") or "") not in {"", "ERROR", "INVALID_INSTANCE"}
+        if is_terminal_summary_row(row)
     }
     records: list[tuple[Path, Any]] = []
     skipped_completed_count = 0
     skipped_range_count = 0
-    for instance_file in instance_files:
-        for instance in iter_instances(instance_file):
-            if limit is not None and len(records) >= limit:
-                break
-            if scale_filter and scale_for_instance(instance) not in scale_filter:
-                continue
-            idx = instance_index(instance.instance_id)
-            if args.start_index is not None and (idx is None or idx < args.start_index):
-                skipped_range_count += 1
-                continue
-            if args.end_index is not None and (idx is None or idx >= args.end_index):
-                skipped_range_count += 1
-                continue
-            if args.skip_completed and instance.instance_id in completed_ids:
-                skipped_completed_count += 1
-                continue
-            records.append((instance_file, instance))
+    stage2_tasks = read_stage2_tasks(
+        dataset_path,
+        family_root=args.family_root or None,
+    )
+    if not stage2_tasks:
+        raise ValueError(
+            "No Stage-2 view_index.parquet was found. Exact benchmarks only "
+            "accept the canonical CLE-backed Stage-2 layout; run the dataset "
+            "generator or the CLE+ID reconstruction workflow first."
+        )
+    input_file_count = len({task.index_path for task in stage2_tasks})
+    for task in stage2_tasks:
         if limit is not None and len(records) >= limit:
             break
+        if scale_filter and task.scale_label not in scale_filter:
+            continue
+        idx = task.row_position
+        if args.start_index is not None and idx < args.start_index:
+            skipped_range_count += 1
+            continue
+        if args.end_index is not None and idx >= args.end_index:
+            skipped_range_count += 1
+            continue
+        if args.skip_completed and task.instance_id in completed_ids:
+            skipped_completed_count += 1
+            continue
+        records.append((Path(task.index_path), task))
+    missing = missing_family_directories(record for _, record in records)
+    if missing:
+        preview = "\n".join(str(path) for path in missing[:10])
+        suffix = "" if len(missing) <= 10 else f"\n... and {len(missing) - 10} more"
+        raise FileNotFoundError(
+            "Selected Stage-2 views reference missing family directories:\n"
+            f"{preview}{suffix}"
+        )
 
+    stage2_splits = {
+        record.split_id
+        for _, record in records
+    }
+    reference_split = (
+        args.reference_split.strip()
+        or (next(iter(stage2_splits)) if len(stage2_splits) == 1 else infer_split(dataset_path))
+    )
+    if reference_root is not None and len(stage2_splits) > 1 and not args.reference_split.strip():
+        raise ValueError(
+            "A reference-solution run must target one Stage-2 split or pass "
+            "--reference_split explicitly"
+        )
     instance_infos = {
-        instance.instance_id: instance_info(instance, reference_split)
-        for _, instance in records
+        record.instance_id: stage2_task_info(record)
+        for _, record in records
     }
     range_label = "all"
     if args.start_index is not None or args.end_index is not None:
@@ -654,7 +801,7 @@ def main(argv: list[str] | None = None) -> None:
         end_label = "" if args.end_index is None else str(args.end_index)
         range_label = f"[{start_label}, {end_label})"
     print(
-        f"Loaded {len(records)} instances from {len(instance_files)} bundle/file(s). "
+        f"Selected {len(records)} Stage-2 instances from {input_file_count} view-index file(s). "
         f"index_range={range_label} skipped_range={skipped_range_count} "
         f"skipped_completed={skipped_completed_count}"
     )

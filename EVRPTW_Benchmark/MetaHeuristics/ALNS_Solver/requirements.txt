@@ -1,2 +1,5 @@
 numpy>=2.2,<2.3
 tqdm
+pandas
+pyarrow
+pytest

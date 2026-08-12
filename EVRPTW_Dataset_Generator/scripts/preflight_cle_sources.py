@@ -14,7 +14,7 @@ from evrptw_cle.util import write_json
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--profile", type=Path, default=Path("configs/us_top10_cle_v1.json")
+        "--profile", type=Path, default=Path("configs/us_11city_cle_v1.json")
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

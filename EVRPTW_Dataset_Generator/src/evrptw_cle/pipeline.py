@@ -44,6 +44,7 @@ class BuildOptions:
     routing_buffer_ladder_km: tuple[float, ...] = (0.0, 1.0, 2.0, 5.0, 10.0, 20.0)
     min_retained_node_coverage: float = 0.99
     min_retained_road_length_coverage: float = 0.995
+    auto_skip_component_node_threshold: int = 100
     micro_component_node_threshold: int = 10
     micro_component_length_km_threshold: float = 1.0
 
@@ -59,6 +60,7 @@ def _validate_options(options: BuildOptions) -> None:
         buffer_ladder_km=options.routing_buffer_ladder_km,
         min_node_coverage=options.min_retained_node_coverage,
         min_road_length_coverage=options.min_retained_road_length_coverage,
+        auto_skip_component_node_threshold=options.auto_skip_component_node_threshold,
         micro_component_node_threshold=options.micro_component_node_threshold,
         micro_component_length_km_threshold=options.micro_component_length_km_threshold,
     ).validate()
@@ -315,6 +317,11 @@ def build_city(options: BuildOptions) -> dict[str, Any]:
                         buffer_ladder_km=available_ladder,
                         min_node_coverage=options.min_retained_node_coverage,
                         min_road_length_coverage=(options.min_retained_road_length_coverage),
+                        auto_skip_component_node_threshold=(
+                            options.auto_skip_component_node_threshold
+                            if attempt_index == len(extraction_attempts_m) - 1
+                            else 1
+                        ),
                         micro_component_node_threshold=(options.micro_component_node_threshold),
                         micro_component_length_km_threshold=(
                             options.micro_component_length_km_threshold

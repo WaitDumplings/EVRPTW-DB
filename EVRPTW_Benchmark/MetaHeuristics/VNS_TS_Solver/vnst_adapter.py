@@ -6,6 +6,11 @@ from typing import Any
 import numpy as np
 
 from evrptw_core.schema import EVRPTWInstance, merge_route_sequences
+from benchmark_common import (
+    charging_profile,
+    running_time_energy_matrix_kwh,
+    running_time_matrix_s,
+)
 
 
 Customer = namedtuple("Customer", ["id", "type", "x", "y", "demand", "ready", "due", "service"])
@@ -31,11 +36,13 @@ class VNSTInstance:
             "fuel_cap": None,
             "load_cap": None,
             "consump_rate": None,
-            "charge_rate": None,
             "velocity": None,
         }
         self.dist_matrix = None
+        self.time_matrix = None
+        self.energy_matrix = None
         self.terminal_order = []
+        self.station_charging_power_kw = {}
 
 
 def to_vnst_instance(instance: EVRPTWInstance) -> VNSTInstance:
@@ -97,8 +104,7 @@ def to_vnst_instance(instance: EVRPTWInstance) -> VNSTInstance:
         )
 
     battery_capacity = float(instance.vehicle.get("battery_capacity_kwh", 100.0))
-    full_charge_time_s = float(instance.vehicle.get("full_charge_time_s", 0.0))
-    charge_rate = battery_capacity / full_charge_time_s if full_charge_time_s > 0 else float("inf")
+    charging_power_kw, charging_efficiency, charging_power_source = charging_profile(instance)
     effective_speed_kmh = float(
         instance.speed_profile.get("effective_speed_kmh")
         or instance.vehicle.get("design_speed_kmh")
@@ -109,7 +115,8 @@ def to_vnst_instance(instance: EVRPTWInstance) -> VNSTInstance:
         "fuel_cap": battery_capacity,
         "load_cap": float(instance.vehicle.get("cargo_capacity_cm3", np.inf)),
         "consump_rate": float(instance.vehicle.get("consumption_kwh_per_km", 0.404)),
-        "charge_rate": charge_rate,
+        "charging_efficiency": charging_efficiency,
+        "charging_power_source": charging_power_source,
         "velocity": effective_speed_kmh / 3600.0,
     }
 
@@ -119,6 +126,12 @@ def to_vnst_instance(instance: EVRPTWInstance) -> VNSTInstance:
     order = [0] + station_ids + customer_ids
     out.terminal_order = order
     out.dist_matrix = canonical_distance[np.ix_(order, order)]
+    out.time_matrix = running_time_matrix_s(instance)[np.ix_(order, order)]
+    out.energy_matrix = running_time_energy_matrix_kwh(instance)[np.ix_(order, order)]
+    out.station_charging_power_kw = {
+        int(instance.num_customers + station_offset + 1): float(power)
+        for station_offset, power in enumerate(charging_power_kw)
+    }
     return out
 
 

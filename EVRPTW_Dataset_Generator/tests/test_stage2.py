@@ -18,6 +18,7 @@ from evrptw_stage2.orders import FULL_CS_TO_DEPOT_CACHE_CONTRACT, build_view_att
 from evrptw_stage2.planning import build_generation_plan, materialization_attempt_inputs
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.reader import CLEEligibilityError, load_portable_cle
+from evrptw_stage2.road_state import build_family_road_state
 from evrptw_stage2.routing import PhysicalRoadNetwork
 from evrptw_stage2.selection import _community_reference_points, _select_charger_rows
 
@@ -33,7 +34,9 @@ def _write_fake_cle(root: Path, *, release_eligible: bool = False) -> Path:
     locations = gpd.GeoDataFrame(
         {
             "latent_service_location_id": [f"loc-{index}" for index in range(100)],
-            "service_location_type": ["house" if index % 2 else "small_apt" for index in range(100)],
+            "service_location_type": [
+                "house" if index % 2 else "small_apt" for index in range(100)
+            ],
             "residential_unit_band": ["1" if index % 2 else "2-4" for index in range(100)],
             "residential_units": [1 if index % 2 else 3 for index in range(100)],
             "location_lon": [(index // 10) * 0.02 + 0.005 for index in range(100)],
@@ -98,7 +101,82 @@ def test_stage2_config_freezes_exposure_and_scale_contract() -> None:
     for scale_id in ("cus50", "cus100", "cus500", "cus1000"):
         scale = config.scale(scale_id)
         assert scale.customers * scale.train_views == 5_000_000
-    assert config.scale("cus2000").test_instances == {"unseen_scale_same_cities": 100}
+    assert config.scale("cus2000").test_instances == {"unseen_scale_same_cities": 500}
+
+
+def test_stage2_road_state_uses_moves_road_type_factor_without_edge_noise() -> None:
+    profile = load_reference_profile(
+        Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+    )
+    directed = pd.DataFrame(
+        {
+            "edge_u": ["a", "b", "c"],
+            "edge_v": ["b", "c", "d"],
+            "edge_key": ["0", "0", "0"],
+            "edge_id": ["a:b:0", "b:c:0", "c:d:0"],
+            "physical_segment_id": ["ab", "bc", "cd"],
+            "length_m": [100.0, 100.0, 100.0],
+            "operating_mode": ["H", "M", "U"],
+            "legal_speed_kph": [100.0, 70.0, 45.0],
+            "reference_speed_kph": [80.0, 50.0, 30.0],
+        }
+    )
+    state, report = build_family_road_state(
+        directed,
+        day_type="weekday",
+        road_state_seed=123,
+        profile=profile,
+    )
+    assert state.loc[1, "road_state_factor"] == pytest.approx(state.loc[2, "road_state_factor"])
+    assert set(state["moves_road_type"]) == {
+        "urban_restricted_access",
+        "urban_unrestricted_access",
+    }
+    assert "edge_energy_kwh" not in state
+    assert report["additional_random_edge_factors"] is False
+
+
+def test_stage2_road_state_replays_stored_baselines_without_rng() -> None:
+    profile = load_reference_profile(
+        Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+    )
+    directed = pd.DataFrame(
+        {
+            "edge_u": ["a", "b", "c"],
+            "edge_v": ["b", "c", "d"],
+            "edge_key": ["0", "0", "0"],
+            "edge_id": ["a:b:0", "b:c:0", "c:d:0"],
+            "physical_segment_id": ["ab", "bc", "cd"],
+            "length_m": [100.0, 100.0, 100.0],
+            "operating_mode": ["H", "M", "U"],
+            "legal_speed_kph": [100.0, 70.0, 45.0],
+            "reference_speed_kph": [80.0, 50.0, 30.0],
+        }
+    )
+    sampled, sampled_report = build_family_road_state(
+        directed,
+        day_type="weekday",
+        road_state_seed=123,
+        profile=profile,
+    )
+    replayed, replayed_report = build_family_road_state(
+        directed,
+        day_type="weekday",
+        road_state_seed=999999,
+        profile=profile,
+        moves_road_type_baseline_factors=sampled_report[
+            "moves_road_type_baseline_factors"
+        ],
+    )
+    np.testing.assert_array_equal(
+        sampled["instance_speed_kph"].to_numpy(),
+        replayed["instance_speed_kph"].to_numpy(),
+    )
+    np.testing.assert_array_equal(
+        sampled["edge_travel_time_s"].to_numpy(),
+        replayed["edge_travel_time_s"].to_numpy(),
+    )
+    assert replayed_report["baseline_factor_source"] == "stored_family_manifest"
 
 
 def test_official_reader_rejects_unreleased_cle(tmp_path: Path) -> None:
@@ -114,6 +192,26 @@ def test_official_reader_rejects_unreleased_cle(tmp_path: Path) -> None:
         )
 
 
+def test_research_reader_filters_default_candidate_rows(tmp_path: Path) -> None:
+    _write_fake_cle(tmp_path, release_eligible=False)
+    cle = load_portable_cle(
+        tmp_path,
+        "test-city",
+        mode="research",
+        minimum_customers=1,
+        minimum_depots=1,
+        minimum_chargers=1,
+    )
+    assert len(cle.read_service_locations()) == 99
+    assert cle.read_depots(columns=["candidate_id"])["candidate_id"].tolist() == [
+        "depot-eligible"
+    ]
+    assert cle.read_chargers(columns=["charger_id"])["charger_id"].tolist() == [
+        "charger-eligible"
+    ]
+    assert cle.research_generation
+
+
 def test_pilot_reader_always_filters_candidate_rows(tmp_path: Path) -> None:
     _write_fake_cle(tmp_path, release_eligible=False)
     cle = load_portable_cle(
@@ -124,15 +222,14 @@ def test_pilot_reader_always_filters_candidate_rows(tmp_path: Path) -> None:
         minimum_depots=1,
         minimum_chargers=1,
     )
-    assert cle.read_service_locations(columns=["latent_service_location_id"])[
-        "latent_service_location_id"
-    ].tolist()[-1] == "loc-98"
-    assert cle.read_depots(columns=["candidate_id"])["candidate_id"].tolist() == [
-        "depot-eligible"
-    ]
-    assert cle.read_chargers(columns=["charger_id"])["charger_id"].tolist() == [
-        "charger-eligible"
-    ]
+    assert (
+        cle.read_service_locations(columns=["latent_service_location_id"])[
+            "latent_service_location_id"
+        ].tolist()[-1]
+        == "loc-98"
+    )
+    assert cle.read_depots(columns=["candidate_id"])["candidate_id"].tolist() == ["depot-eligible"]
+    assert cle.read_chargers(columns=["charger_id"])["charger_id"].tolist() == ["charger-eligible"]
 
 
 def test_complete_community_split_is_deterministic_and_group_safe(tmp_path: Path) -> None:
@@ -178,14 +275,14 @@ def test_complete_community_split_is_deterministic_and_group_safe(tmp_path: Path
 def test_official_generation_plan_has_frozen_family_and_view_counts() -> None:
     config = load_stage2_config(CONFIG_PATH)
     families, views, registry = build_generation_plan(config)
-    assert len(families) == 7_100
-    assert len(views) == 172_100
+    assert len(families) == 7_500
+    assert len(views) == 172_500
     assert registry["view_counts_by_scale"] == {
         "cus50": 101_000,
         "cus100": 52_000,
         "cus500": 12_000,
         "cus1000": 7_000,
-        "cus2000": 100,
+        "cus2000": 500,
     }
     assert families.groupby("family_id")["family_cohort_id"].nunique().max() == 1
     train_views = views.loc[views["family_cohort_id"].eq("core/train")]
@@ -216,15 +313,9 @@ def test_materialization_attempt_seeds_are_deterministic_and_isolated() -> None:
             "time_window_seed": [9],
         }
     )
-    attempt_zero, zero_views = materialization_attempt_inputs(
-        family, views, attempt_number=0
-    )
-    attempt_one_a, one_views_a = materialization_attempt_inputs(
-        family, views, attempt_number=1
-    )
-    attempt_one_b, one_views_b = materialization_attempt_inputs(
-        family, views, attempt_number=1
-    )
+    attempt_zero, zero_views = materialization_attempt_inputs(family, views, attempt_number=0)
+    attempt_one_a, one_views_a = materialization_attempt_inputs(family, views, attempt_number=1)
+    attempt_one_b, one_views_b = materialization_attempt_inputs(family, views, attempt_number=1)
     assert attempt_zero["family_seed"] == 123
     assert attempt_one_a == attempt_one_b
     assert attempt_one_a["family_seed"] != attempt_zero["family_seed"]
@@ -264,7 +355,6 @@ def test_edge_projection_routing_uses_directional_partial_edge_costs() -> None:
             "edge_key": ["0", "0"],
             "length_m": [100.0, 100.0],
             "edge_travel_time_s": [10.0, 20.0],
-            "edge_energy_kwh": [0.04, 0.08],
         }
     )
     network = PhysicalRoadNetwork(graph, road_state, profile)
@@ -303,8 +393,186 @@ def test_edge_projection_routing_uses_directional_partial_edge_costs() -> None:
     assert matrices.distance_matrix_km[1, 0] == pytest.approx(0.05)
     assert matrices.distance_path_travel_time_s[0, 1] == pytest.approx(5.0)
     assert matrices.distance_path_travel_time_s[1, 0] == pytest.approx(10.0)
-    assert matrices.distance_path_energy_kwh[0, 1] == pytest.approx(0.02)
-    assert matrices.distance_path_energy_kwh[1, 0] == pytest.approx(0.04)
+    assert matrices.running_time_shortest_matrix_s[0, 1] == pytest.approx(5.0)
+    assert matrices.running_time_shortest_matrix_s[1, 0] == pytest.approx(10.0)
+
+
+def test_cached_topology_accepts_new_family_road_state() -> None:
+    profile = load_reference_profile(
+        Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+    )
+    graph = nx.MultiDiGraph()
+    graph.add_node("a", x=-117.0, y=32.0)
+    graph.add_node("b", x=-116.999, y=32.0)
+    graph.add_edge("a", "b", key=0)
+    graph.add_edge("b", "a", key=0)
+    road_state = pd.DataFrame(
+        {
+            "edge_u": ["a", "b"],
+            "edge_v": ["b", "a"],
+            "edge_key": ["0", "0"],
+            "length_m": [100.0, 100.0],
+            "edge_travel_time_s": [10.0, 20.0],
+        }
+    )
+    cached = PhysicalRoadNetwork(graph, road_state, profile)
+    next_state = road_state.copy()
+    next_state["edge_travel_time_s"] = [5.0, 40.0]
+    network = cached.with_road_state(next_state, profile)
+    terminals = pd.DataFrame(
+        {
+            "terminal_index": [0, 1],
+            "directed_projection_offsets": [
+                json.dumps(
+                    [
+                        {
+                            "u": "a",
+                            "v": "b",
+                            "key": "0",
+                            "length_m": 100.0,
+                            "offset_from_u_m": 25.0,
+                            "offset_to_v_m": 75.0,
+                        },
+                        {
+                            "u": "b",
+                            "v": "a",
+                            "key": "0",
+                            "length_m": 100.0,
+                            "offset_from_u_m": 75.0,
+                            "offset_to_v_m": 25.0,
+                        },
+                    ]
+                ),
+                json.dumps(
+                    [
+                        {
+                            "u": "a",
+                            "v": "b",
+                            "key": "0",
+                            "length_m": 100.0,
+                            "offset_from_u_m": 75.0,
+                            "offset_to_v_m": 25.0,
+                        },
+                        {
+                            "u": "b",
+                            "v": "a",
+                            "key": "0",
+                            "length_m": 100.0,
+                            "offset_from_u_m": 25.0,
+                            "offset_to_v_m": 75.0,
+                        },
+                    ]
+                ),
+            ],
+            "connector_length_m": [0.0, 0.0],
+        }
+    )
+    matrices = network.route_terminals(terminals)
+    assert network._distance_adjacency is cached._distance_adjacency
+    assert matrices.distance_matrix_km[0, 1] == pytest.approx(0.05)
+    assert matrices.distance_path_travel_time_s[0, 1] == pytest.approx(2.5)
+    assert matrices.distance_path_travel_time_s[1, 0] == pytest.approx(20.0)
+
+
+def test_cached_topology_reselects_equal_length_parallel_edge() -> None:
+    profile = load_reference_profile(
+        Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+    )
+    graph = nx.MultiDiGraph()
+    graph.add_node("a", x=-117.0, y=32.0)
+    graph.add_node("b", x=-116.999, y=32.0)
+    graph.add_edge("a", "b", key=0)
+    graph.add_edge("a", "b", key=1)
+    road_state = pd.DataFrame(
+        {
+            "edge_u": ["a", "a"],
+            "edge_v": ["b", "b"],
+            "edge_key": ["0", "1"],
+            "length_m": [100.0, 100.0],
+            "edge_travel_time_s": [5.0, 10.0],
+        }
+    )
+    cached = PhysicalRoadNetwork(graph, road_state, profile)
+    pair = (cached.node_to_index["a"], cached.node_to_index["b"])
+    assert cached._distance_chosen_edge[pair] == 0
+
+    next_state = road_state.copy()
+    next_state["edge_travel_time_s"] = [20.0, 2.0]
+    network = cached.with_road_state(next_state, profile)
+
+    assert network._distance_adjacency is cached._distance_adjacency
+    assert network._distance_chosen_edge[pair] == 1
+
+
+def test_running_time_path_optimizes_turn_penalties_not_only_edge_times() -> None:
+    profile = load_reference_profile(
+        Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+    )
+    profile["turn_penalty"]["left_turn_s"] = 100.0
+    profile["turn_penalty"]["right_turn_s"] = 100.0
+    graph = nx.MultiDiGraph()
+    coordinates = {
+        "a": (-0.001, 0.0),
+        "b": (0.0, 0.0),
+        "c": (0.0, 0.001),
+        "f": (0.001, 0.0),
+        "d": (0.002, 0.0),
+        "e": (0.003, 0.0),
+    }
+    for node, (x, y) in coordinates.items():
+        graph.add_node(node, x=x, y=y)
+    edges = [
+        ("a", "b", 100.0, 10.0),
+        ("b", "c", 10.0, 1.0),
+        ("c", "d", 10.0, 1.0),
+        ("b", "f", 100.0, 10.0),
+        ("f", "d", 100.0, 10.0),
+        ("d", "e", 100.0, 10.0),
+        ("e", "a", 100.0, 10.0),
+    ]
+    for u, v, _, _ in edges:
+        graph.add_edge(u, v, key=0)
+    road_state = pd.DataFrame(
+        {
+            "edge_u": [edge[0] for edge in edges],
+            "edge_v": [edge[1] for edge in edges],
+            "edge_key": ["0"] * len(edges),
+            "length_m": [edge[2] for edge in edges],
+            "edge_travel_time_s": [edge[3] for edge in edges],
+        }
+    )
+    network = PhysicalRoadNetwork(graph, road_state, profile)
+
+    def one_ref(u: str, v: str, offset: float) -> str:
+        return json.dumps(
+            [
+                {
+                    "u": u,
+                    "v": v,
+                    "key": "0",
+                    "length_m": 100.0,
+                    "offset_from_u_m": offset,
+                    "offset_to_v_m": 100.0 - offset,
+                }
+            ]
+        )
+
+    matrices = network.route_terminals(
+        pd.DataFrame(
+            {
+                "terminal_index": [0, 1],
+                "directed_projection_offsets": [
+                    one_ref("a", "b", 50.0),
+                    one_ref("d", "e", 50.0),
+                ],
+                "connector_length_m": [0.0, 0.0],
+            }
+        )
+    )
+    assert matrices.distance_matrix_km[0, 1] == pytest.approx(0.12)
+    assert matrices.running_time_path_distance_km[0, 1] == pytest.approx(0.30)
+    assert matrices.running_time_shortest_matrix_s[0, 1] == pytest.approx(30.0)
+    assert matrices.report["turn_penalty_in_running_time_path_optimization"] is True
 
 
 def test_nested_view_indices_use_customer_blocks_and_charger_prefixes() -> None:
@@ -371,6 +639,7 @@ def test_view_attributes_use_volume_and_pass_sufficient_feasibility() -> None:
         dtype=np.float32,
     )
     energy = travel_time / 100.0
+    specific_energy = profile["energy"]["specific_energy_consumption_kwh_per_km"]
     attributes = build_view_attributes(
         customers,
         day_type="weekday",
@@ -380,7 +649,7 @@ def test_view_attributes_use_volume_and_pass_sufficient_feasibility() -> None:
         operating_start_s=8 * 3600,
         operating_end_s=24 * 3600,
         running_time_matrix_s=travel_time,
-        running_time_energy_matrix_kwh=energy,
+        running_time_path_distance_matrix_km=energy / specific_energy,
         charging_power_kw=np.asarray([100.0], dtype=np.float32),
         profile=profile,
     )
@@ -396,9 +665,7 @@ def test_feasibility_certificate_can_use_full_charge_station() -> None:
     profile = load_reference_profile(
         Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
     )
-    customers = pd.DataFrame(
-        {"residential_units": [1], "service_location_type": ["house"]}
-    )
+    customers = pd.DataFrame({"residential_units": [1], "service_location_type": ["house"]})
     # Terminal order: depot, customer, charger. Direct customer round trip uses
     # 120 kWh and is impossible with a 100 kWh pack. The constructed route
     # depot -> customer -> charger -> depot uses 80 kWh before charging and is feasible.
@@ -410,6 +677,7 @@ def test_feasibility_certificate_can_use_full_charge_station() -> None:
         [[0.0, 60.0, 40.0], [60.0, 0.0, 20.0], [40.0, 20.0, 0.0]],
         dtype=np.float32,
     )
+    specific_energy = profile["energy"]["specific_energy_consumption_kwh_per_km"]
     attributes = build_view_attributes(
         customers,
         day_type="weekday",
@@ -419,7 +687,7 @@ def test_feasibility_certificate_can_use_full_charge_station() -> None:
         operating_start_s=8 * 3600,
         operating_end_s=24 * 3600,
         running_time_matrix_s=travel_time,
-        running_time_energy_matrix_kwh=energy,
+        running_time_path_distance_matrix_km=energy / specific_energy,
         charging_power_kw=np.asarray([100.0], dtype=np.float32),
         profile=profile,
     )
@@ -438,9 +706,7 @@ def test_feasibility_certificate_uses_multihop_full_cs_return_cache() -> None:
     profile = load_reference_profile(
         Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
     )
-    customers = pd.DataFrame(
-        {"residential_units": [1], "service_location_type": ["house"]}
-    )
+    customers = pd.DataFrame({"residential_units": [1], "service_location_type": ["house"]})
     # Terminal order: depot, customer, CS-A, CS-B.  After depot -> customer,
     # neither customer -> depot nor customer -> CS-B is energy-feasible.  The
     # only feasible return is customer -> CS-A -> CS-B -> depot.  In
@@ -464,6 +730,7 @@ def test_feasibility_certificate_uses_multihop_full_cs_return_cache() -> None:
         ],
         dtype=np.float32,
     )
+    specific_energy = profile["energy"]["specific_energy_consumption_kwh_per_km"]
     attributes = build_view_attributes(
         customers,
         day_type="weekday",
@@ -473,7 +740,7 @@ def test_feasibility_certificate_uses_multihop_full_cs_return_cache() -> None:
         operating_start_s=8 * 3600,
         operating_end_s=24 * 3600,
         running_time_matrix_s=travel_time,
-        running_time_energy_matrix_kwh=energy,
+        running_time_path_distance_matrix_km=energy / specific_energy,
         charging_power_kw=np.asarray([100.0, 100.0], dtype=np.float32),
         profile=profile,
     )
@@ -481,13 +748,9 @@ def test_feasibility_certificate_uses_multihop_full_cs_return_cache() -> None:
     assert attributes.feasibility_first_post_customer_charger_terminal_index[0] == 2
     assert attributes.feasibility_charging_visit_count[0] == 2
     assert attributes.feasibility_energy_margin_kwh[0] == pytest.approx(10.0)
-    assert attributes.full_cs_to_depot_time_s.tolist() == pytest.approx(
-        [3360.0, 600.0]
-    )
+    assert attributes.full_cs_to_depot_time_s.tolist() == pytest.approx([3360.0, 600.0])
     assert attributes.report["full_cs_to_depot_cache"]["finite_return_count"] == 2
-    assert attributes.report["full_cs_to_depot_cache"]["maximum_time_s"] == pytest.approx(
-        3360.0
-    )
+    assert attributes.report["full_cs_to_depot_cache"]["maximum_time_s"] == pytest.approx(3360.0)
     assert attributes.report["feasibility_gate"]["passed"] is True
 
 
@@ -515,14 +778,13 @@ def test_v2_view_stores_and_loads_full_cs_to_depot_cache(tmp_path: Path) -> None
         [[0.0, 60.0, 40.0], [60.0, 0.0, 20.0], [40.0, 20.0, 0.0]],
         dtype=np.float32,
     )
+    specific_energy = profile["energy"]["specific_energy_consumption_kwh_per_km"]
     distance = travel_time / 100.0
     matrix_values = {
         "distance_matrix_km": distance,
         "distance_path_travel_time_s": travel_time,
-        "distance_path_energy_kwh": energy,
         "running_time_shortest_matrix_s": travel_time,
-        "running_time_path_distance_km": distance,
-        "running_time_path_energy_kwh": energy,
+        "running_time_path_distance_km": energy / specific_energy,
     }
     matrix_files = {}
     for name, values in matrix_values.items():
@@ -531,9 +793,7 @@ def test_v2_view_stores_and_loads_full_cs_to_depot_cache(tmp_path: Path) -> None
         matrix_files[name] = relative
 
     attributes = build_view_attributes(
-        pd.DataFrame(
-            {"residential_units": [1], "service_location_type": ["house"]}
-        ),
+        pd.DataFrame({"residential_units": [1], "service_location_type": ["house"]}),
         day_type="weekday",
         package_seed=41,
         service_time_seed=42,
@@ -541,7 +801,7 @@ def test_v2_view_stores_and_loads_full_cs_to_depot_cache(tmp_path: Path) -> None
         operating_start_s=8 * 3600,
         operating_end_s=24 * 3600,
         running_time_matrix_s=travel_time,
-        running_time_energy_matrix_kwh=energy,
+        running_time_path_distance_matrix_km=energy / specific_energy,
         charging_power_kw=np.asarray([100.0], dtype=np.float32),
         profile=profile,
     )
@@ -563,6 +823,7 @@ def test_v2_view_stores_and_loads_full_cs_to_depot_cache(tmp_path: Path) -> None
             attributes.feasibility_first_post_customer_charger_terminal_index
         ),
         feasibility_energy_margin_kwh=attributes.feasibility_energy_margin_kwh,
+        order_sampling_attempts=attributes.order_sampling_attempts,
     )
     np.savez_compressed(
         view / "charging_attributes.npz",
@@ -570,7 +831,7 @@ def test_v2_view_stores_and_loads_full_cs_to_depot_cache(tmp_path: Path) -> None
         full_cs_to_depot_time_s=attributes.full_cs_to_depot_time_s,
     )
     view_manifest = {
-        "schema": "cle_evrptw_materialized_view_v2",
+        "schema": "cle_evrptw_materialized_view_v3",
         "view_id": "view-1",
         "family_id": "family-1",
         "consumer_cohort_id": "core/train",
@@ -589,15 +850,15 @@ def test_v2_view_stores_and_loads_full_cs_to_depot_cache(tmp_path: Path) -> None
             "battery_capacity_kwh": 100.0,
             "cargo_capacity_cm3": float(profile["vehicle"]["cargo_capacity_cm3"]),
             "unlimited_fleet": True,
+            "specific_energy_consumption_kwh_per_km": specific_energy,
         },
+        "energy_model": dict(profile["energy"]),
         "charging_policy": dict(profile["charging"]),
         "non_release_pilot": True,
     }
-    (view / "view_manifest.json").write_text(
-        json.dumps(view_manifest), encoding="utf-8"
-    )
+    (view / "view_manifest.json").write_text(json.dumps(view_manifest), encoding="utf-8")
     family_manifest = {
-        "schema": "cle_evrptw_materialized_matrix_family_v1",
+        "schema": "cle_evrptw_materialized_matrix_family_v2",
         "family_id": "family-1",
         "city_slug": "test-city",
         "terminal_index": "terminal_index.parquet",
@@ -606,16 +867,14 @@ def test_v2_view_stores_and_loads_full_cs_to_depot_cache(tmp_path: Path) -> None
         "view_ids": ["view-1"],
         "view_count": 1,
         "matrix_total_bytes": sum(
-            int((family / relative).stat().st_size)
-            for relative in matrix_files.values()
+            int((family / relative).stat().st_size) for relative in matrix_files.values()
         ),
         "non_release_pilot": True,
         "reference_profile_id": profile["profile_id"],
         "reference_profile_status": profile["profile_status"],
+        "energy_model": dict(profile["energy"]),
     }
-    (family / "family_manifest.json").write_text(
-        json.dumps(family_manifest), encoding="utf-8"
-    )
+    (family / "family_manifest.json").write_text(json.dumps(family_manifest), encoding="utf-8")
 
     loaded = load_materialized_view(family, "view-1")
     assert loaded["metadata"]["full_cs_to_depot_cache_source"] == "stored"

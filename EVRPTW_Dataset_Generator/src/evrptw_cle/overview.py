@@ -116,7 +116,7 @@ def build_overview(
         )
 
     summary = pd.DataFrame.from_records(records)
-    summary_path = output_dir / "top10_connectivity_summary.csv"
+    summary_path = output_dir / "cle_cohort_connectivity_summary.csv"
     summary.to_csv(summary_path, index=False)
 
     figure, axes = plt.subplots(5, 2, figsize=(16, 24), dpi=120)
@@ -145,7 +145,7 @@ def build_overview(
         color="#4b5b65",
     )
     figure.tight_layout(rect=(0.02, 0.02, 0.98, 0.98))
-    png_path = output_dir / "top10_connectivity_overview.png"
+    png_path = output_dir / "cle_cohort_connectivity_overview.png"
     figure.savefig(png_path, bbox_inches="tight", pad_inches=0.12)
     plt.close(figure)
 
@@ -177,7 +177,7 @@ def build_overview(
         color="#4b5b65",
     )
     operational_figure.tight_layout(rect=(0.02, 0.02, 0.98, 0.98))
-    operational_png_path = output_dir / "top10_operational_overview.png"
+    operational_png_path = output_dir / "cle_cohort_operational_overview.png"
     operational_figure.savefig(
         operational_png_path,
         bbox_inches="tight",
@@ -191,11 +191,11 @@ def build_overview(
 </style>
 """
     fragment = f"""{style}<section class="evr-overview">
-<header><h1>Ten city raw and operational OSM road graphs</h1>
+<header><h1>CLE cohort raw and operational OSM road graphs</h1>
 <p>Each city preserves the exact-boundary raw graph for audit and publishes one connected operational graph using actual OSM transit-only connector roads.</p>
 <div class="key"><span><i class="dot"></i>W0001: largest weak component</span><span><i class="dot other"></i>W0002+: smaller components</span></div></header>
 <div class="grid">{"".join(panels)}</div></section>"""
-    html_path = output_dir / "top10_connectivity_overview.html"
+    html_path = output_dir / "cle_cohort_connectivity_overview.html"
     html_path.write_text(
         '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         + style

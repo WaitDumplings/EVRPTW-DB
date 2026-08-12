@@ -1,7 +1,7 @@
 {
   "schema": "evrptw_customer_location_contract_v1",
   "gate_id": "GATE_02_CUSTOMER_LOCATION_CONTRACT",
-  "preset_id": "top10_us_cities_population_v1",
+  "preset_id": "us_11city_population_v1",
   "stage_semantics": {
     "latent_service_location": "one fixed physical delivery stop in the City Logistics Environment",
     "active_customer": "a latent service location activated by a Stage 2 instance",
@@ -11,7 +11,7 @@
     "official_base": "Microsoft USBuildingFootprints polygon",
     "attribute_source": "USACE National Structure Inventory 2026 Base",
     "rule_development_city": "los-angeles",
-    "held_out_city_policy": "apply the frozen Los Angeles rule unchanged to the other nine cities",
+    "held_out_city_policy": "apply the frozen Los Angeles rule unchanged to the other ten cities, including held-out Jacksonville",
     "core_match_methods": {
       "G1_containment": "NSI point covered by Microsoft footprint polygon",
       "G2_near_area_consistent": "nearest Microsoft footprint within 10 m and footprint-area factor at most 4, subject to manual audit"
@@ -75,7 +75,7 @@
       "footprint_boundary_to_operational_edge_projection"
     ],
     "candidate_thresholds_m": [25, 50, 100, 200],
-    "selection_status": "pending_ten_city_footprint_access_audit",
+    "selection_status": "pending_eleven_city_footprint_access_audit",
     "selected_threshold_m": null,
     "selection_rule": {
       "coverage": "choose the smallest candidate reaching at least 99% unit-weighted coverage in every city on graph_operational",

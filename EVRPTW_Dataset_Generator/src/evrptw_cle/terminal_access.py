@@ -360,7 +360,7 @@ def build_terminal_access_layer(
             "OSM service/access tags do not prove that an individual delivery vehicle has permission.",
             "Unspecified-access driveway ways are retained as terminal-only candidates, not public through roads.",
             "The 2 m topological connection tolerance is an entity-resolution tolerance, not a synthetic road.",
-            "The customer access threshold remains unfrozen until ten-city and manual audits pass.",
+            "The customer access threshold remains unfrozen until eleven-city and manual audits pass.",
         ],
     }
     write_json(output_report_path, report)

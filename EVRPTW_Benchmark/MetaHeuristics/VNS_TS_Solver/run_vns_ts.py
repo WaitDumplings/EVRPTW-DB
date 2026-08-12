@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import csv
 import io
 import json
-import math
 import os
 import random
 import sys
@@ -13,26 +11,55 @@ import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-THIS_DIR = Path(__file__).resolve().parent
+META_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
-sys.path.insert(0, str(THIS_DIR))
+sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Dataset_Generator" / "src"))
+sys.path.insert(0, str(META_ROOT))
 
-from evrptw_core.io import iter_instance_dicts, load_instance, save_solution
-from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution
+from evrptw_core.schema import EVRPTWSolution, merge_route_sequences
 from evrptw_core.validation import validate_instance_structure
+
+from benchmark_common import (
+    IncumbentEventRecorder,
+    SolverTimeLimit,
+    build_input_tasks,
+    charging_profile,
+    hard_time_limit,
+    load_input_task,
+    parse_checkpoints,
+    parse_scales,
+    resolve_schedule,
+    validate_routes,
+)
+from benchmark_output import (
+    TIME_TRACE_FIELDNAMES,
+    error_snapshot_rows,
+    read_csv_rows,
+    save_result_artifacts,
+    snapshot_rows,
+    write_csv,
+)
 from solver import VNSTSolver
-from vnst_adapter import flatten_routes, route_distance_km, routes_to_terminal_ids, to_vnst_instance
+from vnst_adapter import to_vnst_instance
 
 
-def iter_instance_files(dataset_path: Path) -> list[Path]:
-    if dataset_path.is_file():
-        return [dataset_path]
-    return sorted((dataset_path / "instances").glob("Cus_*_CS_*/*.pkl"))
+SUMMARY_FIELDNAMES = [
+    "instance_id", "file", "family_id", "city_slug", "split_id", "track_id", "scale_id",
+    "day_type", "status", "benchmark_status", "benchmark_completed", "has_incumbent",
+    "feasible", "objective_distance_km", "vehicle_count", "runtime_s",
+    "first_feasible_time_s", "time_limit_s", "terminated_by_time_limit", "seed",
+    "predefine_route_number", "eta_feas", "eta_dist", "tabu_iter", "tabu_tenure", "k_max",
+    "search_mode", "move_candidate_limit", "route_neighbor_limit", "position_neighbor_limit",
+    "exchange_neighbor_limit", "station_candidate_limit", "route_validation_passed",
+    "charging_visit_count", "total_charging_time_s", "charging_power_min_kw",
+    "charging_power_max_kw", "routes_json", "route_sequence_json", "solution_path",
+    "time_trace_path", "errors", "traceback",
+]
 
 
 def set_random_seed(seed: int) -> None:
@@ -41,270 +68,244 @@ def set_random_seed(seed: int) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
-def finite_or_none(value: float) -> float | None:
-    return float(value) if math.isfinite(float(value)) else None
+def source_info_from_task(task: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    ref = task.get("stage2_task", {})
+    return str(ref.get("view_id", "unknown")), {
+        "file": str(ref.get("index_path", "")),
+        "family_id": str(ref.get("family_id", "")),
+        "city_slug": str(ref.get("city_slug", "")),
+        "split_id": str(ref.get("split_id", "")),
+        "track_id": str(ref.get("track_id", "")),
+        "scale_id": str(ref.get("scale_id", "")),
+    }
 
 
-def parse_scales(raw: str) -> set[str]:
-    scales: set[str] = set()
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        suffix = item[3:] if item.lower().startswith("cus") else item
-        scales.add(f"Cus{int(suffix)}")
-    return scales
-
-
-def payload_scale(payload: dict[str, Any]) -> str:
-    if "num_customers" in payload:
-        return f"Cus{int(payload['num_customers'])}"
-    return f"Cus{len(payload.get('customers', []))}"
+def failed_result(
+    task: dict[str, Any],
+    *,
+    status: str,
+    errors: str,
+    trace: str = "",
+) -> dict[str, Any]:
+    instance_id, info = source_info_from_task(task)
+    summary = {key: "" for key in SUMMARY_FIELDNAMES}
+    summary.update(
+        {
+            "instance_id": instance_id,
+            **info,
+            "status": status,
+            "benchmark_status": status,
+            "benchmark_completed": False,
+            "has_incumbent": False,
+            "feasible": False,
+            "time_limit_s": task["time_limit_s"],
+            "seed": task["seed"],
+            "routes_json": "[]",
+            "route_sequence_json": "[]",
+            "errors": errors,
+            "traceback": trace,
+        }
+    )
+    return {
+        "summary_row": summary,
+        "time_rows": error_snapshot_rows(
+            instance_id, info, tuple(task["checkpoints_s"]), status, errors
+        ),
+        "snapshots": [],
+        "solution": None,
+    }
 
 
 def solve_one(task: dict[str, Any]) -> dict[str, Any]:
-    instance_source = str(task.get("instance_file", ""))
-    instance_file = Path(instance_source) if instance_source else Path(".")
-    instance_payload = task.get("instance_payload")
     seed = int(task["seed"])
-    save_traceback = bool(task.get("save_traceback", False))
-    verbose = bool(task.get("verbose", False))
-
-    instance_id = str(task.get("instance_id", instance_file.stem))
+    set_random_seed(seed)
     try:
-        set_random_seed(seed)
-        instance = EVRPTWInstance.from_dict(instance_payload) if instance_payload is not None else load_instance(instance_file)
-        instance_id = instance.instance_id
-        validation = validate_instance_structure(instance)
-        if not validation.success:
-            return {
-                "instance_id": instance_id,
-                "file": str(instance_file),
-                "status": "INVALID_INSTANCE",
-                "feasible": False,
-                "summary_row": {
-                    "instance_id": instance_id,
-                    "file": str(instance_file),
-                    "status": "INVALID_INSTANCE",
-                    "feasible": False,
-                    "objective_distance_km": "",
-                    "vehicle_count": "",
-                    "runtime_s": "",
-                    "seed": seed,
-                    "predefine_route_number": task.get("predefine_route_number", ""),
-                    "eta_feas": task.get("eta_feas", ""),
-                    "eta_dist": task.get("eta_dist", ""),
-                    "tabu_iter": task.get("tabu_iter", ""),
-                    "tabu_tenure": task.get("tabu_tenure", ""),
-                    "k_max": task.get("k_max", ""),
-                    "search_mode": task.get("search_mode", ""),
-                    "move_candidate_limit": task.get("move_candidate_limit", ""),
-                    "route_neighbor_limit": task.get("route_neighbor_limit", ""),
-                    "position_neighbor_limit": task.get("position_neighbor_limit", ""),
-                    "exchange_neighbor_limit": task.get("exchange_neighbor_limit", ""),
-                    "station_candidate_limit": task.get("station_candidate_limit", ""),
-                    "raw_global_value": "",
-                    "routes_json": "[]",
-                    "route_sequence_json": "[]",
-                    "solution_path": "",
-                    "errors": json.dumps(validation.errors),
-                    "traceback": "",
-                },
-                "route_rows": [],
-                "solution": None,
-                "errors": json.dumps(validation.errors),
-                "traceback": "",
-            }
+        instance, info = load_input_task(task)
+        structural = validate_instance_structure(instance)
+        if not structural.success:
+            return failed_result(
+                task,
+                status="INVALID_INSTANCE",
+                errors=json.dumps(structural.errors),
+            )
 
-        vnst_instance = to_vnst_instance(instance)
+        power_kw, _, _ = charging_profile(instance)
+        adapted = to_vnst_instance(instance)
         solver = VNSTSolver(
-            vnst_instance,
-            predefine_route_number=int(task.get("predefine_route_number", 3)),
-            show_progress=verbose,
-            search_mode=str(task.get("search_mode", "fast")),
-            move_candidate_limit=int(task.get("move_candidate_limit", 80)),
-            route_neighbor_limit=int(task.get("route_neighbor_limit", 4)),
-            position_neighbor_limit=int(task.get("position_neighbor_limit", 4)),
-            exchange_neighbor_limit=int(task.get("exchange_neighbor_limit", 6)),
-            station_candidate_limit=int(task.get("station_candidate_limit", 5)),
+            adapted,
+            predefine_route_number=int(task["predefine_route_number"]),
+            show_progress=bool(task.get("verbose")),
+            search_mode=str(task["search_mode"]),
+            move_candidate_limit=int(task["move_candidate_limit"]),
+            route_neighbor_limit=int(task["route_neighbor_limit"]),
+            position_neighbor_limit=int(task["position_neighbor_limit"]),
+            exchange_neighbor_limit=int(task["exchange_neighbor_limit"]),
+            station_candidate_limit=int(task["station_candidate_limit"]),
         )
-        if task.get("eta_feas") is not None:
-            solver.η_feas = int(task["eta_feas"])
-        if task.get("eta_dist") is not None:
-            solver.η_dist = int(task["eta_dist"])
-        if task.get("tabu_iter") is not None:
-            solver.tabu_iter = int(task["tabu_iter"])
-        if task.get("tabu_tenure") is not None:
-            solver.tabu_tenure = int(task["tabu_tenure"])
-        if task.get("k_max") is not None:
-            solver.k_max = int(task["k_max"])
+        solver.η_feas = int(task["eta_feas"])
+        solver.η_dist = int(task["eta_dist"])
+        solver.tabu_iter = int(task["tabu_iter"])
+        solver.tabu_tenure = int(task["tabu_tenure"])
+        solver.k_max = int(task["k_max"])
 
+        recorder = IncumbentEventRecorder(task["checkpoints_s"], task["time_limit_s"])
         start = time.perf_counter()
-        if verbose:
-            solution_obj = solver.solve()
-        else:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                solution_obj = solver.solve()
+
+        def observe(_elapsed_s: float, _objective: float, routes: list[list[int]]) -> None:
+            audit = validate_routes(instance, routes)
+            if audit["passed"]:
+                recorder.observe(
+                    time.perf_counter() - start,
+                    float(audit["objective_distance_km"]),
+                    routes,
+                )
+
+        def run_solver() -> None:
+            solver.solve(
+                time_limit_s=task["time_limit_s"],
+                incumbent_callback=observe,
+            )
+
+        try:
+            with hard_time_limit(task["time_limit_s"]):
+                if task.get("verbose"):
+                    run_solver()
+                else:
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        run_solver()
+        except SolverTimeLimit:
+            solver.terminated_by_time_limit = True
         runtime_s = time.perf_counter() - start
-
-        routes = routes_to_terminal_ids(solution_obj)
-        feasible = bool(solution_obj is not None and routes and solver.is_solution_feasible(solution_obj))
-        objective = route_distance_km(routes, instance) if feasible else finite_or_none(float(getattr(solver, "global_value", float("inf"))))
-        raw_global_value = finite_or_none(float(getattr(solver, "global_value", float("inf"))))
-        vehicle_count = len(routes) if feasible else None
-        route_sequence = flatten_routes(routes)
-
-        solution = EVRPTWSolution(
-            instance_id=instance_id,
-            solver_name="vns_tabu_search",
-            routes=routes,
-            objective_distance_km=objective,
-            vehicle_count=vehicle_count,
+        natural_completion = not bool(solver.terminated_by_time_limit)
+        best = recorder.best_event
+        status = "COMPLETED_WITH_INCUMBENT" if best is not None else "UNFINISHED_NO_INCUMBENT"
+        snapshots = recorder.snapshots(
             runtime_s=runtime_s,
-            feasible=feasible,
-            violations={} if feasible else {"solver_returned_routes": bool(routes)},
-            metadata={
-                "seed": seed,
-                "predefine_route_number": int(task.get("predefine_route_number", 3)),
-                "eta_feas": int(solver.η_feas),
-                "eta_dist": int(solver.η_dist),
-                "tabu_iter": int(solver.tabu_iter),
-                "tabu_tenure": int(solver.tabu_tenure),
-                "k_max": int(solver.k_max),
-                "search_mode": solver.search_mode,
-                "move_candidate_limit": int(solver.move_candidate_limit),
-                "route_neighbor_limit": int(solver.route_neighbor_limit),
-                "position_neighbor_limit": int(solver.position_neighbor_limit),
-                "exchange_neighbor_limit": int(solver.exchange_neighbor_limit),
-                "station_candidate_limit": int(solver.station_candidate_limit),
-                "raw_global_value": raw_global_value,
-            },
+            natural_completion=natural_completion,
+            final_status=status,
         )
 
-        summary_row = {
-            "instance_id": instance_id,
-            "file": str(instance_file),
-            "status": "FEASIBLE" if feasible else "INFEASIBLE",
-            "feasible": feasible,
-            "objective_distance_km": objective if objective is not None else "",
-            "vehicle_count": vehicle_count if vehicle_count is not None else "",
+        audit = validate_routes(instance, best["routes"]) if best is not None else {
+            "passed": False,
+            "violations": ["no feasible incumbent"],
+            "charging_visit_count": 0,
+            "total_charging_time_s": 0.0,
+        }
+        routes = [] if best is None else best["routes"]
+        objective = None if best is None else float(best["objective_distance_km"])
+        solution = None
+        if best is not None:
+            solution = EVRPTWSolution(
+                instance_id=instance.instance_id,
+                solver_name="vns_ts_stage2_anytime",
+                routes=routes,
+                objective_distance_km=objective,
+                vehicle_count=len(routes),
+                runtime_s=runtime_s,
+                feasible=True,
+                metadata={
+                    "first_feasible_time_s": recorder.first_feasible_time_s,
+                    "time_limit_s": task["time_limit_s"],
+                    "terminated_by_time_limit": solver.terminated_by_time_limit,
+                    "checkpoint_snapshots": snapshots,
+                    "charging_model": "full_charge_per_station_power",
+                    "benchmark_status": status,
+                    "benchmark_completed": True,
+                    "has_incumbent": True,
+                },
+            ).to_dict()
+
+        summary = {
+            "instance_id": instance.instance_id,
+            **info,
+            "day_type": instance.day_type,
+            "status": status,
+            "benchmark_status": status,
+            "benchmark_completed": best is not None,
+            "has_incumbent": best is not None,
+            "feasible": best is not None,
+            "objective_distance_km": "" if objective is None else objective,
+            "vehicle_count": "" if best is None else len(routes),
             "runtime_s": runtime_s,
+            "first_feasible_time_s": (
+                "" if recorder.first_feasible_time_s is None else recorder.first_feasible_time_s
+            ),
+            "time_limit_s": task["time_limit_s"],
+            "terminated_by_time_limit": solver.terminated_by_time_limit,
             "seed": seed,
-            "predefine_route_number": int(task.get("predefine_route_number", 3)),
-            "eta_feas": int(solver.η_feas),
-            "eta_dist": int(solver.η_dist),
-            "tabu_iter": int(solver.tabu_iter),
-            "tabu_tenure": int(solver.tabu_tenure),
-            "k_max": int(solver.k_max),
+            "predefine_route_number": task["predefine_route_number"],
+            "eta_feas": solver.η_feas,
+            "eta_dist": solver.η_dist,
+            "tabu_iter": solver.tabu_iter,
+            "tabu_tenure": solver.tabu_tenure,
+            "k_max": solver.k_max,
             "search_mode": solver.search_mode,
-            "move_candidate_limit": int(solver.move_candidate_limit),
-            "route_neighbor_limit": int(solver.route_neighbor_limit),
-            "position_neighbor_limit": int(solver.position_neighbor_limit),
-            "exchange_neighbor_limit": int(solver.exchange_neighbor_limit),
-            "station_candidate_limit": int(solver.station_candidate_limit),
-            "raw_global_value": raw_global_value if raw_global_value is not None else "",
+            "move_candidate_limit": solver.move_candidate_limit,
+            "route_neighbor_limit": solver.route_neighbor_limit,
+            "position_neighbor_limit": solver.position_neighbor_limit,
+            "exchange_neighbor_limit": solver.exchange_neighbor_limit,
+            "station_candidate_limit": solver.station_candidate_limit,
+            "route_validation_passed": audit["passed"],
+            "charging_visit_count": audit["charging_visit_count"],
+            "total_charging_time_s": audit["total_charging_time_s"],
+            "charging_power_min_kw": float(np.min(power_kw)) if len(power_kw) else "",
+            "charging_power_max_kw": float(np.max(power_kw)) if len(power_kw) else "",
             "routes_json": json.dumps(routes),
-            "route_sequence_json": json.dumps(route_sequence),
+            "route_sequence_json": json.dumps(merge_route_sequences(routes)),
             "solution_path": "",
-            "errors": "" if feasible else json.dumps(solution.violations),
+            "time_trace_path": "",
+            "errors": "" if best is not None else json.dumps(audit["violations"]),
             "traceback": "",
         }
-
-        route_rows = []
-        for route_idx, route in enumerate(routes):
-            route_rows.append({
-                "instance_id": instance_id,
-                "file": str(instance_file),
-                "route_idx": route_idx,
-                "route_json": json.dumps(route),
-                "route_sequence_json": json.dumps(route),
-            })
-
         return {
-            "instance_id": instance_id,
-            "file": str(instance_file),
-            "status": summary_row["status"],
-            "feasible": feasible,
-            "summary_row": summary_row,
-            "route_rows": route_rows,
-            "solution": solution.to_dict(),
-            "errors": "",
-            "traceback": "",
+            "summary_row": summary,
+            "time_rows": snapshot_rows(
+                instance.instance_id, info, snapshots, recorder.first_feasible_time_s
+            ),
+            "snapshots": snapshots,
+            "solution": solution,
         }
     except Exception as exc:
-        return {
-            "instance_id": instance_id,
-            "file": str(instance_file),
-            "status": "ERROR",
-            "feasible": False,
-            "summary_row": {
-                "instance_id": instance_id,
-                "file": str(instance_file),
-                "status": "ERROR",
-                "feasible": False,
-                "objective_distance_km": "",
-                "vehicle_count": "",
-                "runtime_s": "",
-                "seed": seed,
-                "predefine_route_number": task.get("predefine_route_number", ""),
-                "eta_feas": task.get("eta_feas", ""),
-                "eta_dist": task.get("eta_dist", ""),
-                "tabu_iter": task.get("tabu_iter", ""),
-                "tabu_tenure": task.get("tabu_tenure", ""),
-                "k_max": task.get("k_max", ""),
-                "search_mode": task.get("search_mode", ""),
-                "move_candidate_limit": task.get("move_candidate_limit", ""),
-                "route_neighbor_limit": task.get("route_neighbor_limit", ""),
-                "position_neighbor_limit": task.get("position_neighbor_limit", ""),
-                "exchange_neighbor_limit": task.get("exchange_neighbor_limit", ""),
-                "station_candidate_limit": task.get("station_candidate_limit", ""),
-                "raw_global_value": "",
-                "routes_json": "[]",
-                "route_sequence_json": "[]",
-                "solution_path": "",
-                "errors": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc() if save_traceback else "",
-            },
-            "route_rows": [],
-            "solution": None,
-            "errors": f"{type(exc).__name__}: {exc}",
-            "traceback": traceback.format_exc() if save_traceback else "",
-        }
+        return failed_result(
+            task,
+            status="ERROR",
+            errors=f"{type(exc).__name__}: {exc}",
+            trace=traceback.format_exc() if task.get("save_traceback") else "",
+        )
 
 
-def run_tasks(tasks: list[dict[str, Any]], num_workers: int) -> list[dict[str, Any]]:
-    if num_workers <= 1:
-        return [solve_one(task) for task in tasks]
-
-    results = []
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+def run_tasks(tasks: list[dict[str, Any]], workers: int) -> Iterator[dict[str, Any]]:
+    if workers <= 1:
+        for task in tasks:
+            yield solve_one(task)
+        return
+    with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(solve_one, task) for task in tasks]
         for future in as_completed(futures):
-            results.append(future.result())
-    return results
-
-
-def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: row.get(key, "") for key in fieldnames})
+            yield future.result()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the pickle-native VNS-Tabu Search benchmark.")
-    parser.add_argument("--dataset_path", required=True, help="Dataset root or one instance pickle file.")
-    parser.add_argument("--save_path", required=True, help="Directory for VNS-TS summaries and solution pickles.")
+    parser = argparse.ArgumentParser(
+        description="Run VNS-TS on Stage-2 view_index/materialized-family instances."
+    )
+    parser.add_argument("--dataset_path", required=True, help="Stage-2 root or view_index.parquet")
+    parser.add_argument("--family_root", default=None, help="Optional materialized/families override")
+    parser.add_argument("--save_path", required=True)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--max_instances", type=int, default=None)
-    parser.add_argument("--scales", default="", help="Optional comma-separated scale filter, e.g. Cus5,Cus15.")
+    parser.add_argument("--scales", default="", help="Optional list such as Cus50,Cus100")
+    parser.add_argument("--time_limit_s", type=float, default=None)
+    parser.add_argument(
+        "--checkpoints_s",
+        default="",
+        help="Comma-separated checkpoints. Default follows --time_limit_s; otherwise 60,300,900,3600,7200.",
+    )
     parser.add_argument("--predefine_route_number", type=int, default=3)
-    parser.add_argument("--eta_feas", type=int, default=20, help="Feasibility-phase iteration budget. Legacy default: 700.")
-    parser.add_argument("--eta_dist", type=int, default=20, help="Distance-phase iteration budget. Legacy default: 100.")
-    parser.add_argument("--tabu_iter", type=int, default=10, help="Inner tabu iterations. Legacy default: 100.")
+    parser.add_argument("--eta_feas", type=int, default=20)
+    parser.add_argument("--eta_dist", type=int, default=20)
+    parser.add_argument("--tabu_iter", type=int, default=10)
     parser.add_argument("--tabu_tenure", type=int, default=30)
     parser.add_argument("--k_max", type=int, default=15)
     parser.add_argument("--search_mode", choices=["fast", "full"], default="fast")
@@ -313,94 +314,101 @@ def main() -> None:
     parser.add_argument("--position_neighbor_limit", type=int, default=4)
     parser.add_argument("--exchange_neighbor_limit", type=int, default=6)
     parser.add_argument("--station_candidate_limit", type=int, default=5)
+    parser.add_argument("--skip_completed", action="store_true")
     parser.add_argument("--save_traceback", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    dataset_path = Path(args.dataset_path)
+    checkpoints_s, time_limit_s = resolve_schedule(
+        parse_checkpoints(args.checkpoints_s), args.time_limit_s
+    )
     save_path = Path(args.save_path)
     solutions_dir = save_path / "solutions"
+    checkpoints_dir = solutions_dir / "checkpoints"
     solutions_dir.mkdir(parents=True, exist_ok=True)
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = save_path / "vns_ts_summary.csv"
+    trace_path = save_path / "vns_ts_time_trace.csv"
 
-    scale_filter = parse_scales(args.scales)
-    instance_payloads = []
-    for payload in iter_instance_dicts(dataset_path):
-        if scale_filter and payload_scale(payload) not in scale_filter:
-            continue
-        instance_payloads.append(payload)
-        if args.max_instances is not None and len(instance_payloads) >= int(args.max_instances):
-            break
-    if not instance_payloads:
-        print(f"No EVRPTW instances found under: {dataset_path}")
-
-    num_workers = max(1, int(args.num_workers))
-    print(
-        f"VNS-TS benchmark schedule: instances={len(instance_payloads)}, num_workers={num_workers}, "
-        f"scales={sorted(scale_filter) if scale_filter else 'all'}, "
-        f"eta_feas={args.eta_feas}, eta_dist={args.eta_dist}, tabu_iter={args.tabu_iter}, "
-        f"predefine_route_number={args.predefine_route_number}, search_mode={args.search_mode}, "
-        f"move_candidate_limit={args.move_candidate_limit}"
+    input_tasks = build_input_tasks(
+        args.dataset_path,
+        family_root=args.family_root,
+        scales=parse_scales(args.scales),
+        max_instances=args.max_instances,
     )
-
+    existing_summary = read_csv_rows(summary_path) if args.skip_completed else []
+    completed = {
+        row["instance_id"]
+        for row in existing_summary
+        if row.get("status") in {"COMPLETED_WITH_INCUMBENT", "UNFINISHED_NO_INCUMBENT"}
+    }
     tasks = []
-    for idx, payload in enumerate(instance_payloads):
-        tasks.append({
-            "instance_file": str(dataset_path),
-            "instance_payload": payload,
-            "instance_id": str(payload.get("instance_id", f"instance_{idx:06d}")),
-            "seed": int(args.seed) + idx,
-            "predefine_route_number": args.predefine_route_number,
-            "eta_feas": args.eta_feas,
-            "eta_dist": args.eta_dist,
-            "tabu_iter": args.tabu_iter,
-            "tabu_tenure": args.tabu_tenure,
-            "k_max": args.k_max,
-            "search_mode": args.search_mode,
-            "move_candidate_limit": args.move_candidate_limit,
-            "route_neighbor_limit": args.route_neighbor_limit,
-            "position_neighbor_limit": args.position_neighbor_limit,
-            "exchange_neighbor_limit": args.exchange_neighbor_limit,
-            "station_candidate_limit": args.station_candidate_limit,
-            "verbose": args.verbose,
-            "save_traceback": args.save_traceback,
-        })
-
-    results = run_tasks(tasks, num_workers=num_workers)
-    results.sort(key=lambda item: item.get("instance_id", ""))
-
-    summary_rows = []
-    route_rows = []
-    for result in results:
-        row = result.get("summary_row")
-        if row is None:
+    for index, task in enumerate(input_tasks):
+        instance_id, _ = source_info_from_task(task)
+        if instance_id in completed:
             continue
-        solution_dict = result.get("solution")
-        if solution_dict is not None:
-            solution = EVRPTWSolution.from_dict(solution_dict)
-            solution_path = solutions_dir / f"{solution.instance_id}_solution.pkl"
-            save_solution(solution_path, solution)
-            row["solution_path"] = str(solution_path)
-        summary_rows.append(row)
-        route_rows.extend(result.get("route_rows", []))
+        task.update(
+            {
+                "seed": int(args.seed) + index,
+                "time_limit_s": time_limit_s,
+                "checkpoints_s": checkpoints_s,
+                "predefine_route_number": args.predefine_route_number,
+                "eta_feas": args.eta_feas,
+                "eta_dist": args.eta_dist,
+                "tabu_iter": args.tabu_iter,
+                "tabu_tenure": args.tabu_tenure,
+                "k_max": args.k_max,
+                "search_mode": args.search_mode,
+                "move_candidate_limit": args.move_candidate_limit,
+                "route_neighbor_limit": args.route_neighbor_limit,
+                "position_neighbor_limit": args.position_neighbor_limit,
+                "exchange_neighbor_limit": args.exchange_neighbor_limit,
+                "station_candidate_limit": args.station_candidate_limit,
+                "verbose": args.verbose,
+                "save_traceback": args.save_traceback,
+            }
+        )
+        tasks.append(task)
+
+    summary_rows: list[dict[str, Any]] = list(existing_summary)
+    time_rows: list[dict[str, Any]] = read_csv_rows(trace_path) if args.skip_completed else []
+    print(
+        f"VNS-TS Stage-2 schedule: instances={len(tasks)}, workers={max(1, args.num_workers)}, "
+        f"time_limit_s={time_limit_s:g}, checkpoints_s={list(checkpoints_s)}"
+    )
+    for result in run_tasks(tasks, max(1, int(args.num_workers))):
+        save_result_artifacts(
+            result,
+            solver_name="vns_ts_stage2_anytime",
+            solutions_dir=solutions_dir,
+            checkpoints_dir=checkpoints_dir,
+        )
+        result["summary_row"]["time_trace_path"] = str(trace_path)
+        summary_rows = [
+            row for row in summary_rows if row.get("instance_id") != result["summary_row"]["instance_id"]
+        ]
+        time_rows = [
+            row for row in time_rows if row.get("instance_id") != result["summary_row"]["instance_id"]
+        ]
+        summary_rows.append(result["summary_row"])
+        time_rows.extend(result["time_rows"])
+        summary_rows.sort(key=lambda row: str(row.get("instance_id", "")))
+        time_rows.sort(
+            key=lambda row: (str(row.get("instance_id", "")), float(row.get("checkpoint_s", 0.0)))
+        )
+        write_csv(summary_path, summary_rows, SUMMARY_FIELDNAMES)
+        write_csv(trace_path, time_rows, TIME_TRACE_FIELDNAMES)
+        row = result["summary_row"]
         print(
-            f"{row['instance_id']}: status={row['status']} obj={row['objective_distance_km']} "
-            f"vehicles={row['vehicle_count']} runtime={row['runtime_s']}"
+            f"{row['instance_id']}: status={row['status']} "
+            f"objective={row['objective_distance_km']} runtime_s={row['runtime_s']}"
         )
 
-    summary_fieldnames = [
-        "instance_id", "file", "status", "feasible", "objective_distance_km", "vehicle_count",
-        "runtime_s", "seed", "predefine_route_number", "eta_feas", "eta_dist", "tabu_iter",
-        "tabu_tenure", "k_max", "search_mode", "move_candidate_limit", "route_neighbor_limit",
-        "position_neighbor_limit", "exchange_neighbor_limit", "station_candidate_limit",
-        "raw_global_value", "routes_json", "route_sequence_json",
-        "solution_path", "errors", "traceback",
-    ]
-    route_fieldnames = ["instance_id", "file", "route_idx", "route_json", "route_sequence_json"]
-
-    write_csv(save_path / "vns_ts_summary.csv", summary_rows, summary_fieldnames)
-    write_csv(save_path / "vns_ts_routes.csv", route_rows, route_fieldnames)
-    print(f"Saved summary: {save_path / 'vns_ts_summary.csv'}")
-    print(f"Saved routes: {save_path / 'vns_ts_routes.csv'}")
+    if not tasks:
+        write_csv(summary_path, summary_rows, SUMMARY_FIELDNAMES)
+        write_csv(trace_path, time_rows, TIME_TRACE_FIELDNAMES)
+    print(f"Saved summary: {summary_path}")
+    print(f"Saved time trace: {trace_path}")
 
 
 if __name__ == "__main__":

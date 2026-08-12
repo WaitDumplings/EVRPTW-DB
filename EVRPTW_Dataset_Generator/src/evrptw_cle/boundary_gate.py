@@ -11,7 +11,7 @@ from typing import Any
 
 import geopandas as gpd
 
-EXPECTED_PRESET_ID = "top10_us_cities_population_v1"
+EXPECTED_PRESET_ID = "us_11city_population_v1"
 EXPECTED_BOUNDARY_SOURCE = "2025 U.S. Census TIGER/Line Places"
 EXPECTED_WATER_SOURCE = "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)"
 EXPECTED_ADMIN_SEMANTICS = "city proper only"
@@ -59,7 +59,7 @@ def verify_boundary_gate(
     boundary_root: Path,
     city_root: Path | None,
     *,
-    expected_city_count: int = 10,
+    expected_city_count: int = 11,
     max_land_area_relative_error: float = DEFAULT_MAX_LAND_AREA_RELATIVE_ERROR,
 ) -> dict[str, Any]:
     """Verify the official city-proper/service-mask and road-graph contract.

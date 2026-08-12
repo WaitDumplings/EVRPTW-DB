@@ -67,3 +67,44 @@ def test_operational_policy_rejects_unordered_buffer_ladder() -> None:
         assert "increasing" in str(error)
     else:
         raise AssertionError("unordered buffer ladder should fail validation")
+
+
+def test_operational_selection_skips_only_small_components_after_buffer_ladder() -> None:
+    graph = nx.MultiDiGraph(crs="EPSG:4326", simplified=True)
+    coordinates = {
+        1: (0.000, 0.000),
+        2: (0.001, 0.000),
+        3: (0.002, 0.000),
+        10: (0.010, 0.000),
+        11: (0.011, 0.000),
+    }
+    for node, (x, y) in coordinates.items():
+        graph.add_node(node, x=x, y=y)
+    _add_bidirectional_edge(graph, 1, 2, 1)
+    _add_bidirectional_edge(graph, 2, 3, 2)
+    _add_bidirectional_edge(graph, 10, 11, 3)
+    boundary = gpd.GeoDataFrame(
+        geometry=[box(-0.001, -0.001, 0.012, 0.001)], crs="EPSG:4326"
+    )
+    raw_audit = audit_and_label(graph)
+
+    selection = select_operational_graph(
+        graph,
+        graph,
+        raw_audit,
+        boundary,
+        OperationalPolicy(
+            buffer_ladder_km=(0.0,),
+            min_node_coverage=0.99,
+            min_road_length_coverage=0.995,
+            auto_skip_component_node_threshold=3,
+        ),
+    )
+
+    assert selection.summary["coverage_gate_mode"] == "small_isolated_component_fallback"
+    assert selection.summary["city_node_coverage"] == 3 / 5
+    assert selection.summary["coverage_gate_city_node_coverage"] == 1.0
+    fallback = selection.summary["small_isolated_component_fallback"]
+    assert fallback["auto_skipped_component_count"] == 1
+    assert fallback["auto_skipped_node_count"] == 2
+    assert fallback["retained_uncovered_component_count"] == 0

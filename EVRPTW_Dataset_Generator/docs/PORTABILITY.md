@@ -36,7 +36,7 @@ A new adapter is accepted only when it demonstrates:
 
 ## Configuration pattern
 
-Create a new versioned profile beside `configs/us_top10_cle_v1.json`. Paths and
+Create a new versioned profile beside `configs/us_11city_cle_v1.json`. Paths and
 adapters belong in configuration; source-specific parsing belongs in adapter
 code; the assembler should receive canonical paths and manifests only. Do not
 add country branches directly to the CLE schema or Stage-2 solver.

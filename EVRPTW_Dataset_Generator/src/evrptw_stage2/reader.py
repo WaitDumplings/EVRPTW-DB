@@ -1,7 +1,8 @@
 """Strict reader for self-contained portable CLE packages.
 
-The reader is the only supported Stage-1 -> Stage-2 boundary.  It deliberately
-distinguishes an official release input from a non-release engineering pilot.
+The reader is the only supported Stage-1 -> Stage-2 boundary.  It distinguishes
+an official release, a full-size research build, and a bounded engineering
+pilot without relabeling one mode as another.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import Any, Literal
 import pandas as pd
 import pyarrow.parquet as pq
 
-RunMode = Literal["official", "non_release_pilot"]
+RunMode = Literal["official", "research", "non_release_pilot"]
 
 
 class CLEEligibilityError(RuntimeError):
@@ -86,6 +87,10 @@ class PortableCLE:
         return self.mode == "non_release_pilot"
 
     @property
+    def research_generation(self) -> bool:
+        return self.mode == "research"
+
+    @property
     def release_blockers(self) -> tuple[str, ...]:
         return tuple(map(str, self.manifest.get("release_blockers", [])))
 
@@ -107,6 +112,7 @@ class PortableCLE:
             "city_slug": self.city_slug,
             "mode": self.mode,
             "non_release_pilot": self.non_release_pilot,
+            "research_generation": self.research_generation,
             "cle_release_eligible": bool(self.manifest.get("release_eligible", False)),
             "release_blockers": list(self.release_blockers),
             "customer_eligibility_field": self.customer_eligibility_field,
@@ -132,7 +138,7 @@ def load_portable_cle(
     minimum_depots: int = 1,
     minimum_chargers: int = 50,
 ) -> PortableCLE:
-    if mode not in {"official", "non_release_pilot"}:
+    if mode not in {"official", "research", "non_release_pilot"}:
         raise ValueError(f"Unsupported Stage-2 run mode: {mode!r}")
     root = Path(cle_root) / "cities" / city_slug
     manifest_path = root / "manifest.json"
@@ -169,13 +175,13 @@ def load_portable_cle(
         "depot_release_eligible",
         "charger_release_eligible",
     )
-    pilot_fields = (
+    candidate_fields = (
         "cle_default_instance_eligible",
         "depot_candidate_eligible",
         "charger_candidate_eligible",
     )
     customer_field, depot_field, charger_field = (
-        official_fields if mode == "official" else pilot_fields
+        official_fields if mode == "official" else candidate_fields
     )
     required = {
         paths["customers"]: {"latent_service_location_id", customer_field},
@@ -217,6 +223,16 @@ def load_portable_cle(
         )
 
     warnings: list[str] = []
+    if mode == "research":
+        warnings.append(
+            "Research mode uses technically verified candidate/default pools for a full-size "
+            "build and does not claim final scientific release eligibility."
+        )
+        if manifest.get("release_blockers"):
+            warnings.append(
+                "Open CLE scientific-release labels retained in provenance: "
+                + ", ".join(map(str, manifest["release_blockers"]))
+            )
     if mode == "non_release_pilot":
         warnings.append(
             "Non-release pilot mode uses candidate/default eligibility fields and must not "

@@ -77,6 +77,15 @@ def _add_build_arguments(parser: argparse.ArgumentParser, include_city: bool = T
     )
     parser.add_argument("--min-retained-node-coverage", type=float, default=0.99)
     parser.add_argument("--min-retained-road-length-coverage", type=float, default=0.995)
+    parser.add_argument(
+        "--auto-skip-component-node-threshold",
+        type=int,
+        default=100,
+        help=(
+            "After exhausting the real-OSM buffer ladder, allow still-uncovered weak "
+            "components smaller than this exclusive node threshold to be skipped"
+        ),
+    )
     parser.add_argument("--micro-component-node-threshold", type=int, default=10)
     parser.add_argument("--micro-component-length-km-threshold", type=float, default=1.0)
 
@@ -113,6 +122,7 @@ def _options_from_args(
         routing_buffer_ladder_km=tuple(args.routing_buffer_ladder_km),
         min_retained_node_coverage=args.min_retained_node_coverage,
         min_retained_road_length_coverage=args.min_retained_road_length_coverage,
+        auto_skip_component_node_threshold=args.auto_skip_component_node_threshold,
         micro_component_node_threshold=args.micro_component_node_threshold,
         micro_component_length_km_threshold=args.micro_component_length_km_threshold,
     )

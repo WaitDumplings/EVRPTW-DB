@@ -1,57 +1,64 @@
-# VNS_TS_Solver
+# VNS-TS Solver
 
-Pickle-native VNS + Tabu Search benchmark module. The solver is adapted from the legacy `VNS_TabuSearch_Solver` and writes the shared `EVRPTWSolution` schema.
+VNS + Tabu Search baseline for the current CLE-backed Stage-2 EVRPTW
+instances. It only accepts the current `view_index.parquet` plus
+`materialized/families` layout. Instances restored from CLE + instance IDs and
+instances materialized directly by Stage 2 therefore use the same runner.
 
-```bash
-python run_vns_ts.py \
-  --dataset_path ../../../EVRPTW_Dataset/AC_v1/AC_Tiny_5 \
-  --save_path ../../results/AC_v1/AC_Tiny_5/VNS_TS_Solver \
-  --num_workers 4 \
-  --seed 2026
-```
+The resource model matches Stage 2 and the exact benchmark:
 
-Important parameters:
+- objective: directed `distance_matrix_km`;
+- travel time: directed `running_time_shortest_matrix_s`;
+- battery use: directed `running_time_path_energy_kwh`;
+- charging: full recharge with the visited station's individual 11/100 kW (or
+  other exported) `charging_power_kw` and charging efficiency;
+- customer demand/capacity: cm3; all temporal quantities: seconds.
 
-- `--predefine_route_number`: route count used by the initial sweep construction.
-- `--eta_feas`, `--eta_dist`: outer VNS budgets for feasibility and distance phases.
-- `--tabu_iter`: inner tabu-search iterations per VNS perturbation.
-- `--scales`: optional comma-separated scale filter, for example `Cus5,Cus15`.
+Every incumbent is independently replayed before it is admitted to the anytime
+trace.
 
-The adapter keeps objective units in kilometers and time units in seconds. Energy consumption is computed as `distance_km * kWh_per_km`, matching the canonical dataset schema.
-
-Smoke test on the packaged validation split:
+## Cus50 test run
 
 ```bash
 python EVRPTW_Benchmark/MetaHeuristics/VNS_TS_Solver/run_vns_ts.py \
-  --dataset_path EVRPTW_Dataset/dataset_v1/dataset/val \
-  --save_path EVRPTW_Benchmark/results/dataset_v1/val/VNS_TS_Solver_one_instance \
-  --scales Cus5 \
-  --max_instances 1 \
-  --num_workers 1 \
+  --dataset_path EVRPTW_Dataset/Instances_v1/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
+  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v1/compatibility_cus50/test1/VNS_TS_Solver_2h \
+  --num_workers 30 \
+  --time_limit_s 7200 \
+  --checkpoints_s 60,300,900,3600,7200 \
   --seed 2026 \
-  --predefine_route_number 3 \
-  --eta_feas 5 \
-  --eta_dist 5 \
-  --tabu_iter 5 \
-  --search_mode fast
+  --skip_completed
 ```
 
+`--dataset_path` may point at a broader Stage-2 directory; use `--scales` for a
+mixed Core index and `--family_root` when the family directory is stored
+separately.
 
-## Search Modes
+Search controls include `--eta_feas`, `--eta_dist`, `--tabu_iter`,
+`--predefine_route_number`, and `--search_mode fast|full`. The default `fast`
+mode uses bounded candidate neighborhoods and may naturally terminate before
+the two-hour cap.
 
-Default `search_mode=fast` uses candidate-budgeted Tabu Search: it screens relocate/exchange/2-opt/station moves by local road-distance deltas and evaluates only the best bounded candidate set. This keeps VNS-TS practical as a benchmark baseline while preserving the VNS perturbation + Tabu improvement structure.
+## Outputs
 
-Use `--search_mode full --eta_feas 60 --eta_dist 60 --tabu_iter 30` to run the legacy-style full-neighborhood Tabu Search on small instances.
+- `vns_ts_summary.csv`: final status and final validated incumbent;
+- `vns_ts_time_trace.csv`: objective and full route at every requested
+  checkpoint;
+- `solutions/*.pkl`: final canonical solutions;
+- `solutions/checkpoints/*.pkl`: checkpoint solutions.
 
-Default fast profile:
+For cross-solver collection, the summary exposes the same
+`benchmark_status`, `benchmark_completed`, and `has_incumbent` fields as the
+Exact runner. The time trace likewise contains `benchmark_status` in addition
+to the solver-facing `status` field.
 
-```text
-eta_feas=20
-eta_dist=20
-tabu_iter=10
-move_candidate_limit=40
-route_neighbor_limit=4
-position_neighbor_limit=4
-exchange_neighbor_limit=6
-station_candidate_limit=5
+A late incumbent is never backfilled into an earlier checkpoint. Natural early
+termination forwards the final incumbent only to later checkpoints. No
+feasible solution at the time limit is `UNFINISHED_NO_INCUMBENT`.
+
+## Tests
+
+```bash
+python -m pytest -q \
+  EVRPTW_Benchmark/MetaHeuristics/tests/test_stage2_metaheuristics.py
 ```

@@ -56,12 +56,12 @@ def _run(command: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--preset", type=Path, default=Path("configs/top10_us_cities_population_v1.json")
+        "--preset", type=Path, default=Path("configs/us_11city_population_v1.json")
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/sources/osm/osm_charging_pois_top10.csv"),
+        default=Path("data/sources/osm/osm_charging_pois_us_11city.csv"),
     )
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]

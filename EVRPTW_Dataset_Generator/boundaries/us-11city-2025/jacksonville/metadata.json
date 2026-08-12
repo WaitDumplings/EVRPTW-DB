@@ -1,0 +1,36 @@
+{
+  "city_slug": "jacksonville",
+  "display_name": "Jacksonville",
+  "query": "Jacksonville, Florida, USA",
+  "census_name": "Jacksonville city",
+  "census_place_geoid": "1235000",
+  "county_geoids": [
+    "12031"
+  ],
+  "boundary_source": "2025 U.S. Census TIGER/Line Places",
+  "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
+  "admin_boundary_semantics": "city proper only",
+  "land_boundary_semantics": "city proper minus official AREAWATER polygons",
+  "place_source_file": "place/tl_2025_12_place.zip",
+  "place_source_sha256": "4394a80089284477cf79daefb754afd7e9f90683415d3398376e5c2152960876",
+  "county_source_file": "county/tl_2025_us_county.zip",
+  "county_source_sha256": "9c6e9d9076abce2670d1de255de3710c35ecca00a7005d88e012dec52d95f763",
+  "land_mask_qa": {
+    "census_land_area_km2": 1935.575054,
+    "census_water_area_km2": 329.26165,
+    "derived_admin_area_km2": 2263.2651894310593,
+    "derived_land_area_km2": 1934.2452234803775,
+    "derived_removed_water_area_km2": 329.01996595067925,
+    "land_area_relative_error_vs_census": 0.0006870467341859864,
+    "water_area_relative_error_vs_census": 0.0007340182171861113,
+    "land_mask_valid": true,
+    "land_mask_empty": false,
+    "areawater_sources": [
+      {
+        "county_geoid": "12031",
+        "file": "areawater/tl_2025_12031_areawater.zip",
+        "sha256": "eb7c5c7c5f411bdf0d8f74e017e4163f2277c6b107229ecbc5c7ce65ad5f02ac"
+      }
+    ]
+  }
+}

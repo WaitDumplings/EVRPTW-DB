@@ -317,9 +317,9 @@ def verify_customer_gate(
     city_root: Path,
     customer_root: Path,
     *,
-    expected_city_count: int = 10,
+    expected_city_count: int = 11,
 ) -> dict[str, Any]:
-    """Verify the official ten-city latent-customer contract."""
+    """Verify the official eleven-city latent-customer contract."""
 
     preset_path = preset_path.resolve()
     contract_path = contract_path.resolve()
@@ -342,8 +342,10 @@ def verify_customer_gate(
 
     access_contract = contract.get("road_access", {})
     selected_threshold = access_contract.get("selected_threshold_m")
-    if access_contract.get("selection_status") != "frozen_from_ten_city_audit":
-        global_errors.append("global road-access threshold is not frozen from a ten-city audit")
+    if access_contract.get("selection_status") != "frozen_from_eleven_city_audit":
+        global_errors.append(
+            "global road-access threshold is not frozen from an eleven-city audit"
+        )
     if selected_threshold not in access_contract.get("candidate_thresholds_m", []):
         global_errors.append("selected road-access threshold is missing or not pre-registered")
         selected_threshold = None

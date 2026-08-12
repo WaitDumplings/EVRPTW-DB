@@ -22,7 +22,7 @@ def _build_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
             encoding="utf-8"
         )
     )
-    contract["road_access"]["selection_status"] = "frozen_from_ten_city_audit"
+    contract["road_access"]["selection_status"] = "frozen_from_eleven_city_audit"
     contract["road_access"]["selected_threshold_m"] = 100
     contract_path = tmp_path / "configs/contract.json"
     _write_json(contract_path, contract)
@@ -32,7 +32,7 @@ def _build_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     _write_json(
         preset_path,
         {
-            "preset_id": "top10_us_cities_population_v1",
+            "preset_id": "us_11city_population_v1",
             "cities": [{"slug": slug, "display_name": "Sample City"}],
         },
     )

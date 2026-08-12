@@ -16,6 +16,7 @@ class OperationalPolicy:
     buffer_ladder_km: tuple[float, ...] = (0.0, 1.0, 2.0, 5.0, 10.0, 20.0)
     min_node_coverage: float = 0.99
     min_road_length_coverage: float = 0.995
+    auto_skip_component_node_threshold: int = 100
     micro_component_node_threshold: int = 10
     micro_component_length_km_threshold: float = 1.0
 
@@ -30,6 +31,8 @@ class OperationalPolicy:
             raise ValueError("min_node_coverage must be in (0, 1]")
         if not 0.0 < self.min_road_length_coverage <= 1.0:
             raise ValueError("min_road_length_coverage must be in (0, 1]")
+        if self.auto_skip_component_node_threshold < 1:
+            raise ValueError("auto_skip_component_node_threshold must be positive")
         if self.micro_component_node_threshold < 1:
             raise ValueError("micro_component_node_threshold must be positive")
         if self.micro_component_length_km_threshold <= 0:
@@ -117,6 +120,75 @@ def _micro_component_summary(
     }
 
 
+def _component_skip_gate(
+    raw_audit: ConnectivityAudit,
+    raw_graph: nx.MultiDiGraph,
+    covered_city_nodes: set[Hashable],
+    policy: OperationalPolicy,
+) -> dict[str, Any]:
+    """Evaluate the preregistered small-isolated-component fallback.
+
+    The primary gate always uses every raw city component.  Only after the full
+    real-OSM buffer ladder fails may still-uncovered components with fewer than
+    ``auto_skip_component_node_threshold`` nodes be removed from the effective
+    coverage denominator.  Raw coverage is retained separately for audit.
+    """
+
+    covered_component_ids = {
+        raw_graph.nodes[node]["weak_component_id"] for node in covered_city_nodes
+    }
+    components = raw_audit.components
+    uncovered = components[~components["component_id"].isin(covered_component_ids)]
+    skipped = uncovered[
+        uncovered["node_count"] < policy.auto_skip_component_node_threshold
+    ]
+    retained_uncovered = uncovered[
+        uncovered["node_count"] >= policy.auto_skip_component_node_threshold
+    ]
+    total_nodes = int(components["node_count"].sum())
+    total_length_m = float(components["physical_road_length_m"].sum())
+    skipped_nodes = int(skipped["node_count"].sum())
+    skipped_length_m = float(skipped["physical_road_length_m"].sum())
+    covered_nodes = len(covered_city_nodes)
+    covered_length_m = _covered_physical_length_m(
+        raw_audit, raw_graph, covered_city_nodes
+    )
+    effective_node_denominator = max(total_nodes - skipped_nodes, 1)
+    effective_length_denominator = max(total_length_m - skipped_length_m, 1.0)
+    node_coverage = covered_nodes / effective_node_denominator
+    road_coverage = covered_length_m / effective_length_denominator
+    passed = (
+        retained_uncovered.empty
+        and node_coverage >= policy.min_node_coverage
+        and road_coverage >= policy.min_road_length_coverage
+    )
+    return {
+        "definition": (
+            "after exhausting the real-OSM buffer ladder, exclude only still-uncovered "
+            f"weak components with node_count < {policy.auto_skip_component_node_threshold} "
+            "from the effective coverage denominator"
+        ),
+        "component_node_threshold_exclusive": policy.auto_skip_component_node_threshold,
+        "uncovered_component_count": int(len(uncovered)),
+        "auto_skipped_component_count": int(len(skipped)),
+        "auto_skipped_component_ids": skipped["component_id"].astype(str).tolist(),
+        "auto_skipped_node_count": skipped_nodes,
+        "auto_skipped_node_share": skipped_nodes / max(total_nodes, 1),
+        "auto_skipped_physical_road_length_m": skipped_length_m,
+        "auto_skipped_physical_road_length_share": skipped_length_m
+        / max(total_length_m, 1.0),
+        "retained_uncovered_component_count": int(len(retained_uncovered)),
+        "retained_uncovered_component_ids": retained_uncovered["component_id"]
+        .astype(str)
+        .tolist(),
+        "effective_city_node_count": int(effective_node_denominator),
+        "effective_city_physical_road_length_m": effective_length_denominator,
+        "effective_city_node_coverage": node_coverage,
+        "effective_city_physical_road_length_coverage": road_coverage,
+        "passed": bool(passed),
+    }
+
+
 def select_operational_graph(
     envelope_graph: nx.MultiDiGraph,
     raw_city_graph: nx.MultiDiGraph,
@@ -130,7 +202,7 @@ def select_operational_graph(
     total_city_nodes = len(city_nodes)
     total_physical_length_m = float(raw_audit.summary["physical_road_length_m"])
     trials: list[dict[str, Any]] = []
-    selected: tuple[float, nx.MultiDiGraph, set[Hashable], dict[str, Any]] | None = None
+    selected: tuple[float, nx.MultiDiGraph, set[Hashable], dict[str, Any], str] | None = None
 
     for buffer_km in policy.buffer_ladder_km:
         polygon = _buffer_geometry(boundary, buffer_km)
@@ -161,22 +233,57 @@ def select_operational_graph(
             trial["city_node_coverage"] >= policy.min_node_coverage
             and trial["city_physical_road_length_coverage"] >= policy.min_road_length_coverage
         )
+        trial["small_component_fallback"] = _component_skip_gate(
+            raw_audit, raw_city_graph, covered_city_nodes, policy
+        )
         trials.append(trial)
         if trial["coverage_gate_passed"]:
-            selected = (buffer_km, candidate, root_nodes, trial)
+            selected = (buffer_km, candidate, root_nodes, trial, "raw_coverage")
             break
 
     if selected is None:
-        last = trials[-1]
-        raise OperationalCoverageError(
-            "No actual-OSM routing envelope met the operational coverage gates: "
-            f"node={last['city_node_coverage']:.6f} required={policy.min_node_coverage:.6f}, "
-            "road_length="
-            f"{last['city_physical_road_length_coverage']:.6f} "
-            f"required={policy.min_road_length_coverage:.6f}"
-        )
+        fallback_trials = [
+            trial for trial in trials if trial["small_component_fallback"]["passed"]
+        ]
+        if fallback_trials:
+            selected_trial = max(
+                fallback_trials,
+                key=lambda trial: (
+                    trial["city_node_coverage"],
+                    trial["city_physical_road_length_coverage"],
+                    -trial["buffer_km"],
+                ),
+            )
+            buffer_km = float(selected_trial["buffer_km"])
+            polygon = _buffer_geometry(boundary, buffer_km)
+            candidate = ox.truncate.truncate_graph_polygon(
+                envelope_graph,
+                polygon,
+                truncate_by_edge=False,
+            )
+            root_nodes = _root_component(candidate, city_nodes)
+            selected = (
+                buffer_km,
+                candidate,
+                root_nodes,
+                selected_trial,
+                "small_isolated_component_fallback",
+            )
+        else:
+            last = trials[-1]
+            fallback = last["small_component_fallback"]
+            raise OperationalCoverageError(
+                "No actual-OSM routing envelope met the operational coverage gates: "
+                f"node={last['city_node_coverage']:.6f} required={policy.min_node_coverage:.6f}, "
+                "road_length="
+                f"{last['city_physical_road_length_coverage']:.6f} "
+                f"required={policy.min_road_length_coverage:.6f}; "
+                "small-component fallback retained "
+                f"{fallback['retained_uncovered_component_count']} uncovered component(s) "
+                "at or above the node threshold"
+            )
 
-    buffer_km, _, root_nodes, selected_trial = selected
+    buffer_km, _, root_nodes, selected_trial, gate_mode = selected
     operational = envelope_graph.subgraph(root_nodes).copy()
     for node in operational.nodes:
         inside_city = node in city_nodes
@@ -200,6 +307,7 @@ def select_operational_graph(
     summary = {
         "schema": "evrptw_operational_connectivity_v1",
         "passed": True,
+        "coverage_gate_mode": gate_mode,
         "selected_buffer_km": buffer_km,
         "buffer_ladder_km": list(policy.buffer_ladder_km),
         "min_city_node_coverage": policy.min_node_coverage,
@@ -212,6 +320,23 @@ def select_operational_graph(
             "covered_city_physical_road_length_m"
         ],
         "city_physical_road_length_coverage": selected_trial["city_physical_road_length_coverage"],
+        "coverage_gate_city_node_coverage": (
+            selected_trial["city_node_coverage"]
+            if gate_mode == "raw_coverage"
+            else selected_trial["small_component_fallback"][
+                "effective_city_node_coverage"
+            ]
+        ),
+        "coverage_gate_city_physical_road_length_coverage": (
+            selected_trial["city_physical_road_length_coverage"]
+            if gate_mode == "raw_coverage"
+            else selected_trial["small_component_fallback"][
+                "effective_city_physical_road_length_coverage"
+            ]
+        ),
+        "small_isolated_component_fallback": selected_trial[
+            "small_component_fallback"
+        ],
         "operational_node_count": operational.number_of_nodes(),
         "operational_directed_edge_count": operational.number_of_edges(),
         "transit_only_node_count": transit_nodes,

@@ -49,19 +49,15 @@ def view_parent_terminal_indices(
     customer_indices = 1 + np.arange(start, start + customer_count, dtype=np.int32)
     charger_start = 1 + parent_customer_count
     charger_indices = charger_start + np.arange(charger_count, dtype=np.int32)
-    return np.concatenate(
-        [np.asarray([0], dtype=np.int32), customer_indices, charger_indices]
-    )
+    return np.concatenate([np.asarray([0], dtype=np.int32), customer_indices, charger_indices])
 
 
 def _matrix_payload(matrices: RoutingMatrices) -> dict[str, np.ndarray]:
     return {
         "distance_matrix_km": matrices.distance_matrix_km,
         "distance_path_travel_time_s": matrices.distance_path_travel_time_s,
-        "distance_path_energy_kwh": matrices.distance_path_energy_kwh,
         "running_time_shortest_matrix_s": matrices.running_time_shortest_matrix_s,
         "running_time_path_distance_km": matrices.running_time_path_distance_km,
-        "running_time_path_energy_kwh": matrices.running_time_path_energy_kwh,
     }
 
 
@@ -74,6 +70,7 @@ def materialize_family(
     views: pd.DataFrame,
     customer_split_path: str | Path,
     output_root: str | Path,
+    routing_topology_cache: dict[str, PhysicalRoadNetwork] | None = None,
 ) -> dict[str, Any]:
     family_id = str(family["family_id"])
     if views.empty:
@@ -98,7 +95,15 @@ def materialize_family(
         road_state_seed=int(family["road_state_seed"]),
         profile=profile,
     )
-    network = PhysicalRoadNetwork.from_files(cle.graph_path, road_state, profile)
+    cached_network = (
+        routing_topology_cache.get(cle.city_slug) if routing_topology_cache is not None else None
+    )
+    if cached_network is None:
+        network = PhysicalRoadNetwork.from_files(cle.graph_path, road_state, profile)
+        if routing_topology_cache is not None:
+            routing_topology_cache[cle.city_slug] = network
+    else:
+        network = cached_network.with_road_state(road_state, profile)
     matrices = network.route_terminals(terminal_index)
     matrix_payload = _matrix_payload(matrices)
 
@@ -127,11 +132,9 @@ def materialize_family(
             charger_rows = view_terminals.loc[
                 view_terminals["terminal_kind"].eq("charging_station")
             ]
-            charging_power = charger_rows["effective_charging_power_kw"].to_numpy(
-                dtype=np.float32
-            )
+            charging_power = charger_rows["effective_charging_power_kw"].to_numpy(dtype=np.float32)
             running_time = matrices.running_time_shortest_matrix_s[np.ix_(indices, indices)]
-            running_energy = matrices.running_time_path_energy_kwh[np.ix_(indices, indices)]
+            running_distance = matrices.running_time_path_distance_km[np.ix_(indices, indices)]
             attributes = build_view_attributes(
                 customer_rows,
                 day_type=str(selection_report["day_type"]),
@@ -141,7 +144,7 @@ def materialize_family(
                 operating_start_s=config.operating_horizon_start_s,
                 operating_end_s=config.operating_horizon_end_s,
                 running_time_matrix_s=running_time,
-                running_time_energy_matrix_kwh=running_energy,
+                running_time_path_distance_matrix_km=running_distance,
                 charging_power_kw=charging_power,
                 profile=profile,
             )
@@ -158,9 +161,7 @@ def materialize_family(
                 feasible_arrival_time_s=attributes.feasible_arrival_time_s,
                 feasible_return_duration_s=attributes.feasible_return_duration_s,
                 feasibility_requires_charging=attributes.feasibility_requires_charging,
-                feasibility_charging_visit_count=(
-                    attributes.feasibility_charging_visit_count
-                ),
+                feasibility_charging_visit_count=(attributes.feasibility_charging_visit_count),
                 feasibility_inbound_full_state_terminal_index=(
                     attributes.feasibility_inbound_full_state_terminal_index
                 ),
@@ -168,6 +169,7 @@ def materialize_family(
                     attributes.feasibility_first_post_customer_charger_terminal_index
                 ),
                 feasibility_energy_margin_kwh=attributes.feasibility_energy_margin_kwh,
+                order_sampling_attempts=attributes.order_sampling_attempts,
             )
             np.savez_compressed(
                 view_dir / "charging_attributes.npz",
@@ -175,7 +177,7 @@ def materialize_family(
                 full_cs_to_depot_time_s=attributes.full_cs_to_depot_time_s,
             )
             view_manifest = {
-                "schema": "cle_evrptw_materialized_view_v2",
+                "schema": "cle_evrptw_materialized_view_v3",
                 "view_id": view_id,
                 "family_id": family_id,
                 "consumer_cohort_id": str(view["consumer_cohort_id"]),
@@ -201,10 +203,15 @@ def materialize_family(
                     "battery_capacity_kwh": float(profile["energy"]["battery_capacity_kwh"]),
                     "cargo_capacity_cm3": float(profile["vehicle"]["cargo_capacity_cm3"]),
                     "unlimited_fleet": bool(profile["vehicle"]["unlimited_fleet"]),
+                    "specific_energy_consumption_kwh_per_km": float(
+                        profile["energy"]["specific_energy_consumption_kwh_per_km"]
+                    ),
                 },
+                "energy_model": dict(profile["energy"]),
                 "charging_policy": dict(profile["charging"]),
                 "runtime_mask_stored": False,
                 "attribute_report": attributes.report,
+                "generation_mode": cle.mode,
                 "non_release_pilot": cle.non_release_pilot,
                 "materialization_attempt_number": int(
                     family.get("materialization_attempt_number", 0)
@@ -221,7 +228,7 @@ def materialize_family(
             for name, relative in matrix_files.items()
         }
         manifest = {
-            "schema": "cle_evrptw_materialized_matrix_family_v1",
+            "schema": "cle_evrptw_materialized_matrix_family_v2",
             "family_id": family_id,
             "family_cohort_id": str(family["family_cohort_id"]),
             "city_slug": cle.city_slug,
@@ -234,6 +241,8 @@ def materialize_family(
             "matrix_files": matrix_files,
             "matrix_file_bytes": byte_counts,
             "matrix_total_bytes": int(sum(byte_counts.values())),
+            "stored_matrix_count": len(matrix_files),
+            "derived_matrix_names": ["distance_path_energy_kwh", "running_time_path_energy_kwh"],
             "terminal_index": "terminal_index.parquet",
             "view_count": len(view_manifests),
             "view_ids": [item["view_id"] for item in view_manifests],
@@ -243,9 +252,7 @@ def materialize_family(
             "road_state_storage": "deterministic_reconstruction_from_seed_cle_and_profile",
             "road_state_seed": int(family["road_state_seed"]),
             "base_family_seed": int(family.get("base_family_seed", family["family_seed"])),
-            "materialization_attempt_number": int(
-                family.get("materialization_attempt_number", 0)
-            ),
+            "materialization_attempt_number": int(family.get("materialization_attempt_number", 0)),
             "materialization_attempt_seed": int(
                 family.get("materialization_attempt_seed", family["family_seed"])
             ),
@@ -256,8 +263,13 @@ def materialize_family(
                 "battery_capacity_kwh": float(profile["energy"]["battery_capacity_kwh"]),
                 "cargo_capacity_cm3": float(profile["vehicle"]["cargo_capacity_cm3"]),
                 "unlimited_fleet": bool(profile["vehicle"]["unlimited_fleet"]),
+                "specific_energy_consumption_kwh_per_km": float(
+                    profile["energy"]["specific_energy_consumption_kwh_per_km"]
+                ),
             },
+            "energy_model": dict(profile["energy"]),
             "charging_policy": dict(profile["charging"]),
+            "generation_mode": cle.mode,
             "non_release_pilot": cle.non_release_pilot,
             "materialization_status": "complete",
         }

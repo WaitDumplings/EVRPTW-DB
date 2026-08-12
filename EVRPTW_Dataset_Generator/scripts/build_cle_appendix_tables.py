@@ -98,13 +98,34 @@ def build_tables(cle_root: Path, output_dir: Path, *, replace: bool) -> dict[str
             }
         )
         operational = road["operational_connectivity"]
+        fallback = operational.get("small_isolated_component_fallback") or {}
         road_rows.append(
             {
                 "city": manifest["city_label"],
                 "buffer_km": operational["selected_buffer_km"],
-                "node_coverage_pct": 100 * operational["city_node_coverage"],
-                "road_length_coverage_pct": 100
+                "raw_node_coverage_pct": 100 * operational["city_node_coverage"],
+                "raw_road_length_coverage_pct": 100
                 * operational["city_physical_road_length_coverage"],
+                "coverage_gate_mode": operational.get(
+                    "coverage_gate_mode", "primary_raw_coverage"
+                ),
+                "gate_node_coverage_pct": 100
+                * operational.get(
+                    "coverage_gate_city_node_coverage",
+                    operational["city_node_coverage"],
+                ),
+                "gate_road_length_coverage_pct": 100
+                * operational.get(
+                    "coverage_gate_city_physical_road_length_coverage",
+                    operational["city_physical_road_length_coverage"],
+                ),
+                "fallback_skipped_components": fallback.get(
+                    "auto_skipped_component_count", 0
+                ),
+                "fallback_skipped_nodes": fallback.get("auto_skipped_node_count", 0),
+                "fallback_skipped_road_m": fallback.get(
+                    "auto_skipped_physical_road_length_m", 0.0
+                ),
                 "largest_scc_node_pct": 100
                 * connectivity["reference_scc_node_share"],
                 "customer_scc_quarantine": connectivity[
@@ -252,11 +273,17 @@ def build_tables(cle_root: Path, output_dir: Path, *, replace: bool) -> dict[str
         "city_count": len(city_dirs),
         "cohort_totals": totals,
         "display_note": {
-            "node_coverage": _percent(
-                min(row["node_coverage_pct"] for row in road_rows) / 100
+            "minimum_raw_node_coverage": _percent(
+                min(row["raw_node_coverage_pct"] for row in road_rows) / 100
             ),
-            "road_length_coverage": _percent(
-                min(row["road_length_coverage_pct"] for row in road_rows) / 100
+            "minimum_raw_road_length_coverage": _percent(
+                min(row["raw_road_length_coverage_pct"] for row in road_rows) / 100
+            ),
+            "minimum_gate_node_coverage": _percent(
+                min(row["gate_node_coverage_pct"] for row in road_rows) / 100
+            ),
+            "minimum_gate_road_length_coverage": _percent(
+                min(row["gate_road_length_coverage_pct"] for row in road_rows) / 100
             ),
         },
         "source_manifests": source_manifests,
@@ -276,7 +303,7 @@ def main() -> None:
     parser.add_argument(
         "--cle-root",
         type=Path,
-        default=Path("../EVRPTW_Dataset/CLE_v1/us_top10"),
+        default=Path("../EVRPTW_Dataset/CLE_v1/us_11city"),
     )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--replace", action="store_true")

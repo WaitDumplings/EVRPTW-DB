@@ -5,6 +5,7 @@ from collections import deque, defaultdict
 import numpy as np
 from tqdm import tqdm
 import time
+from typing import Callable, Optional
 
 from vnst_adapter import Route
 
@@ -93,9 +94,26 @@ class VNSTSolver:
         ) if len(instance.stations) > 0 else np.zeros((0, 2), dtype=float)
 
         self.instance_dist_matrix_calculatrion()
+
+        if getattr(instance, "time_matrix", None) is not None:
+            self.time_matrix = np.asarray(instance.time_matrix, dtype=float)
+        else:
+            self.time_matrix = self.dist_matrix / float(instance.vehicle_params["velocity"])
+        if getattr(instance, "energy_matrix", None) is not None:
+            self.energy_matrix = np.asarray(instance.energy_matrix, dtype=float)
+        else:
+            self.energy_matrix = (
+                self.dist_matrix * float(instance.vehicle_params["consump_rate"])
+            )
+        expected_shape = self.dist_matrix.shape
+        if self.time_matrix.shape != expected_shape or self.energy_matrix.shape != expected_shape:
+            raise ValueError("distance, travel-time, and energy matrices must have identical shapes")
         self.nearest_station = self.battery_to_nearest_rs(instance.depot)
 
-        self.time_matrix = self.dist_matrix / float(instance.vehicle_params["velocity"])
+        self.terminated_by_time_limit = False
+        self._solve_start = None
+        self._deadline = None
+        self._incumbent_callback = None
 
         # Local tabu for StationReIn (arc -> remaining tenure)
         self.StationReIn_tabu_list = {}
@@ -122,8 +140,38 @@ class VNSTSolver:
         return self.time_matrix[self.node_id[node1.id]][self.node_id[node2.id]]
 
     def fuel_consumption(self, node1, node2):
-        return float(self.instance.vehicle_params["consump_rate"]) * float(
-            self.dist_matrix[self.node_id[node1.id], self.node_id[node2.id]]
+        return float(self.energy_matrix[self.node_id[node1.id], self.node_id[node2.id]])
+
+    def charging_time(self, station, missing_energy_kwh):
+        power = float(self.instance.station_charging_power_kw[station.id])
+        efficiency = float(self.instance.vehicle_params.get("charging_efficiency", 1.0))
+        return max(0.0, float(missing_energy_kwh)) / (efficiency * power) * 3600.0
+
+    def _time_limit_reached(self):
+        if self._deadline is None:
+            return False
+        reached = time.perf_counter() >= self._deadline
+        if reached:
+            self.terminated_by_time_limit = True
+        return reached
+
+    def _report_incumbent(self):
+        if (
+            self._incumbent_callback is None
+            or self._solve_start is None
+            or self.global_solution is None
+            or not math.isfinite(float(self.global_value))
+            or float(self.global_value) >= 1e10
+        ):
+            return
+        routes = [
+            [int(node.id) for node in route.nodes]
+            for route in self.global_solution
+        ]
+        self._incumbent_callback(
+            time.perf_counter() - self._solve_start,
+            float(self.global_value),
+            routes,
         )
 
     def battery_to_nearest_rs(self, node):
@@ -141,16 +189,12 @@ class VNSTSolver:
                 self.nearest_station_idx[cu.id] = None
             return nearest_station
 
-        v = float(self.instance.vehicle_params["velocity"])
-        cr = float(self.instance.vehicle_params["consump_rate"])
-
         for cu in self.instance.customers:
-            pos = np.array([cu.x, cu.y], dtype=float)
-            distances = np.linalg.norm(self.recharging_stations - pos, axis=1)
-            arg = int(np.argmin(distances))
+            energies = [self.fuel_consumption(cu, station) for station in self.instance.stations]
+            arg = int(np.argmin(energies))
             st = self.instance.stations[arg]
             self.nearest_station_idx[cu.id] = st.id
-            nearest_station[cu.id] = cr * float(np.min(distances))
+            nearest_station[cu.id] = float(energies[arg])
 
         return nearest_station
 
@@ -229,13 +273,12 @@ class VNSTSolver:
     def time_violation(self, route, node=None):
         """
         Time-window feasibility with charging time.
-        Model assumption: at a station, you recharge exactly the energy spent since last charge,
-        with charge_time = energy_used / charge_rate.
+        At a station, recharge exactly the energy spent since the previous
+        depot/station, using that station's own power and the configured
+        charging efficiency.
         """
         current_time = 0.0
         energy_since_last_charge = 0.0
-
-        charge_rate = float(self.instance.vehicle_params["charge_rate"])
 
         # walk along nodes
         for i, cur in enumerate(route.nodes):
@@ -251,7 +294,7 @@ class VNSTSolver:
             elif cur.type == "f":
                 # charge
                 if energy_since_last_charge > 0.0:
-                    current_time = arrival + energy_since_last_charge / charge_rate
+                    current_time = arrival + self.charging_time(cur, energy_since_last_charge)
                 else:
                     current_time = arrival
                 energy_since_last_charge = 0.0
@@ -280,8 +323,6 @@ class VNSTSolver:
         energy_since_last_charge = 0.0
         pen = 0.0
 
-        charge_rate = float(self.instance.vehicle_params["charge_rate"])
-
         for i, cur in enumerate(route.nodes):
             arrival = max(current_time, float(cur.ready))
             if arrival > float(cur.due):
@@ -292,7 +333,7 @@ class VNSTSolver:
                 current_time = arrival + float(cur.service)
             elif cur.type == "f":
                 if energy_since_last_charge > 0.0:
-                    current_time = arrival + energy_since_last_charge / charge_rate
+                    current_time = arrival + self.charging_time(cur, energy_since_last_charge)
                 else:
                     current_time = arrival
                 energy_since_last_charge = 0.0
@@ -626,6 +667,8 @@ class VNSTSolver:
             return "->".join(str(n.id) for n in route.nodes)
 
         for _iter in range(self.tabu_iter):
+            if self._time_limit_reached():
+                break
             self._decay_station_tabu()
 
             route_info = [route_sig(r) for r in current_solution]
@@ -914,6 +957,7 @@ class VNSTSolver:
             if cur_val < self.global_value:
                 self.global_value = cur_val
                 self.global_solution = self.clone_solution_shallow(best_solution)
+                self._report_incumbent()
 
         return best_solution
 
@@ -1133,6 +1177,8 @@ class VNSTSolver:
         tabu_list = deque(maxlen=self.tabu_tenure)
 
         for _iter in range(self.tabu_iter):
+            if self._time_limit_reached():
+                break
             self._decay_station_tabu()
             moves = self._candidate_moves_fast(current_solution)
             if not moves:
@@ -1182,6 +1228,7 @@ class VNSTSolver:
             if cur_val < self.global_value:
                 self.global_value = cur_val
                 self.global_solution = self.clone_solution_shallow(best_solution)
+                self._report_incumbent()
 
         return best_solution
 
@@ -1193,10 +1240,23 @@ class VNSTSolver:
             return self._tabu_search(S_prime)
         return self._tabu_search_fast(S_prime)
 
-    def solve(self):
+    def solve(
+        self,
+        time_limit_s: Optional[float] = None,
+        incumbent_callback: Optional[Callable[[float, float, list[list[int]]], None]] = None,
+    ):
+        self._solve_start = time.perf_counter()
+        self._deadline = (
+            None
+            if time_limit_s is None
+            else self._solve_start + max(0.0, float(time_limit_s))
+        )
+        self._incumbent_callback = incumbent_callback
+        self.terminated_by_time_limit = False
         S = self.initial_solution()
         self.global_solution = self.clone_solution_shallow(S)
         self.global_value = self.generalized_cost(S, penalty_value=False, p_div_value=False, allow_infeasible=False)
+        self._report_incumbent()
 
         κ = 1
         i = 0
@@ -1207,7 +1267,7 @@ class VNSTSolver:
 
         pbar = tqdm(total=self.η_dist + self.η_feas, disable=not self.show_progress)
 
-        while feasibilityPhase or (not feasibilityPhase and i < self.η_dist):
+        while (feasibilityPhase or (not feasibilityPhase and i < self.η_dist)) and not self._time_limit_reached():
             S_prime = self.vns_perturb(S, κ)
             S_double = self.apply_tabu_search(S_prime)
 
@@ -1226,6 +1286,7 @@ class VNSTSolver:
                 if val < self.global_value:
                     self.global_value = val
                     self.global_solution = self.clone_solution_shallow(S)
+                    self._report_incumbent()
 
             if feasibilityPhase:
                 if not self.is_solution_feasible(S):
@@ -1240,6 +1301,11 @@ class VNSTSolver:
             self.update_penalty_weights(S, i)
             i += 1
             pbar.update(1)
+
+            # Tabu search can improve global_solution internally. Reporting at
+            # the outer-iteration boundary gives the improvement a conservative
+            # timestamp and therefore cannot leak it into an earlier checkpoint.
+            self._report_incumbent()
 
         pbar.close()
         return self.global_solution

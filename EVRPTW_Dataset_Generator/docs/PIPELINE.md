@@ -1,5 +1,9 @@
 # CLE construction pipeline
 
+This document defines Stage 1. The Stage-2 operating-day model, formulas,
+parameter provenance, and literature are specified separately in
+[STAGE2_INSTANCE_MODEL.md](STAGE2_INSTANCE_MODEL.md).
+
 ## 1. Contract and execution graph
 
 ```text
@@ -49,9 +53,17 @@ SHA-256 hashes, row counts, and unresolved QA states before assembly.
 6. If either coverage is below 0.99 or 0.995 respectively, test routing
    envelopes at 1, 2, 5, 10, and 20 km. Select the smallest envelope whose real
    OSM roads connect the retained city roads and pass both thresholds.
-7. Mark all nodes/edges outside the service boundary `transit_only=true`. They
+7. If the entire buffer ladder is exhausted without passing, apply the
+   profile-defined residual rule. V1 may remove only still-uncovered weak
+   components with fewer than 100 nodes from the *effective gate denominator*.
+   It does not invent a road, edit an OSM direction, or delete the component
+   from the raw audit. The manifest must retain raw coverage, effective
+   coverage, every skipped component ID, and skipped node/physical-length
+   counts and shares. Any uncovered component with at least 100 nodes remains
+   a hard failure.
+8. Mark all nodes/edges outside the service boundary `transit_only=true`. They
    can connect a route but cannot host a service location or facility.
-8. Compute stable directed SCC labels. The largest directed SCC is the Stage-1
+9. Compute stable directed SCC labels. The largest directed SCC is the Stage-1
    reference service SCC; smaller SCCs remain in the road artifact for audit.
 
 This is a weak-connectivity construction gate, not a claim that every directed

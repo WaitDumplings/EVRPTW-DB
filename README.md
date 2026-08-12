@@ -25,9 +25,11 @@ time, or realized time window.
 An instance selects active locations and facilities, samples package demand,
 service time, and one time window per active location, chooses a vehicle/fleet
 policy, creates one static directed weekday or weekend speed realization, and
-exports distance-path and running-time-path matrices. Scale views reuse one
-parent matrix family and therefore do not copy the city graph or lower-scale
-matrices.
+exports paired distance-shortest and exact turn-aware fastest-path matrices.
+The four dense matrices are a deterministic local cache: a portable release
+may omit them and reconstruct them bit-for-bit from the frozen CLE, stored
+family road-state factors, and terminal projections. The two energy matrices
+are derived from path distance and the frozen linear vehicle coefficient.
 
 This separation lets many instances reuse one large physical graph without
 copying it into every instance and prevents latent future information from
@@ -48,9 +50,11 @@ EVRPTW-DB/
 
 ## U.S. reference implementation
 
-The first CLE profile targets ten U.S. city-proper service areas: New York
-City, Los Angeles, Chicago, Houston, Phoenix, Philadelphia, San Antonio, San
-Diego, Dallas, and Fort Worth.
+The reference cohort contains ten training-city CLEs—New York City, Los
+Angeles, Chicago, Houston, Phoenix, Philadelphia, San Antonio, San Diego,
+Dallas, and Fort Worth—plus Jacksonville as the held-out Test-3 city. Every
+boundary is a Census city-proper service area with water removed; Jacksonville
+is not used by training, validation, Test-1, Test-2, or same-city Cus2000.
 
 It integrates public/freely accessible sources with distinct roles:
 
@@ -74,25 +78,47 @@ Rivian EDV, or every generated order is an observed delivery.
 Source preparation, exact required filenames, data licenses, frozen thresholds,
 and one-command generation are documented in
 [`EVRPTW_Dataset_Generator/README.md`](EVRPTW_Dataset_Generator/README.md).
+The rigorous Stage-2 submodels, formulas, parameter provenance, assumptions,
+and literature are in
+[`docs/STAGE2_INSTANCE_MODEL.md`](EVRPTW_Dataset_Generator/docs/STAGE2_INSTANCE_MODEL.md).
+Optimized local workers, memory limits, exact-output benchmarks, resume, and
+multi-server sharding are documented in
+[`docs/STAGE2_PERFORMANCE.md`](EVRPTW_Dataset_Generator/docs/STAGE2_PERFORMANCE.md).
 
-After sources pass preflight:
+After unpacking the server bundle:
 
 ```bash
 cd EVRPTW_Dataset_Generator
 conda env create -f environment.yml
 conda activate evrptw-cle
-bash scripts/build_top10_cle.sh
+cd ..
+./generate_cle.sh
+./generate_instances.sh
 ```
 
-The CLE-backed Stage-2 reference runner, its community split, and non-release
-San Diego vertical-slice commands are documented in the Generator README under
-**Stage 2: CLE to operating-day instances**. Official generation is deliberately
-blocked while the CLE scientific release gates and U.S. operations-profile
-calibration remain open.
+These are the two production entry points. `generate_cle.sh` writes the eleven
+portable CLEs under `EVRPTW_Dataset/CLE_v1/us_11city/` and removes its
+intermediate work tree after a complete successful run. `generate_instances.sh`
+uses 12 processes by default and writes the split plan, community ledgers,
+matrix families, views, and verification reports under
+`EVRPTW_Dataset/Instances_v1/us_11city/`.
+
+The combined entry point exposes both supported CLE-backed acquisition modes:
+
+```bash
+# Build CLE and sample Stage 2 directly.
+./auto.sh stage2
+
+# Reconstruct after transferring CLE plus the slim instance-parameter tree.
+# Add --view-id/--view-id-file to restore only selected parent families.
+CLE_ROOT=/data/EVRPTW_Dataset/CLE_v1/us_11city \
+INSTANCE_OUTPUT_ROOT=/data/EVRPTW_Dataset/Instances_v1/us_11city \
+WORKERS=12 ./auto.sh restore
+```
 
 The build keeps raw sources, caches, and debug artifacts under
 `EVRPTW_Dataset_Generator/`, then packages one self-contained CLE per city under
-`EVRPTW_Dataset/CLE_v1/us_top10/`. The release-side verifier requires the
+`EVRPTW_Dataset/CLE_v1/us_11city/`. The release-side verifier requires the
 operational GraphML and all runtime paths to remain inside the city package.
 Large source files and generated GraphML/GeoParquet artifacts are intentionally
 excluded from ordinary Git history and should be distributed with versioned
@@ -106,17 +132,20 @@ official-versus-pilot gates, Census-block-group community partitioning,
 deterministic family/view plans, unit-aware customer activation, depot-aware
 catchments, nested charger selection independent of daily active-customer IDs,
 directed edge-level weekday/weekend road states, projected-edge
-routing, dual path matrix families, volume/package/service/time-window
+routing, exact turn-aware dual-path matrix families, volume/package/service/time-window
 attributes, a sufficient feasibility gate, a stored full-CS-to-depot
 fastest-feasible-time cache for dynamic mask acceleration, a consumer loader,
 and a structural verifier. The cache is static instance data, not a stored
 runtime action mask.
 
-This is currently a **non-release vertical slice**, not an official dataset.
-The ten existing CLE packages are technically portable but still declare open
-scientific release blockers, and the U.S. instance profile is labeled
-`development_calibration`. Both gates must pass before the runner accepts
-`--mode official`.
+All eleven CLE packages have passed technical and package-portability
+verification. Stage-2 held-out-location/held-out-city, nested training-view,
+and Cus2000 vertical slices also pass. The production instance shell defaults
+to `research` mode: it permits the complete frozen benchmark plan while
+retaining its research-generation label and the source provenance. The stricter
+`official` mode remains available for a later final public release. The exact
+build evidence is recorded in
+[`US_11CITY_BUILD_REPORT.md`](EVRPTW_Dataset_Generator/docs/US_11CITY_BUILD_REPORT.md).
 
 ## Reproducibility and release policy
 

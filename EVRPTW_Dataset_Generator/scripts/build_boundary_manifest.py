@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a portable provenance manifest for the reviewed ten-city boundaries."""
+"""Build a portable provenance manifest for a reviewed CLE city cohort."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def main() -> None:
         )
 
     payload = {
-        "schema": "evrptw_top10_boundary_manifest_v1",
+        "schema": "evrptw_cle_cohort_boundary_manifest_v2",
         "boundary_source": "2025 U.S. Census TIGER/Line Places",
         "water_source": "2025 U.S. Census TIGER/Line Area Hydrography (AREAWATER)",
         "semantics": "admin boundary is city proper; land boundary is admin minus AREAWATER",

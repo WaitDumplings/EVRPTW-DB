@@ -28,22 +28,22 @@
     }
   },
   "road_state": {
-    "model_id": "hierarchical_reference_speed_multiplier_v1",
-    "factor_by_day_and_mode": {
+    "model_id": "moves_day_road_type_factor_v2-development",
+    "mode_to_moves_road_type": {
+      "H": "urban_restricted_access",
+      "M": "urban_unrestricted_access",
+      "U": "urban_unrestricted_access"
+    },
+    "factor_by_day_and_moves_road_type": {
       "weekday": {
-        "H": {"mean": 0.96, "std": 0.035, "min": 0.82, "max": 1.04},
-        "M": {"mean": 0.92, "std": 0.050, "min": 0.72, "max": 1.04},
-        "U": {"mean": 0.88, "std": 0.060, "min": 0.62, "max": 1.03}
+        "urban_restricted_access": {"mean": 0.96, "std": 0.035, "min": 0.82, "max": 1.04},
+        "urban_unrestricted_access": {"mean": 0.92, "std": 0.050, "min": 0.72, "max": 1.04}
       },
       "weekend": {
-        "H": {"mean": 0.98, "std": 0.030, "min": 0.86, "max": 1.05},
-        "M": {"mean": 0.95, "std": 0.045, "min": 0.76, "max": 1.05},
-        "U": {"mean": 0.91, "std": 0.055, "min": 0.66, "max": 1.04}
+        "urban_restricted_access": {"mean": 0.98, "std": 0.030, "min": 0.86, "max": 1.05},
+        "urban_unrestricted_access": {"mean": 0.95, "std": 0.045, "min": 0.76, "max": 1.05}
       }
     },
-    "corridor_log_sigma": 0.025,
-    "physical_segment_log_sigma": 0.020,
-    "direction_log_sigma": 0.025,
     "minimum_speed_kph": 5.0,
     "connector_operating_mode": "U",
     "connector_reference_speed_kph": 36.403361
@@ -58,17 +58,16 @@
     "signal_delay_included": false
   },
   "energy": {
-    "model_id": "rivian_edv_speed_sensitive_anchor_v1-development",
+    "model_id": "rivian_delivery_700_constant_distance_v1",
     "battery_capacity_kwh": 100.0,
-    "reference_consumption_kwh_per_km": 0.404,
-    "reference_speed_kph": 40.0,
-    "rolling_share": 0.55,
-    "aerodynamic_share": 0.30,
-    "auxiliary_share": 0.15
+    "nominal_range_km": 257.0,
+    "specific_energy_consumption_kwh_per_km": 0.38910505836575876,
+    "speed_dependence_included": false,
+    "auxiliary_load_included": false
   },
   "vehicle": {
-    "vehicle_id": "rivian_edv_700_reference_v1",
-    "cargo_capacity_cm3": 3607178.0,
+    "vehicle_id": "rivian_commercial_van_delivery_700_reference_v1",
+    "cargo_capacity_cm3": 18500000.0,
     "unlimited_fleet": true
   },
   "charging": {
@@ -78,6 +77,7 @@
     "dc_vehicle_cap_kw": 100.0,
     "ac_l2_vehicle_cap_kw": 11.0,
     "missing_station_power_official_policy": "error_if_city_mode_median_unavailable",
+    "missing_station_power_research_policy": "use_reference_vehicle_mode_cap_if_no_city_mode_median",
     "missing_station_power_pilot_policy": "use_reference_vehicle_mode_cap",
     "port_capacity_model": "infinite_ports"
   },
@@ -117,5 +117,9 @@
         "loose": {"width_mean_h": 10.5, "width_std_h": 1.1, "width_min_h": 6.0, "width_max_h": 16.0, "center_mean_h": 13.8, "center_std_h": 1.8}
       }
     }
+  },
+  "feasibility": {
+    "max_order_resample_attempts": 64,
+    "time_window_policy": "sample_then_validate_without_feasibility_clipping_v1"
   }
 }

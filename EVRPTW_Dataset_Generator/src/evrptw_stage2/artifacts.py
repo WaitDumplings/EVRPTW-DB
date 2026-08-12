@@ -15,14 +15,17 @@ from .orders import (
     _single_customer_certificates,
 )
 
-MATRIX_NAMES = (
+STORED_MATRIX_NAMES = (
     "distance_matrix_km",
     "distance_path_travel_time_s",
-    "distance_path_energy_kwh",
     "running_time_shortest_matrix_s",
     "running_time_path_distance_km",
+)
+DERIVED_MATRIX_NAMES = (
+    "distance_path_energy_kwh",
     "running_time_path_energy_kwh",
 )
+MATRIX_NAMES = (*STORED_MATRIX_NAMES, *DERIVED_MATRIX_NAMES)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -48,13 +51,42 @@ def load_materialized_view(
     terminal_index = pd.read_parquet(root / family_manifest["terminal_index"])
     terminals = terminal_index.iloc[parent_indices].reset_index(drop=True)
     matrices: dict[str, np.ndarray] = {}
-    for name in MATRIX_NAMES:
+    for name in STORED_MATRIX_NAMES:
         parent = np.load(
             root / family_manifest["matrix_files"][name],
             mmap_mode=mmap_mode,
             allow_pickle=False,
         )
         matrices[name] = np.asarray(parent[np.ix_(parent_indices, parent_indices)])
+    if all(name in family_manifest["matrix_files"] for name in DERIVED_MATRIX_NAMES):
+        # Backward-compatible loading of old non-release six-matrix pilots.
+        for name in DERIVED_MATRIX_NAMES:
+            parent = np.load(
+                root / family_manifest["matrix_files"][name],
+                mmap_mode=mmap_mode,
+                allow_pickle=False,
+            )
+            matrices[name] = np.asarray(
+                parent[np.ix_(parent_indices, parent_indices)]
+            )
+        energy_matrix_source = "stored_legacy_v1"
+    else:
+        energy_model = family_manifest.get("energy_model", {})
+        specific_energy = float(
+            energy_model.get(
+                "specific_energy_consumption_kwh_per_km",
+                view_manifest["vehicle"][
+                    "specific_energy_consumption_kwh_per_km"
+                ],
+            )
+        )
+        matrices["distance_path_energy_kwh"] = (
+            matrices["distance_matrix_km"] * specific_energy
+        ).astype(np.float32)
+        matrices["running_time_path_energy_kwh"] = (
+            matrices["running_time_path_distance_km"] * specific_energy
+        ).astype(np.float32)
+        energy_matrix_source = "derived_from_path_distance"
     with np.load(view_root / view_manifest["customer_attributes"], allow_pickle=False) as data:
         attributes = {key: data[key] for key in data.files}
     customer_count = int(view_manifest["customer_count"])
@@ -95,7 +127,7 @@ def load_materialized_view(
         full_cs_cache_source = "computed_legacy_v1"
     coordinates = terminals[["longitude", "latitude"]].to_numpy(dtype=np.float32)
     payload = {
-        "schema": "cle_evrptw_loaded_view_v2",
+        "schema": "cle_evrptw_loaded_view_v3",
         "instance_id": view_id,
         "family_id": str(family_manifest["family_id"]),
         "city_slug": str(family_manifest["city_slug"]),
@@ -111,6 +143,10 @@ def load_materialized_view(
         "demands_cm3": attributes["demands_cm3"].astype(np.float32, copy=False),
         "service_time_s": attributes["service_time_s"].astype(np.float32, copy=False),
         "tw_s": attributes["time_windows_s"].astype(np.float32, copy=False),
+        "order_sampling_attempts": attributes.get(
+            "order_sampling_attempts",
+            np.ones(customer_count, dtype=np.int16),
+        ).astype(np.int16, copy=False),
         "feasibility_certificate": {
             "certificate_service_arrival_time_s": attributes[
                 "feasible_arrival_time_s"
@@ -146,10 +182,15 @@ def load_materialized_view(
             "consumer_cohort_id": view_manifest["consumer_cohort_id"],
             "split_id": view_manifest["split_id"],
             "track_id": view_manifest["track_id"],
+            "generation_mode": view_manifest.get(
+                "generation_mode",
+                "non_release_pilot" if view_manifest["non_release_pilot"] else "official",
+            ),
             "non_release_pilot": bool(view_manifest["non_release_pilot"]),
             "reference_profile_id": family_manifest["reference_profile_id"],
             "source_view_schema": str(view_manifest["schema"]),
             "full_cs_to_depot_cache_source": full_cs_cache_source,
+            "energy_matrix_source": energy_matrix_source,
         },
         **matrices,
     }
@@ -191,7 +232,12 @@ def _verify_view_feasibility_certificate(payload: dict[str, Any]) -> list[str]:
     recomputed = _single_customer_certificates(
         customer_count=customer_count,
         running_time_matrix_s=payload["running_time_shortest_matrix_s"],
-        running_time_energy_matrix_kwh=payload["running_time_path_energy_kwh"],
+        running_time_path_distance_matrix_km=payload[
+            "running_time_path_distance_km"
+        ],
+        specific_energy_consumption_kwh_per_km=float(
+            vehicle["specific_energy_consumption_kwh_per_km"]
+        ),
         charging_power_kw=payload["charging_power_kw"],
         battery_capacity_kwh=float(vehicle["battery_capacity_kwh"]),
         charging_efficiency=float(charging["charging_efficiency"]),
@@ -270,7 +316,14 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
     if terminal_index["source_id"].astype(str).duplicated().any():
         errors.append("terminal_index contains duplicate source IDs")
     matrix_metrics: dict[str, Any] = {}
-    for name in MATRIX_NAMES:
+    stored_names = tuple(manifest["matrix_files"])
+    expected_stored = set(STORED_MATRIX_NAMES)
+    if manifest.get("schema") == "cle_evrptw_materialized_matrix_family_v2":
+        if set(stored_names) != expected_stored:
+            errors.append(
+                "v2 family must persist exactly the four contracted matrices"
+            )
+    for name in stored_names:
         path = root / manifest["matrix_files"][name]
         if not path.is_file():
             errors.append(f"missing matrix: {name}")
@@ -316,6 +369,25 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
             for name in MATRIX_NAMES:
                 if payload[name].shape != (terminal_view_count, terminal_view_count):
                     errors.append(f"{view_id}: {name} view shape mismatch")
+            specific_energy = float(
+                payload["vehicle"]["specific_energy_consumption_kwh_per_km"]
+            )
+            if not np.allclose(
+                payload["distance_path_energy_kwh"],
+                payload["distance_matrix_km"] * specific_energy,
+                rtol=1e-6,
+                atol=1e-5,
+            ):
+                errors.append(f"{view_id}: distance-path energy is not linear in distance")
+            if not np.allclose(
+                payload["running_time_path_energy_kwh"],
+                payload["running_time_path_distance_km"] * specific_energy,
+                rtol=1e-6,
+                atol=1e-5,
+            ):
+                errors.append(
+                    f"{view_id}: running-time-path energy is not linear in distance"
+                )
             if len(payload["package_counts"]) != customer_count:
                 errors.append(f"{view_id}: package count length mismatch")
             if len(payload["demands_cm3"]) != customer_count:

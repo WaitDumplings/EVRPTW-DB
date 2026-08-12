@@ -522,7 +522,7 @@ def main() -> None:
         },
         "known_limitations": [
             "The package_flat_pickle is a local deterministic flattening of package_data.json; both hashes and the flattening-script hash are recorded when supplied.",
-            "Amazon stop coordinates are not treated as locations for the ten-city cles.",
+            "Amazon stop coordinates are not treated as locations for the eleven-city CLEs.",
             "Amazon ARCD does not label a stop as house or apartment, so building-type-conditioned demand requires a separately disclosed model.",
             "Descriptive weekday/weekend differences are not automatically causal city-transfer parameters.",
         ],

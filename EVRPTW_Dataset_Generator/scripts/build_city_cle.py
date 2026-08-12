@@ -54,7 +54,7 @@ def main() -> None:
     parser.add_argument(
         "--building-config",
         type=Path,
-        default=Path("configs/top10_building_extraction_v1.json"),
+        default=Path("configs/us_11city_building_extraction_v1.json"),
     )
     parser.add_argument("--building-source-root", type=Path, required=True)
     parser.add_argument("--afdc", type=Path, required=True)

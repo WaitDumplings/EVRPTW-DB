@@ -31,8 +31,8 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cle-root", type=Path, required=True)
     parser.add_argument(
         "--mode",
-        choices=("official", "non_release_pilot"),
-        default="official",
+        choices=("official", "research", "non_release_pilot"),
+        default="research",
     )
 
 
@@ -139,6 +139,7 @@ def main() -> None:
             "failures": failures,
             "ready": not failures,
             "official_generation_allowed": args.mode == "official" and not failures,
+            "research_generation_allowed": args.mode == "research" and not failures,
         }
         _write_or_print(payload, args.output)
         if failures:

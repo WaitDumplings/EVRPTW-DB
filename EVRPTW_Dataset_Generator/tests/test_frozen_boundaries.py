@@ -6,7 +6,7 @@ from pathlib import Path
 from evrptw_cle.util import sha256_file
 
 ROOT = Path(__file__).resolve().parents[1]
-BOUNDARY_ROOT = ROOT / "boundaries/top10-population-2025"
+BOUNDARY_ROOT = ROOT / "boundaries/us-11city-2025"
 
 
 def _read_json(path: Path) -> dict:
@@ -15,9 +15,9 @@ def _read_json(path: Path) -> dict:
 
 def test_frozen_boundary_metadata_is_portable_and_hash_aligned() -> None:
     manifest = _read_json(BOUNDARY_ROOT / "manifest.json")
-    building_registry = _read_json(ROOT / "configs/top10_building_extraction_v1.json")
+    building_registry = _read_json(ROOT / "configs/us_11city_building_extraction_v1.json")
 
-    assert len(manifest["cities"]) == 10
+    assert len(manifest["cities"]) == 11
     assert set(building_registry["cities"]) == {
         record["slug"] for record in manifest["cities"]
     }

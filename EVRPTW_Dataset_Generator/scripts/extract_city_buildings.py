@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/top10_building_extraction_v1.json"),
+        default=Path("configs/us_11city_building_extraction_v1.json"),
     )
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, default=Path("data/buildings"))

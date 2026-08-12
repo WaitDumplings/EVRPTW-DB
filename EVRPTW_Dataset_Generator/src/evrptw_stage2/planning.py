@@ -333,9 +333,9 @@ def build_generation_plan(
         )
         for scale_id, group in family_frame.groupby("parent_scale_id", sort=True)
     }
-    three_matrix_reference_bytes = int(
+    legacy_six_matrix_bytes = int(
         sum(matrix_bytes_by_parent_scale.values())
-        * 3
+        * 6
         / config.stored_parent_matrix_count
     )
     registry = {
@@ -359,7 +359,10 @@ def build_generation_plan(
         "stored_parent_matrix_count": config.stored_parent_matrix_count,
         "estimated_parent_matrix_bytes_by_scale": matrix_bytes_by_parent_scale,
         "estimated_parent_matrix_bytes_total": int(sum(matrix_bytes_by_parent_scale.values())),
-        "three_matrix_reference_bytes_total": three_matrix_reference_bytes,
+        "legacy_six_matrix_bytes_total": legacy_six_matrix_bytes,
+        "matrix_storage_savings_vs_legacy_six_fraction": (
+            1.0 - config.stored_parent_matrix_count / 6.0
+        ),
     }
     return family_frame, view_frame, registry
 
