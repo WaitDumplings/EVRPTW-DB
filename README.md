@@ -116,6 +116,31 @@ INSTANCE_OUTPUT_ROOT=/data/EVRPTW_Dataset/Instances_v1/us_11city \
 WORKERS=12 ./auto.sh restore
 ```
 
+For a transferred slim release archive, one command verifies its SHA-256,
+checks every archive member, unpacks it safely, and restores all matrix
+families in a persistent background `tmux` session:
+
+```bash
+# Keep the required sidecar beside the archive as FILE.tar.zst.sha256.
+./auto.sh archive start \
+  --archive /data/EVRPTW_Dataset_us11city_research_slim_v1.tar.zst \
+  --destination /data \
+  --workers 12
+
+./auto.sh archive status --destination /data
+./auto.sh archive logs --destination /data --follow
+./auto.sh archive wait --destination /data
+```
+
+The archive must contain one top-level `EVRPTW_Dataset/` directory; the final
+tree is `/data/EVRPTW_Dataset` for the example above. `start` is resumable for
+the same verified archive and reuses atomically completed matrix families, but
+refuses to overwrite or adopt an unrelated existing dataset. Use
+`--foreground` only for interactive debugging or CI. For the current
+US-11-city release, reserve at least about 170 GiB of free space and do not run
+benchmarks until `status` reports `succeeded`; the wrapper also performs an
+exact manifest-based space check before extraction.
+
 The build keeps raw sources, caches, and debug artifacts under
 `EVRPTW_Dataset_Generator/`, then packages one self-contained CLE per city under
 `EVRPTW_Dataset/CLE_v1/us_11city/`. The release-side verifier requires the

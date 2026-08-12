@@ -326,6 +326,34 @@ checks the CLE and profile hashes, and accepts the output only when all four
 conflicting matrix directory. See [OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md)
 for the reconstruction contract.
 
+If CLE and slim parameters are distributed together as the supported
+`EVRPTW_Dataset` archive layout, use the repository-level background workflow
+instead of unpacking by hand:
+
+```bash
+cd ..
+./auto.sh archive start \
+  --archive /data/EVRPTW_Dataset_us11city_research_slim_v1.tar.zst \
+  --destination /data \
+  --workers 12 \
+  --families-per-worker-task 25
+
+./auto.sh archive status --destination /data
+./auto.sh archive logs --destination /data --follow
+./auto.sh archive wait --destination /data
+```
+
+The required checksum defaults to `<archive>.sha256`; pass
+`--sha256-file FILE` only when it has another name. The workflow rejects
+absolute paths, `..` traversal, links, special files, duplicate members,
+unexpected archive roots, insufficient disk space, and unrelated existing
+targets. It extracts into private staging and publishes the tree atomically
+before invoking the same exact reconstruction path shown above. A repeated
+`start` for the same archive safely resumes and reuses complete family caches.
+The job state and log live under
+`<destination>/.evrptw_restore_us11city/`. For this release, budget at least
+about 170 GiB free and wait for phase `succeeded` before starting a benchmark.
+
 ## Frozen Stage-2 benchmark sizes
 
 | Scale | CS | Train | Validation | Test |

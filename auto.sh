@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_METHOD="${DATA_METHOD:-stage2}"
+if [[ "${1:-}" == "archive" ]]; then
+  shift
+  exec "$ROOT_DIR/restore_dataset_archive.sh" "$@"
+fi
 if [[ "${1:-}" == "stage2" || "${1:-}" == "restore" ]]; then
   DATA_METHOD="$1"
   shift
@@ -22,7 +26,7 @@ case "$DATA_METHOD" in
     INSTANCE_METHOD=restore "$ROOT_DIR/generate_instances.sh" "$@"
     ;;
   *)
-    echo "Usage: $0 {stage2|restore} [Stage-2/restore arguments]" >&2
+    echo "Usage: $0 {stage2|restore|archive} [arguments]" >&2
     exit 2
     ;;
 esac
