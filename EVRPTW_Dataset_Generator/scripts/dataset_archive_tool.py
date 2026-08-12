@@ -15,15 +15,14 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import shutil
 import signal
 import subprocess
 import sys
 import tarfile
 import time
+from pathlib import Path, PurePosixPath
 from typing import Any
-
 
 ARCHIVE_ROOT = "EVRPTW_Dataset"
 RELEASE_MANIFEST_SCHEMA = "evrptw_slim_dataset_release_manifest_v1"
@@ -308,8 +307,8 @@ def _check_code_revision(repo_root: Path, required_commit: str) -> None:
         raise ArchiveWorkflowError("Release manifest does not declare code_commit")
     check = subprocess.run(
         ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", required_commit, "HEAD"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
+        check=False,
         text=True,
     )
     if check.returncode != 0:
@@ -592,6 +591,7 @@ def run_job(job_dir: Path) -> None:
                 [str(repo_root / "auto.sh"), "restore"],
                 cwd=repo_root,
                 env=environment,
+                check=False,
             )
             if result.returncode != 0:
                 raise ArchiveWorkflowError(

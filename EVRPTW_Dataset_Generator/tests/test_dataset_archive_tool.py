@@ -7,14 +7,13 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tarfile
+from pathlib import Path
 
 import pytest
-
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 TOOL_PATH = REPOSITORY_ROOT / "EVRPTW_Dataset_Generator" / "scripts" / "dataset_archive_tool.py"
@@ -227,8 +226,8 @@ def test_auto_archive_background_start_uses_tmux_without_running_restore(tmp_pat
         cwd=REPOSITORY_ROOT,
         env=environment,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
+        check=False,
         timeout=30,
     )
 
@@ -269,8 +268,8 @@ def test_status_reports_stopped_nonterminal_job_as_failure(tmp_path: Path) -> No
         cwd=REPOSITORY_ROOT,
         env=environment,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
+        check=False,
         timeout=30,
     )
 
@@ -315,8 +314,8 @@ def test_concurrent_archive_launcher_is_rejected(tmp_path: Path) -> None:
             cwd=REPOSITORY_ROOT,
             env=environment,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
+            check=False,
             timeout=30,
         )
     finally:
@@ -403,8 +402,8 @@ def test_tiny_archive_end_to_end_exact_restore(tmp_path: Path) -> None:
         cwd=REPOSITORY_ROOT,
         env=environment,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
+        check=False,
         timeout=60,
     )
     assert first_run.returncode == 0, first_run.stderr
@@ -434,8 +433,8 @@ def test_tiny_archive_end_to_end_exact_restore(tmp_path: Path) -> None:
         cwd=REPOSITORY_ROOT,
         env=environment,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
+        check=False,
         timeout=60,
     )
     assert second_run.returncode == 0, second_run.stderr

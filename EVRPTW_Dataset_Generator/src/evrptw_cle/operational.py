@@ -169,15 +169,15 @@ def _component_skip_gate(
             "from the effective coverage denominator"
         ),
         "component_node_threshold_exclusive": policy.auto_skip_component_node_threshold,
-        "uncovered_component_count": int(len(uncovered)),
-        "auto_skipped_component_count": int(len(skipped)),
+        "uncovered_component_count": len(uncovered),
+        "auto_skipped_component_count": len(skipped),
         "auto_skipped_component_ids": skipped["component_id"].astype(str).tolist(),
         "auto_skipped_node_count": skipped_nodes,
         "auto_skipped_node_share": skipped_nodes / max(total_nodes, 1),
         "auto_skipped_physical_road_length_m": skipped_length_m,
         "auto_skipped_physical_road_length_share": skipped_length_m
         / max(total_length_m, 1.0),
-        "retained_uncovered_component_count": int(len(retained_uncovered)),
+        "retained_uncovered_component_count": len(retained_uncovered),
         "retained_uncovered_component_ids": retained_uncovered["component_id"]
         .astype(str)
         .tolist(),

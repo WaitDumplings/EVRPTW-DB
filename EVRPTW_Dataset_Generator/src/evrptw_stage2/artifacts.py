@@ -318,11 +318,11 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
     matrix_metrics: dict[str, Any] = {}
     stored_names = tuple(manifest["matrix_files"])
     expected_stored = set(STORED_MATRIX_NAMES)
-    if manifest.get("schema") == "cle_evrptw_materialized_matrix_family_v2":
-        if set(stored_names) != expected_stored:
-            errors.append(
-                "v2 family must persist exactly the four contracted matrices"
-            )
+    if (
+        manifest.get("schema") == "cle_evrptw_materialized_matrix_family_v2"
+        and set(stored_names) != expected_stored
+    ):
+        errors.append("v2 family must persist exactly the four contracted matrices")
     for name in stored_names:
         path = root / manifest["matrix_files"][name]
         if not path.is_file():

@@ -37,7 +37,6 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
     """Materialize one single-city chunk while reusing its routing topology."""
 
     config = load_stage2_config(task["config_path"])
-    non_release = str(task["mode"]) == "non_release_pilot"
     profile = load_reference_profile(
         task["profile_path"],
         official=str(task["mode"]) == "official",
