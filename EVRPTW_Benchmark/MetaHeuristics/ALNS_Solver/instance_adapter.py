@@ -6,6 +6,7 @@ import numpy as np
 
 from evrptw_core.schema import EVRPTWInstance, merge_route_sequences
 from benchmark_common import (
+    certificate_singleton_routes,
     charging_profile,
     running_time_energy_matrix_kwh,
     running_time_matrix_s,
@@ -31,6 +32,7 @@ def to_alns_tensor_instance(instance: EVRPTWInstance) -> dict[str, Any]:
     distance_matrix_km = np.asarray(instance.distance_matrix_km, dtype=np.float64)
     time_matrix_min = running_time_matrix_s(instance) / 60.0
     energy_matrix_kwh = running_time_energy_matrix_kwh(instance)
+    verified_certificate_routes = certificate_singleton_routes(instance)
 
     return {
         "instance_id": instance.instance_id,
@@ -46,6 +48,11 @@ def to_alns_tensor_instance(instance: EVRPTWInstance) -> dict[str, Any]:
         "charging_power_kw": charging_power_kw,
         "charging_efficiency": charging_efficiency,
         "charging_power_source": charging_power_source,
+        # Only the reconstructed routes are suitable for a warm start: the
+        # helper has independently replayed them under the canonical contract.
+        # The raw generator witness is retained for diagnostics only.
+        "certificate_singleton_routes": verified_certificate_routes,
+        "feasibility_certificate": instance.raw.get("feasibility_certificate"),
         "env": {
             "instance_startTime": float(instance.working_start_s),
             "instance_endTime": float(instance.working_end_s),

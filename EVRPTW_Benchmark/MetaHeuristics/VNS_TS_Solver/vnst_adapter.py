@@ -7,6 +7,7 @@ import numpy as np
 
 from evrptw_core.schema import EVRPTWInstance, merge_route_sequences
 from benchmark_common import (
+    certificate_singleton_routes,
     charging_profile,
     running_time_energy_matrix_kwh,
     running_time_matrix_s,
@@ -43,15 +44,15 @@ class VNSTInstance:
         self.energy_matrix = None
         self.terminal_order = []
         self.station_charging_power_kw = {}
+        self.certificate_singleton_routes = None
 
 
 def to_vnst_instance(instance: EVRPTWInstance) -> VNSTInstance:
     """Convert canonical pickle schema to the legacy VNS-TS object model.
 
-    VNS-TS expects node order [depot, stations, customers] in its internal
-    distance matrix, while the benchmark schema uses [depot, customers,
-    stations]. Node ids remain benchmark-terminal ids so returned routes are
-    already compatible with EVRPTW_Core.
+    Node ids and matrices remain in the canonical benchmark terminal order
+    ``[depot, customers, stations]``.  The solver uses ``terminal_order`` for
+    legacy external instances, so no Stage-2 matrix permutation is required.
     """
     out = VNSTInstance()
     out.instance_id = instance.instance_id
@@ -121,17 +122,17 @@ def to_vnst_instance(instance: EVRPTWInstance) -> VNSTInstance:
     }
 
     canonical_distance = np.asarray(instance.distance_matrix_km, dtype=np.float64)
-    station_ids = list(range(instance.num_customers + 1, instance.num_terminals))
-    customer_ids = list(range(1, instance.num_customers + 1))
-    order = [0] + station_ids + customer_ids
-    out.terminal_order = order
-    out.dist_matrix = canonical_distance[np.ix_(order, order)]
-    out.time_matrix = running_time_matrix_s(instance)[np.ix_(order, order)]
-    out.energy_matrix = running_time_energy_matrix_kwh(instance)[np.ix_(order, order)]
+    out.terminal_order = list(range(instance.num_terminals))
+    out.dist_matrix = canonical_distance
+    out.time_matrix = running_time_matrix_s(instance)
+    out.energy_matrix = running_time_energy_matrix_kwh(instance)
     out.station_charging_power_kw = {
         int(instance.num_customers + station_offset + 1): float(power)
         for station_offset, power in enumerate(charging_power_kw)
     }
+    # The shared helper reconstructs multi-hop charger paths and admits them
+    # only after complete canonical replay of the whole route set.
+    out.certificate_singleton_routes = certificate_singleton_routes(instance)
     return out
 
 

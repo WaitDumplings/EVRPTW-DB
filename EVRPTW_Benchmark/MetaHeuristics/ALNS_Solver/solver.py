@@ -4,6 +4,7 @@ import math
 import random
 import time
 from collections import defaultdict
+from itertools import islice
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from tqdm import tqdm
 import numpy as np
@@ -168,8 +169,6 @@ class ALNS_Solver:
         self.instance = instance
         self.rng = random.Random(seed)
         self.format = format
-        self.customer_top_k = 5   
-        self.station_top_m = 5 
 
         if format == "tensor":
             self.n_stations = len(instance.get("charging_stations", []))
@@ -251,7 +250,14 @@ class ALNS_Solver:
         else:
             self.energy_matrix = self.dist_matrix * self.r
 
+        # The matrices are immutable for the lifetime of a solver.  Keeping the
+        # maximum avoids rescanning the full O(n^2) distance matrix in every
+        # regret-insertion round.
+        self.max_distance = float(self.dist_matrix.max())
+
         self.station_charge_minutes_per_kwh: Dict[int, float] = {}
+        self.certificate_singleton_routes = instance.get("certificate_singleton_routes")
+        self.feasibility_certificate = instance.get("feasibility_certificate")
         if format == "tensor":
             power = np.asarray(instance.get("charging_power_kw", []), dtype=float)
             efficiency = float(instance.get("charging_efficiency", 1.0))
@@ -314,6 +320,12 @@ class ALNS_Solver:
         self.shaw_deteminism = 6
         self.n_zones = 9
 
+        # Preserve ``station_indices`` as a list because its iteration order is
+        # part of deterministic neighbourhood enumeration.  Membership checks,
+        # however, are frequent enough to warrant a separate O(1) lookup set.
+        self.station_index_set = set(self.station_indices)
+        self.customer_zone_map = self._build_zone_map(self.customer_indices)
+
         # ------------------------------------------------------------------
         # Operator pools
         # ------------------------------------------------------------------
@@ -374,12 +386,43 @@ class ALNS_Solver:
         # Caches
         # ------------------------------------------------------------------
         self._sim_cache: Dict[Tuple[int, ...], Dict[str, Any]] = {}
+        self._feasibility_cache: Dict[Tuple[int, ...], bool] = {}
         self._dist_cache: Dict[Tuple[int, ...], float] = {}
         self._demand_cache: Dict[Tuple[int, ...], float] = {}
         self._time_cache: Dict[Tuple[int, ...], float] = {}
         self._best_station_arc_cache: Dict[Tuple[Tuple[int, ...], int], Optional[List[int]]] = {}
 
         self.heavy_postprocess_interval = 200
+
+        # Construction is deliberately bounded: a complete singleton solution
+        # is available almost immediately on certified Stage-2 instances, after
+        # which a deterministic best-fit pass may improve vehicle consolidation
+        # without delaying the first published incumbent indefinitely.
+        if self.n_customers >= 500:
+            self.initial_construction_budget_s = 5.0
+            self.initial_merge_candidate_limit = 12
+            self.initial_exact_insertion_limit = 6
+            self.customer_top_k = 8
+            self.simulation_cache_limit = 12_000
+        elif self.n_customers >= 100:
+            self.initial_construction_budget_s = 8.0
+            self.initial_merge_candidate_limit = 20
+            self.initial_exact_insertion_limit = 12
+            self.customer_top_k = 16
+            self.simulation_cache_limit = 20_000
+        else:
+            self.initial_construction_budget_s = 12.0
+            self.initial_merge_candidate_limit = None
+            self.initial_exact_insertion_limit = 24
+            self.customer_top_k = None
+            self.simulation_cache_limit = 30_000
+        self.scalar_cache_limit = 50_000
+        self.station_cache_limit = 12_000
+        self.initial_construction_strategy = "singleton_best_fit_v1"
+        self.algorithm_profile_id = "alns_stage2_scalable_v2"
+        self.initial_construction_stats: Dict[str, Any] = {}
+        self.singleton_source = "solver_repair"
+        self._singleton_route_cache: Dict[int, List[int]] = {}
 
         # ------------------------------------------------------------------
         # Search state
@@ -425,6 +468,26 @@ class ALNS_Solver:
             "attribute_total": int(self.attribute_total),
 
             "visited": list(self.visited),
+        }
+
+    def get_run_metadata(self) -> Dict[str, Any]:
+        """Return the effective, scale-adaptive algorithm profile for outputs."""
+
+        return {
+            "algorithm_profile_id": self.algorithm_profile_id,
+            "initial_construction_strategy": self.initial_construction_strategy,
+            "initial_construction": dict(self.initial_construction_stats),
+            "singleton_source": self.singleton_source,
+            "customer_insertion_exact_candidate_limit": self.customer_top_k,
+            "initial_merge_candidate_limit": self.initial_merge_candidate_limit,
+            "initial_exact_insertion_limit": self.initial_exact_insertion_limit,
+            "initial_construction_budget_s": self.initial_construction_budget_s,
+            "station_repair": "progressive_multi_hop_full_replay_v1",
+            "route_feasibility": "compact_cached_exact_v1",
+            "simulation_cache_limit": self.simulation_cache_limit,
+            "scalar_cache_limit": self.scalar_cache_limit,
+            "station_cache_limit": self.station_cache_limit,
+            "published_incumbent_validation": "solver_full_then_runner_independent_replay",
         }
 
 
@@ -537,23 +600,42 @@ class ALNS_Solver:
             report_incumbent()
 
         else:
-            current = self._construct_initial_solution()
+            # Publish the complete singleton fallback before spending any time
+            # on consolidation.  It is an ordinary fully checked solution, not
+            # a partial incumbent, so a large instance gets a valid checkpoint
+            # route even if construction consumes the remaining time budget.
+            singleton = self._construct_singleton_solution()
+            if not self.is_solution_feasible(singleton):
+                self.current_routes = [list(r) for r in singleton]
+                self.best_routes = [list(r) for r in singleton]
+                self.global_value = float("inf")
+                self.visited = self._served_mask(singleton)
+                return merge_routes(singleton) if self.format == "tensor" else self._export_routes(singleton)
+            singleton_value = self.objective_value(singleton)
+            self.current_routes = [list(r) for r in singleton]
+            self.best_routes = [list(r) for r in singleton]
+            self.global_value = singleton_value
+            self.cur_iter = 1
+            report_incumbent()
+
+            current = self._construct_initial_solution(
+                deadline=deadline,
+                singleton_routes=singleton,
+            )
             current = self._postprocess_solution(current)
             initial_value = self.objective_value(current)
 
             if not self.is_solution_feasible(current):
-                self.current_routes = [list(r) for r in current]
-                self.best_routes = [list(r) for r in current]
-                self.global_value = float("inf")
-                self.visited = self._served_mask(current)
-                return merge_routes(current) if self.format == "tensor" else self._export_routes(current)
+                current = [list(r) for r in singleton]
+                initial_value = singleton_value
 
             self.current_routes = [list(r) for r in current]
-            self.best_routes = [list(r) for r in current]
-            self.global_value = self.objective_value(current)
-            self.temperature = self._initial_temperature(self.global_value)
+            if initial_value + 1e-9 < self.global_value:
+                self.best_routes = [list(r) for r in current]
+                self.global_value = initial_value
+                report_incumbent()
+            self.temperature = self._initial_temperature(initial_value)
             self.cur_iter = 1
-            report_incumbent()
 
         # ------------------------------------------------------------
         # Decide how far to run this time
@@ -588,7 +670,9 @@ class ALNS_Solver:
                 candidate = self._repair_all_routes_with_si(partial, si_name)
                 candidate = self._light_postprocess_solution(candidate)
 
-                accepted, reward = self._evaluate_candidate(candidate, current)
+                accepted, reward, cand_obj = self._evaluate_candidate(
+                    candidate, current_distance
+                )
 
                 self.sr_uses[sr_name] += 1
                 self.si_uses[si_name] += 1
@@ -616,7 +700,9 @@ class ALNS_Solver:
                 candidate = self.ci_ops[ci_name](partial, removed_customers)
                 candidate = self._light_postprocess_solution(candidate)
 
-                accepted, reward = self._evaluate_candidate(candidate, current)
+                accepted, reward, cand_obj = self._evaluate_candidate(
+                    candidate, current_distance
+                )
 
                 self.cr_uses[cr_name] += 1
                 self.ci_uses[ci_name] += 1
@@ -624,8 +710,6 @@ class ALNS_Solver:
                 self.ci_scores[ci_name] += reward
 
             if accepted:
-                cand_obj = self.objective_value(candidate)
-
                 if cand_obj + 1e-9 < self.global_value:
                     candidate = self._postprocess_solution(candidate)
                     cand_obj = self.objective_value(candidate)
@@ -674,20 +758,26 @@ class ALNS_Solver:
             return float("inf")
         return sum(self._route_distance(r) for r in routes)
 
-    def _evaluate_candidate(self, candidate: List[List[int]], current: List[List[int]]) -> Tuple[bool, float]:
+    def _evaluate_candidate(
+        self,
+        candidate: List[List[int]],
+        current_distance: float,
+    ) -> Tuple[bool, float, float]:
         if not self.is_solution_feasible(candidate):
-            return False, self.r4
+            return False, self.r4, float("inf")
 
-        cand_dist = self.objective_value(candidate)
-        curr_dist = self.objective_value(current)
+        # Feasibility was established immediately above.  Summing the route
+        # distances directly preserves objective_value's reduction order while
+        # avoiding a second full solution-feasibility scan.
+        cand_dist = sum(self._route_distance(route) for route in candidate)
 
         if cand_dist + 1e-9 < self.global_value:
-            return True, self.r1
-        if cand_dist + 1e-9 < curr_dist:
-            return True, self.r2
-        if self._accept_sa(cand_dist, curr_dist):
-            return True, self.r3
-        return False, self.r4
+            return True, self.r1, cand_dist
+        if cand_dist + 1e-9 < current_distance:
+            return True, self.r2, cand_dist
+        if self._accept_sa(cand_dist, current_distance):
+            return True, self.r3, cand_dist
+        return False, self.r4, cand_dist
 
     def _accept_sa(self, new_dist: float, old_dist: float) -> bool:
         if new_dist <= old_dist + 1e-9:
@@ -718,12 +808,64 @@ class ALNS_Solver:
     def is_route_feasible(self, route: List[int]) -> bool:
         if not route or route[0] != 0 or route[-1] != 0:
             return False
+        if any(node < 0 or node >= len(self.nodes) for node in route):
+            return False
+        if 0 in route[1:-1]:
+            return False
         if not self._has_customer(route):
             return False
-        if self._route_demand(route) > self.C - 1e-9:
+        # A route whose demand is exactly the vehicle capacity is feasible.
+        # Use the same numerical tolerance as the insertion pre-filters; the
+        # previous ``C - eps`` comparison incorrectly rejected full loads.
+        if self._route_demand(route) > self.C + 1e-9:
             return False
-        sim = self._simulate_route(route)
-        return sim["feasible"]
+        return self._is_route_schedule_feasible(route)
+
+    def _is_route_schedule_feasible(self, route: List[int]) -> bool:
+        """Compact route replay for hot feasibility-only evaluations."""
+
+        key = self._route_key(route)
+        if key in self._feasibility_cache:
+            return self._feasibility_cache[key]
+        detailed = self._sim_cache.get(key)
+        if detailed is not None:
+            feasible = bool(detailed["feasible"])
+            self._cache_store(
+                self._feasibility_cache, key, feasible, self.scalar_cache_limit
+            )
+            return feasible
+
+        current_time = max(0.0, float(self.depot["ready"]))
+        battery = self.Q
+        for pos in range(1, len(route)):
+            origin = route[pos - 1]
+            destination = route[pos]
+            current_time += float(self.time_matrix[origin, destination])
+            battery -= float(self.energy_matrix[origin, destination])
+            node = self.nodes[destination]
+            start = max(current_time, float(node["ready"]))
+            if battery < -1e-9 or start > float(node["due"]) + 1e-9:
+                self._cache_store(
+                    self._feasibility_cache, key, False, self.scalar_cache_limit
+                )
+                return False
+            if destination in self.station_index_set:
+                recharge_amount = self.Q - battery
+                minutes_per_kwh = self.station_charge_minutes_per_kwh.get(
+                    destination, self.g
+                )
+                current_time = start + recharge_amount * minutes_per_kwh
+                battery = self.Q
+            elif destination == 0:
+                current_time = start
+            else:
+                current_time = start + float(node["service"])
+
+        feasible = current_time <= float(self.depot["due"]) + 1e-9
+        self._cache_store(
+            self._feasibility_cache, key, feasible, self.scalar_cache_limit
+        )
+        return feasible
 
     def _simulate_route(self, route: List[int]) -> Dict[str, Any]:
         key = self._route_key(route)
@@ -806,10 +948,15 @@ class ALNS_Solver:
                     "first_time_violation_pos": first_time_violation_pos,
                     "first_infeasible_pos": first_infeasible_pos,
                 }
-                self._sim_cache[key] = result
+                self._cache_store(
+                    self._sim_cache, key, result, self.simulation_cache_limit
+                )
+                self._cache_store(
+                    self._feasibility_cache, key, False, self.scalar_cache_limit
+                )
                 return result
 
-            if j in self.station_indices:
+            if j in self.station_index_set:
                 recharge_amount = self.Q - battery
                 minutes_per_kwh = self.station_charge_minutes_per_kwh.get(j, self.g)
                 time = start + recharge_amount * minutes_per_kwh
@@ -840,63 +987,216 @@ class ALNS_Solver:
             "first_time_violation_pos": first_time_violation_pos,
             "first_infeasible_pos": first_infeasible_pos,
         }
-        self._sim_cache[key] = result
+        self._cache_store(
+            self._sim_cache, key, result, self.simulation_cache_limit
+        )
+        self._cache_store(
+            self._feasibility_cache, key, feasible, self.scalar_cache_limit
+        )
         return result
 
     # ======================================================================
     # Initial solution
     # ======================================================================
-    def _construct_initial_solution(self) -> List[List[int]]:
-        unserved = set(self.customer_indices)
-        failed_seed_customers = set()
-        routes: List[List[int]] = []
+    def _construct_singleton_solution(self) -> List[List[int]]:
+        """Build a complete feasible fallback before attempting consolidation."""
 
-        while unserved:
-            candidate_seeds = [c for c in unserved if c not in failed_seed_customers]
-            if not candidate_seeds:
+        certified = self._normalized_certificate_singletons()
+        if certified is not None:
+            self.singleton_source = "stage2_certificate_replayed"
+            self._singleton_route_cache = {
+                customer: list(route)
+                for customer, route in zip(self.customer_indices, certified)
+            }
+            return certified
+
+        self.singleton_source = "solver_repair"
+        routes: List[List[int]] = []
+        for customer in self.customer_indices:
+            route = self._make_single_customer_route(customer)
+            if route is None:
+                # Keep failure explicit.  The caller's full feasibility check
+                # prevents a partial solution from ever becoming an incumbent.
+                return []
+            routes.append(route)
+        return routes
+
+    def _normalized_certificate_singletons(self) -> Optional[List[List[int]]]:
+        raw = self.certificate_singleton_routes
+        if raw is None:
+            return None
+        by_customer: Dict[int, List[int]] = {}
+        try:
+            for raw_route in raw:
+                route = [int(node) for node in raw_route]
+                customers = [node for node in route if node in self.customer_to_mask]
+                if len(customers) != 1 or customers[0] in by_customer:
+                    return None
+                by_customer[customers[0]] = route
+        except (TypeError, ValueError):
+            return None
+        if set(by_customer) != set(self.customer_indices):
+            return None
+        ordered = [by_customer[customer] for customer in self.customer_indices]
+        # The shared loader has already canonical-replayed these routes, but the
+        # solver validates again after adaptation before trusting the fallback.
+        return ordered if self.is_solution_feasible(ordered) else None
+
+    def _construct_initial_solution(
+        self,
+        deadline: Optional[float] = None,
+        singleton_routes: Optional[List[List[int]]] = None,
+    ) -> List[List[int]]:
+        construction_start = time.perf_counter()
+        construction_deadline = construction_start + self.initial_construction_budget_s
+        if deadline is not None:
+            construction_deadline = min(construction_deadline, deadline)
+
+        routes = (
+            self._construct_singleton_solution()
+            if singleton_routes is None
+            else [list(route) for route in singleton_routes]
+        )
+        if not routes:
+            self.initial_construction_stats = {
+                "strategy": self.initial_construction_strategy,
+                "singleton_fallback_feasible": False,
+                "singleton_source": self.singleton_source,
+                "elapsed_s": time.perf_counter() - construction_start,
+            }
+            return []
+
+        # Best-fit decreasing is deterministic and starts from a complete
+        # feasible incumbent.  Customers with less time-window slack are placed
+        # first; ties retain canonical customer order.
+        customer_order = sorted(
+            self.customer_indices,
+            key=lambda customer: (
+                float(self.nodes[customer]["due"])
+                - float(self.nodes[customer]["ready"]),
+                customer,
+            ),
+        )
+        merged_routes: List[List[int]] = []
+        inserted = 0
+        budget_exhausted = False
+        for order_position, customer in enumerate(customer_order):
+            if time.perf_counter() >= construction_deadline:
+                budget_exhausted = True
+                remaining = customer_order[order_position:]
+                merged_routes.extend(routes[customer - 1] for customer in remaining)
                 break
 
-            start_customer = min(candidate_seeds, key=lambda c: self.dist_matrix[0, c])
-            current_route = [0, start_customer, 0]
-            current_route = self._repair_route_with_si(current_route, "gsi")
+            route_ids = list(range(len(merged_routes)))
+            candidate_limit = self.initial_merge_candidate_limit
+            if candidate_limit is not None and len(route_ids) > candidate_limit:
+                # Rank only which routes receive exact insertion evaluation.
+                # Every selected candidate is still fully repaired and checked.
+                route_ids.sort(
+                    key=lambda ridx: min(
+                        float(self.dist_matrix[node, customer])
+                        for node in merged_routes[ridx]
+                        if node in self.customer_to_mask or node == 0
+                    )
+                )
+                route_ids = route_ids[:candidate_limit]
 
-            if current_route is None:
-                failed_seed_customers.add(start_customer)
+            best = self._best_bounded_initial_insertion(
+                merged_routes,
+                customer,
+                route_ids,
+                construction_deadline,
+            )
+            if time.perf_counter() >= construction_deadline:
+                budget_exhausted = True
+
+            if best is None:
+                merged_routes.append(routes[customer - 1])
+            else:
+                ridx, new_route, _ = best
+                merged_routes[ridx] = new_route
+                inserted += 1
+
+            if budget_exhausted:
+                remaining = customer_order[order_position + 1 :]
+                merged_routes.extend(routes[item - 1] for item in remaining)
+                break
+
+        else:
+            budget_exhausted = False
+
+        result = self._cleanup_solution(merged_routes)
+        self.initial_construction_stats = {
+            "strategy": self.initial_construction_strategy,
+            "singleton_fallback_feasible": True,
+            "singleton_source": self.singleton_source,
+            "singleton_route_count": len(routes),
+            "result_route_count": len(result),
+            "merged_customer_count": inserted,
+            "budget_s": self.initial_construction_budget_s,
+            "budget_exhausted": budget_exhausted,
+            "elapsed_s": time.perf_counter() - construction_start,
+        }
+        return result
+
+    def _best_bounded_initial_insertion(
+        self,
+        routes: List[List[int]],
+        customer: int,
+        route_ids: List[int],
+        deadline: float,
+    ) -> Optional[Tuple[int, List[int], float]]:
+        """Evaluate a bounded set of promising positions with exact checks.
+
+        The local distance delta is only a ranking proxy.  Returned routes have
+        gone through the normal station repair and full route-feasibility test.
+        """
+
+        customer_demand = float(self.nodes[customer]["demand"])
+        cheap: List[Tuple[float, int, int, float]] = []
+        for ridx in route_ids:
+            route = routes[ridx]
+            route_demand = self._route_demand(route)
+            if route_demand + customer_demand > self.C + 1e-9:
                 continue
+            route_sim = self._simulate_route(route)
+            base_distance = self._route_distance(route)
+            for pos in range(1, len(route)):
+                if not self._quick_customer_insert_filter(
+                    route,
+                    customer,
+                    pos,
+                    route_demand=route_demand,
+                    route_sim=route_sim,
+                ):
+                    continue
+                previous = route[pos - 1]
+                following = route[pos]
+                proxy = float(
+                    self.dist_matrix[previous, customer]
+                    + self.dist_matrix[customer, following]
+                    - self.dist_matrix[previous, following]
+                )
+                cheap.append((proxy, ridx, pos, base_distance))
 
-            unserved.remove(start_customer)
-
-            while True:
-                best_customer = None
-                best_route = None
-                best_cost = float("inf")
-                base_dist = self._route_distance(current_route)
-
-                for c in list(unserved):
-                    for pos in range(1, len(current_route)):
-                        if not self._quick_customer_insert_filter(current_route, c, pos):
-                            continue
-
-                        trial = current_route[:pos] + [c] + current_route[pos:]
-                        repaired = self._try_insert_customer_with_si(trial, "gsi")
-                        if repaired is None:
-                            continue
-
-                        delta = self._route_distance(repaired) - base_dist
-                        if delta < best_cost:
-                            best_cost = delta
-                            best_customer = c
-                            best_route = repaired
-
-                if best_customer is None:
-                    break
-
-                current_route = best_route
-                unserved.remove(best_customer)
-
-            routes.append(current_route)
-
-        return self._cleanup_solution(routes)
+        # Python's stable sort preserves route/position enumeration for ties.
+        cheap.sort(key=lambda item: item[0])
+        best: Optional[Tuple[int, List[int], float]] = None
+        for _, ridx, pos, base_distance in cheap[: self.initial_exact_insertion_limit]:
+            if time.perf_counter() >= deadline:
+                break
+            route = routes[ridx]
+            trial = route[:pos] + [customer] + route[pos:]
+            # Construction must obey a hard latency envelope.  Reusing the
+            # route's existing charging visits and accepting only a directly
+            # feasible insertion is cheap and exact; potentially expensive
+            # station repair remains available to the main ALNS search.
+            if not self.is_route_feasible(trial):
+                continue
+            delta = self._route_distance(trial) - base_distance
+            if best is None or delta < best[2]:
+                best = (ridx, trial, delta)
+        return best
 
     # ======================================================================
     # Customer Removal (CR)
@@ -968,6 +1268,16 @@ class ALNS_Solver:
         if not customers:
             return routes, []
 
+        # _route_of_customer returns the first matching route.  setdefault
+        # deliberately preserves that behaviour even for malformed solutions
+        # containing a duplicate customer, while replacing repeated scans of
+        # the complete solution with one linear pass.
+        first_route_of_customer: Dict[int, int] = {}
+        for ridx, route in enumerate(routes):
+            for node in route:
+                if node in self.customer_to_mask:
+                    first_route_of_customer.setdefault(node, ridx)
+
         q = min(len(customers), self._num_customers_to_remove())
         removed = []
 
@@ -976,7 +1286,7 @@ class ALNS_Solver:
 
         while len(removed) < q:
             anchor = self.rng.choice(removed)
-            anchor_route = self._route_of_customer(routes, anchor)
+            anchor_route = first_route_of_customer.get(anchor)
             related = []
 
             for u in customers:
@@ -986,7 +1296,9 @@ class ALNS_Solver:
                 node_a = self.nodes[anchor]
                 node_u = self.nodes[u]
 
-                same_route_term = -1.0 if self._route_of_customer(routes, u) == anchor_route else 1.0
+                same_route_term = (
+                    -1.0 if first_route_of_customer.get(u) == anchor_route else 1.0
+                )
                 shaw_score = (
                     self.phi1 * self.dist_matrix[anchor, u]
                     + self.phi2 * abs(float(node_a["ready"]) - float(node_u["ready"]))
@@ -1020,7 +1332,7 @@ class ALNS_Solver:
         if not customers:
             return routes, []
 
-        zone_map = self._build_zone_map(self.customer_indices)
+        zone_map = self.customer_zone_map
         all_zones = sorted(set(zone_map.values()))
         if not all_zones:
             return self._cr_random_customer(routes)
@@ -1103,7 +1415,7 @@ class ALNS_Solver:
         for ridx, route in enumerate(routes):
             for pos in range(1, len(route) - 1):
                 s = route[pos]
-                if s not in self.station_indices:
+                if s not in self.station_index_set:
                     continue
                 detour = (
                     self.dist_matrix[route[pos - 1], s]
@@ -1132,7 +1444,7 @@ class ALNS_Solver:
             arrival_battery = sim["arrival_battery"]
             for pos in range(1, len(route) - 1):
                 s = route[pos]
-                if s not in self.station_indices:
+                if s not in self.station_index_set:
                     continue
                 scored.append((arrival_battery[pos], ridx, pos))
 
@@ -1208,7 +1520,7 @@ class ALNS_Solver:
                 for i in range(1, min(k, len(options))):
                     regret += options[i][2] - primary
                 if len(options) < k:
-                    regret += (k - len(options)) * max(1.0, float(self.dist_matrix.max()))
+                    regret += (k - len(options)) * max(1.0, self.max_distance)
 
                 if regret > best_regret or (math.isclose(regret, best_regret) and primary < best_primary):
                     best_regret = regret
@@ -1256,7 +1568,7 @@ class ALNS_Solver:
         return self._cleanup_solution(routes)
 
     def _ci_zone_insertion(self, routes: List[List[int]], removed_customers: List[int]) -> List[List[int]]:
-        zone_map = self._build_zone_map(self.customer_indices)
+        zone_map = self.customer_zone_map
         all_zones = sorted(set(zone_map.values()))
         if not all_zones:
             return self._ci_time_based(routes, removed_customers)
@@ -1287,8 +1599,7 @@ class ALNS_Solver:
                     options = self._all_customer_insertions(routes, c, mode="time")
                 if not options:
                     continue
-                options.sort(key=lambda x: x[2])
-                ridx, new_route, delta = options[0]
+                ridx, new_route, delta = min(options, key=lambda x: x[2])
                 if delta < best_delta:
                     best_delta = delta
                     best = (c, ridx, new_route)
@@ -1325,10 +1636,6 @@ class ALNS_Solver:
             return None
 
         repaired = self._repair_route_with_si(trial_route, si_name)
-        if repaired is None:
-            return None
-        if not self.is_route_feasible(repaired):
-            return None
         return repaired
 
     def _repair_route_with_si(self, route: List[int], si_name: str) -> Optional[List[int]]:
@@ -1377,7 +1684,9 @@ class ALNS_Solver:
         if fail_pos is None:
             return None
 
-        candidate_positions = list(range(fail_pos - 1, 0, -1))
+        # Include the depot's outgoing arc.  Excluding arc zero prevented repair
+        # of customers that require charging before they are first reached.
+        candidate_positions = list(range(fail_pos - 1, -1, -1))
 
         if strategy == "gsi":
             for arc_pos in candidate_positions:
@@ -1387,9 +1696,9 @@ class ALNS_Solver:
             return None
 
         if strategy == "gsi_comparison":
-            if fail_pos - 1 >= 1:
+            if fail_pos - 1 >= 0:
                 cand1 = self._best_station_on_arc(route, fail_pos - 1)
-                cand2 = self._best_station_on_arc(route, fail_pos - 2) if fail_pos - 2 >= 1 else None
+                cand2 = self._best_station_on_arc(route, fail_pos - 2) if fail_pos - 2 >= 0 else None
 
                 candidates = []
                 if cand1 is not None:
@@ -1419,62 +1728,6 @@ class ALNS_Solver:
         feasible_candidates.sort(key=lambda r: self._route_distance(r))
         return feasible_candidates[0]
 
-
-    def _best_station_on_arc_part(self, route: List[int], arc_pos: int) -> Optional[List[int]]:
-        route_key = self._route_key(route)
-        cache_key = (route_key, arc_pos)
-
-        if cache_key in self._best_station_arc_cache:
-            cached = self._best_station_arc_cache[cache_key]
-            return None if cached is None else list(cached)
-
-        i = route[arc_pos]
-        j = route[arc_pos + 1]
-
-        base_dist = self._route_distance(route)
-        base_arc = float(self.dist_matrix[i, j])
-
-        station_candidates = []
-        for s in self.station_indices:
-            if s == i or s == j:
-                continue
-
-            if self._energy(i, s) > self.Q + 1e-9:
-                continue
-            if self._energy(s, j) > self.Q + 1e-9:
-                continue
-
-            detour = float(self.dist_matrix[i, s] + self.dist_matrix[s, j] - base_arc)
-            station_candidates.append((detour, s))
-
-        if not station_candidates:
-            self._best_station_arc_cache[cache_key] = None
-            return None
-
-        station_candidates.sort(key=lambda x: x[0])
-
-        if self.station_top_m is not None and self.station_top_m > 0:
-            station_candidates = station_candidates[: self.station_top_m]
-
-        best_route = None
-        best_delta = float("inf")
-
-        for detour, s in station_candidates:
-            if detour >= best_delta:
-                continue
-
-            trial = route[: arc_pos + 1] + [s] + route[arc_pos + 1 :]
-            if not self.is_route_feasible(trial):
-                continue
-
-            delta = self._route_distance(trial) - base_dist
-            if delta < best_delta:
-                best_delta = delta
-                best_route = trial
-
-        self._best_station_arc_cache[cache_key] = None if best_route is None else list(best_route)
-        return None if best_route is None else list(best_route)
-
     def _best_station_on_arc(self, route: List[int], arc_pos: int) -> Optional[List[int]]:
         route_key = self._route_key(route)
         cache_key = (route_key, arc_pos)
@@ -1490,6 +1743,16 @@ class ALNS_Solver:
         best_delta = float("inf")
         base_dist = self._route_distance(route)
         base_arc = float(self.dist_matrix[i, j])
+        base_sim = self._simulate_route(route)
+        base_fail_pos = base_sim["first_energy_violation_pos"]
+        if base_fail_pos is None:
+            self._cache_store(
+                self._best_station_arc_cache,
+                cache_key,
+                None,
+                self.station_cache_limit,
+            )
+            return None
 
         for s in self.station_indices:
             if s == i or s == j:
@@ -1497,33 +1760,58 @@ class ALNS_Solver:
 
             if self._energy(i, s) > self.Q + 1e-9:
                 continue
-            if self._energy(s, j) > self.Q + 1e-9:
-                continue
 
             detour = float(self.dist_matrix[i, s] + self.dist_matrix[s, j] - base_arc)
             if detour >= best_delta:
                 continue
 
             trial = route[: arc_pos + 1] + [s] + route[arc_pos + 1 :]
-            if not self.is_route_feasible(trial):
-                continue
+            trial_sim = self._simulate_route(trial)
+            if not trial_sim["feasible"]:
+                trial_fail_pos = trial_sim["first_energy_violation_pos"]
+                inserted_pos = arc_pos + 1
+                # A progressive station must itself be reachable and must not
+                # move the first failing original node earlier.  Equality after
+                # accounting for the inserted node is useful: the next repair
+                # iteration may add another CS on the remaining long arc.
+                if (
+                    trial_fail_pos is None
+                    or trial_fail_pos <= inserted_pos
+                    or trial_fail_pos < base_fail_pos + 1
+                    or trial_sim["first_time_violation_pos"] is not None
+                ):
+                    continue
 
             delta = self._route_distance(trial) - base_dist
             if delta < best_delta:
                 best_delta = delta
                 best_route = trial
 
-        self._best_station_arc_cache[cache_key] = None if best_route is None else list(best_route)
+        self._cache_store(
+            self._best_station_arc_cache,
+            cache_key,
+            None if best_route is None else list(best_route),
+            self.station_cache_limit,
+        )
         return None if best_route is None else list(best_route)
 
     # ======================================================================
     # Customer insertion helpers
     # ======================================================================
-    def _quick_customer_insert_filter(self, route: List[int], customer: int, pos: int) -> bool:
-        if self._route_demand(route) + float(self.nodes[customer]["demand"]) > self.C + 1e-9:
+    def _quick_customer_insert_filter(
+        self,
+        route: List[int],
+        customer: int,
+        pos: int,
+        *,
+        route_demand: Optional[float] = None,
+        route_sim: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        demand = self._route_demand(route) if route_demand is None else route_demand
+        if demand + float(self.nodes[customer]["demand"]) > self.C + 1e-9:
             return False
 
-        sim = self._simulate_route(route)
+        sim = self._simulate_route(route) if route_sim is None else route_sim
         prev_node = route[pos - 1]
 
         depart_prev = sim["departure_times"][pos - 1]
@@ -1532,7 +1820,7 @@ class ALNS_Solver:
         if earliest_arr_c > float(self.nodes[customer]["due"]) + 1e-9:
             return False
 
-        if prev_node in self.station_indices:
+        if prev_node in self.station_index_set:
             prev_battery = self.Q
         else:
             prev_battery = sim["departure_battery"][pos - 1]
@@ -1548,6 +1836,7 @@ class ALNS_Solver:
         customer: int,
         mode: str = "distance",
         allowed_routes: Optional[set] = None,
+        include_new_route: bool = True,
     ) -> List[Tuple[int, List[int], float]]:
         options = []
         cheap_candidates = []
@@ -1562,14 +1851,26 @@ class ALNS_Solver:
             route = routes[ridx]
 
             # 容量先过滤
-            if self._route_demand(route) + customer_demand > self.C + 1e-9:
+            route_demand = self._route_demand(route)
+            if route_demand + customer_demand > self.C + 1e-9:
                 continue
 
-            base_dist = self._route_distance(route)
-            base_time = self._route_total_time(route)
+            route_sim = self._simulate_route(route)
+            if mode == "time":
+                base_dist = None
+                base_time = self._route_total_time(route)
+            else:
+                base_dist = self._route_distance(route)
+                base_time = None
 
             for pos in range(1, len(route)):
-                if not self._quick_customer_insert_filter(route, customer, pos):
+                if not self._quick_customer_insert_filter(
+                    route,
+                    customer,
+                    pos,
+                    route_demand=route_demand,
+                    route_sim=route_sim,
+                ):
                     continue
 
                 prev_node = route[pos - 1]
@@ -1582,9 +1883,12 @@ class ALNS_Solver:
                     - self.dist_matrix[prev_node, next_node]
                 )
 
-                # time模式先用一个 cheap time proxy
                 if mode == "time":
-                    proxy = dist_delta / max(1e-12, self.v)
+                    proxy = (
+                        self.time_matrix[prev_node, customer]
+                        + self.time_matrix[customer, next_node]
+                        - self.time_matrix[prev_node, next_node]
+                    )
                 else:
                     proxy = dist_delta
 
@@ -1612,14 +1916,15 @@ class ALNS_Solver:
             options.append((ridx, repaired, delta))
 
         # 单独保留 new single-customer route
-        new_route = self._make_single_customer_route(customer)
-        if new_route is not None:
-            delta = (
-                self._route_total_time(new_route)
-                if mode == "time"
-                else self._route_distance(new_route)
-            )
-            options.append((len(routes), new_route, delta))
+        if include_new_route:
+            new_route = self._make_single_customer_route(customer)
+            if new_route is not None:
+                delta = (
+                    self._route_total_time(new_route)
+                    if mode == "time"
+                    else self._route_distance(new_route)
+                )
+                options.append((len(routes), new_route, delta))
 
         return options
 
@@ -1629,20 +1934,46 @@ class ALNS_Solver:
         customer: int,
         mode: str = "distance",
         allowed_routes: Optional[set] = None,
+        include_new_route: bool = True,
     ) -> List[Tuple[int, List[int], float]]:
+        if self.customer_top_k is not None:
+            return self._all_customer_insertions_part(
+                routes,
+                customer,
+                mode=mode,
+                allowed_routes=allowed_routes,
+                include_new_route=include_new_route,
+            )
         options = []
 
         route_ids = range(len(routes))
         if allowed_routes is not None:
             route_ids = [ridx for ridx in range(len(routes)) if ridx in allowed_routes]
 
+        customer_demand = float(self.nodes[customer]["demand"])
+
         for ridx in route_ids:
             route = routes[ridx]
-            base_dist = self._route_distance(route)
-            base_time = self._route_total_time(route)
+            route_demand = self._route_demand(route)
+            if route_demand + customer_demand > self.C + 1e-9:
+                continue
+
+            route_sim = self._simulate_route(route)
+            if mode == "time":
+                base_dist = None
+                base_time = self._route_total_time(route)
+            else:
+                base_dist = self._route_distance(route)
+                base_time = None
 
             for pos in range(1, len(route)):
-                if not self._quick_customer_insert_filter(route, customer, pos):
+                if not self._quick_customer_insert_filter(
+                    route,
+                    customer,
+                    pos,
+                    route_demand=route_demand,
+                    route_sim=route_sim,
+                ):
                     continue
 
                 trial = route[:pos] + [customer] + route[pos:]
@@ -1657,10 +1988,11 @@ class ALNS_Solver:
                 )
                 options.append((ridx, repaired, delta))
 
-        new_route = self._make_single_customer_route(customer)
-        if new_route is not None:
-            delta = self._route_total_time(new_route) if mode == "time" else self._route_distance(new_route)
-            options.append((len(routes), new_route, delta))
+        if include_new_route:
+            new_route = self._make_single_customer_route(customer)
+            if new_route is not None:
+                delta = self._route_total_time(new_route) if mode == "time" else self._route_distance(new_route)
+                options.append((len(routes), new_route, delta))
 
         return options
 
@@ -1673,8 +2005,7 @@ class ALNS_Solver:
         options = self._all_customer_insertions(routes, customer, mode=mode)
         if not options:
             return None
-        options.sort(key=lambda x: x[2])
-        return options[0]
+        return min(options, key=lambda x: x[2])
 
     # ======================================================================
     # Customer removal modes
@@ -1697,13 +2028,13 @@ class ALNS_Solver:
             while pos < len(route) - 1:
                 u = route[pos]
                 if u in removed_set:
-                    if mode == "with_preceding_station" and pos - 1 >= 1 and route[pos - 1] in self.station_indices:
+                    if mode == "with_preceding_station" and pos - 1 >= 1 and route[pos - 1] in self.station_index_set:
                         del route[pos - 1]
                         pos -= 1
 
                     del route[pos]
 
-                    if mode == "with_succeeding_station" and pos < len(route) - 1 and route[pos] in self.station_indices:
+                    if mode == "with_succeeding_station" and pos < len(route) - 1 and route[pos] in self.station_index_set:
                         del route[pos]
                     continue
                 pos += 1
@@ -1776,8 +2107,19 @@ class ALNS_Solver:
     def _route_key(self, route: List[int]) -> Tuple[int, ...]:
         return tuple(route)
 
+    @staticmethod
+    def _cache_store(cache: Dict, key: Any, value: Any, limit: int) -> None:
+        """Bound deterministic memoization without changing computed values."""
+
+        if key not in cache and len(cache) >= limit:
+            eviction_count = max(1, limit // 8)
+            for old_key in list(islice(cache, eviction_count)):
+                del cache[old_key]
+        cache[key] = value
+
     def _clear_caches(self) -> None:
         self._sim_cache.clear()
+        self._feasibility_cache.clear()
         self._dist_cache.clear()
         self._demand_cache.clear()
         self._time_cache.clear()
@@ -1793,7 +2135,7 @@ class ALNS_Solver:
         if val is not None:
             return val
         val = float(sum(self.dist_matrix[route[i], route[i + 1]] for i in range(len(route) - 1)))
-        self._dist_cache[key] = val
+        self._cache_store(self._dist_cache, key, val, self.scalar_cache_limit)
         return val
 
     def _route_total_time(self, route: List[int]) -> float:
@@ -1804,7 +2146,7 @@ class ALNS_Solver:
 
         sim = self._simulate_route(route)
         val = float("inf") if not sim["feasible"] else (sim["departure_times"][-1] if len(route) > 1 else 0.0)
-        self._time_cache[key] = val
+        self._cache_store(self._time_cache, key, val, self.scalar_cache_limit)
         return val
 
     def _route_demand(self, route: List[int]) -> float:
@@ -1813,7 +2155,7 @@ class ALNS_Solver:
         if val is not None:
             return val
         val = sum(float(self.nodes[u]["demand"]) for u in route if u in self.customer_to_mask)
-        self._demand_cache[key] = val
+        self._cache_store(self._demand_cache, key, val, self.scalar_cache_limit)
         return val
 
     def _energy(self, i: int, j: int) -> float:
@@ -1834,7 +2176,7 @@ class ALNS_Solver:
         for u in route[1:]:
             if u == 0 and cleaned[-1] == 0:
                 continue
-            if u in self.station_indices and cleaned[-1] == u:
+            if u in self.station_index_set and cleaned[-1] == u:
                 continue
             cleaned.append(u)
 
@@ -1844,14 +2186,14 @@ class ALNS_Solver:
 
     def _prune_redundant_stations(self, route: List[int]) -> List[int]:
         route = self._cleanup_route(route)
-        if not any(u in self.station_indices for u in route):
+        if not any(u in self.station_index_set for u in route):
             return route
 
         changed = True
         while changed:
             changed = False
             for pos in range(1, len(route) - 1):
-                if route[pos] not in self.station_indices:
+                if route[pos] not in self.station_index_set:
                     continue
                 trial = route[:pos] + route[pos + 1 :]
                 if self.is_route_feasible(trial):
@@ -1870,11 +2212,15 @@ class ALNS_Solver:
         return out
 
     def _make_single_customer_route(self, customer: int) -> Optional[List[int]]:
+        cached = self._singleton_route_cache.get(customer)
+        if cached is not None:
+            return list(cached)
         route = [0, customer, 0]
         route = self._repair_route_with_si(route, "gsi")
-        if route is None or not self.is_route_feasible(route):
-            return None
-        return route
+        if route is not None:
+            self._singleton_route_cache[customer] = list(route)
+            return list(route)
+        return None
 
     def _list_customers(self, routes: List[List[int]]) -> List[int]:
         return [u for r in routes for u in r if u in self.customer_to_mask]
@@ -1898,7 +2244,7 @@ class ALNS_Solver:
         positions = []
         for ridx, route in enumerate(routes):
             for pos in range(1, len(route) - 1):
-                if route[pos] in self.station_indices:
+                if route[pos] in self.station_index_set:
                     positions.append((ridx, pos))
         return positions
 

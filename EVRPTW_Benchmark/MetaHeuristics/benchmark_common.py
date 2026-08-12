@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import signal
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -16,6 +19,11 @@ from evrptw_stage2.artifacts import load_materialized_view
 
 DEFAULT_CHECKPOINTS_S = (60.0, 300.0, 900.0, 3600.0, 7200.0)
 DEFAULT_TIME_LIMIT_S = 7200.0
+SEED_SCHEME = "blake2b_view_id_v1"
+TIME_BUDGET_ITERATION_CEILING = 2_147_483_647
+ALGORITHM_TIMING_SCOPE = "adapter_solver_constructor_and_solve"
+RUN_CONTRACT_SCHEMA = "evrptw_meta_run_contract_v2"
+CANONICAL_REPLAY_PROFILE_ID = "full_charge_strict_route_v2"
 
 REQUIRED_VIEW_INDEX_COLUMNS = {
     "view_id",
@@ -27,6 +35,12 @@ REQUIRED_VIEW_INDEX_COLUMNS = {
     "scale_id",
     "customer_count",
     "charging_station_count",
+    "family_cohort_id",
+    "terminal_count",
+    "view_seed",
+    "package_seed",
+    "service_time_seed",
+    "time_window_seed",
 }
 
 
@@ -67,6 +81,16 @@ class Stage2ViewTask:
     customer_count: int
     charging_station_count: int
     row_position: int
+    family_cohort_id: str = ""
+    terminal_count: int = 0
+    view_seed: int = 0
+    package_seed: int = 0
+    service_time_seed: int = 0
+    time_window_seed: int = 0
+    family_manifest_fingerprint: str = ""
+    family_artifact_fingerprint: str = ""
+    view_manifest_fingerprint: str = ""
+    data_identity_fingerprint: str = ""
 
     @property
     def instance_id(self) -> str:
@@ -132,6 +156,141 @@ def checkpoint_label(checkpoint_s: float) -> str:
     return f"{int(value)}s" if value.is_integer() else f"{value:g}s".replace(".", "p")
 
 
+def stable_view_seed(base_seed: int, view_id: str) -> int:
+    """Return a shard/order-independent NumPy-compatible seed for a view.
+
+    Python's built-in hash is intentionally randomized between processes, so a
+    cryptographic digest is used as the experiment contract.  The domain tag
+    permits a future seed scheme without silently changing existing runs.
+    """
+
+    payload = f"{SEED_SCHEME}\0{int(base_seed)}\0{str(view_id)}".encode("utf-8")
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, "big") % (2**32)
+
+
+def stable_view_shard(view_id: str, shard_count: int) -> int:
+    """Assign a view to a stable shard independent of index ordering."""
+
+    count = int(shard_count)
+    if count <= 0:
+        raise ValueError("shard_count must be positive")
+    payload = f"evrptw-meta-shard-v1\0{str(view_id)}".encode("utf-8")
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, "big") % count
+
+
+def resolve_optional_iteration_budget(
+    requested: int | None,
+) -> tuple[int, str]:
+    """Resolve a smoke-test iteration cap or a wall-clock-driven ceiling."""
+
+    if requested is None:
+        return TIME_BUDGET_ITERATION_CEILING, "wall_clock"
+    value = int(requested)
+    if value < 0:
+        raise ValueError("iteration budget must be non-negative")
+    return value, "iteration_limited"
+
+
+def _portable_dataset_path_identity(raw_path: str, anchor: str) -> str:
+    """Drop host-specific prefixes while retaining the dataset-relative path."""
+
+    parts = Path(str(raw_path)).parts
+    try:
+        position = parts.index(anchor)
+    except ValueError:
+        return Path(str(raw_path)).name
+    return Path(*parts[position:]).as_posix()
+
+
+def build_run_contract(
+    task: dict[str, Any],
+    *,
+    algorithm_name: str,
+    algorithm_profile_id: str,
+    base_seed: int,
+    solver_parameters: dict[str, Any],
+) -> tuple[str, str]:
+    """Build the portable semantic identity of one benchmark invocation.
+
+    Execution layout (worker count, queue depth, slice/shard selection and save
+    directory) is intentionally absent.  Consequently the same view can be
+    resumed on another server, while any budget, seed, profile, solver setting
+    or dataset-row identity change requires a fresh solve.
+    """
+
+    reference = dict(task.get("stage2_task", {}))
+    contract = {
+        "schema": RUN_CONTRACT_SCHEMA,
+        "algorithm": {
+            "name": str(algorithm_name),
+            "profile_id": str(algorithm_profile_id),
+        },
+        "budget": {
+            "time_limit_s": float(task["time_limit_s"]),
+            "checkpoints_s": [
+                float(value) for value in task.get("checkpoints_s", ())
+            ],
+        },
+        "randomness": {
+            "base_seed": int(base_seed),
+            "seed_scheme": str(task["seed_scheme"]),
+            "instance_seed": int(task["seed"]),
+        },
+        "timing_scope": ALGORITHM_TIMING_SCOPE,
+        "canonical_replay_profile_id": CANONICAL_REPLAY_PROFILE_ID,
+        "data_identity": {
+            "input_kind": str(task.get("input_kind", "")),
+            "view_id": str(reference.get("view_id", "")),
+            "family_id": str(reference.get("family_id", "")),
+            "family_cohort_id": str(reference.get("family_cohort_id", "")),
+            "consumer_cohort_id": str(reference.get("consumer_cohort_id", "")),
+            "split_id": str(reference.get("split_id", "")),
+            "track_id": str(reference.get("track_id", "")),
+            "city_slug": str(reference.get("city_slug", "")),
+            "scale_id": str(reference.get("scale_id", "")),
+            "customer_count": int(reference.get("customer_count", 0)),
+            "charging_station_count": int(
+                reference.get("charging_station_count", 0)
+            ),
+            "terminal_count": int(reference.get("terminal_count", 0)),
+            "view_seed": int(reference.get("view_seed", 0)),
+            "package_seed": int(reference.get("package_seed", 0)),
+            "service_time_seed": int(reference.get("service_time_seed", 0)),
+            "time_window_seed": int(reference.get("time_window_seed", 0)),
+            "family_manifest_fingerprint": str(
+                reference.get("family_manifest_fingerprint", "")
+            ),
+            "family_artifact_fingerprint": str(
+                reference.get("family_artifact_fingerprint", "")
+            ),
+            "view_manifest_fingerprint": str(
+                reference.get("view_manifest_fingerprint", "")
+            ),
+            "data_identity_fingerprint": str(
+                reference.get("data_identity_fingerprint", "")
+            ),
+            "view_index_identity": _portable_dataset_path_identity(
+                str(reference.get("index_path", "")), "generation_plan"
+            ),
+            "family_directory_identity": _portable_dataset_path_identity(
+                str(reference.get("family_dir", "")), "materialized"
+            ),
+        },
+        "solver_parameters": dict(solver_parameters),
+    }
+    contract_json = json.dumps(
+        contract,
+        ensure_ascii=True,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    fingerprint = hashlib.sha256(contract_json.encode("utf-8")).hexdigest()
+    return fingerprint, contract_json
+
+
 def discover_view_indices(dataset_path: str | Path) -> list[Path]:
     root = Path(dataset_path)
     if root.is_file():
@@ -141,6 +300,143 @@ def discover_view_indices(dataset_path: str | Path) -> list[Path]:
     if not root.exists():
         raise FileNotFoundError(root)
     return sorted(root.rglob("view_index.parquet"))
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _semantic_json_fingerprint(
+    path: Path,
+    *,
+    ignored_keys: tuple[str, ...] = (),
+) -> str:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"expected a JSON object in {path}")
+    for key in ignored_keys:
+        payload.pop(key, None)
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=True,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _attach_stage2_data_identity(
+    task: Stage2ViewTask,
+    family_manifest_cache: dict[str, tuple[str, str]],
+) -> Stage2ViewTask:
+    """Bind resume identity to the small materialized artifacts, not host paths.
+
+    Each selected family is hashed once per launch: its terminal index and four
+    stored matrix files are content-addressed alongside the semantic manifest.
+    The view manifest and three small per-view artifacts are also hashed
+    byte-for-byte. ``matrix_reconstruction`` is excluded from manifest semantics
+    so direct and CLE-restored copies of the same family retain one portable
+    identity, while the reconstructed matrix bytes must still match exactly.
+    """
+
+    family_dir = Path(task.family_dir)
+    family_manifest = family_dir / "family_manifest.json"
+    family_key = str(family_manifest.resolve())
+    family_identity = family_manifest_cache.get(family_key)
+    if family_identity is None:
+        if not family_manifest.is_file():
+            raise FileNotFoundError(family_manifest)
+        family_payload = json.loads(family_manifest.read_text(encoding="utf-8"))
+        if not isinstance(family_payload, dict):
+            raise ValueError(f"expected a JSON object in {family_manifest}")
+        family_fingerprint = _semantic_json_fingerprint(
+            family_manifest,
+            ignored_keys=("matrix_reconstruction",),
+        )
+        artifact_paths: dict[str, str] = {}
+        terminal_index = family_payload.get("terminal_index")
+        matrix_files = family_payload.get("matrix_files")
+        if not isinstance(terminal_index, str) or not terminal_index:
+            raise ValueError(f"{family_manifest} has no terminal_index artifact")
+        if not isinstance(matrix_files, dict) or not matrix_files:
+            raise ValueError(f"{family_manifest} has no matrix_files artifacts")
+        artifact_paths["terminal_index"] = terminal_index
+        for matrix_name, relative_path in sorted(matrix_files.items()):
+            if not isinstance(relative_path, str) or not relative_path:
+                raise ValueError(
+                    f"{family_manifest} has an invalid matrix path for {matrix_name}"
+                )
+            artifact_paths[f"matrix:{matrix_name}"] = relative_path
+
+        family_root = family_dir.resolve()
+        family_artifact_sha256: dict[str, str] = {}
+        for label, relative_path in artifact_paths.items():
+            artifact = (family_dir / relative_path).resolve()
+            if family_root not in artifact.parents:
+                raise ValueError(
+                    f"family artifact escapes its directory: {relative_path}"
+                )
+            if not artifact.is_file():
+                raise FileNotFoundError(artifact)
+            family_artifact_sha256[label] = _sha256_file(artifact)
+        family_artifact_json = json.dumps(
+            family_artifact_sha256,
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        family_artifact_fingerprint = hashlib.sha256(
+            family_artifact_json.encode("utf-8")
+        ).hexdigest()
+        family_identity = (family_fingerprint, family_artifact_fingerprint)
+        family_manifest_cache[family_key] = family_identity
+    family_fingerprint, family_artifact_fingerprint = family_identity
+
+    view_dir = family_dir / "views" / task.view_id
+    view_manifest = view_dir / "view_manifest.json"
+    if not view_manifest.is_file():
+        raise FileNotFoundError(view_manifest)
+    view_fingerprint = _semantic_json_fingerprint(view_manifest)
+    artifact_fingerprints: dict[str, str] = {}
+    for name in (
+        "terminal_parent_indices.npy",
+        "customer_attributes.npz",
+        "charging_attributes.npz",
+    ):
+        artifact = view_dir / name
+        if not artifact.is_file():
+            raise FileNotFoundError(artifact)
+        artifact_fingerprints[name] = _sha256_file(artifact)
+
+    combined_payload = {
+        "schema": "evrptw_stage2_materialized_data_identity_v1",
+        "family_manifest_sha256": family_fingerprint,
+        "family_artifact_sha256": family_artifact_fingerprint,
+        "view_manifest_sha256": view_fingerprint,
+        "view_artifact_sha256": artifact_fingerprints,
+    }
+    combined_json = json.dumps(
+        combined_payload,
+        ensure_ascii=True,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return replace(
+        task,
+        family_manifest_fingerprint=family_fingerprint,
+        family_artifact_fingerprint=family_artifact_fingerprint,
+        view_manifest_fingerprint=view_fingerprint,
+        data_identity_fingerprint=hashlib.sha256(
+            combined_json.encode("utf-8")
+        ).hexdigest(),
+    )
 
 
 def infer_family_root(index_path: str | Path) -> Path | None:
@@ -192,6 +488,12 @@ def read_stage2_tasks(
                     customer_count=int(row["customer_count"]),
                     charging_station_count=int(row["charging_station_count"]),
                     row_position=position,
+                    family_cohort_id=str(row["family_cohort_id"]),
+                    terminal_count=int(row["terminal_count"]),
+                    view_seed=int(row["view_seed"]),
+                    package_seed=int(row["package_seed"]),
+                    service_time_seed=int(row["service_time_seed"]),
+                    time_window_seed=int(row["time_window_seed"]),
                 )
             )
             position += 1
@@ -275,6 +577,10 @@ def load_stage2_instance(task: Stage2ViewTask) -> EVRPTWInstance:
             "distance_path_travel_time_s": payload["distance_path_travel_time_s"],
             "full_cs_to_depot_time_s": payload["full_cs_to_depot_time_s"],
             "terminal_parent_indices": payload["terminal_parent_indices"],
+            # Preserve the generator's constructive feasibility witness for
+            # heuristic warm starts and independent diagnostics.  It remains
+            # raw metadata; benchmark route replay is still authoritative.
+            "feasibility_certificate": payload.get("feasibility_certificate"),
         }
     )
 
@@ -285,23 +591,93 @@ def build_input_tasks(
     family_root: str | Path | None = None,
     scales: set[str] | None = None,
     max_instances: int | None = None,
+    start_index: int = 0,
+    end_index: int | None = None,
+    shard_count: int = 1,
+    shard_index: int = 0,
 ) -> list[dict[str, Any]]:
+    start = int(start_index)
+    end = None if end_index is None else int(end_index)
+    count = int(shard_count)
+    shard = int(shard_index)
+    if start < 0:
+        raise ValueError("start_index must be non-negative")
+    if end is not None and end < start:
+        raise ValueError("end_index must be greater than or equal to start_index")
+    if count <= 0:
+        raise ValueError("shard_count must be positive")
+    if shard < 0 or shard >= count:
+        raise ValueError("shard_index must satisfy 0 <= shard_index < shard_count")
+    if max_instances is not None and int(max_instances) < 0:
+        raise ValueError("max_instances must be non-negative")
+
     scale_filter = scales or set()
     stage2 = read_stage2_tasks(dataset_path, family_root=family_root)
     if stage2:
         selected = [task for task in stage2 if not scale_filter or task.scale_label in scale_filter]
+        selected = selected[start:end]
+        if count > 1:
+            selected = [
+                task
+                for task in selected
+                if stable_view_shard(task.view_id, count) == shard
+            ]
         if max_instances is not None:
             selected = selected[: int(max_instances)]
         missing = missing_family_directories(selected)
         if missing:
             preview = ", ".join(str(path) for path in missing[:5])
             raise FileNotFoundError(f"missing {len(missing)} Stage-2 family directories: {preview}")
+        family_manifest_cache: dict[str, tuple[str, str]] = {}
+        selected = [
+            _attach_stage2_data_identity(task, family_manifest_cache)
+            for task in selected
+        ]
         return [{"input_kind": "stage2", "stage2_task": task.to_dict()} for task in selected]
 
     raise ValueError(
         "No Stage-2 view_index.parquet was found. Metaheuristic runners only "
         "accept the current Stage-2 view-index/materialized-family layout."
     )
+
+
+def bounded_process_map(
+    solve_function: Callable[[dict[str, Any]], dict[str, Any]],
+    tasks: Iterable[dict[str, Any]],
+    *,
+    workers: int,
+    max_in_flight: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Map tasks without placing the complete experiment in the process queue."""
+
+    worker_count = max(1, int(workers))
+    if worker_count == 1:
+        for task in tasks:
+            yield solve_function(task)
+        return
+
+    limit = worker_count * 2 if max_in_flight is None else int(max_in_flight)
+    if limit <= 0:
+        raise ValueError("max_in_flight must be positive")
+    task_iterator = iter(tasks)
+    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+        pending = set()
+        for _ in range(limit):
+            try:
+                task = next(task_iterator)
+            except StopIteration:
+                break
+            pending.add(executor.submit(solve_function, task))
+
+        while pending:
+            completed, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                yield future.result()
+                try:
+                    task = next(task_iterator)
+                except StopIteration:
+                    continue
+                pending.add(executor.submit(solve_function, task))
 
 
 def load_input_task(task: dict[str, Any]) -> tuple[EVRPTWInstance, dict[str, str]]:
@@ -327,9 +703,15 @@ def running_time_matrix_s(instance: EVRPTWInstance) -> np.ndarray:
         raise ValueError(
             "Stage-2 instance is missing running_time_shortest_matrix_s"
         )
-    out = np.asarray(matrix, dtype=np.float64)
+    # Stage-2 matrices are float32 and can be hundreds of MiB.  Casting to
+    # float64 here used to duplicate the complete matrix for every incumbent
+    # replay.  Individual arc values are converted to Python float by the
+    # replay loop, so retaining the source dtype is numerically identical.
+    out = np.asarray(matrix)
     if out.shape != (instance.num_terminals, instance.num_terminals):
         raise ValueError(f"travel-time matrix has invalid shape {out.shape}")
+    if not np.issubdtype(out.dtype, np.number):
+        raise ValueError(f"travel-time matrix has non-numeric dtype {out.dtype}")
     return out
 
 
@@ -341,9 +723,11 @@ def running_time_energy_matrix_kwh(instance: EVRPTWInstance) -> np.ndarray:
         raise ValueError(
             "Stage-2 instance is missing running_time_path_energy_kwh"
         )
-    out = np.asarray(matrix, dtype=np.float64)
+    out = np.asarray(matrix)
     if out.shape != (instance.num_terminals, instance.num_terminals):
         raise ValueError(f"energy matrix has invalid shape {out.shape}")
+    if not np.issubdtype(out.dtype, np.number):
+        raise ValueError(f"energy matrix has non-numeric dtype {out.dtype}")
     return out
 
 
@@ -379,7 +763,7 @@ def validate_routes(
     n = instance.num_customers
     first_station = n + 1
     power, efficiency, power_source = charging_profile(instance)
-    distance = np.asarray(instance.distance_matrix_km, dtype=float)
+    distance = np.asarray(instance.distance_matrix_km)
     travel = running_time_matrix_s(instance)
     energy = running_time_energy_matrix_kwh(instance)
     battery_capacity = float(instance.vehicle["battery_capacity_kwh"])
@@ -397,6 +781,12 @@ def validate_routes(
             continue
         if any(node < 0 or node >= instance.num_terminals for node in route):
             violations.append(f"route {route_index} contains an invalid terminal")
+            continue
+        if 0 in route[1:-1]:
+            violations.append(f"route {route_index} contains an internal depot visit")
+            continue
+        if not any(1 <= node <= n for node in route[1:-1]):
+            violations.append(f"route {route_index} contains no customer")
             continue
         current_time = float(instance.working_start_s)
         battery = battery_capacity
@@ -452,6 +842,158 @@ def validate_routes(
     }
 
 
+def certificate_singleton_routes(
+    instance: EVRPTWInstance,
+) -> list[list[int]] | None:
+    """Reconstruct and replay the Stage-2 constructive feasibility witness.
+
+    The stored certificate identifies the full-battery infrastructure state
+    immediately before each customer and the first charger after it.  The
+    intermediate depot/charger hops are deliberately not stored, so they are
+    reconstructed from the same directed full-state cache used by Stage 2.
+    A route set is returned only after canonical benchmark replay accepts it;
+    malformed, stale, or absent certificates are treated as no warm start.
+    """
+
+    certificate = instance.raw.get("feasibility_certificate")
+    if not isinstance(certificate, dict) or instance.num_customers <= 0:
+        return None
+
+    required = (
+        "inbound_full_state_terminal_index",
+        "first_post_customer_charger_terminal_index",
+    )
+    if any(name not in certificate for name in required):
+        return None
+    try:
+        inbound = np.asarray(
+            certificate["inbound_full_state_terminal_index"], dtype=np.int64
+        )
+        post_customer = np.asarray(
+            certificate["first_post_customer_charger_terminal_index"],
+            dtype=np.int64,
+        )
+        if inbound.shape != (instance.num_customers,) or post_customer.shape != (
+            instance.num_customers,
+        ):
+            return None
+
+        # Keep this internal generator dependency local: normal replay and
+        # runners that do not request a certificate avoid importing SciPy.
+        from evrptw_stage2.orders import _build_full_state_route_cache
+
+        power_kw, efficiency, _ = charging_profile(instance)
+        cache = _build_full_state_route_cache(
+            customer_count=instance.num_customers,
+            running_time_matrix_s=running_time_matrix_s(instance),
+            running_time_energy_matrix_kwh=running_time_energy_matrix_kwh(instance),
+            charging_power_kw=power_kw,
+            battery_capacity_kwh=float(instance.vehicle["battery_capacity_kwh"]),
+            charging_efficiency=efficiency,
+        )
+        full_nodes = np.asarray(cache.terminal_indices, dtype=np.int64)
+        full_position = {int(node): pos for pos, node in enumerate(full_nodes)}
+
+        def depot_to(position: int) -> list[int]:
+            cursor = int(position)
+            reversed_positions = [cursor]
+            for _ in range(len(full_nodes)):
+                if cursor == 0:
+                    return [
+                        int(full_nodes[pos]) for pos in reversed(reversed_positions)
+                    ]
+                cursor = int(cache.from_depot_predecessor[cursor])
+                if cursor < 0 or cursor >= len(full_nodes):
+                    break
+                reversed_positions.append(cursor)
+            raise ValueError("broken depot-to-customer certificate predecessor chain")
+
+        def to_depot(position: int) -> list[int]:
+            cursor = int(position)
+            positions = [cursor]
+            for _ in range(len(full_nodes)):
+                if cursor == 0:
+                    return [int(full_nodes[pos]) for pos in positions]
+                cursor = int(cache.to_depot_reverse_predecessor[cursor])
+                if cursor < 0 or cursor >= len(full_nodes):
+                    break
+                positions.append(cursor)
+            raise ValueError("broken customer-to-depot certificate predecessor chain")
+
+        routes: list[list[int]] = []
+        first_station = 1 + instance.num_customers
+        for customer_offset in range(instance.num_customers):
+            customer_node = customer_offset + 1
+            inbound_node = int(inbound[customer_offset])
+            if inbound_node not in full_position:
+                return None
+            route = depot_to(full_position[inbound_node])
+            route.append(customer_node)
+            post_node = int(post_customer[customer_offset])
+            if post_node < 0:
+                route.append(0)
+            else:
+                if post_node not in full_position or post_node < first_station:
+                    return None
+                outbound = to_depot(full_position[post_node])
+                route.extend(outbound)
+            routes.append(route)
+
+        stored_visits = certificate.get("charging_visit_count")
+        if stored_visits is not None:
+            expected_visits = np.asarray(stored_visits, dtype=np.int64)
+            actual_visits = np.asarray(
+                [sum(node >= first_station for node in route) for route in routes],
+                dtype=np.int64,
+            )
+            if expected_visits.shape != actual_visits.shape or not np.array_equal(
+                expected_visits, actual_visits
+            ):
+                return None
+
+        audit = validate_routes(instance, routes)
+        return routes if audit["passed"] else None
+    except (KeyError, TypeError, ValueError, IndexError, ImportError):
+        return None
+
+
+class IncumbentReplayCache:
+    """Reuse replay only when a solver reports the exact same route again.
+
+    VNS-TS reports its current global solution at conservative outer-iteration
+    boundaries even when that incumbent has not changed.  Replaying a large
+    route at every boundary is unnecessary.  This one-entry cache deliberately
+    does *not* trust the solver objective and does not skip any new route
+    sequence, so a real improvement can never be lost.
+    """
+
+    def __init__(self, instance: EVRPTWInstance) -> None:
+        self.instance = instance
+        self._route_key: tuple[tuple[int, ...], ...] | None = None
+        self._audit: dict[str, Any] | None = None
+        self.hits = 0
+        self.misses = 0
+
+    @staticmethod
+    def _copy_audit(audit: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **audit,
+            "violations": list(audit.get("violations", [])),
+        }
+
+    def validate(self, routes: list[list[int]]) -> dict[str, Any]:
+        key = tuple(tuple(int(node) for node in route) for route in routes)
+        if key == self._route_key and self._audit is not None:
+            self.hits += 1
+            return self._copy_audit(self._audit)
+        clean_routes = [list(route) for route in key]
+        audit = validate_routes(self.instance, clean_routes)
+        self._route_key = key
+        self._audit = self._copy_audit(audit)
+        self.misses += 1
+        return self._copy_audit(audit)
+
+
 class IncumbentEventRecorder:
     """Record improvements and build strict at-or-before checkpoint snapshots.
 
@@ -495,7 +1037,7 @@ class IncumbentEventRecorder:
                 self._sealed_events[checkpoint] = self._copy_event(self._best_event)
         if (
             self._best_event is not None
-            and value >= float(self._best_event["objective_distance_km"]) - 1e-9
+            and value >= float(self._best_event["objective_distance_km"])
         ):
             return
         self._best_event = {

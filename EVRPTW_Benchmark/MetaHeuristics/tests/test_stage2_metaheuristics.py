@@ -142,6 +142,21 @@ def test_both_solvers_use_station_specific_full_charge_time() -> None:
     assert np.isclose(vnst.charging_time(adapted.stations[1], 20.0), 20.0 / 100.0 * 3600.0)
 
 
+def test_canonical_replay_rejects_internal_depot_and_customerless_routes() -> None:
+    instance = make_instance()
+    internal_depot = validate_routes(instance, [[0, 1, 0, 2, 0]])
+    customerless_extra_route = validate_routes(
+        instance,
+        [[0, 1, 0], [0, 2, 0]],
+    )
+    assert not internal_depot["passed"]
+    assert any("internal depot" in item for item in internal_depot["violations"])
+    assert not customerless_extra_route["passed"]
+    assert any(
+        "no customer" in item for item in customerless_extra_route["violations"]
+    )
+
+
 def test_checkpoint_snapshots_never_backfill_late_incumbent() -> None:
     recorder = IncumbentEventRecorder((60.0, 300.0, 900.0, 1200.0), 1200.0)
     recorder.observe(30.0, 100.0, [[0, 1, 0]])
@@ -228,8 +243,21 @@ def test_natural_early_completion_only_forward_fills_future() -> None:
 
 
 def test_exact_compatible_status_fields_are_declared() -> None:
-    assert "benchmark_status" in TIME_TRACE_FIELDNAMES
-    required = {"benchmark_status", "benchmark_completed", "has_incumbent"}
+    assert {
+        "benchmark_status",
+        "solver_name",
+        "algorithm_profile_id",
+        "seed",
+        "seed_scheme",
+        "run_contract_fingerprint",
+    } <= set(TIME_TRACE_FIELDNAMES)
+    required = {
+        "benchmark_status",
+        "benchmark_completed",
+        "has_incumbent",
+        "run_contract_fingerprint",
+        "run_contract_json",
+    }
     for runner in (
         META_ROOT / "ALNS_Solver" / "run_alns.py",
         META_ROOT / "VNS_TS_Solver" / "run_vns_ts.py",
