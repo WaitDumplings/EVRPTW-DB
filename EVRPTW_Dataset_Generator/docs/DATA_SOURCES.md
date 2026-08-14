@@ -10,7 +10,7 @@
 | Residential attributes | USACE National Structure Inventory (NSI) | Yes, queried automatically | Occupancy family, modeled units, structure identifiers and attributes | Modeled inventory, not parcel-order ground truth |
 | Charging sites | NREL Alternative Fuels Data Center (AFDC) | Yes; free API key | Public/available EV site coordinates, connectors and port counts | Public site is not automatically fleet-compatible; power may be missing |
 | Address anchor | U.S. Census Geocoder | Optional but recommended | Address-level coordinate QA | Not exact EVSE geometry |
-| Road class/legal speed | FHWA HPMS | Optional | High-confidence functional class and missing legal-speed evidence | Requires explicit OSM conflation; local-road coverage is incomplete |
+| Road class/legal speed | FHWA HPMS | Required by the U.S. reference profile; replaceable by another country adapter | High-confidence functional class and direction-verified missing legal-speed evidence | Requires explicit OSM conflation; local-road coverage is incomplete |
 | Commercial-vehicle speed prior | NREL Fleet DNA report NREL/TP-5400-65921 | Built-in versioned profile | Three Average Driving Speed profile means | Mode-level prior, not Amazon/Rivian edge observation |
 | Day/road-type speed-factor structure | U.S. EPA MOVES | Stage 2 U.S. adapter | Restricted/unrestricted access and weekday/weekend calibration strata | Current numerical factor table is still development calibration |
 | Operating-day statistics | Amazon Last Mile Routing Research Challenge 2021 | Stage 2 only | Package volume, service-time and time-window aggregate calibration | Coordinates are obfuscated; no house/apartment label |

@@ -205,9 +205,12 @@ For every directed physical edge `e`, Stage 1 retains:
   - U: residential, service, and delivery-access roads.
 
 OSM supplies the road type and, when present, direction-applicable legal speed.
-HPMS `F_SYSTEM` is the preferred functional-class evidence when a successful
-conflation exists; OSM `highway=*` is the fallback. H/M/U is the benchmark's
-portable crosswalk, not a native NREL or MOVES classification.
+The legal-speed priority is directional OSM `maxspeed`, generic OSM
+`maxspeed`, direction-verified high-confidence HPMS `SPEED_LIMIT`, then the
+same-city hierarchical median. HPMS `F_SYSTEM` is the preferred
+functional-class evidence for a high-confidence physical-corridor match; OSM
+`highway=*` is the fallback. H/M/U is the benchmark's portable crosswalk, not
+a native NREL or MOVES classification.
 
 The H/M/U reference-speed anchors come from the public NREL Fleet DNA
 commercial-vehicle report and are capped by the legal speed. Fleet DNA is used
@@ -482,7 +485,7 @@ configurable benchmark assumptions.
 
 | Parameter group | Source role | Current state |
 | --- | --- | --- |
-| Road topology/legal speed | OSM; optional HPMS | public-data grounded |
+| Road topology/legal speed | OSM; HPMS in the U.S. reference adapter | public-data grounded |
 | H/M/U reference speed | NREL Fleet DNA mode prior | built-in adapter |
 | Weekday/weekend road factor structure | EPA MOVES strata | structure grounded; numerical distributions still development |
 | Package volume, service, TW summaries | Amazon ARCD aggregates | development calibration; frozen artifact required |

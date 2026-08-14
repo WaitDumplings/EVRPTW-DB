@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from .hpms_match import discover_hpms_source
 from .util import sha256_file
 
 AFDC_REQUIRED_COLUMNS = {
@@ -49,10 +50,21 @@ def _record_file(path: Path, *, expected_sha256: str | None = None) -> dict[str,
     return record
 
 
+def _record_large_source(path: Path) -> dict[str, Any]:
+    """Record lightweight research preflight metadata without hashing a large file."""
+
+    record: dict[str, Any] = {"path": str(path), "exists": path.is_file()}
+    if path.is_file():
+        record["bytes"] = path.stat().st_size
+    return record
+
+
 def preflight_profile(
     profile_path: Path,
     *,
     selected_slugs: set[str] | None = None,
+    hpms_source_root_override: Path | None = None,
+    hpms_source_registry_override: Path | None = None,
 ) -> dict[str, Any]:
     """Validate source paths and cross-config contracts without changing data."""
 
@@ -212,12 +224,57 @@ def preflight_profile(
                         "resolved AFDC manifest predates coordinate-validation tiers"
                     )
 
-    hpms_root = resolve_from(generator_root, source_paths["hpms_edge_match_root"])
-    if not hpms_root.exists():
-        warnings.append(
-            "optional normalized HPMS-to-OSM edge matches are absent; functional class "
-            "will use OSM fallback and legal speed will not receive HPMS fills"
+    hpms_records: list[dict[str, Any]] = []
+    hpms_raw_root_value = source_paths.get("hpms_raw_root")
+    hpms_registry_value = source_paths.get("hpms_source_registry")
+    hpms_required = bool(
+        profile.get("speed_profile", {})
+        .get("hpms_matching", {})
+        .get("required", False)
+    )
+    hpms_raw_root = hpms_source_root_override or (
+        resolve_from(generator_root, hpms_raw_root_value)
+        if hpms_raw_root_value
+        else None
+    )
+    hpms_registry_path = hpms_source_registry_override or (
+        resolve_from(generator_root, hpms_registry_value)
+        if hpms_registry_value
+        else None
+    )
+    hpms_registry: dict[str, Any] = {}
+    if hpms_registry_path is not None and hpms_registry_path.is_file():
+        hpms_registry = read_json(hpms_registry_path)
+    elif hpms_required:
+        errors.append(f"missing HPMS source registry: {hpms_registry_path}")
+    elif hpms_registry_path is not None:
+        warnings.append(f"optional HPMS source registry is absent: {hpms_registry_path}")
+
+    hpms_city_entries = hpms_registry.get("cities", {})
+    for item in cities:
+        slug = str(item["slug"])
+        entry = hpms_city_entries.get(slug, {})
+        source_stem = str(entry.get("source_stem", "")).strip()
+        source_path = (
+            discover_hpms_source(hpms_raw_root, source_stem)
+            if hpms_raw_root is not None and source_stem
+            else None
         )
+        record = {
+            "city_slug": slug,
+            "source_stem": source_stem or None,
+            "source": _record_large_source(source_path) if source_path else None,
+        }
+        hpms_records.append(record)
+        if source_path is None:
+            message = (
+                f"{slug}: HPMS raw source is unavailable for source_stem="
+                f"{source_stem or '<missing>'} under {hpms_raw_root}"
+            )
+            if hpms_required:
+                errors.append(message)
+            else:
+                warnings.append(message)
     if shutil.which("osmium") is None:
         errors.append("osmium executable is not available; install the conda environment")
 
@@ -233,7 +290,11 @@ def preflight_profile(
             "city_preset": _record_file(preset_path),
             "building_registry": _record_file(building_registry_path),
             "afdc": afdc_record,
-            "hpms_edge_match_root": str(hpms_root),
+            "hpms_source_registry": (
+                _record_file(hpms_registry_path) if hpms_registry_path else None
+            ),
+            "hpms_raw_root": str(hpms_raw_root) if hpms_raw_root else None,
+            "hpms_sources": hpms_records,
             "pbf_sources": list(pbf_records.values()),
             "cities": city_records,
         },

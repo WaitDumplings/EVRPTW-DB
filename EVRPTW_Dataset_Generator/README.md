@@ -38,7 +38,7 @@ Dallas, and Fort Worth. Jacksonville is the eleventh CLE and held-out Test-3
 city.
 
 The reference adapter integrates Census, OSM, Microsoft US Building
-Footprints, USACE NSI, AFDC, optional HPMS, NREL Fleet DNA, EPA MOVES, Amazon
+Footprints, USACE NSI, AFDC, HPMS, NREL Fleet DNA, EPA MOVES, Amazon
 ARCD aggregates, and official Rivian Commercial Van specifications. It is one
 portable U.S. implementation of the canonical schemas, not a requirement that
 another country use the same sources.
@@ -119,7 +119,14 @@ data/sources/
     <city>/raw_tiles/*.geojsonseq.gz
   census_block_groups_2025/
     tl_2025_{04,06,12,17,36,42,48}_bg.zip
-  hpms-edge-matches/                 # optional, one normalized file per city
+  hpms/
+    new-york.parquet                 # GeoParquet, GeoJSON, GPKG, or SHP
+    california.parquet
+    illinois.parquet
+    texas.parquet
+    arizona.parquet
+    pennsylvania.parquet
+    florida.parquet
 ```
 
 The server bundle already includes the frozen NSI API tile responses, so the
@@ -143,6 +150,22 @@ python scripts/resolve_afdc_coordinates.py \
   --census-results data/sources/afdc/afdc_census_address_anchors.csv \
   --osm-pois data/sources/osm/osm_charging_pois_us_11city.csv \
   --output data/sources/afdc/afdc_us_public_available_electric_resolved_us_11city_v1.csv
+```
+
+The HPMS files are public FHWA geospatial extracts. Their exact extension is
+not fixed; the city-to-source mapping is versioned in
+`configs/us_11city_hpms_sources_v1.json`. The official U.S. profile treats the
+seven files above as required, then creates derived per-city match tables under
+`work/us-11city-v1/hpms_edge_matches/`. A single-city matcher can also be run
+directly:
+
+```bash
+PYTHONPATH=src python scripts/build_hpms_edge_matches.py \
+  --city-slug san-diego \
+  --hpms data/sources/hpms/california.parquet \
+  --graph work/us-11city-v1/cities/san-diego/graph_operational.graphml \
+  --boundary boundaries/us-11city-2025/san-diego/land_boundary.geojson \
+  --output work/us-11city-v1/hpms_edge_matches/san-diego.parquet
 ```
 
 Build all eleven CLEs from the repository root:

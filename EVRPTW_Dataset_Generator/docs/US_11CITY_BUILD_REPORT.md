@@ -3,6 +3,12 @@
 This report records the completed 2026-08-10 engineering build. It separates
 technical completion from scientific release eligibility.
 
+> Historical-build note: this report predates the direction-aware HPMS-to-OSM
+> matcher and `evrptw_directed_speed_profiles_v5`. Its topology, facility, and
+> service-location counts remain historical engineering evidence, but its speed
+> provenance is not evidence for the current profile. The 11 CLEs and all
+> Stage-2 matrices must be regenerated before updating this report.
+
 ## Stage 1 result
 
 The cohort is New York City, Los Angeles, Chicago, Houston, Phoenix,

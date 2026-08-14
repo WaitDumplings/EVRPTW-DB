@@ -63,7 +63,8 @@ It integrates public/freely accessible sources with distinct roles:
 - Microsoft USBuildingFootprints geometry;
 - USACE National Structure Inventory residential occupancy/unit evidence;
 - NREL Alternative Fuels Data Center charging sites;
-- optional high-confidence FHWA HPMS edge evidence;
+- FHWA HPMS functional-class and legal-speed evidence, conflated to OSM by the
+  Generator with an auditable direction-aware matcher;
 - an explicitly documented NREL Fleet DNA running-speed prior.
 
 The result is best described as a **real-geography, public-data-integrated,

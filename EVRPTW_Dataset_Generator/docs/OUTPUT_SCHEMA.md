@@ -98,8 +98,11 @@ v_model_nrel_kph, reference_speed_kph, reference_speed_source,
 reference_travel_time_s
 ```
 
-Raw directional/generic OSM values, parsed HGV evidence, optional HPMS fields,
-match confidence, and conflict flags are retained for audit.
+Raw directional/generic OSM values and parsed HGV evidence are retained. HPMS
+audit fields include the source segment ID, `F_SYSTEM`, `SPEED_LIMIT`, match
+method/confidence, lateral distance, overlap ratio, orientation difference,
+`hpms_corridor_match_usable`, `hpms_direction_verified`,
+`hpms_speed_usable`, and OSM/HPMS conflict flags.
 
 ## Required latent-location concepts
 

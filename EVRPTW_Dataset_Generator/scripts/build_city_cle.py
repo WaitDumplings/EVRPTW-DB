@@ -24,6 +24,11 @@ from evrptw_cle.customer_spatial import (
     build_microsoft_nsi_spatial_pilot,
 )
 from evrptw_cle.facilities import build_facility_layers
+from evrptw_cle.hpms_match import (
+    HPMSMatchOptions,
+    build_hpms_edge_matches,
+    validate_hpms_edge_matches,
+)
 from evrptw_cle.nsi import (
     NSICustomerOptions,
     build_nsi_customer_cle,
@@ -87,8 +92,42 @@ def main() -> None:
     parser.add_argument(
         "--hpms-edge-evidence-root",
         type=Path,
-        help="Optional directory containing <city-slug>.parquet or .csv conflated edge evidence.",
+        help=(
+            "Directory containing or receiving <city-slug>.parquet normalized "
+            "HPMS-to-OSM evidence."
+        ),
     )
+    parser.add_argument(
+        "--hpms-source",
+        type=Path,
+        help="Raw state/city HPMS geospatial source used when normalized evidence is absent.",
+    )
+    parser.add_argument(
+        "--require-hpms-match",
+        action="store_true",
+        help="Fail instead of silently falling back to OSM when HPMS evidence is unavailable.",
+    )
+    parser.add_argument("--hpms-candidate-radius-m", type=float, default=75.0)
+    parser.add_argument("--hpms-overlap-buffer-m", type=float, default=25.0)
+    parser.add_argument("--hpms-minimum-overlap-ratio", type=float, default=0.20)
+    parser.add_argument(
+        "--hpms-maximum-orientation-delta-deg", type=float, default=30.0
+    )
+    parser.add_argument(
+        "--hpms-high-confidence-distance-m", type=float, default=25.0
+    )
+    parser.add_argument(
+        "--hpms-high-confidence-overlap-ratio", type=float, default=0.50
+    )
+    parser.add_argument(
+        "--hpms-high-confidence-orientation-delta-deg",
+        type=float,
+        default=15.0,
+    )
+    parser.add_argument(
+        "--hpms-ambiguity-distance-margin-m", type=float, default=10.0
+    )
+    parser.add_argument("--hpms-ambiguity-overlap-margin", type=float, default=0.20)
     parser.add_argument("--vehicle-speed-cap-kph", type=float)
     parser.add_argument(
         "--include-pilot-speed-scenarios",
@@ -165,6 +204,47 @@ def main() -> None:
     road_verification = verify_city_output(city_dir)
     if not road_verification["passed"]:
         raise RuntimeError(f"road verification failed: {road_verification['errors']}")
+
+    if hpms_edge_evidence is None and args.hpms_source is not None:
+        if args.hpms_edge_evidence_root is None:
+            parser.error("--hpms-source requires --hpms-edge-evidence-root")
+        _step("HPMS", "clip raw HPMS and conflate it with directed OSM edges")
+        hpms_edge_evidence = args.hpms_edge_evidence_root / f"{slug}.parquet"
+        build_hpms_edge_matches(
+            city_slug=slug,
+            hpms_path=args.hpms_source,
+            graph_path=graph,
+            boundary_path=service_boundary,
+            output_path=hpms_edge_evidence,
+            options=HPMSMatchOptions(
+                candidate_radius_m=args.hpms_candidate_radius_m,
+                overlap_buffer_m=args.hpms_overlap_buffer_m,
+                minimum_overlap_ratio=args.hpms_minimum_overlap_ratio,
+                maximum_orientation_delta_deg=(
+                    args.hpms_maximum_orientation_delta_deg
+                ),
+                high_confidence_distance_m=(
+                    args.hpms_high_confidence_distance_m
+                ),
+                high_confidence_overlap_ratio=(
+                    args.hpms_high_confidence_overlap_ratio
+                ),
+                high_confidence_orientation_delta_deg=(
+                    args.hpms_high_confidence_orientation_delta_deg
+                ),
+                ambiguity_distance_margin_m=(
+                    args.hpms_ambiguity_distance_margin_m
+                ),
+                ambiguity_overlap_margin=args.hpms_ambiguity_overlap_margin,
+            ),
+        )
+    if hpms_edge_evidence is not None:
+        validate_hpms_edge_matches(hpms_edge_evidence)
+    elif args.require_hpms_match:
+        raise FileNotFoundError(
+            f"Required HPMS source/match is unavailable for {slug}; provide "
+            "--hpms-source or a normalized file under --hpms-edge-evidence-root"
+        )
 
     if not building_manifest.exists():
         _step("buildings", "extract registered Microsoft footprints")
@@ -281,6 +361,31 @@ def main() -> None:
 
     speed_dir = cle_dir / "profiles"
     speed_manifest = speed_dir / "speed_manifest.json"
+    speed_layer_rebuilt = False
+    if speed_manifest.exists():
+        recorded_speed = _read_json(speed_manifest)
+        recorded_hpms = recorded_speed.get("hpms_edge_evidence")
+        expected_hpms_sha = (
+            sha256_file(hpms_edge_evidence)
+            if hpms_edge_evidence is not None
+            else None
+        )
+        recorded_hpms_sha = (
+            recorded_hpms.get("sha256")
+            if isinstance(recorded_hpms, dict)
+            else None
+        )
+        speed_is_current = (
+            recorded_speed.get("schema") == "evrptw_directed_speed_profiles_v5"
+            and recorded_speed.get("graph", {}).get("sha256") == sha256_file(graph)
+            and recorded_hpms_sha == expected_hpms_sha
+        )
+        if not speed_is_current:
+            _step(
+                "speed",
+                "discard stale generated profile after graph/HPMS contract change",
+            )
+            shutil.rmtree(speed_dir)
     if not speed_manifest.exists():
         _step(
             "speed",
@@ -302,10 +407,13 @@ def main() -> None:
             factor_min=args.speed_factor_min,
             factor_max=args.speed_factor_max,
         )
+        speed_layer_rebuilt = True
     else:
         _step("speed", "reuse directed legal-speed layer")
 
-    refresh_speed_route_qa = args.refresh_speed_route_qa or refresh_facilities
+    refresh_speed_route_qa = (
+        args.refresh_speed_route_qa or refresh_facilities or speed_layer_rebuilt
+    )
     speed_route_audit = cle_dir / "qa/static_speed_route_audit.json"
     if args.include_pilot_speed_scenarios and (
         not speed_route_audit.exists() or refresh_speed_route_qa

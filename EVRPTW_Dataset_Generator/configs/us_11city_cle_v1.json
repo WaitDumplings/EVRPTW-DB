@@ -11,7 +11,8 @@
     "microsoft_building_root": "data/sources/microsoft-us-building-footprints",
     "afdc_raw_csv": "data/sources/afdc/afdc_us_public_available_electric.csv",
     "afdc_resolved_csv": "data/sources/afdc/afdc_us_public_available_electric_resolved_us_11city_v1.csv",
-    "hpms_edge_match_root": "data/sources/hpms-edge-matches"
+    "hpms_raw_root": "data/sources/hpms",
+    "hpms_source_registry": "configs/us_11city_hpms_sources_v1.json"
   },
   "work_root": "work/us-11city-v1",
   "release_root": "../EVRPTW_Dataset/CLE_v1/us_11city",
@@ -58,9 +59,27 @@
     "legal_speed_priority": [
       "osm_directional_maxspeed",
       "osm_generic_maxspeed",
-      "high_confidence_hpms_speed_limit",
+      "direction_verified_hpms_speed_limit",
       "hierarchical_imputation"
     ],
+    "hpms_matching": {
+      "required": true,
+      "output_contract": "work_root/hpms_edge_matches/<city>.parquet",
+      "match_scope": "city_projected_physical_corridor_then_directed_edge",
+      "f_system_policy": "high_confidence_corridor_match",
+      "speed_limit_policy": "high_confidence_direction_verified_edge_match_only",
+      "parameters": {
+        "candidate_radius_m": 75,
+        "overlap_buffer_m": 25,
+        "minimum_overlap_ratio": 0.2,
+        "maximum_orientation_delta_deg": 30,
+        "high_confidence_distance_m": 25,
+        "high_confidence_overlap_ratio": 0.5,
+        "high_confidence_orientation_delta_deg": 15,
+        "ambiguity_distance_margin_m": 10,
+        "ambiguity_overlap_margin": 0.2
+      }
+    },
     "nrel_source": {
       "report": "NREL/TP-5400-65921",
       "doi": "10.2172/1397153",

@@ -1,15 +1,102 @@
 from __future__ import annotations
 
+import networkx as nx
+import osmnx as ox
 import pandas as pd
 import pytest
+from shapely.geometry import LineString
 
 from evrptw_cle.speed import (
     _build_static_operational_scenarios,
+    _hpms_corridor_is_usable,
+    _hpms_speed_is_usable,
     _select_directional_speed,
+    build_legal_speed_layer,
     operating_mode_from_hpms,
     operating_mode_from_osm,
     parse_osm_maxspeed,
 )
+
+
+def test_hpms_speed_requires_direction_verified_evidence() -> None:
+    corridor_only = {
+        "match_confidence": "high",
+        "corridor_match_usable": True,
+        "direction_verified": False,
+        "hpms_speed_usable": False,
+    }
+    assert _hpms_corridor_is_usable(corridor_only)
+    assert not _hpms_speed_is_usable(corridor_only)
+    assert _hpms_speed_is_usable(
+        {
+            **corridor_only,
+            "direction_verified": True,
+            "hpms_speed_usable": True,
+        }
+    )
+
+
+def test_legal_speed_priority_osm_then_verified_hpms_then_imputation(
+    tmp_path,
+) -> None:
+    graph = nx.MultiDiGraph()
+    graph.graph["crs"] = "EPSG:4326"
+    for node, x in enumerate([-117.03, -117.02, -117.01, -117.00], start=1):
+        graph.add_node(node, x=x, y=32.0)
+    for u, v in [(1, 2), (2, 3), (3, 4)]:
+        attributes = {
+            "osmid": 100 + u,
+            "highway": "residential",
+            "length": 100.0,
+            "oneway": True,
+            "reversed": False,
+            "geometry": LineString(
+                [
+                    (graph.nodes[u]["x"], graph.nodes[u]["y"]),
+                    (graph.nodes[v]["x"], graph.nodes[v]["y"]),
+                ]
+            ),
+        }
+        if u == 1:
+            attributes["maxspeed"] = "30 mph"
+        graph.add_edge(u, v, key=0, **attributes)
+    graph_path = tmp_path / "graph.graphml"
+    ox.save_graphml(graph, graph_path)
+
+    evidence_path = tmp_path / "hpms.parquet"
+    pd.DataFrame(
+        {
+            "edge_id": ["1:2:0", "2:3:0", "3:4:0"],
+            "F_SYSTEM": [7, 7, 7],
+            "SPEED_LIMIT": [20, 25, 40],
+            "match_confidence": ["high", "high", "high"],
+            "corridor_match_usable": [True, True, True],
+            "direction_verified": [True, True, False],
+            "hpms_speed_usable": [True, True, False],
+        }
+    ).to_parquet(evidence_path, index=False)
+
+    output_dir = tmp_path / "speed"
+    build_legal_speed_layer(
+        city_slug="test-city",
+        graph_path=graph_path,
+        output_dir=output_dir,
+        hpms_edge_evidence_path=evidence_path,
+    )
+    speeds = pd.read_parquet(output_dir / "directed_legal_speeds.parquet").set_index(
+        "edge_id"
+    )
+    assert speeds.loc["1:2:0", "speed_limit_source"] == "osm_maxspeed"
+    assert speeds.loc["1:2:0", "speed_limit_kph"] == pytest.approx(48.28032)
+    assert (
+        speeds.loc["2:3:0", "speed_limit_source"]
+        == "hpms_speed_limit_direction_verified"
+    )
+    assert speeds.loc["2:3:0", "speed_limit_kph"] == pytest.approx(40.2336)
+    assert speeds.loc["3:4:0", "speed_limit_source"] == (
+        "within_city_class_imputation"
+    )
+    assert speeds.loc["3:4:0", "speed_limit_kph"] == pytest.approx(40.2336)
 
 
 def test_parse_osm_maxspeed_handles_mph_kph_and_multivalue() -> None:

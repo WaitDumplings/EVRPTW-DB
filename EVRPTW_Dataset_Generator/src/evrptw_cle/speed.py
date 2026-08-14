@@ -413,6 +413,26 @@ def _high_confidence_hpms(record: dict[str, Any]) -> bool:
         return False
 
 
+def _hpms_corridor_is_usable(record: dict[str, Any]) -> bool:
+    """Return whether HPMS functional class may replace the OSM fallback."""
+
+    if not _high_confidence_hpms(record):
+        return False
+    if "corridor_match_usable" not in record:
+        return True
+    return _as_bool(record.get("corridor_match_usable"))
+
+
+def _hpms_speed_is_usable(record: dict[str, Any]) -> bool:
+    """Require an explicitly direction-verified match before using HPMS speed."""
+
+    return (
+        _hpms_corridor_is_usable(record)
+        and _as_bool(record.get("direction_verified"))
+        and _as_bool(record.get("hpms_speed_usable"))
+    )
+
+
 def build_legal_speed_layer(
     *,
     city_slug: str,
@@ -438,6 +458,15 @@ def build_legal_speed_layer(
         raise ValueError("vehicle_speed_cap_kph must be positive when supplied")
     graph = ox.load_graphml(graph_path)
     hpms_evidence = _load_hpms_edge_evidence(hpms_edge_evidence_path)
+    graph_edge_ids = {
+        f"{u}:{v}:{key}" for u, v, key in graph.edges(keys=True)
+    }
+    stale_hpms_edges = sorted(set(hpms_evidence) - graph_edge_ids)
+    if stale_hpms_edges:
+        raise ValueError(
+            "HPMS edge evidence belongs to a different graph; unknown edge IDs include "
+            f"{stale_hpms_edges[:5]}"
+        )
     records: list[dict[str, Any]] = []
     parse_counts: Counter[str] = Counter()
     for u, v, key, attributes in graph.edges(keys=True, data=True):
@@ -447,7 +476,8 @@ def build_legal_speed_layer(
         edge_id = f"{u}:{v}:{key}"
         selected_speed = _select_directional_speed(attributes, edge_id)
         hpms = hpms_evidence.get(edge_id, {})
-        hpms_high_confidence = _high_confidence_hpms(hpms)
+        hpms_corridor_usable = _hpms_corridor_is_usable(hpms)
+        hpms_speed_usable = _hpms_speed_is_usable(hpms)
         hpms_speed_kph = None
         try:
             raw_hpms_speed = float(hpms.get("SPEED_LIMIT"))
@@ -456,18 +486,24 @@ def build_legal_speed_layer(
         except (TypeError, ValueError):
             pass
         osm_speed_kph = selected_speed["speed_limit_kph"]
-        if osm_speed_kph is None and hpms_high_confidence and hpms_speed_kph is not None:
+        if osm_speed_kph is None and hpms_speed_usable and hpms_speed_kph is not None:
             selected_speed["speed_limit_kph"] = hpms_speed_kph
-            selected_speed["speed_limit_observed_source"] = "hpms_speed_limit_high_confidence"
+            selected_speed["speed_limit_observed_source"] = (
+                "hpms_speed_limit_direction_verified"
+            )
             selected_speed["maxspeed_parse_status"] = "hpms_numeric_mph"
         parse_status = selected_speed["maxspeed_parse_status"]
         parse_counts[f"{selected_speed['speed_limit_observed_source']}:{parse_status}"] += 1
         highway = _primary_highway(attributes.get("highway"))
         hpms_mode = operating_mode_from_hpms(hpms.get("F_SYSTEM"))
-        operating_mode = hpms_mode if hpms_high_confidence and hpms_mode else operating_mode_from_osm(highway)
+        operating_mode = (
+            hpms_mode
+            if hpms_corridor_usable and hpms_mode
+            else operating_mode_from_osm(highway)
+        )
         operating_mode_source = (
             "hpms_f_system_high_confidence"
-            if hpms_high_confidence and hpms_mode
+            if hpms_corridor_usable and hpms_mode
             else "osm_highway_fallback"
         )
         osmid = _canonical_values(attributes.get("osmid"))
@@ -492,6 +528,18 @@ def build_legal_speed_layer(
                 "raw_hpms_f_system": hpms.get("F_SYSTEM"),
                 "raw_hpms_speed_limit_mph": hpms.get("SPEED_LIMIT"),
                 "hpms_match_confidence": hpms.get("match_confidence"),
+                "hpms_corridor_match_usable": hpms_corridor_usable,
+                "hpms_direction_verified": _as_bool(
+                    hpms.get("direction_verified")
+                ),
+                "hpms_speed_usable": hpms_speed_usable,
+                "hpms_segment_id": hpms.get("hpms_segment_id"),
+                "hpms_match_method": hpms.get("match_method"),
+                "hpms_lateral_distance_m": hpms.get("lateral_distance_m"),
+                "hpms_overlap_ratio": hpms.get("overlap_ratio"),
+                "hpms_orientation_difference_deg": hpms.get(
+                    "orientation_difference_deg"
+                ),
                 "hpms_speed_limit_kph_evidence": hpms_speed_kph,
                 "speed_conflict_flag": bool(
                     osm_speed_kph is not None
@@ -511,11 +559,13 @@ def build_legal_speed_layer(
     observed = frame["speed_limit_kph"].notna()
     osm_observed = frame["speed_limit_observed_source"].astype(str).str.startswith("osm_")
     hpms_observed = frame["speed_limit_observed_source"].eq(
-        "hpms_speed_limit_high_confidence"
+        "hpms_speed_limit_direction_verified"
     )
     observed_frame = frame.loc[observed]
     if observed_frame.empty:
-        raise ValueError("Operational graph has no parseable OSM maxspeed values")
+        raise ValueError(
+            "Operational graph has no observed legal-speed evidence from OSM or HPMS"
+        )
 
     class_medians: dict[str, float] = {}
     for highway, group in observed_frame.groupby("highway", observed=True):
@@ -638,11 +688,19 @@ def build_legal_speed_layer(
         if scenarios is not None:
             scenarios.to_parquet(scenario_path, index=False)
         manifest = {
-            "schema": "evrptw_directed_speed_profiles_v4",
+            "schema": "evrptw_directed_speed_profiles_v5",
             "status": "cle_reference_speed_profile_complete",
             "generated_utc": datetime.now(UTC).isoformat(),
             "city_slug": city_slug,
             "graph": {"path": str(graph_path.resolve()), "sha256": sha256_file(graph_path)},
+            "hpms_edge_evidence": (
+                {
+                    "path": str(hpms_edge_evidence_path.resolve()),
+                    "sha256": sha256_file(hpms_edge_evidence_path),
+                }
+                if hpms_edge_evidence_path is not None
+                else None
+            ),
             "edge_count": len(frame),
             "scenario_count": int(scenarios["scenario_id"].nunique()) if scenarios is not None else 0,
             "scenario_edge_row_count": len(scenarios) if scenarios is not None else 0,
@@ -650,6 +708,13 @@ def build_legal_speed_layer(
             "observed_osm_maxspeed_edge_share": float(osm_observed.mean()),
             "observed_hpms_speed_limit_edge_count": int(hpms_observed.sum()),
             "observed_hpms_speed_limit_edge_share": float(hpms_observed.mean()),
+            "hpms_corridor_match_usable_edge_count": int(
+                frame["hpms_corridor_match_usable"].sum()
+            ),
+            "hpms_direction_verified_edge_count": int(
+                frame["hpms_direction_verified"].sum()
+            ),
+            "hpms_speed_usable_edge_count": int(frame["hpms_speed_usable"].sum()),
             "observed_any_legal_speed_edge_count": int(observed.sum()),
             "observed_any_legal_speed_edge_share": float(observed.mean()),
             "observed_any_legal_speed_length_share": observed_length / total_length,
@@ -674,7 +739,7 @@ def build_legal_speed_layer(
                 "priority": [
                     "parseable direction-applicable OSM maxspeed:forward/backward",
                     "parseable generic OSM maxspeed",
-                    "high-confidence conflated HPMS SPEED_LIMIT when OSM is missing",
+                    "direction-verified high-confidence HPMS SPEED_LIMIT when OSM is missing",
                     "same-city same-highway length-weighted median",
                     "same-city H/M/U operating-mode length-weighted median",
                     "same-city parent-highway length-weighted median",
@@ -682,6 +747,10 @@ def build_legal_speed_layer(
                 ],
                 "multivalue_policy": "conservative minimum; preserve raw source text",
                 "directional_tag_status": "retained and selected using OSMnx reversed way direction",
+                "hpms_speed_policy": (
+                    "requires corridor_match_usable, direction_verified, and "
+                    "hpms_speed_usable; corridor-only matches may provide F_SYSTEM only"
+                ),
                 "hgv_tag_policy": "retained and parsed as evidence only; not applied until vehicle/GVWR access contract is frozen",
             },
             "reference_speed_contract": {
@@ -737,11 +806,6 @@ def build_legal_speed_layer(
                 "directed_legal_speeds": "directed_legal_speeds.parquet",
             },
         }
-        if hpms_edge_evidence_path is not None:
-            manifest["hpms_edge_evidence"] = {
-                "path": str(hpms_edge_evidence_path.resolve()),
-                "sha256": sha256_file(hpms_edge_evidence_path),
-            }
         if scenarios is not None:
             manifest["scenario_qa"] = _scenario_summary(scenarios)
             manifest["outputs"]["static_operational_scenarios"] = (

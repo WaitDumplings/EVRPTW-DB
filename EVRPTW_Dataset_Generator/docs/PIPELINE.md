@@ -158,11 +158,38 @@ It does not store realized package count, demand, service time, or time window.
 
 ## 6. Speed profiles
 
+### 6.1 HPMS-to-OSM conflation
+
+The U.S. adapter reads a public HPMS line layer for the relevant state, clips
+it to the service boundary, and projects it and the operational OSM graph into
+the same local metric CRS. Directed OSM edges that represent the same physical
+segment are grouped before matching. Candidate ranking uses route-number
+compatibility, lateral distance, buffered line overlap, local orientation, and
+H/M/U compatibility. Geometry orientation is evaluated modulo 180 degrees, so
+the arbitrary coordinate storage order of either source is not interpreted as
+travel direction.
+
+The V1 profile generates candidates within 75 m and requires at least 20%
+buffered overlap with an orientation difference no greater than 30 degrees. A
+non-ambiguous candidate is high confidence only when it has an exact route
+token or is nearly coincident, is within 25 m, has at least 50% overlap, and is
+within 15 degrees. All tolerances are versioned matcher parameters and the
+measured evidence is retained in the normalized output.
+
+A high-confidence physical-corridor match may supply `F_SYSTEM`. HPMS
+`SPEED_LIMIT` may fill a directed OSM edge only when that match is high
+confidence and the matched OSM physical segment has a unique verified one-way
+direction. Bidirectional or ambiguous corridor evidence can still classify the
+road but cannot supply a directional speed.
+
+### 6.2 Legal and reference speed
+
 Each directed physical edge keeps three separate concepts:
 
 1. `legal_speed_kph`: direction-applicable OSM `maxspeed`, generic OSM
-   `maxspeed`, high-confidence HPMS `SPEED_LIMIT` fill when OSM is missing, then
-   transparent within-city class/mode/parent/global median imputation.
+   `maxspeed`, direction-verified high-confidence HPMS `SPEED_LIMIT` when OSM
+   is missing, then transparent within-city class/mode/parent/global median
+   imputation.
 2. `operating_mode`: HPMS `F_SYSTEM` 1-2 -> H, 3-6 -> M, 7 -> U when a
    high-confidence normalized match exists; otherwise OSM `highway=*` fallback.
 3. `reference_speed_kph`: a running-speed prior used before Stage-2 variation.

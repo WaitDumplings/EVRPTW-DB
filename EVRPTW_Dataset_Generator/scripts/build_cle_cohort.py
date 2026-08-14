@@ -15,6 +15,7 @@ from typing import Any
 
 from evrptw_cle.building_registry import extract_registered_city
 from evrptw_cle.cle import package_cle, verify_cle
+from evrptw_cle.hpms_match import discover_hpms_source
 from evrptw_cle.preflight import preflight_profile
 from evrptw_cle.util import sha256_file, write_json
 from evrptw_cle.verification import verify_city_output
@@ -65,6 +66,25 @@ def _selected_preset(
 def _run(command: list[str], repo_root: Path) -> None:
     print("RUN " + " ".join(command), flush=True)
     subprocess.run(command, cwd=repo_root, check=True)
+
+
+def _hpms_city_sources(
+    *,
+    registry_path: Path | None,
+    source_root: Path | None,
+    city_slugs: set[str],
+) -> dict[str, Path | None]:
+    if registry_path is None or source_root is None:
+        return {slug: None for slug in city_slugs}
+    registry = _read_json(registry_path)
+    configured = registry.get("cities", {})
+    missing = city_slugs - set(configured)
+    if missing:
+        raise ValueError(f"HPMS source registry lacks cities: {sorted(missing)}")
+    return {
+        slug: discover_hpms_source(source_root, str(configured[slug]["source_stem"]))
+        for slug in sorted(city_slugs)
+    }
 
 
 def _road_command(
@@ -147,6 +167,9 @@ def _cle_command(
     refresh_facilities: bool,
     refresh_protected_connectivity: bool,
     hpms_edge_evidence_root: Path | None,
+    hpms_source_path: Path | None,
+    require_hpms_match: bool,
+    hpms_match_options: dict[str, Any],
     vehicle_speed_cap_kph: float | None,
     include_pilot_speed_scenarios: bool,
 ) -> list[str]:
@@ -180,6 +203,31 @@ def _cle_command(
     ]
     if hpms_edge_evidence_root is not None:
         command.extend(["--hpms-edge-evidence-root", str(hpms_edge_evidence_root)])
+    if hpms_source_path is not None:
+        command.extend(["--hpms-source", str(hpms_source_path)])
+    if require_hpms_match:
+        command.append("--require-hpms-match")
+    hpms_option_flags = {
+        "candidate_radius_m": "--hpms-candidate-radius-m",
+        "overlap_buffer_m": "--hpms-overlap-buffer-m",
+        "minimum_overlap_ratio": "--hpms-minimum-overlap-ratio",
+        "maximum_orientation_delta_deg": "--hpms-maximum-orientation-delta-deg",
+        "high_confidence_distance_m": "--hpms-high-confidence-distance-m",
+        "high_confidence_overlap_ratio": "--hpms-high-confidence-overlap-ratio",
+        "high_confidence_orientation_delta_deg": (
+            "--hpms-high-confidence-orientation-delta-deg"
+        ),
+        "ambiguity_distance_margin_m": "--hpms-ambiguity-distance-margin-m",
+        "ambiguity_overlap_margin": "--hpms-ambiguity-overlap-margin",
+    }
+    unknown_hpms_options = set(hpms_match_options) - set(hpms_option_flags)
+    if unknown_hpms_options:
+        raise ValueError(
+            f"Unknown HPMS matching parameters: {sorted(unknown_hpms_options)}"
+        )
+    for name, flag in hpms_option_flags.items():
+        if name in hpms_match_options:
+            command.extend([flag, str(hpms_match_options[name])])
     if vehicle_speed_cap_kph is not None:
         command.extend(["--vehicle-speed-cap-kph", str(vehicle_speed_cap_kph)])
     if include_pilot_speed_scenarios:
@@ -366,6 +414,8 @@ def main() -> None:
         help="Sensitivity flag only; it is not a Tier-B hard filter.",
     )
     parser.add_argument("--hpms-edge-evidence-root", type=Path)
+    parser.add_argument("--hpms-source-root", type=Path)
+    parser.add_argument("--hpms-source-registry", type=Path)
     parser.add_argument("--vehicle-speed-cap-kph", type=float)
     parser.add_argument("--include-pilot-speed-scenarios", action="store_true")
     parser.add_argument(
@@ -439,12 +489,36 @@ def main() -> None:
         release_root = repo_root.parent / "EVRPTW_Dataset/CLE_v1/us_11city"
     if not release_root.is_absolute():
         release_root = repo_root / release_root
-    hpms_edge_evidence_root = args.hpms_edge_evidence_root
-    if hpms_edge_evidence_root is None:
-        configured_hpms = profile_path_value(
-            profile["source_paths"]["hpms_edge_match_root"]
+    hpms_edge_evidence_root = (
+        args.hpms_edge_evidence_root or work_root / "hpms_edge_matches"
+    )
+    configured_hpms_root = profile["source_paths"].get("hpms_raw_root")
+    configured_hpms_registry = profile["source_paths"].get(
+        "hpms_source_registry"
+    )
+    hpms_source_root = args.hpms_source_root or (
+        profile_path_value(configured_hpms_root) if configured_hpms_root else None
+    )
+    hpms_source_registry = args.hpms_source_registry or (
+        profile_path_value(configured_hpms_registry)
+        if configured_hpms_registry
+        else None
+    )
+    if hpms_source_root is not None and not hpms_source_root.is_absolute():
+        hpms_source_root = (repo_root / hpms_source_root).resolve()
+    if hpms_source_registry is not None and not hpms_source_registry.is_absolute():
+        hpms_source_registry = (repo_root / hpms_source_registry).resolve()
+    hpms_required = bool(
+        profile["speed_profile"].get("hpms_matching", {}).get("required", False)
+    )
+    hpms_match_options = dict(
+        profile["speed_profile"].get("hpms_matching", {}).get("parameters", {})
+    )
+    if hpms_required and (hpms_source_root is None or hpms_source_registry is None):
+        parser.error(
+            "profile requires HPMS matching but does not define hpms_raw_root and "
+            "hpms_source_registry"
         )
-        hpms_edge_evidence_root = configured_hpms if configured_hpms.exists() else None
     vehicle_speed_cap_kph = args.vehicle_speed_cap_kph
     if vehicle_speed_cap_kph is None:
         vehicle_speed_cap_kph = profile["speed_profile"].get("vehicle_speed_cap_kph")
@@ -463,11 +537,23 @@ def main() -> None:
     failures: list[dict[str, str]] = []
 
     if "preflight" in args.stages:
-        report = preflight_profile(profile_path, selected_slugs=requested)
+        report = preflight_profile(
+            profile_path,
+            selected_slugs=requested,
+            hpms_source_root_override=hpms_source_root,
+            hpms_source_registry_override=hpms_source_registry,
+        )
         write_json(work_root / "qa/preflight.json", report)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         if not report["passed"]:
             raise SystemExit(2)
+    hpms_sources = {slug: None for slug in requested}
+    if "cles" in args.stages:
+        hpms_sources = _hpms_city_sources(
+            registry_path=hpms_source_registry,
+            source_root=hpms_source_root,
+            city_slugs=requested,
+        )
     if "roads" in args.stages:
         _run(
             _road_command(repo_root, execution_preset_path, work_root / "cities"),
@@ -516,6 +602,9 @@ def main() -> None:
                         refresh_facilities=args.refresh_facilities,
                         refresh_protected_connectivity=args.refresh_protected_connectivity,
                         hpms_edge_evidence_root=hpms_edge_evidence_root,
+                        hpms_source_path=hpms_sources[slug],
+                        require_hpms_match=hpms_required,
+                        hpms_match_options=hpms_match_options,
                         vehicle_speed_cap_kph=vehicle_speed_cap_kph,
                         include_pilot_speed_scenarios=args.include_pilot_speed_scenarios,
                     ),

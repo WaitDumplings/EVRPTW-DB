@@ -179,9 +179,12 @@ CLE 的每条 directed edge `e` 保存：
   - M：城市主要转移道路；
   - U：residential/service/delivery access。
 
-有可靠 HPMS conflation 时优先用 `F_SYSTEM` 判定功能等级，否则使用 OSM
-`highway=*`。H/M/U 是本项目的 portable crosswalk，不是 NREL 或 MOVES 的
-原生类别。
+法定限速按以下顺序确定：OSM directional `maxspeed`、OSM generic
+`maxspeed`、经过方向验证的 high-confidence HPMS `SPEED_LIMIT`，最后才是
+同城分层中位数填补。有可靠的 HPMS physical-corridor conflation 时优先用
+`F_SYSTEM` 判定功能等级，否则使用 OSM `highway=*`。只有 corridor match
+并不足以使用 HPMS 限速；还必须确认它对应唯一的 OSM 单行方向。H/M/U 是
+本项目的 portable crosswalk，不是 NREL 或 MOVES 的原生类别。
 
 H/M/U reference-speed anchor 来自 NREL Fleet DNA 商用车报告，是 mode-level
 prior，不是 Rivian 的逐路段 telemetry
