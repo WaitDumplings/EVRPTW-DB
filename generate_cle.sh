@@ -10,6 +10,7 @@ RELEASE_ROOT="${CLE_RELEASE_ROOT:-$ROOT_DIR/EVRPTW_Dataset/CLE_v1/us_11city}"
 NSI_CACHE_ROOT="${NSI_CACHE_ROOT:-$GENERATOR_DIR/data/sources/nsi-us-11city}"
 NSI_WORKERS="${NSI_WORKERS:-4}"
 KEEP_CLE_WORK="${KEEP_CLE_WORK:-0}"
+PREPARE_CLE_SOURCES="${PREPARE_CLE_SOURCES:-1}"
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "Python executable not found: $PYTHON_BIN" >&2
@@ -22,6 +23,21 @@ if ! command -v osmium >/dev/null 2>&1; then
 fi
 if [[ ! -f "$CLE_PROFILE" ]]; then
   echo "CLE profile is missing: $CLE_PROFILE" >&2
+  exit 2
+fi
+
+export PYTHONPATH="$GENERATOR_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+
+if [[ "$PREPARE_CLE_SOURCES" == "1" ]]; then
+  echo "Preparing/reusing the frozen 11-city public source inputs"
+  cd "$GENERATOR_DIR"
+  "$PYTHON_BIN" scripts/prepare_us11_sources.py
+elif [[ "$PREPARE_CLE_SOURCES" != "0" ]]; then
+  echo "PREPARE_CLE_SOURCES must be 0 or 1." >&2
   exit 2
 fi
 
@@ -40,11 +56,6 @@ if [[ -d "$NSI_CACHE_ROOT" ]]; then
 fi
 
 cd "$GENERATOR_DIR"
-export PYTHONPATH="$GENERATOR_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
-export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
 
 echo "CLE profile: $CLE_PROFILE"
 echo "CLE work root: $WORK_ROOT"

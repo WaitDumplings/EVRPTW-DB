@@ -1,18 +1,18 @@
 {
   "schema": "evrptw_hpms_source_registry_v1",
-  "description": "City-to-source mapping for public FHWA HPMS geospatial extracts. Place one supported file per source_stem under data/sources/hpms.",
+  "description": "City-to-source mapping for bounded public FHWA HPMS city-window extracts. The integrated source preparer writes one supported file per city under data/sources/hpms.",
   "supported_extensions": [".parquet", ".geojson", ".json", ".gpkg", ".shp"],
   "cities": {
     "new-york": {"source_stem": "new-york"},
-    "los-angeles": {"source_stem": "california"},
-    "chicago": {"source_stem": "illinois"},
-    "houston": {"source_stem": "texas"},
-    "phoenix": {"source_stem": "arizona"},
-    "philadelphia": {"source_stem": "pennsylvania"},
-    "san-antonio": {"source_stem": "texas"},
-    "san-diego": {"source_stem": "california"},
-    "dallas": {"source_stem": "texas"},
-    "fort-worth": {"source_stem": "texas"},
-    "jacksonville": {"source_stem": "florida"}
+    "los-angeles": {"source_stem": "los-angeles"},
+    "chicago": {"source_stem": "chicago"},
+    "houston": {"source_stem": "houston"},
+    "phoenix": {"source_stem": "phoenix"},
+    "philadelphia": {"source_stem": "philadelphia"},
+    "san-antonio": {"source_stem": "san-antonio"},
+    "san-diego": {"source_stem": "san-diego"},
+    "dallas": {"source_stem": "dallas"},
+    "fort-worth": {"source_stem": "fort-worth"},
+    "jacksonville": {"source_stem": "jacksonville"}
   }
 }

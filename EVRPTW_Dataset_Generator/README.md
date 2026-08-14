@@ -127,10 +127,16 @@ not the extracted locations or CLE schema.
 Run both commands from the repository root:
 
 ```bash
-EVRPTW_Dataset_Generator/scripts/download_amazon_last_mile_2021.sh
+export NLR_API_KEY=YOUR_FREE_NLR_DEVELOPER_KEY
 ./generate_cle.sh
 ./generate_instances.sh
 ```
+
+The first command runs `scripts/prepare_us11_sources.py` before the CLE build.
+It downloads only missing fixed-cohort sources and reuses every existing
+nonempty input. The second command uses 12 workers by default and downloads the
+three Amazon model-build JSON files automatically when its compact calibration
+artifact and raw inputs are both absent.
 
 `generate_instances.sh` accepts only the current Stage-1 speed contract:
 `evrptw_directed_speed_profiles_v6` with a versioned reference profile ID.
@@ -154,6 +160,7 @@ Useful environment overrides are:
 ```bash
 WORKERS=8 ./generate_instances.sh
 KEEP_CLE_WORK=1 ./generate_cle.sh
+PREPARE_CLE_SOURCES=0 ./generate_cle.sh  # only for an already complete frozen bundle
 INSTANCE_MODE=non_release_pilot WORKERS=1 \
 AMAZON_MODEL_BUILD_INPUTS=/data/almrrc2021-data-training/model_build_inputs \
   ./generate_instances.sh --cities san-diego --tracks train --max-families 1
@@ -167,7 +174,11 @@ separate stricter mode.
 
 ## Stage 1 quick start
 
-### Required source layout
+### Automatically prepared source layout
+
+`generate_cle.sh` invokes `scripts/prepare_us11_sources.py` first. The preparer
+checks this contract, downloads only missing public inputs, and reuses existing
+nonempty files. The resulting layout is:
 
 ```text
 data/sources/
@@ -198,13 +209,17 @@ data/sources/
   census_block_groups_2025/
     tl_2025_{04,06,12,17,36,42,48}_bg.zip
   hpms/
-    new-york.parquet                 # GeoParquet, GeoJSON, GPKG, or SHP
-    california.parquet
-    illinois.parquet
-    texas.parquet
-    arizona.parquet
-    pennsylvania.parquet
-    florida.parquet
+    new-york.geojson                 # one bounded official city window
+    los-angeles.geojson
+    chicago.geojson
+    houston.geojson
+    phoenix.geojson
+    philadelphia.geojson
+    san-antonio.geojson
+    san-diego.geojson
+    dallas.geojson
+    fort-worth.geojson
+    jacksonville.geojson
   moves5/                             # optional reproducibility input
     movesdb20241112.sql
   amazon-last-mile-2021/              # may instead live outside the repo
@@ -214,42 +229,26 @@ data/sources/
       travel_times.json
 ```
 
-The server bundle already includes the frozen NSI API tile responses, so the
-eleven-city build does not require an NSI network request. If the cache is
-removed, the same code can query NSI again in deterministic tiles.
+When frozen NSI API tile responses are present, the eleven-city build reuses
+them without a network request. Otherwise the same code queries and caches NSI
+again in deterministic city tiles.
 
-Useful source-preparation commands:
+Inspect source readiness without downloading anything:
 
 ```bash
-python scripts/fetch_pbf_sources.py \
-  --preset configs/us_11city_population_v1.json \
-  --manifest data/sources/geofabrik/source_manifest.json
-
-export NLR_API_KEY=YOUR_KEY
-python scripts/download_afdc_snapshot.py
-python scripts/extract_osm_charging_pois.py
-python scripts/geocode_afdc_addresses_census.py \
-  --afdc data/sources/afdc/afdc_us_public_available_electric.csv
-python scripts/resolve_afdc_coordinates.py \
-  --afdc data/sources/afdc/afdc_us_public_available_electric.csv \
-  --census-results data/sources/afdc/afdc_census_address_anchors.csv \
-  --osm-pois data/sources/osm/osm_charging_pois_us_11city.csv \
-  --output data/sources/afdc/afdc_us_public_available_electric_resolved_us_11city_v1.csv
-
-# Stage-2 source only; downloads the three used JSON files plus license/README.
-scripts/download_amazon_last_mile_2021.sh
+python scripts/prepare_us11_sources.py --check-only
 ```
 
-The Amazon downloader uses the public AWS Open Data bucket with
+The integrated Stage-2 Amazon downloader uses the public AWS Open Data bucket with
 `--no-sign-request`; no AWS account or API key is required. Raw Amazon JSON is
 kept under the ignored `data/sources/` tree and is not committed to Git. See
 [the Amazon source contract](docs/AMAZON_LAST_MILE_2021.md) before publishing
 the compact artifact or generated instances.
 
-The HPMS files are public FHWA geospatial extracts. Their exact extension is
-not fixed; the city-to-source mapping is versioned in
-`configs/us_11city_hpms_sources_v1.json`. The official U.S. profile treats the
-seven files above as required, then creates derived per-city match tables under
+The HPMS files are bounded public FHWA geospatial extracts. Their exact
+extension is not fixed; the city-to-source mapping is versioned in
+`configs/us_11city_hpms_sources_v1.json`. The integrated preparer produces the
+eleven city-window files above, then the CLE builder creates per-city match tables under
 `work/us-11city-v1/hpms_edge_matches/`. A single-city matcher can also be run
 directly:
 

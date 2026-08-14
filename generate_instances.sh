@@ -33,14 +33,22 @@ case "$INSTANCE_METHOD" in
 esac
 
 if [[ "$INSTANCE_METHOD" == "stage2" && ! -f "$AMAZON_ARTIFACT_ROOT/manifest.json" ]]; then
+  amazon_missing=0
   for amazon_file in route_data.json package_data.json travel_times.json; do
-    if [[ ! -f "$AMAZON_MODEL_BUILD_INPUTS/$amazon_file" ]]; then
-      echo "Amazon model-build input is missing: $AMAZON_MODEL_BUILD_INPUTS/$amazon_file" >&2
-      echo "Run EVRPTW_Dataset_Generator/scripts/download_amazon_last_mile_2021.sh" >&2
-      echo "or set AMAZON_MODEL_BUILD_INPUTS to an existing ALMRRC 2021 model_build_inputs directory." >&2
-      exit 2
+    if [[ ! -s "$AMAZON_MODEL_BUILD_INPUTS/$amazon_file" ]]; then
+      amazon_missing=1
     fi
   done
+  if [[ "$amazon_missing" -eq 1 ]]; then
+    if [[ "$(basename "$AMAZON_MODEL_BUILD_INPUTS")" != "model_build_inputs" ]]; then
+      echo "Cannot infer the Amazon source root from: $AMAZON_MODEL_BUILD_INPUTS" >&2
+      echo "Use a path ending in model_build_inputs or provide the three JSON files." >&2
+      exit 2
+    fi
+    echo "Amazon model-build inputs are missing; downloading the three public files"
+    "$GENERATOR_DIR/scripts/download_amazon_last_mile_2021.sh" \
+      "$(dirname "$AMAZON_MODEL_BUILD_INPUTS")"
+  fi
 fi
 
 if [[ "$INSTANCE_METHOD" == "stage2" ]]; then

@@ -25,6 +25,14 @@ provide a free NLR Developer Network API key when the shared national snapshot i
 present. NSI is fetched and cached inside the existing CLE customer stage.
 Amazon is not a CLE input and is therefore not downloaded by this command.
 
+For the frozen paper cohort, `generate_cle.sh` invokes
+`scripts/prepare_us11_sources.py` before construction. It applies the same
+missing-only/reuse-existing policy across the seven OSM and Microsoft state
+inputs, eleven bounded HPMS city windows, AFDC coordinate evidence, and seven
+Census block-group archives. NSI remains a deterministic tiled acquisition in
+the customer stage. The Stage-2 entry point separately prepares the three
+Amazon model-build files only when needed.
+
 After downloading AFDC, the adapter extracts charging POIs from the selected
 OSM PBF, batch-geocodes AFDC street addresses in the requested state through
 the Census Geocoder, and runs the versioned coordinate resolver. The resolver

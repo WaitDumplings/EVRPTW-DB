@@ -134,15 +134,19 @@ cd EVRPTW_Dataset_Generator
 conda env create -f environment.yml
 conda activate evrptw-cle
 cd ..
-EVRPTW_Dataset_Generator/scripts/download_amazon_last_mile_2021.sh
+export NLR_API_KEY=YOUR_FREE_NLR_DEVELOPER_KEY
 ./generate_cle.sh
 ./generate_instances.sh
 ```
 
-The downloader retrieves only the three public Amazon training JSON files used
-by Stage 2, plus the upstream license and README. It uses unsigned access to
-the AWS Open Data bucket, so no AWS account is required. Raw Amazon files stay
-outside Git; see
+`generate_cle.sh` first checks every fixed-cohort public input. Missing OSM,
+Microsoft building, bounded HPMS, AFDC/coordinate-evidence, and Census
+block-group files are downloaded or derived; existing nonempty files are
+reused. NSI is cached during the CLE customer stage. `generate_instances.sh`
+uses 12 workers by default and downloads only the three public Amazon training
+JSON files used by Stage 2 when neither those files nor the compact artifact
+already exists. AWS access is unsigned, so no AWS account is required. Raw
+Amazon files stay outside Git; see
 [`AMAZON_LAST_MILE_2021.md`](EVRPTW_Dataset_Generator/docs/AMAZON_LAST_MILE_2021.md)
 for the compact-artifact and release-license policy.
 
