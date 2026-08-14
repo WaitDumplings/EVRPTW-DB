@@ -56,6 +56,19 @@ canonical_destination() {
     "$1"
 }
 
+check_restore_python_dependencies() {
+  local generator_src="$ROOT_DIR/EVRPTW_Dataset_Generator/src"
+  local import_error
+  if ! import_error="$(
+    PYTHONPATH="$generator_src${PYTHONPATH:+:$PYTHONPATH}" \
+      "$PYTHON_RESOLVED" -c \
+      'from evrptw_stage2.reconstruction import restore_dataset_matrices' 2>&1
+  )"; then
+    [[ -z "$import_error" ]] || printf '%s\n' "$import_error" >&2
+    fail "Python restore dependencies are unavailable for $PYTHON_RESOLVED. Run: $PYTHON_RESOLVED -m pip install -r $ROOT_DIR/requirements.txt"
+  fi
+}
+
 job_paths() {
   DESTINATION_RESOLVED="$(canonical_destination "$1")"
   JOB_DIR="$DESTINATION_RESOLVED/.evrptw_restore_us11city"
@@ -130,6 +143,7 @@ case "$command_name" in
     [[ "$workers" =~ ^[1-9][0-9]*$ ]] || fail "--workers must be positive"
     [[ "$families_per_task" =~ ^[1-9][0-9]*$ ]] || \
       fail "--families-per-worker-task must be positive"
+    check_restore_python_dependencies
     resolve_command ZSTD_RESOLVED "${ZSTD_BIN:-zstd}"
     resolve_command FLOCK_RESOLVED "${FLOCK_BIN:-flock}"
     if [[ "$foreground" -eq 0 ]]; then

@@ -1,0 +1,3 @@
+# Default Python runtime for CLE/Stage-2 generation and archive restoration.
+# Solver-specific dependencies remain in their respective benchmark folders.
+-r EVRPTW_Dataset_Generator/requirements.txt

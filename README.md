@@ -96,6 +96,17 @@ cd ..
 ./generate_instances.sh
 ```
 
+For an existing Python 3.11 environment, the repository-level pip equivalent
+is:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Use the same `python` executable for installation and archive restoration. The
+archive launcher checks the Stage-2 restore imports before checksum scanning so
+a missing dependency fails immediately with the corresponding install command.
+
 These are the two production entry points. `generate_cle.sh` writes the eleven
 portable CLEs under `EVRPTW_Dataset/CLE_v1/us_11city/` and removes its
 intermediate work tree after a complete successful run. `generate_instances.sh`
