@@ -12,12 +12,49 @@ source names. A new geography adapter must provide:
 5. depot candidates with explicit evidence tiers;
 6. a native-road-class to canonical H/M/U crosswalk;
 7. legal speed evidence and a transparent imputation hierarchy;
-8. an optional commercial-vehicle reference-speed model.
+8. a versioned reference-speed adapter, or an explicit documented decision to
+   use legal speed directly.
 
 The adapter must emit both native and canonical fields. For example, a Canadian
 road adapter may retain its provincial functional class while emitting the same
 `operating_mode` values consumed by Stage 2. It may replace AFDC, HPMS, NSI, and
 Microsoft data completely; only the normalized contracts remain fixed.
+
+EPA MOVES5 is the bundled U.S. adapter, not a schema requirement. A Canadian or
+other-country implementation may supply its own category/day profile, with its
+own mapping from native road classes to canonical speed strata. The adapter
+must keep edge legal speed, the low-flow/free-flow proxy, the category-level
+operating prior, and final edge reference speed as separate fields. It must not
+present a national category table as an observed speed for a particular edge.
+
+## U.S. city-name adapter
+
+The repository includes a concrete onboarding adapter for U.S. Census Places:
+
+```bash
+NLR_API_KEY=... ./generate_us_city_cle.sh --city "Austin" --state TX
+```
+
+This command materializes a one-city profile and calls the same canonical CLE
+assembler used by the frozen reference cohort. The state registry supplies
+only public source identifiers and filename conventions. City identity and
+boundary membership come from Census, not from a hard-coded 11-city list.
+Optional URL/subregion overrides are explicit adapter inputs and remain in the
+generated contract.
+
+For AFDC, the U.S. adapter also builds coordinate evidence automatically:
+OSM charging POIs provide mapped-site evidence, while the Census Geocoder
+provides address-anchor evidence. Both are provenance fields, not silent
+coordinate truth. The raw AFDC coordinate remains recoverable, and exact-site
+and address-only evidence stay distinguishable in the normalized facility
+table.
+
+This mechanism is not a claim that every possible U.S. city will have equally
+complete OSM tags, NSI classifications, AFDC sites, HPMS matches, or depot
+candidates. The existing preflight, coverage, SCC, missingness, and package
+verification reports quantify those outcomes. A technically successful custom
+CLE also does not become part of the paper benchmark until a new cohort version
+is declared.
 
 ## Required validation
 

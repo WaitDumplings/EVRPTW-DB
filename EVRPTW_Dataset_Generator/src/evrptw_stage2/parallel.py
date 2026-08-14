@@ -12,6 +12,7 @@ from typing import Any
 
 import pandas as pd
 
+from .amazon import load_amazon_stage2_artifacts
 from .artifacts import verify_materialized_family
 from .config import load_stage2_config
 from .materialize import materialize_family
@@ -45,8 +46,11 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
     cle = load_portable_cle(task["cle_root"], city, mode=str(task["mode"]))
     output_root = Path(task["output_root"])
     customer_split_path = Path(task["customer_split_path"])
+    community_adjacency_path = Path(task["community_adjacency_path"])
+    amazon_artifacts = load_amazon_stage2_artifacts(task["amazon_artifact_root"])
     max_attempts = int(task["max_attempts_per_family"])
     topology_cache = {}
+    adjacency_cache = {}
     result: dict[str, Any] = {
         "chunk_id": str(task["chunk_id"]),
         "city_slug": city,
@@ -101,8 +105,11 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
                     family=attempt_family,
                     views=attempt_views,
                     customer_split_path=customer_split_path,
+                    community_adjacency_path=community_adjacency_path,
+                    amazon_artifacts=amazon_artifacts,
                     output_root=output_root / "materialized",
                     routing_topology_cache=topology_cache,
+                    community_adjacency_cache=adjacency_cache,
                 )
             except Exception as error:  # noqa: BLE001 - persist every failed attempt.
                 rejection = {

@@ -67,6 +67,10 @@ def _load_and_validate_registry(config_path: Path) -> tuple[dict[str, Any], list
             f"extra={sorted(registry_slugs - official_slugs)}"
         )
 
+    integrity_mode = str(payload.get("source_integrity_mode", "frozen_registry"))
+    if integrity_mode not in {"frozen_registry", "record_on_extraction"}:
+        errors.append(f"unsupported source_integrity_mode {integrity_mode!r}")
+
     required = {
         "label",
         "state",
@@ -86,8 +90,31 @@ def _load_and_validate_registry(config_path: Path) -> tuple[dict[str, Any], list
         missing = sorted(required - set(entry))
         if missing:
             errors.append(f"{slug}: missing registry fields {missing}")
-        if len(str(entry.get("source_sha256", ""))) != 64:
-            errors.append(f"{slug}: source_sha256 is not a full SHA-256")
+        source_sha256 = entry.get("source_sha256")
+        source_bytes = entry.get("source_bytes")
+        source_feature_count = entry.get("source_feature_count")
+        if integrity_mode == "frozen_registry":
+            if len(str(source_sha256 or "")) != 64:
+                errors.append(f"{slug}: source_sha256 is not a full SHA-256")
+            if not isinstance(source_bytes, int) or source_bytes <= 0:
+                errors.append(f"{slug}: source_bytes must be a positive integer")
+            if not isinstance(source_feature_count, int) or source_feature_count <= 0:
+                errors.append(
+                    f"{slug}: source_feature_count must be a positive integer"
+                )
+        else:
+            if source_sha256 is not None and len(str(source_sha256)) != 64:
+                errors.append(f"{slug}: optional source_sha256 is invalid")
+            if source_bytes is not None and (
+                not isinstance(source_bytes, int) or source_bytes <= 0
+            ):
+                errors.append(f"{slug}: optional source_bytes must be positive")
+            if source_feature_count is not None and (
+                not isinstance(source_feature_count, int) or source_feature_count <= 0
+            ):
+                errors.append(
+                    f"{slug}: optional source_feature_count must be positive"
+                )
         if len(str(entry.get("boundary_sha256", ""))) != 64:
             errors.append(f"{slug}: boundary_sha256 is not a full SHA-256")
         try:
@@ -139,9 +166,10 @@ def preflight_registered_city(
     else:
         actual_bytes = source_path.stat().st_size
         checks["source_bytes"] = actual_bytes
-        if actual_bytes != int(entry["source_bytes"]):
+        expected_bytes = entry.get("source_bytes")
+        if expected_bytes is not None and actual_bytes != int(expected_bytes):
             errors.append(
-                f"source byte size {actual_bytes} differs from registry {entry['source_bytes']}"
+                f"source byte size {actual_bytes} differs from registry {expected_bytes}"
             )
         first = _first_source_feature(source_path)
         if first is None:
@@ -161,10 +189,11 @@ def preflight_registered_city(
                     f"first feature properties {sorted(property_keys)} differ from "
                     f"{sorted(EXPECTED_PROPERTIES)}"
                 )
-        if verify_source_hash:
+        expected_source_sha = entry.get("source_sha256")
+        if verify_source_hash and expected_source_sha:
             actual_source_sha = sha256_file(source_path)
             checks["source_sha256"] = actual_source_sha
-            if actual_source_sha != entry["source_sha256"]:
+            if actual_source_sha != expected_source_sha:
                 errors.append("source SHA-256 differs from the frozen registry")
         else:
             checks["source_sha256"] = "deferred_to_staged_extraction"
@@ -279,9 +308,13 @@ def extract_registered_city(
             density_grid_m=float(payload.get("density_grid_m", 500.0)),
         )
         validation_errors: list[str] = []
-        if extraction.get("source_sha256") != entry["source_sha256"]:
+        expected_source_sha = entry.get("source_sha256")
+        expected_feature_count = entry.get("source_feature_count")
+        if expected_source_sha and extraction.get("source_sha256") != expected_source_sha:
             validation_errors.append("extracted source SHA-256 differs from registry")
-        if extraction.get("source_feature_count") != int(entry["source_feature_count"]):
+        if expected_feature_count is not None and extraction.get(
+            "source_feature_count"
+        ) != int(expected_feature_count):
             validation_errors.append("extracted source feature count differs from registry")
         if set(extraction.get("source_property_keys", [])) != EXPECTED_PROPERTIES:
             validation_errors.append("extracted source property keys differ from registry")
@@ -315,6 +348,9 @@ def extract_registered_city(
                 "bytes": source_path.stat().st_size,
                 "feature_count": extraction["source_feature_count"],
                 "property_keys": extraction["source_property_keys"],
+                "integrity_mode": payload.get(
+                    "source_integrity_mode", "frozen_registry"
+                ),
             },
             "boundary": {
                 "path": str(boundary_path),

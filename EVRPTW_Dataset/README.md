@@ -6,9 +6,10 @@ through a dataset hosting service, release artifact, or Git LFS-style workflow.
 
 The current profiles are:
 
-- **CLE-v1 / US Top 10**: portable city-level road, service-location,
+- **CLE-v1 / US 11-city cohort**: portable city-level road, service-location,
   infrastructure, access, and reference-speed environments used as Stage-1
-  inputs.
+  inputs. The current speed contract is schema v6: OSM/HPMS legal speed plus
+  weekday/weekend EPA MOVES5 retention profiles.
 - **CLE-EVRPTW-v1**: the new CLE-backed matrix-family/view layout. The current
   generated artifact is a non-release San Diego vertical slice; official
   train/validation/test generation remains gated.
@@ -19,12 +20,12 @@ The current profiles are:
   only for operating-day demand, service-time, time-window, and activation
   behavior.
 
-## CLE-v1 / US Top 10 Layout
+## CLE-v1 / US 11-city Layout
 
 ```text
 EVRPTW_Dataset/
   CLE_v1/
-    us_top10/
+    us_11city/
       cle_index.json
       cle_index.csv
       cities/
@@ -46,6 +47,20 @@ Each city directory is a self-contained portable package. Its manifest records
 technical verification, portability verification, and scientific
 `release_eligible` status separately. Generator caches and intermediate layers
 are not part of this directory.
+
+Generated CLE and matrix artifacts are intentionally not tracked in this git
+checkout. A CLE whose `profiles/speed_manifest.json` is not schema
+`evrptw_directed_speed_profiles_v6`, or whose reference profile ID is not
+`us_epa_moves5_20241112_source32_static_08_24_v1`, predates the current speed
+contract. Rebuild all eleven CLEs with `./generate_cle.sh`, then rebuild Stage-2
+families with `./generate_instances.sh`; do not mix old matrices with v6 CLEs.
+
+The raw Amazon Last Mile 2021 JSON is also not tracked in Git. The compact
+`Calibration_v1/amazon_stage2_v2/` layer and generated instance fields derived
+from it retain the upstream CC BY-NC 4.0 attribution/noncommercial boundary;
+the repository's future code license does not relicense those data. Download,
+storage, transformation, and release requirements are documented in
+[`AMAZON_LAST_MILE_2021.md`](../EVRPTW_Dataset_Generator/docs/AMAZON_LAST_MILE_2021.md).
 
 ## CLE-EVRPTW-v1 Layout
 

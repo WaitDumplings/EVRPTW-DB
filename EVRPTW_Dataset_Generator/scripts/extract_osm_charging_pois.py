@@ -16,6 +16,21 @@ import pandas as pd
 
 from evrptw_cle.util import sha256_file, write_json
 
+OUTPUT_COLUMNS = [
+    "city_slug",
+    "source_osm_id",
+    "name",
+    "operator",
+    "brand",
+    "addr_housenumber",
+    "addr_street",
+    "addr_city",
+    "addr_state",
+    "addr_postcode",
+    "longitude",
+    "latitude",
+]
+
 
 def _resolve(base: Path, value: str) -> Path:
     path = Path(value)
@@ -124,6 +139,9 @@ def main() -> None:
                 ]
             )
             frame = gpd.read_file(geojson).to_crs(4326)
+            source_records.append(
+                {"city_slug": slug, "pbf": str(pbf), "pbf_sha256": sha256_file(pbf)}
+            )
             if frame.empty:
                 continue
             points = frame.geometry.representative_point()
@@ -144,10 +162,11 @@ def main() -> None:
                 }
             )
             frames.append(normalized)
-        source_records.append(
-            {"city_slug": slug, "pbf": str(pbf), "pbf_sha256": sha256_file(pbf)}
-        )
-    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    combined = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=OUTPUT_COLUMNS)
+    )
     if not combined.empty:
         combined = combined.drop_duplicates(["city_slug", "source_osm_id"])
     output.parent.mkdir(parents=True, exist_ok=True)

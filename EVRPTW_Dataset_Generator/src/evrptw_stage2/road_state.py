@@ -35,28 +35,34 @@ def build_family_road_state(
         "physical_segment_id",
         "length_m",
         "operating_mode",
+        "moves_road_type",
         "legal_speed_kph",
-        "reference_speed_kph",
     }
     missing = required - set(directed_speeds.columns)
     if missing:
         raise ValueError(f"Directed-speed layer is missing columns: {sorted(missing)}")
     cfg = profile["road_state"]
     moves_cfg = cfg["factor_by_day_and_moves_road_type"][day_type]
-    mode_to_moves = {str(k): str(v) for k, v in cfg["mode_to_moves_road_type"].items()}
     frame = directed_speeds.copy().reset_index(drop=True)
     factors = np.empty(len(frame), dtype=float)
     road_type_baselines: dict[str, float] = {}
     modes = frame["operating_mode"].astype(str)
-    unknown_modes = sorted(set(modes) - set(mode_to_moves))
+    unknown_modes = sorted(set(modes) - {"H", "M", "U"})
     if unknown_modes:
         raise ValueError(f"Unsupported operating modes: {unknown_modes}")
-    moves_types = modes.map(mode_to_moves)
+    moves_types = frame["moves_road_type"].astype(str)
     expected_moves_types = set(map(str, moves_types.unique()))
     supplied_baselines = (
         None
         if moves_road_type_baseline_factors is None
         else {str(key): float(value) for key, value in moves_road_type_baseline_factors.items()}
+    )
+    frozen_neutral_profile = all(
+        float(values["mean"]) == 1.0
+        and float(values["std"]) == 0.0
+        and float(values["min"]) == 1.0
+        and float(values["max"]) == 1.0
+        for values in moves_cfg.values()
     )
     if supplied_baselines is not None:
         missing_baselines = expected_moves_types - set(supplied_baselines)
@@ -72,16 +78,19 @@ def build_family_road_state(
         mask = moves_types.eq(moves_road_type).to_numpy()
         values = moves_cfg[moves_road_type]
         if supplied_baselines is None:
-            rng = np.random.default_rng(
-                derive_seed(road_state_seed, "moves_road_type", moves_road_type)
-            )
-            baseline = float(
-                np.clip(
-                    rng.normal(float(values["mean"]), float(values["std"])),
-                    float(values["min"]),
-                    float(values["max"]),
+            if frozen_neutral_profile:
+                baseline = 1.0
+            else:
+                rng = np.random.default_rng(
+                    derive_seed(road_state_seed, "moves_road_type", moves_road_type)
                 )
-            )
+                baseline = float(
+                    np.clip(
+                        rng.normal(float(values["mean"]), float(values["std"])),
+                        float(values["min"]),
+                        float(values["max"]),
+                    )
+                )
         else:
             baseline = supplied_baselines[moves_road_type]
             if not float(values["min"]) <= baseline <= float(values["max"]):
@@ -97,7 +106,11 @@ def build_family_road_state(
         factors[mask] = np.clip(
             factors[mask], float(values["min"]), float(values["max"])
         )
-    reference = pd.to_numeric(frame["reference_speed_kph"], errors="coerce").to_numpy()
+    day_reference_column = f"reference_speed_{day_type}_kph"
+    if day_reference_column not in frame.columns:
+        raise ValueError(f"CLE speed layer lacks {day_reference_column}")
+    reference_column = day_reference_column
+    reference = pd.to_numeric(frame[reference_column], errors="coerce").to_numpy()
     legal = pd.to_numeric(frame["legal_speed_kph"], errors="coerce").to_numpy()
     if not np.isfinite(reference).all() or not np.isfinite(legal).all():
         raise ValueError("CLE speed layer contains missing/non-finite reference or legal speeds")
@@ -110,6 +123,7 @@ def build_family_road_state(
     length_m = pd.to_numeric(frame["length_m"], errors="coerce").to_numpy()
     frame["day_type"] = day_type
     frame["moves_road_type"] = moves_types
+    frame["reference_speed_kph"] = reference.astype(np.float32)
     frame["road_state_factor"] = factors.astype(np.float32)
     frame["instance_speed_kph"] = instance_speed.astype(np.float32)
     frame["edge_travel_time_s"] = (length_m / (instance_speed / 3.6)).astype(np.float32)
@@ -125,14 +139,18 @@ def build_family_road_state(
         "day_type": day_type,
         "road_state_seed": int(road_state_seed),
         "directed_edge_count": len(frame),
-        "mode_to_moves_road_type": mode_to_moves,
+        "reference_speed_column": reference_column,
         "moves_road_type_baseline_factors": road_type_baselines,
         "baseline_factor_source": (
             "stored_family_manifest"
             if supplied_baselines is not None
-            else "deterministic_seed_sampling"
+            else (
+                "frozen_neutral_profile_value"
+                if frozen_neutral_profile
+                else "deterministic_seed_sampling"
+            )
         ),
-        "factor_granularity": "day_type_x_moves_road_type",
+        "factor_granularity": "residual_day_type_x_moves_road_type",
         "additional_random_edge_factors": False,
         "speed_kph_min": float(instance_speed.min()),
         "speed_kph_median": float(np.median(instance_speed)),
@@ -153,11 +171,13 @@ def build_family_road_state(
 def connector_costs(
     length_m: float,
     *,
-    profile: Mapping[str, Any],
+    speed_kph: float,
 ) -> tuple[float, float]:
-    """Return connector distance km and time s under the fixed U profile."""
+    """Return connector costs under the current city's U-edge reference speed."""
 
-    speed = float(profile["road_state"]["connector_reference_speed_kph"])
+    speed = float(speed_kph)
+    if not np.isfinite(speed) or speed <= 0.0:
+        raise ValueError("Connector speed must be positive and finite")
     distance_km = float(length_m) / 1000.0
     time_s = distance_km / speed * 3600.0
     return distance_km, time_s

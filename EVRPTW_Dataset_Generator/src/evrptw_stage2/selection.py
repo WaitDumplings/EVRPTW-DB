@@ -9,8 +9,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .amazon import AmazonStage2Artifacts
 from .planning import derive_seed
 from .reader import PortableCLE
+from .routing import PhysicalRoadNetwork
+from .spatial_activation import activate_spatial_customers
 
 
 def sample_day_type(profile: Mapping[str, Any], family_seed: int) -> str:
@@ -584,3 +587,384 @@ def select_family_terminals(
         "non_release_pilot": cle.non_release_pilot,
     }
     return terminal_index, metadata
+
+
+def _select_depot_group(
+    depots: pd.DataFrame,
+    *,
+    seed: int,
+    track: str,
+) -> tuple[pd.Series, dict[str, Any]]:
+    """Select one physical-facility group, then its canonical access point."""
+
+    if track not in {"strict", "practical"}:
+        raise ValueError("depot_track must be strict or practical")
+    frame = depots.copy()
+    if track == "strict":
+        frame = frame.loc[frame["strict_depot_candidate_eligible"].astype(bool)].copy()
+    else:
+        frame = frame.loc[
+            frame["strict_depot_candidate_eligible"].astype(bool)
+            | frame["optional_depot_candidate_eligible"].astype(bool)
+        ].copy()
+    if frame.empty:
+        raise ValueError(f"No eligible {track} depot candidates")
+    if "facility_group_id" not in frame:
+        frame["facility_group_id"] = frame["candidate_id"].astype(str)
+        grouping_source = "candidate_singleton_fallback"
+    else:
+        frame["facility_group_id"] = frame["facility_group_id"].astype(str)
+        grouping_source = "cle_physical_facility_group"
+    group_ids = sorted(frame["facility_group_id"].unique())
+    rng = np.random.default_rng(seed)
+    group_id = str(group_ids[int(rng.integers(len(group_ids)))])
+    group = frame.loc[frame["facility_group_id"].eq(group_id)].copy()
+    tier_a = group.loc[group["strict_depot_candidate_eligible"].astype(bool)].copy()
+    access_pool = tier_a if not tier_a.empty else group
+    access_pool["_rank"] = [
+        derive_seed(seed, "depot_access_point", candidate_id)
+        for candidate_id in access_pool["candidate_id"].astype(str)
+    ]
+    depot = access_pool.sort_values(["_rank", "candidate_id"], kind="stable").iloc[0]
+    return depot, {
+        "policy": "uniform_physical_group_then_tier_a_preferred_access_v1",
+        "track": track,
+        "grouping_source": grouping_source,
+        "eligible_group_count": len(group_ids),
+        "selected_facility_group_id": group_id,
+        "selected_group_candidate_count": len(group),
+        "selected_group_tier_a_count": len(tier_a),
+        "selected_access_tier_a_preferred": bool(len(tier_a)),
+        "area_used_as_hard_gate": False,
+        "area_used_as_sampling_weight": False,
+    }
+
+
+def _star_terminal_index(depot: pd.Series, customers: pd.DataFrame) -> pd.DataFrame:
+    records = [
+        _common_terminal_record(
+            depot,
+            terminal_index=0,
+            terminal_kind="depot",
+            source_id=str(depot["candidate_id"]),
+            longitude=float(depot["longitude"]),
+            latitude=float(depot["latitude"]),
+        )
+    ]
+    for position, row in customers.reset_index(drop=True).iterrows():
+        records.append(
+            _common_terminal_record(
+                row,
+                terminal_index=position + 1,
+                terminal_kind="customer",
+                source_id=str(row["latent_service_location_id"]),
+                longitude=float(row["location_lon"]),
+                latitude=float(row["location_lat"]),
+            )
+        )
+    return pd.DataFrame.from_records(records)
+
+
+def _road_time_adjacency(
+    adjacency: pd.DataFrame,
+    network: PhysicalRoadNetwork,
+) -> pd.DataFrame:
+    if adjacency.empty:
+        return adjacency.assign(crossing_time_s=pd.Series(dtype=float))
+    edge_times = network.edges[
+        ["edge_u", "edge_v", "edge_key", "edge_travel_time_s"]
+    ].copy()
+    for column in ("edge_u", "edge_v", "edge_key"):
+        edge_times[column] = edge_times[column].astype(str)
+        adjacency[column] = adjacency[column].astype(str)
+    result = adjacency.merge(
+        edge_times,
+        on=["edge_u", "edge_v", "edge_key"],
+        how="left",
+        validate="many_to_one",
+    )
+    if result["edge_travel_time_s"].isna().any():
+        missing = int(result["edge_travel_time_s"].isna().sum())
+        raise ValueError(f"Community adjacency references {missing} absent road-state edges")
+    result["crossing_time_s"] = result["edge_travel_time_s"].astype(float)
+    return result
+
+
+def select_family_terminals_v2(
+    cle: PortableCLE,
+    *,
+    family: Mapping[str, Any],
+    customer_split_path: str,
+    community_adjacency_path: str,
+    profile: Mapping[str, Any],
+    network: PhysicalRoadNetwork,
+    amazon: AmazonStage2Artifacts,
+    community_adjacency_cache: dict[str, pd.DataFrame] | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
+    """Select a depot, one Amazon-structured customer parent and relevant CSs."""
+
+    family_seed = int(family["family_seed"])
+    customer_count = int(family["parent_customer_count"])
+    charger_count = int(family["parent_charging_station_count"])
+    day_type = str(family.get("day_type") or sample_day_type(profile, family_seed))
+    spatial_cfg = profile.get("stage2_spatial", {})
+    depot_track = str(spatial_cfg.get("depot_track", "practical"))
+    depots = cle.read_depots().reset_index(drop=True)
+    depot, depot_metadata = _select_depot_group(
+        depots,
+        seed=int(family["depot_seed"]),
+        track=depot_track,
+    )
+
+    customers = cle.read_service_locations().copy()
+    split = pd.read_parquet(customer_split_path)
+    split_columns = [
+        "latent_service_location_id",
+        "community_id",
+        "customer_pool",
+        "road_connectivity_subgroup",
+    ]
+    missing = set(split_columns) - set(split.columns)
+    if missing:
+        raise ValueError(f"Customer split ledger is missing columns: {sorted(missing)}")
+    customers = customers.merge(
+        split[split_columns],
+        on="latent_service_location_id",
+        how="inner",
+        validate="one_to_one",
+    )
+    requested_pool = str(family["customer_pool"])
+    if requested_pool in {"train", "heldout"}:
+        customers = customers.loc[customers["customer_pool"].eq(requested_pool)].copy()
+    elif requested_pool != "all_release_eligible":
+        raise ValueError(f"Unsupported customer pool: {requested_pool!r}")
+    split_pool_count = len(customers)
+    star = network.route_depot_star(_star_terminal_index(depot, customers))
+    customers["depot_running_time_s"] = star.outbound_time_s[1:]
+    customers["depot_return_time_s"] = star.inbound_time_s[1:]
+    customers["depot_outbound_distance_km"] = star.outbound_distance_km[1:]
+    customers["depot_return_distance_km"] = star.inbound_distance_km[1:]
+    t_env = amazon.t_env_s
+    before_energy = customers.loc[customers["depot_running_time_s"].le(t_env)].copy()
+    specific_energy = float(profile["energy"]["specific_energy_consumption_kwh_per_km"])
+    battery = float(profile["energy"]["battery_capacity_kwh"])
+    roundtrip_energy = (
+        before_energy["depot_outbound_distance_km"]
+        + before_energy["depot_return_distance_km"]
+    ) * specific_energy
+    territory = before_energy.loc[roundtrip_energy.le(battery + 1e-9)].copy()
+    territory["direct_roundtrip_energy_kwh"] = roundtrip_energy.loc[territory.index]
+    territory["radial_decile"] = np.searchsorted(
+        amazon.decile_edges_s[1:-1],
+        territory["depot_running_time_s"].to_numpy(dtype=float),
+        side="right",
+    ).astype(np.int8)
+    if len(territory) < customer_count:
+        raise ValueError(
+            "TERRITORY_TOO_SMALL: "
+            f"split={split_pool_count}, time_envelope={len(before_energy)}, "
+            f"direct_energy={len(territory)}, N={customer_count}"
+        )
+    structure_targets, structure_metadata = amazon.structure_source(
+        day_type=day_type,
+        customer_count=customer_count,
+        seed=int(family["customer_superset_seed"]),
+    )
+    amazon_nn = pd.to_numeric(
+        structure_targets.get("amazon_route_nearest_neighbor_time_s"), errors="coerce"
+    ).dropna()
+    source_route_ids = set(structure_targets["route_id"].astype(str))
+    amazon_pair_reference = amazon.route_spatial_reference.loc[
+        amazon.route_spatial_reference["route_id"].astype(str).isin(source_route_ids)
+    ]
+    adjacency_cache_key = f"{cle.city_slug}:{day_type}"
+    adjacency = (
+        community_adjacency_cache.get(adjacency_cache_key)
+        if community_adjacency_cache is not None
+        else None
+    )
+    if adjacency is None:
+        adjacency = _road_time_adjacency(
+            pd.read_parquet(community_adjacency_path), network
+        )
+        if community_adjacency_cache is not None:
+            community_adjacency_cache[adjacency_cache_key] = adjacency
+    activation = activate_spatial_customers(
+        territory,
+        adjacency,
+        structure_targets,
+        customer_count=customer_count,
+        seed=int(family["customer_superset_seed"]),
+        region_redraw_cap=int(spatial_cfg.get("region_redraw_cap", 3)),
+    )
+    selected_customers = activation.customers.reset_index(drop=True)
+
+    chargers = cle.read_chargers().reset_index(drop=True)
+    reference_points = _community_reference_points(selected_customers)
+    reference_points = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "reference_longitude": [float(depot["longitude"])],
+                    "reference_latitude": [float(depot["latitude"])],
+                    "reference_weight": [max(1, len(selected_customers) // 10)],
+                }
+            ),
+            reference_points,
+        ],
+        ignore_index=True,
+    )
+    selected_chargers, charger_metadata = _select_charger_rows(
+        chargers,
+        reference_points,
+        count=charger_count,
+        seed=int(family["charger_seed"]),
+    )
+    selected_chargers, power_metadata = _resolve_charging_power(
+        selected_chargers,
+        city_chargers=chargers,
+        profile=profile,
+        generation_mode=cle.mode,
+    )
+    charger_active_customer_diagnostic = _active_customer_charger_diagnostic(
+        selected_customers,
+        selected_chargers,
+    )
+
+    records = [
+        {
+            **_common_terminal_record(
+                depot,
+                terminal_index=0,
+                terminal_kind="depot",
+                source_id=str(depot["candidate_id"]),
+                longitude=float(depot["longitude"]),
+                latitude=float(depot["latitude"]),
+            ),
+            "parent_customer_position": pd.NA,
+            "community_id": pd.NA,
+            "sampling_cluster_id": pd.NA,
+            "structure_route_id": pd.NA,
+            "activation_decile": pd.NA,
+            "service_location_type": pd.NA,
+            "residential_unit_band": pd.NA,
+            "residential_units": pd.NA,
+            "depot_running_time_s": 0.0,
+            "charger_selection_rank": pd.NA,
+            "reference_charge_mode": pd.NA,
+            "effective_charging_power_kw": pd.NA,
+            "effective_charging_power_source": pd.NA,
+        }
+    ]
+    for position, row in selected_customers.iterrows():
+        records.append(
+            {
+                **_common_terminal_record(
+                    row,
+                    terminal_index=1 + position,
+                    terminal_kind="customer",
+                    source_id=str(row["latent_service_location_id"]),
+                    longitude=float(row["location_lon"]),
+                    latitude=float(row["location_lat"]),
+                ),
+                "parent_customer_position": position,
+                "community_id": str(row["community_id"]),
+                "sampling_cluster_id": str(row["sampling_cluster_id"]),
+                "structure_route_id": str(row["structure_route_id"]),
+                "activation_decile": int(row["activation_decile"]),
+                "service_location_type": str(row["service_location_type"]),
+                "residential_unit_band": str(row["residential_unit_band"]),
+                "residential_units": int(row["residential_units"]),
+                "depot_running_time_s": float(row["depot_running_time_s"]),
+                "charger_selection_rank": pd.NA,
+                "reference_charge_mode": pd.NA,
+                "effective_charging_power_kw": pd.NA,
+                "effective_charging_power_source": pd.NA,
+            }
+        )
+    for rank, row in selected_chargers.iterrows():
+        records.append(
+            {
+                **_common_terminal_record(
+                    row,
+                    terminal_index=1 + customer_count + rank,
+                    terminal_kind="charging_station",
+                    source_id=str(row["charger_id"]),
+                    longitude=float(row["resolved_longitude"]),
+                    latitude=float(row["resolved_latitude"]),
+                ),
+                "parent_customer_position": pd.NA,
+                "community_id": pd.NA,
+                "sampling_cluster_id": pd.NA,
+                "structure_route_id": pd.NA,
+                "activation_decile": pd.NA,
+                "service_location_type": pd.NA,
+                "residential_unit_band": pd.NA,
+                "residential_units": pd.NA,
+                "depot_running_time_s": pd.NA,
+                "charger_selection_rank": rank + 1,
+                "reference_charge_mode": str(row["reference_charge_mode"]),
+                "effective_charging_power_kw": float(row["effective_charging_power_kw"]),
+                "effective_charging_power_source": str(row["effective_charging_power_source"]),
+            }
+        )
+    terminal_index = pd.DataFrame.from_records(records)
+    metadata = {
+        "schema": "cle_evrptw_family_terminal_selection_v2",
+        "family_id": str(family["family_id"]),
+        "city_slug": cle.city_slug,
+        "day_type": day_type,
+        "day_type_source": "preallocated_family_slot",
+        "customer_pool": requested_pool,
+        "parent_customer_count": customer_count,
+        "parent_charging_station_count": charger_count,
+        "selected_depot_id": str(depot["candidate_id"]),
+        "selected_depot_evidence_tier": str(depot["evidence_tier"]),
+        "depot_selection": depot_metadata,
+        "territory": {
+            "policy": "amazon_q99_directed_network_time_and_direct_energy_screen_v1",
+            "amazon_t_env_s": t_env,
+            "split_legal_pool_count": split_pool_count,
+            "time_envelope_pool_count": len(before_energy),
+            "energy_screen_pool_count": len(territory),
+            "energy_screen_removed_count": len(before_energy) - len(territory),
+            "energy_screen_removed_share": (
+                (len(before_energy) - len(territory)) / len(before_energy)
+                if len(before_energy)
+                else 0.0
+            ),
+            "energy_screen_semantics": "direct_depot_customer_depot_sufficient_condition",
+            "pool_floor": 1.0,
+            "territory_reserve_ratio": len(territory) / customer_count,
+            "depot_star": star.report,
+        },
+        "amazon_structure_source": structure_metadata,
+        "amazon_spatial_reference": {
+            "nearest_neighbor_time_s": amazon_nn.astype(float).tolist(),
+            "within_route_pairwise_time_p50_s": pd.to_numeric(
+                amazon_pair_reference["within_route_pairwise_time_p50_s"], errors="coerce"
+            ).dropna().astype(float).tolist(),
+            "within_route_pairwise_time_p90_s": pd.to_numeric(
+                amazon_pair_reference["within_route_pairwise_time_p90_s"], errors="coerce"
+            ).dropna().astype(float).tolist(),
+            "coordinate_space_only": True,
+            "cross_route_centroid_separation_normative": False,
+        },
+        "spatial_activation": activation.metadata,
+        "charger_selection": {
+            **charger_metadata,
+            "core_count": 0,
+            "core_reason": "territory_direct_roundtrip_energy_screen_makes_core_empty",
+            "fill_semantics": "active_community_and_depot_corridor_proxy_coverage",
+        },
+        "charger_active_customer_coverage_diagnostic": charger_active_customer_diagnostic,
+        "charging_power_resolution": power_metadata,
+        "non_release_pilot": cle.non_release_pilot,
+    }
+    baseline_columns = [
+        "latent_service_location_id",
+        "community_id",
+        "radial_decile",
+        "depot_running_time_s",
+    ]
+    return terminal_index, metadata, activation.radial_baseline[baseline_columns]

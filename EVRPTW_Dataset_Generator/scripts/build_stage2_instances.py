@@ -18,10 +18,12 @@ from typing import Any
 
 import pandas as pd
 
+from evrptw_stage2.amazon import load_amazon_stage2_artifacts
 from evrptw_stage2.artifacts import verify_materialized_family
 from evrptw_stage2.community import build_customer_split
 from evrptw_stage2.config import load_stage2_config
 from evrptw_stage2.materialize import materialize_family
+from evrptw_stage2.metrics import aggregate_phase1_metrics
 from evrptw_stage2.parallel import materialize_family_chunk, verify_family_path
 from evrptw_stage2.planning import (
     build_generation_plan,
@@ -32,7 +34,7 @@ from evrptw_stage2.planning import (
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.reader import load_portable_cle
 
-STAGES = ("preflight", "splits", "plan", "materialize", "verify")
+STAGES = ("preflight", "splits", "plan", "materialize", "verify", "metrics")
 
 
 def _process_peak_rss_bytes() -> int:
@@ -48,6 +50,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--block-group-preset", type=Path, required=True)
     parser.add_argument("--block-group-source-dir", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--amazon-artifact-root", type=Path, required=True)
     parser.add_argument(
         "--mode",
         choices=("official", "research", "non_release_pilot"),
@@ -115,11 +118,17 @@ def _load_plan(plan_root: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, A
     view_parts = [pd.read_parquet(path) for path in sorted(plan_root.rglob("view_index.parquet"))]
     if not family_parts or not view_parts:
         raise FileNotFoundError(f"Incomplete plan under {plan_root}")
-    return (
-        pd.concat(family_parts, ignore_index=True).drop_duplicates("family_id"),
-        pd.concat(view_parts, ignore_index=True).drop_duplicates("view_id"),
-        json.loads((plan_root / "split_registry.json").read_text(encoding="utf-8")),
+    families = pd.concat(family_parts, ignore_index=True).drop_duplicates("family_id")
+    views = pd.concat(view_parts, ignore_index=True).drop_duplicates("view_id")
+    registry = json.loads(
+        (plan_root / "split_registry.json").read_text(encoding="utf-8")
     )
+    if registry.get("schema") != "cle_evrptw_generation_plan_v2" or "day_type" not in families:
+        raise ValueError(
+            f"Stale Stage-2 plan under {plan_root}; remove generated plan/materialized "
+            "outputs and rebuild with the v2 spatial contract"
+        )
+    return families, views, registry
 
 
 def _physical_memory_bytes() -> int | None:
@@ -175,6 +184,15 @@ def _build_materialization_tasks(
                             / "customer_split_manifest.parquet"
                         ).resolve()
                     ),
+                    "community_adjacency_path": str(
+                        (
+                            args.output_root
+                            / "customer_splits"
+                            / str(city)
+                            / "community_adjacency.parquet"
+                        ).resolve()
+                    ),
+                    "amazon_artifact_root": str(args.amazon_artifact_root.resolve()),
                     "output_root": str(args.output_root.resolve()),
                     "max_attempts_per_family": int(args.max_attempts_per_family),
                     "families": families_payload,
@@ -236,6 +254,7 @@ def main() -> None:
             "--allow-memory-oversubscription"
         )
     config = load_stage2_config(args.config)
+    amazon_artifacts = load_amazon_stage2_artifacts(args.amazon_artifact_root)
     non_release = args.mode == "non_release_pilot"
     profile = load_reference_profile(args.profile, official=args.mode == "official")
     all_cities = (*config.train_cities, config.heldout_city)
@@ -251,6 +270,13 @@ def main() -> None:
         "cities": list(cities),
         "stages": list(args.stages),
         "preflight": [],
+        "amazon_artifact": {
+            "schema": amazon_artifacts.manifest["schema"],
+            "artifact_id": amazon_artifacts.manifest["artifact_id"],
+            "template_count": int(amazon_artifacts.manifest["template_count"]),
+            "station_day_count": int(amazon_artifacts.manifest["station_day_count"]),
+            "t_env_s": float(amazon_artifacts.manifest["t_env_s"]),
+        },
         "splits": {},
         "materialized": [],
         "rejected_attempts": [],
@@ -280,8 +306,14 @@ def main() -> None:
             block_groups = args.block_group_source_dir / f"tl_{vintage}_{state_fips}_bg.zip"
             split_dir = args.output_root / "customer_splits" / city
             report_path = split_dir / "customer_split_report.json"
-            if report_path.is_file():
+            adjacency_path = split_dir / "community_adjacency.parquet"
+            if report_path.is_file() and adjacency_path.is_file():
                 report = json.loads(report_path.read_text(encoding="utf-8"))
+            elif report_path.exists() or adjacency_path.exists():
+                raise ValueError(
+                    f"Incomplete or stale customer split under {split_dir}; "
+                    "remove that generated split directory and rebuild it"
+                )
             else:
                 report = build_customer_split(
                     cle,
@@ -296,7 +328,7 @@ def main() -> None:
     gc.collect()
 
     plan_root = args.output_root / "generation_plan"
-    needs_plan = bool({"plan", "materialize", "verify"} & set(args.stages))
+    needs_plan = bool({"plan", "materialize", "verify", "metrics"} & set(args.stages))
     if "plan" in args.stages and not (plan_root / "split_registry.json").is_file():
         families, views, registry = build_generation_plan(
             config,
@@ -359,6 +391,7 @@ def main() -> None:
 
     if "materialize" in args.stages and args.workers == 1:
         routing_topology_cache = {}
+        community_adjacency_cache = {}
         cached_city: str | None = None
         active_cle = None
         for _, family_row in selected_families.iterrows():
@@ -384,6 +417,7 @@ def main() -> None:
             city = str(family["city_slug"])
             if cached_city != city:
                 routing_topology_cache.clear()
+                community_adjacency_cache.clear()
                 cached_city = city
                 active_cle = load_portable_cle(args.cle_root, city, mode=args.mode)
             if active_cle is None:
@@ -418,8 +452,16 @@ def main() -> None:
                             / city
                             / "customer_split_manifest.parquet"
                         ),
+                        community_adjacency_path=(
+                            args.output_root
+                            / "customer_splits"
+                            / city
+                            / "community_adjacency.parquet"
+                        ),
+                        amazon_artifacts=amazon_artifacts,
                         output_root=args.output_root / "materialized",
                         routing_topology_cache=routing_topology_cache,
+                        community_adjacency_cache=community_adjacency_cache,
                     )
                 except Exception as error:  # noqa: BLE001 - persist every failed attempt.
                     rejection = {
@@ -524,6 +566,13 @@ def main() -> None:
     run_report["passed"] = not run_report["unresolved_family_ids"] and all(
         bool(item["passed"]) for item in run_report["verified"]
     )
+    if "metrics" in args.stages:
+        if int(args.shard_count) != 1:
+            raise ValueError(
+                "The metrics stage requires a complete unsharded output; run "
+                "scripts/aggregate_phase1_metrics.py after all shards finish"
+            )
+        run_report["phase1_metrics"] = aggregate_phase1_metrics(args.output_root)
     run_report["performance"] = {
         "run_wall_seconds": time.perf_counter() - run_started,
         "process_peak_rss_bytes": _process_peak_rss_bytes(),

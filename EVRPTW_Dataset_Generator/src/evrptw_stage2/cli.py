@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .amazon import load_amazon_stage2_artifacts
 from .artifacts import verify_materialized_family
 from .community import build_customer_split
 from .config import load_stage2_config
@@ -75,6 +76,8 @@ def make_parser() -> argparse.ArgumentParser:
     materialize.add_argument("--plan-root", type=Path, required=True)
     materialize.add_argument("--family-id", required=True)
     materialize.add_argument("--customer-split", type=Path, required=True)
+    materialize.add_argument("--community-adjacency", type=Path, required=True)
+    materialize.add_argument("--amazon-artifact-root", type=Path, required=True)
     materialize.add_argument("--output-root", type=Path, required=True)
 
     verify_family = subparsers.add_parser(
@@ -187,6 +190,7 @@ def main() -> None:
         city = str(family["city_slug"])
         cle = load_portable_cle(args.cle_root, city, mode=args.mode)
         profile = load_reference_profile(args.profile, official=args.mode == "official")
+        amazon_artifacts = load_amazon_stage2_artifacts(args.amazon_artifact_root)
         manifest = materialize_family(
             cle,
             config=config,
@@ -194,6 +198,8 @@ def main() -> None:
             family=family,
             views=views,
             customer_split_path=args.customer_split,
+            community_adjacency_path=args.community_adjacency,
+            amazon_artifacts=amazon_artifacts,
             output_root=args.output_root,
         )
         _write_or_print(manifest, None)

@@ -1,4 +1,4 @@
-"""Build auditable legal, reference, and static operational speed layers."""
+"""Build auditable directed legal and weekday/weekend reference speeds."""
 
 from __future__ import annotations
 
@@ -14,6 +14,12 @@ import numpy as np
 import osmnx as ox
 import pandas as pd
 
+from .moves_speed import (
+    load_moves_speed_profile,
+    moves_road_type_from_hpms,
+    moves_road_type_from_osm,
+    speed_retention_factor,
+)
 from .nsi import _as_bool, _parse_multivalue
 from .util import sha256_file, write_json
 
@@ -22,17 +28,9 @@ NUMERIC_SPEED = re.compile(
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>mph|km/h|kph)?", re.IGNORECASE
 )
 
-# These values are the "Average Driving Speed" profile means reported for
-# FDNA clusters 3, 2, and 1 in Table 14 of NREL/TP-5400-65921.  The project
-# adapter maps them, in descending speed order, to H/M/U.  NREL did not label
-# individual OSM roads or name these clusters H/M/U.  They are therefore
-# transparent mode-level priors, not edge observations and not a universal
-# Amazon/Rivian average speed.
-NREL_MODE_SPEED_KPH = {
-    "H": 48.57 * MPH_TO_KPH,
-    "M": 33.64 * MPH_TO_KPH,
-    "U": 22.62 * MPH_TO_KPH,
-}
+DEFAULT_MOVES_SPEED_PROFILE_PATH = (
+    Path(__file__).resolve().parents[2] / "configs" / "us_moves5_speed_profile_v1.json"
+)
 
 OSM_OPERATING_MODE = {
     "motorway": "H",
@@ -53,27 +51,6 @@ OSM_OPERATING_MODE = {
     "road": "U",
     "unknown": "U",
 }
-
-ROAD_GROUP = {
-    "motorway": "restricted_access",
-    "motorway_link": "restricted_access_link",
-    "trunk": "restricted_access",
-    "trunk_link": "restricted_access_link",
-    "primary": "arterial",
-    "primary_link": "arterial_link",
-    "secondary": "arterial",
-    "secondary_link": "arterial_link",
-    "tertiary": "collector",
-    "tertiary_link": "collector_link",
-    "unclassified": "local",
-    "residential": "local",
-    "living_street": "service_access",
-    "service": "service_access",
-    "busway": "collector",
-    "road": "local",
-    "unknown": "local",
-}
-
 
 def operating_mode_from_hpms(value: Any) -> str | None:
     """Map FHWA HPMS F_SYSTEM to the portable H/M/U operating modes."""
@@ -222,148 +199,6 @@ def _weighted_median(values: pd.Series, weights: pd.Series) -> float:
     return float(sorted_values[np.searchsorted(cumulative, cumulative[-1] / 2, side="left")])
 
 
-def _centered_lognormal(
-    rng: np.random.Generator,
-    count: int,
-    sigma: float,
-) -> np.ndarray:
-    if sigma == 0:
-        return np.ones(count, dtype=float)
-    return np.exp(rng.normal(loc=-(sigma**2) / 2.0, scale=sigma, size=count))
-
-
-def _scenario_summary(frame: pd.DataFrame) -> dict[str, Any]:
-    by_scenario: dict[str, Any] = {}
-    for scenario_id, group in frame.groupby("scenario_id", sort=True):
-        weights = group["length_m"].to_numpy(dtype=float)
-        speeds = group["speed_kph"].to_numpy(dtype=float)
-        multipliers = group["operational_variation_factor"].to_numpy(dtype=float)
-        by_scenario[str(scenario_id)] = {
-            "day_type": str(group["day_type"].iloc[0]),
-            "edge_count": len(group),
-            "length_weighted_mean_speed_kph": float(np.average(speeds, weights=weights)),
-            "speed_kph_p10": float(np.quantile(speeds, 0.10)),
-            "speed_kph_p50": float(np.quantile(speeds, 0.50)),
-            "speed_kph_p90": float(np.quantile(speeds, 0.90)),
-            "variation_factor_p10": float(np.quantile(multipliers, 0.10)),
-            "variation_factor_p50": float(np.quantile(multipliers, 0.50)),
-            "variation_factor_p90": float(np.quantile(multipliers, 0.90)),
-        }
-    paired = (
-        frame.groupby(["scenario_id", "physical_segment_id"], sort=False)
-        .agg(direction_count=("direction_id", "nunique"), speed_min=("speed_kph", "min"), speed_max=("speed_kph", "max"))
-        .reset_index()
-    )
-    paired = paired.loc[paired["direction_count"] >= 2].copy()
-    if paired.empty:
-        asymmetry = {
-            "paired_physical_segment_scenario_count": 0,
-            "nonzero_directional_speed_difference_share": 0.0,
-            "median_directional_speed_range_kph": 0.0,
-        }
-    else:
-        delta = paired["speed_max"] - paired["speed_min"]
-        asymmetry = {
-            "paired_physical_segment_scenario_count": len(paired),
-            "nonzero_directional_speed_difference_share": float((delta > 1e-9).mean()),
-            "median_directional_speed_range_kph": float(delta.median()),
-        }
-    return {"by_scenario": by_scenario, "directed_edge_asymmetry": asymmetry}
-
-
-def _build_static_operational_scenarios(
-    frame: pd.DataFrame,
-    *,
-    seed: int,
-    scenarios_per_day_type: int,
-    global_sigma: float,
-    road_group_sigma: float,
-    corridor_sigma: float,
-    direction_sigma: float,
-    factor_min: float,
-    factor_max: float,
-) -> pd.DataFrame:
-    if scenarios_per_day_type < 1:
-        raise ValueError("scenarios_per_day_type must be positive")
-    if not (0 < factor_min <= 1 <= factor_max):
-        raise ValueError("variation-factor bounds must bracket 1 and be positive")
-    base_columns = [
-        "edge_u",
-        "edge_v",
-        "edge_key",
-        "edge_id",
-        "physical_segment_id",
-        "corridor_id",
-        "direction_id",
-        "length_m",
-        "highway",
-        "road_group",
-        "speed_limit_kph",
-        "reference_speed_kph",
-        "directional_variation_eligible",
-    ]
-    road_groups = sorted(frame["road_group"].unique())
-    corridors = sorted(frame["corridor_id"].unique())
-    directions = sorted(frame["direction_id"].unique())
-    scenario_frames: list[pd.DataFrame] = []
-    scenario_index = 0
-    for day_type in ("weekday", "weekend"):
-        for within_day_index in range(scenarios_per_day_type):
-            scenario_seed = seed + scenario_index
-            rng = np.random.default_rng(scenario_seed)
-            global_factor = float(_centered_lognormal(rng, 1, global_sigma)[0])
-            road_factors = dict(
-                zip(
-                    road_groups,
-                    _centered_lognormal(rng, len(road_groups), road_group_sigma),
-                    strict=True,
-                )
-            )
-            corridor_factors = dict(
-                zip(
-                    corridors,
-                    _centered_lognormal(rng, len(corridors), corridor_sigma),
-                    strict=True,
-                )
-            )
-            direction_factors = dict(
-                zip(
-                    directions,
-                    _centered_lognormal(rng, len(directions), direction_sigma),
-                    strict=True,
-                )
-            )
-            scenario = frame[base_columns].copy()
-            scenario["scenario_id"] = f"{day_type}-pilot-{within_day_index:02d}"
-            scenario["day_type"] = day_type
-            scenario["scenario_seed"] = scenario_seed
-            scenario["global_factor"] = global_factor
-            scenario["road_group_factor"] = scenario["road_group"].map(road_factors)
-            scenario["corridor_factor"] = scenario["corridor_id"].map(corridor_factors)
-            scenario["direction_factor"] = np.where(
-                scenario["directional_variation_eligible"],
-                scenario["direction_id"].map(direction_factors),
-                1.0,
-            )
-            scenario["operational_variation_factor"] = (
-                scenario["global_factor"]
-                * scenario["road_group_factor"]
-                * scenario["corridor_factor"]
-                * scenario["direction_factor"]
-            ).clip(lower=factor_min, upper=factor_max)
-            scenario["speed_kph"] = np.minimum(
-                scenario["speed_limit_kph"],
-                scenario["reference_speed_kph"]
-                * scenario["operational_variation_factor"],
-            )
-            scenario["travel_time_s"] = scenario["length_m"] / (
-                scenario["speed_kph"] / 3.6
-            )
-            scenario_frames.append(scenario)
-            scenario_index += 1
-    return pd.concat(scenario_frames, ignore_index=True)
-
-
 def _load_hpms_edge_evidence(path: Path | None) -> dict[str, dict[str, Any]]:
     """Load an optional, already-conflated HPMS-to-OSM edge table.
 
@@ -439,23 +274,21 @@ def build_legal_speed_layer(
     graph_path: Path,
     output_dir: Path,
     hpms_edge_evidence_path: Path | None = None,
+    moves_speed_profile_path: Path | None = None,
     vehicle_speed_cap_kph: float | None = None,
-    build_pilot_scenarios: bool = False,
-    scenario_seed: int = 20270805,
-    scenarios_per_day_type: int = 2,
-    global_sigma: float = 0.02,
-    road_group_sigma: float = 0.04,
-    corridor_sigma: float = 0.05,
-    direction_sigma: float = 0.03,
-    factor_min: float = 0.75,
-    factor_max: float = 1.15,
 ) -> dict[str, Any]:
-    """Build a directed legal/reference speed profile and pilot scenario bank."""
+    """Build a directed legal/MOVES weekday/weekend reference-speed profile."""
 
     if output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite speed output: {output_dir}")
     if vehicle_speed_cap_kph is not None and vehicle_speed_cap_kph <= 0:
         raise ValueError("vehicle_speed_cap_kph must be positive when supplied")
+    moves_profile_path = (
+        Path(moves_speed_profile_path)
+        if moves_speed_profile_path is not None
+        else DEFAULT_MOVES_SPEED_PROFILE_PATH
+    )
+    moves_profile = load_moves_speed_profile(moves_profile_path)
     graph = ox.load_graphml(graph_path)
     hpms_evidence = _load_hpms_edge_evidence(hpms_edge_evidence_path)
     graph_edge_ids = {
@@ -506,9 +339,19 @@ def build_legal_speed_layer(
             if hpms_corridor_usable and hpms_mode
             else "osm_highway_fallback"
         )
+        hpms_moves_type = moves_road_type_from_hpms(hpms.get("F_SYSTEM"))
+        moves_road_type = (
+            hpms_moves_type
+            if hpms_corridor_usable and hpms_moves_type
+            else moves_road_type_from_osm(highway)
+        )
+        moves_road_type_source = (
+            "hpms_f_system_high_confidence"
+            if hpms_corridor_usable and hpms_moves_type
+            else "osm_highway_fallback"
+        )
         osmid = _canonical_values(attributes.get("osmid"))
         corridor_id = f"osmid:{osmid}" if osmid else f"edge:{min(str(u), str(v))}:{max(str(u), str(v))}"
-        direction_label = selected_speed["direction_label"]
         physical_segment_id = (
             f"{corridor_id}|{min(str(u), str(v))}|{max(str(u), str(v))}|{length:.3f}"
         )
@@ -520,11 +363,13 @@ def build_legal_speed_layer(
                 "edge_id": edge_id,
                 "physical_segment_id": physical_segment_id,
                 "corridor_id": corridor_id,
-                "direction_id": f"{corridor_id}|{direction_label}",
                 "length_m": length,
                 "highway": highway,
                 "operating_mode": operating_mode,
                 "operating_mode_source": operating_mode_source,
+                "moves_road_type": moves_road_type,
+                "moves_road_type_source": moves_road_type_source,
+                "moves_is_ramp": highway in {"motorway_link", "trunk_link"},
                 "raw_hpms_f_system": hpms.get("F_SYSTEM"),
                 "raw_hpms_speed_limit_mph": hpms.get("SPEED_LIMIT"),
                 "hpms_match_confidence": hpms.get("match_confidence"),
@@ -546,13 +391,9 @@ def build_legal_speed_layer(
                     and hpms_speed_kph is not None
                     and not math.isclose(float(osm_speed_kph), hpms_speed_kph, abs_tol=1.0)
                 ),
-                "road_group": ROAD_GROUP.get(highway, "local"),
                 "oneway": _as_bool(attributes.get("oneway", False)),
                 "transit_only": _as_bool(attributes.get("transit_only", False)),
                 **selected_speed,
-                "directional_variation_eligible": bool(
-                    selected_speed["directional_maxspeed_present"]
-                ),
             }
         )
     frame = pd.DataFrame(records)
@@ -627,54 +468,54 @@ def build_legal_speed_layer(
     frame["legal_speed_confidence"] = frame["speed_limit_confidence"]
     frame["legal_speed_imputed"] = frame["speed_limit_is_imputed"]
     frame["legal_travel_time_s"] = frame["length_m"] / (frame["speed_limit_kph"] / 3.6)
-    frame["v_model_nrel_kph"] = frame["operating_mode"].map(NREL_MODE_SPEED_KPH)
-    reference_terms = [
-        frame["speed_limit_kph"].to_numpy(dtype=float),
-        frame["v_model_nrel_kph"].to_numpy(dtype=float),
-    ]
-    if vehicle_speed_cap_kph is not None:
-        reference_terms.append(np.full(len(frame), vehicle_speed_cap_kph, dtype=float))
-    frame["reference_speed_kph"] = np.minimum.reduce(reference_terms)
+    frame["free_flow_speed_proxy_kph"] = frame["legal_speed_kph"]
+    for day_type in ("weekday", "weekend"):
+        retention_column = f"moves_speed_retention_{day_type}"
+        reference_column = f"reference_speed_{day_type}_kph"
+        travel_time_column = f"reference_travel_time_{day_type}_s"
+        retention_by_road_type = {
+            road_type: speed_retention_factor(
+                moves_profile, road_type=road_type, day_type=day_type
+            )
+            for road_type in moves_profile["road_types"]
+        }
+        frame[retention_column] = frame["moves_road_type"].map(
+            retention_by_road_type
+        )
+        reference = (
+            frame["free_flow_speed_proxy_kph"].to_numpy(dtype=float)
+            * frame[retention_column].to_numpy(dtype=float)
+        )
+        if vehicle_speed_cap_kph is not None:
+            reference = np.minimum(reference, vehicle_speed_cap_kph)
+        frame[reference_column] = np.minimum(
+            frame["legal_speed_kph"].to_numpy(dtype=float), reference
+        )
+        frame[travel_time_column] = frame["length_m"] / (
+            frame[reference_column] / 3.6
+        )
     frame["vehicle_speed_cap_kph"] = vehicle_speed_cap_kph
-    frame["reference_speed_source"] = "us_hpms_osm_nrel_v1"
-    frame["reference_travel_time_s"] = frame["length_m"] / (
-        frame["reference_speed_kph"] / 3.6
-    )
+    frame["reference_speed_source"] = moves_profile["profile_id"]
     numeric = frame[
         [
             "length_m",
             "speed_limit_kph",
             "legal_travel_time_s",
-            "v_model_nrel_kph",
-            "reference_speed_kph",
-            "reference_travel_time_s",
+            "free_flow_speed_proxy_kph",
+            "reference_speed_weekday_kph",
+            "reference_speed_weekend_kph",
+            "reference_travel_time_weekday_s",
+            "reference_travel_time_weekend_s",
         ]
     ].to_numpy(dtype=float)
     if not np.isfinite(numeric).all() or (numeric <= 0).any():
         raise ValueError("Speed layer contains nonpositive or nonfinite values")
-    if (frame["reference_speed_kph"] > frame["speed_limit_kph"] + 1e-9).any():
-        raise ValueError("Reference speed exceeds legal limit")
-
-    scenarios: pd.DataFrame | None = None
-    if build_pilot_scenarios:
-        scenarios = _build_static_operational_scenarios(
-            frame,
-            seed=scenario_seed,
-            scenarios_per_day_type=scenarios_per_day_type,
-            global_sigma=global_sigma,
-            road_group_sigma=road_group_sigma,
-            corridor_sigma=corridor_sigma,
-            direction_sigma=direction_sigma,
-            factor_min=factor_min,
-            factor_max=factor_max,
-        )
-        scenario_numeric = scenarios[
-            ["operational_variation_factor", "speed_kph", "travel_time_s"]
-        ].to_numpy(dtype=float)
-        if not np.isfinite(scenario_numeric).all() or (scenario_numeric <= 0).any():
-            raise ValueError("Operational scenario bank contains invalid values")
-        if (scenarios["speed_kph"] > scenarios["speed_limit_kph"] + 1e-9).any():
-            raise ValueError("Operational scenario speed exceeds legal limit")
+    for day_type in ("weekday", "weekend"):
+        if (
+            frame[f"reference_speed_{day_type}_kph"]
+            > frame["speed_limit_kph"] + 1e-9
+        ).any():
+            raise ValueError(f"{day_type} reference speed exceeds legal limit")
 
     total_length = float(frame["length_m"].sum())
     observed_length = float(frame.loc[observed, "length_m"].sum())
@@ -683,12 +524,9 @@ def build_legal_speed_layer(
         staged = Path(temp) / output_dir.name
         staged.mkdir()
         table_path = staged / "directed_legal_speeds.parquet"
-        scenario_path = staged / "static_operational_scenarios.parquet"
         frame.to_parquet(table_path, index=False)
-        if scenarios is not None:
-            scenarios.to_parquet(scenario_path, index=False)
         manifest = {
-            "schema": "evrptw_directed_speed_profiles_v5",
+            "schema": "evrptw_directed_speed_profiles_v6",
             "status": "cle_reference_speed_profile_complete",
             "generated_utc": datetime.now(UTC).isoformat(),
             "city_slug": city_slug,
@@ -702,8 +540,6 @@ def build_legal_speed_layer(
                 else None
             ),
             "edge_count": len(frame),
-            "scenario_count": int(scenarios["scenario_id"].nunique()) if scenarios is not None else 0,
-            "scenario_edge_row_count": len(scenarios) if scenarios is not None else 0,
             "observed_osm_maxspeed_edge_count": int(osm_observed.sum()),
             "observed_osm_maxspeed_edge_share": float(osm_observed.mean()),
             "observed_hpms_speed_limit_edge_count": int(hpms_observed.sum()),
@@ -755,21 +591,19 @@ def build_legal_speed_layer(
             },
             "reference_speed_contract": {
                 "name": "delivery_reference_running_speed_not_door_to_door_average",
-                "profile_id": "us_hpms_nrel_v1",
-                "formula": "min(legal_speed_kph, v_model_nrel_kph, optional_vehicle_speed_cap_kph)",
-                "nrel_mode_speed_kph": NREL_MODE_SPEED_KPH,
-                "nrel_evidence": {
-                    "report": "NREL/TP-5400-65921",
-                    "doi": "10.2172/1397153",
-                    "title": "The Development of Vocational Vehicle Drive Cycles and Segmentation",
-                    "table": 14,
-                    "statistic": "Average Driving Speed profile means for FDNA clusters 3, 2, and 1",
-                    "cluster_speed_mph_descending": [48.57, 33.64, 22.62],
-                    "adapter_assumption": (
-                        "map descending FDNA speed profiles 3/2/1 to canonical H/M/U; "
-                        "the source does not assign H/M/U to road edges"
-                    ),
-                },
+                "profile_id": moves_profile["profile_id"],
+                "formula": (
+                    "reference_speed(edge,day)=legal_speed(edge)*"
+                    "MOVES_effective_speed(road_type,day)/MOVES_low_flow_Q85(road_type)"
+                ),
+                "free_flow_edge_proxy": "direction_applicable_legal_speed_kph",
+                "moves_speed_profile_file": moves_profile_path.name,
+                "moves_source_database": moves_profile["source_database"],
+                "moves_source_type_id": moves_profile["source_type_id"],
+                "moves_service_window": moves_profile["service_window"],
+                "moves_low_flow_benchmark": moves_profile["low_flow_benchmark"],
+                "moves_road_types": moves_profile["road_types"],
+                "moves_scope_warning": moves_profile["default_data_scope"],
                 "mode_source_priority": [
                     "high-confidence conflated HPMS F_SYSTEM",
                     "OSM highway fallback",
@@ -780,37 +614,20 @@ def build_legal_speed_layer(
                     if vehicle_speed_cap_kph is not None
                     else "not_applied_no_versioned_source"
                 ),
-                "turn_signal_start_stop_status": "not_in_edge_speed; route-cost layer pending",
+                "turn_signal_start_stop_status": "not_in_edge speed; geometry-only turn penalties are Stage 2",
             },
             "stage_2_operational_speed_contract": {
-                "semantics": "instance-static operational variation; no departure-time-dependent traffic",
-                "stored_in_cle": bool(build_pilot_scenarios),
+                "semantics": "select the CLE weekday or weekend reference field",
+                "stored_in_cle": False,
                 "day_types": ["weekday", "weekend"],
-                "scenarios_per_day_type": scenarios_per_day_type,
-                "seed": scenario_seed,
-                "factor_structure": "global * road_group * corridor * direction factor only where an OSM directional maxspeed tag is present",
-                "factor_sigmas": {
-                    "global": global_sigma,
-                    "road_group": road_group_sigma,
-                    "corridor": corridor_sigma,
-                    "direction": direction_sigma,
-                },
-                "factor_bounds": [factor_min, factor_max],
-                "day_type_mean_shift": "none_in_pilot",
-                "calibration_status": "engineering_pilot_not_fitted_to_MOVES5",
-                "official_parameter_status": "scenario_count_sigmas_bounds_and_daytype_difference_not_frozen",
+                "canonical_residual_factor": 1.0,
                 "independent_per_edge_noise": False,
-                "direction_activation_policy": "osm_directional_speed_evidence_only",
+                "departure_time_dependent_traffic": False,
             },
             "outputs": {
                 "directed_legal_speeds": "directed_legal_speeds.parquet",
             },
         }
-        if scenarios is not None:
-            manifest["scenario_qa"] = _scenario_summary(scenarios)
-            manifest["outputs"]["static_operational_scenarios"] = (
-                "static_operational_scenarios.parquet"
-            )
         manifest["output_sha256"] = {
             name: sha256_file(staged / relative)
             for name, relative in manifest["outputs"].items()

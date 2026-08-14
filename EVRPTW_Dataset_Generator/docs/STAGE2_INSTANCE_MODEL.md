@@ -1,519 +1,472 @@
-# CLE-EVRPTW Stage-2 instance model
+# CLE to EVRPTW instance generation contract
 
-This document is the technical contract for converting a City Logistics
-Environment (CLE) into classical, static EVRPTW operating-day instances. The
-Generator README is intentionally a quick-start guide; model definitions,
-formulas, parameter provenance, assumptions, and release limitations belong
-here.
+This document is the authoritative scientific description of Stage 2. It
+explains exactly how a portable City Logistics Environment (CLE) becomes a
+classical, static EVRPTW instance and which outputs are retained for audit.
+The JSON configuration files are the executable source of truth; this document
+states their meaning and the claim boundary.
 
-## 1. Scope and claim boundary
+## 1. Benchmark scope
 
-The U.S. reference implementation is a **real-geography, public-data-integrated,
-semi-synthetic benchmark**:
+The U.S. reference corpus is a **real-geography, public-data-integrated,
+semi-synthetic benchmark**. A CLE fixes the city boundary, directed road graph,
+latent residential service locations, depot candidates, public charging sites,
+and edge speed evidence. Stage 2 decides which of those latent objects are
+active on one operating day and attaches observed Amazon order templates.
 
-- CLE roads, directed topology, building locations, facility candidates, and
-  charging-site evidence are grounded in public data;
-- active customers, packages, service times, time windows, day-level speeds,
-  and solver instances are generated from versioned statistical models;
-- no generated instance is claimed to be an observed Amazon route;
-- Amazon coordinates are not used to place customers in CLE cities.
+The released instance is not claimed to be an observed Amazon route or a
+reconstruction of an Amazon service area. Amazon coordinates are not transferred
+to the CLE. Amazon data supplies empirical depot-day route structure and
+package/service/time-window templates; CLE geography supplies the physical
+locations and directed travel network.
 
-The V1 problem remains compatible with the classical EVRPTW:
+The canonical problem track retains classical EVRPTW assumptions:
 
-- one depot is selected per instance family;
-- the EV fleet is homogeneous, unlimited, and initially fully charged;
-- demand and capacity use volume in `cm3`;
-- each active service location has at most one time window;
-- public charging stations have infinite port capacity;
-- charging is linear and must continue to full capacity;
-- road travel times are static within an instance;
-- the optimization objective is minimum physical travel distance;
-- time and energy are feasibility resources, not extra objective terms;
-- runtime action masks are computed by environments and are not stored.
+- one depot per instance family;
+- a homogeneous, initially full, unlimited EV fleet;
+- demand and capacity in cubic centimetres;
+- one time window per active physical service location;
+- static travel time within an instance;
+- real public charging sites with fixed effective power and unlimited ports;
+- linear charging to full capacity;
+- linear distance-based energy consumption; and
+- minimum physical travel distance as the objective.
 
-The operating horizon is `08:00-24:00` for this profile. It is a configurable
-benchmark setting, not a claim that every carrier uses the same shift.
+The operating horizon is 08:00--24:00 in the U.S. profile. It is configurable
+and is not presented as a universal carrier shift.
 
-## 2. Inputs, outputs, and execution order
+## 2. Required inputs and produced artifacts
 
 Stage 2 consumes:
 
-1. a portable CLE package;
-2. the frozen benchmark contract
-   `configs/cle_evrptw_stage2_v1.json`;
-3. a versioned operations adapter such as
-   `configs/us_reference_instance_profile_v1.json`;
-4. Census block-group polygons for the customer split; and
-5. aggregate Amazon ARCD calibration statistics produced by
-   `scripts/analyze_amazon_arcd_statistics.py`.
+1. eleven portable CLE packages produced by Stage 1;
+2. Census block-group polygons for the customer-pool split;
+3. Amazon Last Mile Routing Research Challenge 2021 `route_data.json`,
+   `package_data.json`, and `travel_times.json` from `model_build_inputs`;
+4. `configs/cle_evrptw_stage2_v1.json`, which freezes benchmark sizes, splits,
+   and view relationships; and
+5. `configs/us_reference_instance_profile_v1.json`, which freezes the U.S.
+   vehicle, charging, connector, and feasibility adapter.
 
-The execution order is:
-
-1. freeze complete-community train/held-out customer pools;
-2. plan matrix families and lower-scale views;
-3. sample day type, depot, customer superset, and nested CS set;
-4. realize one static directed road state;
-5. compute distance-shortest and turn-aware fastest terminal closures;
-6. sample packages, demand, service time, and time windows;
-7. reject and replace infeasible order draws without changing a time window;
-8. store a compact one-customer feasibility certificate and CS-return cache;
-9. write four parent matrices and lower-scale index views; and
-10. structurally verify every family and view.
-
-## 3. Split and scale model
-
-### 3.1 Complete-community split
-
-A community is:
+The production runner writes:
 
 ```text
-community_id = Census block group x directed road SCC
+EVRPTW_Dataset/Instances_v1/us_11city/
+  amazon_artifacts.json
+  customer_splits/<city>/
+    customer_split_manifest.parquet
+    community_manifest.parquet
+    community_adjacency.parquet
+    customer_split_report.json
+  generation_plan/
+    families.parquet
+    views.parquet
+    split_registry.json
+  materialized/families/<family_id>/
+    family_manifest.json
+    terminal_index.parquet
+    phase1_metrics.json
+    phase1_observations.parquet
+    phase1_region_pair_metrics.parquet
+    matrices/*.npy
+    views/<view_id>/*
+  rejections/*.json
+  reports/phase1/
+    family_metrics.parquet
+    stratified_metrics.csv
+    rejected_attempts.parquet       # only when rejections occurred
+    summary.json
 ```
 
-Complete communities, rather than individual locations, are assigned to either
-the train-location pool or the held-out-location pool. The frozen target is
-80/20. A held-out community is marked `training_ineligible=true`, so no
-location from that community may appear in training, validation, or Test-1.
+The raw Amazon files are preprocessed once into compact Parquet artifacts.
+Raw customer coordinates are never copied into the generated dataset.
 
-The three core tests have distinct meanings:
+## 3. Stage-2 execution order
 
-- Test-1: new seeds, the ten training cities, train-location pool;
-- Test-2: the ten training cities, held-out communities only;
-- Test-3: Jacksonville, unseen during training.
+The implementation performs the following steps in order:
 
-Cus2000 is a same-city unseen-scale test, not an exact-solver comparison track.
-Cus50 is the compatibility and budgeted-MIP track.
+1. preprocess Amazon depot-day structure and order templates;
+2. freeze location pools and the directed community-adjacency graph;
+3. plan parent matrix families and their lower-scale views;
+4. select a physical depot access point;
+5. construct a depot-centred feasible territory;
+6. activate exactly the parent number of customer locations;
+7. select the scale-fixed real charging-station set;
+8. realize one static weekday or weekend road state;
+9. compute the four parent terminal matrices;
+10. attach distinct feasible Amazon order templates;
+11. build lower-scale views, charging caches, and feasibility certificates;
+12. verify the family and persist Phase-1 diagnostics; and
+13. aggregate diagnostics across the completed corpus.
 
-### 3.2 Exposure budget and CS counts
+Selection is deterministic conditional on the recorded seeds. A failed family
+attempt is recorded and retried with a deterministic attempt seed; it is never
+silently modified after acceptance.
 
-Each training scale has five million active-customer exposures:
+## 4. Amazon preprocessing
 
-| Scale | Train views | CS count | Main role |
+### 4.1 Station-day units
+
+Routes are grouped by station code, calendar date, and weekday/weekend class.
+Two empirical roles remain separate:
+
+- **spatial-structure support** uses route membership and inter-stop travel
+  times to describe how stops are distributed within routes; and
+- **order support** uses package volume, planned service time, and time-window
+  fields to create stop-level delivery templates.
+
+This separation prevents a stop that is usable for route structure but has
+incomplete order attributes from being treated as a complete order template.
+
+### 4.2 Spatial envelope and route structure
+
+For each station-day, the preprocessing records route stop counts and travel-
+time distributions. The territory envelope `T_env` is the station-day tail
+quantile specified by the frozen contract. It is used as empirical reach in
+network travel time; it is not interpreted as a radius in kilometres.
+
+Within a chosen structure source, stops are stratified by source route and by
+decile of depot-to-stop travel time. The generated city must preserve both
+route totals and decile totals after deterministic controlled rounding.
+
+If one real station-day supports the requested parent size, it is used directly
+and labelled `SINGLE_STRUCTURE_DAY`. If not, multiple days from the same Amazon
+station and day type are combined until they support the requested scale and
+the source is labelled `SAME_STATION_STRUCTURE_COMPOSITE`. Cross-station
+composition is not allowed.
+
+### 4.3 Order templates
+
+One observed stop becomes one order template containing:
+
+- package count;
+- summed package volume in `cm3`;
+- summed planned service time; and
+- either one observed time window or the full operating horizon.
+
+Package dimensions are converted to a common volume unit before summation.
+Templates with required missing or invalid fields are excluded and their
+attrition is reported. A source is labelled `SINGLE_ORDER_DAY` or
+`SAME_STATION_ORDER_COMPOSITE`; the latter combines days only within one
+station and one day type. Templates are never duplicated to reach a larger N.
+
+## 5. Customer pools and community graph
+
+### 5.1 Community definition
+
+The geographic unit is:
+
+```text
+community_id = Census Block Group x directed-road strongly connected component
+```
+
+A Census block group contributes a public, stable residential geography. The
+road-SCC suffix prevents locations that fall in the same Census polygon but
+cannot share the same directed operational road component from being treated
+as one routing community.
+
+### 5.2 Community adjacency
+
+`community_adjacency.parquet` is built from actual directed OSM edges that
+cross between community-labelled graph nodes. Its cost is derived from the CLE
+edge travel time. Transit-only road communities with no latent customers are
+retained because they can connect two customer communities. This graph is used
+for spatial expansion; straight-line nearest polygons are not treated as road
+neighbours.
+
+### 5.3 Leakage-free split
+
+Complete communities, rather than individual buildings, are assigned to the
+train-location pool or held-out-location pool. The target is 80/20. A held-out
+community is unavailable to train, validation, and Test-1.
+
+- Test-1: new seeds in the ten training cities, train-location pool;
+- Test-2: held-out communities in the ten training cities;
+- Test-3: Jacksonville, unseen during training; and
+- Cus2000: same-city unseen-scale evaluation.
+
+## 6. Family and view plan
+
+The plan allocates work before physical selection. Day types are assigned per
+city and cohort by deterministic largest-remainder allocation of the fixed 5:2
+weekday/weekend mixture, followed by a seeded shuffle. A slot's day type never
+changes during retry.
+
+The core training exposure budget is five million activated customers per
+scale:
+
+| Scale | Train views | CS | Purpose |
 | --- | ---: | ---: | --- |
-| Cus50 | 100,000 | 10 | classical compatibility |
-| Cus100 | 50,000 | 20 | core |
-| Cus500 | 10,000 | 50 | core |
-| Cus1000 | 5,000 | 50 | core parent |
-| Cus2000 | 0 | 50 | unseen-scale test |
+| Cus50 | 100,000 | 10 | compatibility and budgeted MIP |
+| Cus100 | 50,000 | 20 | core benchmark |
+| Cus500 | 10,000 | 50 | core benchmark |
+| Cus1000 | 5,000 | 50 | core parent scale |
+| Cus2000 | 0 | 50 | unseen-scale evaluation |
 
-CS counts are fixed by scale. This makes tensor shape and solver step semantics
-stable while still exposing charger-density differences across scales.
+Cus1000 parent families are partitioned into exact, disjoint lower-scale views.
+Twenty Cus50 children form the parent; fixed groupings of these leaves form
+Cus100 and Cus500. The union of leaves must equal the parent and siblings must
+be disjoint. A Cus2000 family additionally stores a deterministic Cus1000
+control view to separate city/seed effects from the scale change.
 
-## 4. Facility and customer activation
+## 7. Depot selection
 
-### 4.1 Depot
+Stage 1 groups OSM access points that refer to the same physical logistics
+facility. Grouping uses containment by a logistics/industrial land-use polygon,
+or matching normalized name/operator together with matching address or touching
+geometry. A facility that has no supported match remains a singleton; proximity
+alone does not merge two depots.
 
-One release-eligible Tier-A/B depot candidate is sampled for a matrix family.
-Tier C is not an instance depot pool. The depot changes across families so a
-city is not represented by one fixed start location. Strict candidates receive
-sampling weight 2 and optional candidates weight 1. This 2:1 weighting is a
-versioned benchmark choice: it favors stronger logistics evidence without
-collapsing a city to the small strict-only set. It is not an observed carrier
-market share and must be included in sensitivity analysis.
+For each family:
 
-Starting from the selected depot, the customer catchment begins at 40 km and
-expands by 10 km, up to 100 km, until it contains at least
-`max(N, ceil(1.5 N))` eligible latent locations. These are straight-line
-prefilter distances; all released terminal-to-terminal matrices still use the
-directed road graph. The thresholds bound the family geographically and are
-development sampling parameters, not legal service radii.
+1. sample one eligible physical facility group uniformly;
+2. select a Tier-A access point within that group when available; otherwise
+   select an eligible Tier-B access point; and
+3. record the evidence tier and group identifier.
 
-### 4.2 Charging stations
+Building area is retained as evidence but is not a hard `1000 m2` gate and is
+not used to impose an unexplained area threshold. Tier C retail or parcel-shop
+locations are not in the canonical depot pool.
 
-The selected depot defines an expandable catchment. CS candidates are greedily
-ordered against complete-community reference centroids, before daily customer
-IDs are sampled. The first 10, 20, and 50 entries form nested CS sets. This
-prevents charger selection from using the exact active-customer realization.
+## 8. Feasible territory
 
-Let `d_c(q)` be the distance from community reference point `c` to candidate
-charger `q`, and let `D_c` be its current distance to the nearest already
-selected charger. A candidate is chosen by minimizing
+The selected depot is routed once to all road nodes in the selected day-type
+reference state. A latent customer enters the candidate territory only if:
 
-```text
-sum_c w_c min(D_c, d_c(q))
-  + 0.25 * Q90_c[min(D_c, d_c(q))]
-  + 0.10 * max_c[min(D_c, d_c(q))].
-```
+- it belongs to the family split pool;
+- its directed road connector is valid;
+- its depot travel time lies within the Amazon-derived `T_env`; and
+- depot-to-customer-to-depot path energy is no greater than one full battery.
 
-The first term targets weighted mean coverage; the other two discourage a
-small set of poorly served communities. The weights are eligible-location
-counts, not realized order counts. The 0.25/0.10 coefficients are transparent
-development design constants rather than parameters estimated from AFDC.
+The last condition is deliberately sufficient rather than necessary. It
+guarantees every activated customer has an individual direct-roundtrip energy
+certificate. Charging can still be required in a multi-customer route. The
+territory must contain at least N candidates; otherwise the family attempt is
+rejected before spatial activation. No 40/50/.../100 km ladder or `1.5N`
+straight-line pool rule is used.
 
-Each station retains the AFDC charging-mode and power provenance. Effective
-power is:
+## 9. Step 6: spatial customer activation
 
-```text
-p_effective = min(p_station, p_vehicle_cap(mode))
-```
+### 9.1 Target quota table
 
-Reported station power is used when available. A missing value uses the
-city-by-mode median. Official generation fails if that median is unavailable;
-development pilots may use the vehicle mode cap and must record the fallback.
-
-### 4.3 Active service locations
-
-The CLE contains latent physical service locations, not daily orders.
-Activation first selects communities and then locations within communities.
-Residential-unit evidence affects activation and package multiplicity:
-
-- a house is one ordering unit;
-- an apartment location can represent multiple residential units;
-- `CusN` always means `N` distinct active physical service locations, not
-  `N` packages or households.
-
-For a requested `N`, a target locations-per-community value `T` is sampled from
-a clipped lognormal distribution. The current center/spread and 56--205 bounds
-come from Amazon route stop-count aggregates, but `T` is used only as a
-spatial-diversity prior. The number of selected communities is at least
+For requested parent size N, source route-by-decile counts are proportionally
+downscaled only when their total exceeds N. Deterministic controlled rounding
+then produces an integer table `Q[r,b]` such that:
 
 ```text
-max(2, ceil(N/T), ceil(log2(N+1))).
+sum_b Q[r,b] = rounded route total r
+sum_r Q[r,b] = rounded decile total b
+sum_r,b Q[r,b] = N.
 ```
 
-Communities are sampled without replacement using eligible-location count,
-depot-distance decay, and one family-level lognormal activity multiplier. They
-are added until they also contain at least `ceil(1.08 N)` eligible locations.
-Within those communities, a location with `u_i` residential units receives
-base activation weight
+This is a two-margin transportation problem, not independent cell rounding.
+Rows that round to zero are reported as dropped; margins and total are hard
+correctness gates.
+
+### 9.2 Region seeds
+
+Each positive source-route row corresponds to one generated delivery region.
+The first seed community is selected deterministically from an admissible
+travel-time decile. Subsequent seeds maximize their minimum **symmetrized
+network travel time** to existing seeds, subject to the row's available decile
+quota. This discourages all generated regions from collapsing into one part of
+the city.
+
+If the exact decile lacks capacity, fallback is ordered to the immediately
+nearer decile before the immediately farther decile, and the event is recorded.
+The implementation does not silently search arbitrary distance bands.
+
+### 9.3 Community growth and customer assignment
+
+Regions grow in round-robin order on the directed community-adjacency graph.
+At each step, the region requests capacity in its remaining route-decile cells.
+Eligible adjacent communities are ranked deterministically by usable capacity,
+decile compatibility, and seed. A community may support competing regions, but
+one customer ID can be assigned only once globally.
+
+Final customer assignment is a global min-cost flow over requested
+region-decile cells and eligible customer IDs. If competition makes the first
+candidate set infeasible, the affected regions expand to the next road-adjacent
+communities and retry. Every expansion is counted. A completed family must
+contain exactly N unique customer IDs and must satisfy every quota cell.
+
+The full region construction has a bounded deterministic redraw count. A redraw
+changes the family attempt seed and is logged; it does not edit an accepted
+sample.
+
+### 9.4 Radial control baseline
+
+For every successful family, the generator also creates a size-matched radial
+baseline from the same feasible territory. It uses the target depot-time
+distribution but does not use community-contiguous growth. The baseline is not
+released as a benchmark instance; it is retained to reveal selection effects in
+the Phase-1 evaluation.
+
+## 10. Charging-station selection
+
+Charging stations are selected after the active customer geography is known.
+The candidate pool contains real, compatible AFDC sites from the CLE; no
+synthetic station is inserted. Fixed counts by scale are part of the benchmark
+contract.
+
+Selection has two roles:
+
+1. a feasibility core would include stations required by the energy
+   reachability certificate; under the current conservative direct-roundtrip
+   customer screen this core is normally empty; and
+2. remaining positions cover active customer communities, the depot-to-region
+   corridors, and poorly covered parts of the activated territory.
+
+This means stations are geographically relevant to the realized delivery area,
+not sampled before the customer territory. The selection report states core
+size, fill composition, candidate count, power provenance, and any fallback.
+The environment, not the dataset, controls repeated CS visits during a route.
+
+Effective charging power is:
 
 ```text
-a_i(day) = 1 - (1 - p_day)^u_i,
+p_effective(q) = min(p_reported_or_city_mode_median(q), vehicle_mode_cap).
 ```
 
-multiplied by its community activity. Sampling guarantees at least one
-location from each selected community and then fills the remaining positions
-without replacement. This makes apartments more likely to be active without
-changing the meaning of `CusN`.
+The canonical adapter accepts compatible DC and Level-2 sites. Missing station
+power uses the city-by-mode median; all connectors and terminal access remain
+part of the directed matrices.
 
-Only the route-size descriptive statistics are directly Amazon-derived. The
-community activity spread, distance decay, 1.08 buffer, and per-unit
-probabilities are development cross-data calibration values. They are
-auditable configuration values, not universal parcel rates.
+## 11. Static road state and matrices
 
-## 5. Static road-state model
+Stage 1 stores weekday and weekend reference speed for every directed physical
+edge. Stage 2 chooses the column fixed by the family day type. The canonical
+profile does not invent a second uncalibrated edge-randomness multiplier.
+Directional asymmetry comes from OSM one-way topology, direction-applicable
+legal speed, different forward/reverse paths, and turn penalties.
 
-### 5.1 Three speed concepts
+Customer/depot/CS connectors are bidirectional and use the city/day physical-
+length-weighted median speed of delivery-access edges. The physical road itself
+retains its original direction.
 
-For every directed physical edge `e`, Stage 1 retains:
+The parent stores four `float32` matrices:
 
-- `v_e_legal`: direction-applicable legal speed;
-- `v_e_ref`: commercial-vehicle reference speed; and
-- H/M/U operating mode:
-  - H: motorway and trunk transfer;
-  - M: urban transfer and major urban roads;
-  - U: residential, service, and delivery-access roads.
+1. shortest-distance path distance;
+2. turn-inclusive travel time on the shortest-distance path;
+3. exact turn-aware fastest travel time; and
+4. physical distance of that fastest-time path.
 
-OSM supplies the road type and, when present, direction-applicable legal speed.
-The legal-speed priority is directional OSM `maxspeed`, generic OSM
-`maxspeed`, direction-verified high-confidence HPMS `SPEED_LIMIT`, then the
-same-city hierarchical median. HPMS `F_SYSTEM` is the preferred
-functional-class evidence for a high-confidence physical-corridor match; OSM
-`highway=*` is the fallback. H/M/U is the benchmark's portable crosswalk, not
-a native NREL or MOVES classification.
+Right, left, straight, and U-turn classes are derived from edge geometry. No
+signal-delay model is included. Fastest-time routing uses an edge-state graph,
+so a turn penalty belongs to the actual incoming/outgoing edge pair rather than
+being added after shortest-path computation.
 
-The H/M/U reference-speed anchors come from the public NREL Fleet DNA
-commercial-vehicle report and are capped by the legal speed. Fleet DNA is used
-as a mode-level prior, not described as Rivian edge telemetry
-([NREL report](https://doi.org/10.2172/1397153)).
+## 12. Order-template attachment
 
-### 5.2 Instance factor
+After terminal matrices exist, each parent customer is matched to one distinct
+Amazon order template. A customer-template edge is admissible only when:
 
-EPA MOVES indexes average-speed distributions by road type, source type, and
-day/time strata. V1 uses its road-type/day structure as the transferable U.S.
-adapter:
+- template demand does not exceed vehicle volume capacity;
+- the earliest service start satisfies the observed time window; and
+- service plus the precomputed energy-feasible return duration finishes within
+  the operating horizon.
 
-```text
-H   -> urban restricted access
-M,U -> urban unrestricted access
-```
+Maximum bipartite matching must cover all customers. If a source fails Hall
+coverage, the attempt is recorded and the next admissible single-day or same-
+station composite source is tried. Templates are not reused, and a time window
+is never shifted or widened to force feasibility. Every customer row stores
+`order_template_id`, `order_station_day_id`, and `order_source_mode`. Child
+views inherit the corresponding parent templates.
 
-For each matrix family, one factor is drawn for each MOVES road type under the
-sampled weekday/weekend class:
+## 13. Vehicle, energy, and charging cache
 
-```text
-v_e(instance) = min(v_e(legal),
-                    max(v_min, v_e(ref) * alpha(day, MOVES-road-type)))
-```
+The U.S. reference vehicle is the Rivian Commercial Van Delivery 700 profile:
 
-M and U share the same day-level MOVES factor but retain different
-`v_e_ref`, so delivery-access roads remain slower. The model deliberately
-does not add unsupported corridor, physical-segment, or direction-specific
-random multipliers. Directional asymmetry instead comes from the directed OSM
-topology, direction-applicable legal speeds, path choice, and turns.
-
-The MOVES database and algorithms provide the calibration strata
-([EPA MOVES algorithms](https://www.epa.gov/moves/moves-algorithms)); the
-numerical factor distributions currently in the JSON profile are explicitly
-`development_calibration`. Before official release, they must be regenerated
-from a frozen MOVES version/query and the resulting parameter table must be
-published. NPMRDS can be implemented as an optional observed-speed adapter, but
-it is not the default because its directional TMC coverage is licensed and
-primarily covers the National Highway System
-([FHWA NPMRDS overview](https://ops.fhwa.dot.gov/publications/fhwahop20028/)).
-
-New customer, depot, and CS connectors use the U reference speed in both
-directions. Connector symmetry does not change the directionality of the
-physical road to which the connector is attached.
-
-## 6. Turn-aware terminal closures
-
-No signal-delay model is used. V1 includes only geometry-derived straight,
-right, left, and U-turn penalties from the versioned operations profile.
-
-The distance path minimizes physical distance. Its paired travel-time matrix
-evaluates edge travel time and turn penalties on that exact distance-minimizing
-path.
-
-The fastest path is exact with respect to the V1 turn model. The directed road
-graph is transformed to an edge-state graph. A state is the incoming directed
-edge `e`; a transition from `e` to `f` is allowed only when
-`head(e)=tail(f)`, with weight
-
-```text
-w(e,f) = travel_time(f) + turn_penalty(e,f).
-```
-
-Dijkstra is then run on this edge-state graph. Terminal connector and partial
-projected-edge costs are added exactly at the source and destination. This
-allows a slightly longer route to be selected when it has a lower
-turn-inclusive running time.
-
-## 7. Package, demand, service, and time-window models
-
-The primary empirical source is the
-[2021 Amazon Last Mile Routing Research Challenge data set](https://doi.org/10.1287/trsc.2022.1173).
-It contains real route-, stop-, and package-level records, including package
-dimensions, planned service time, time windows, and volumetric vehicle
-capacity. Its stop coordinates are obfuscated, and it does not label stops as
-houses or apartments. Consequently:
-
-- its coordinates are not transferred to CLE cities;
-- aggregate distributions are transferable priors;
-- house/apartment conditioning is a disclosed cross-data model using CLE
-  residential-unit evidence; and
-- the benchmark does not claim observed building-type-specific parcel rates.
-
-### 7.1 Package count and volume
-
-For active location `i` with `u_i` residential units:
-
-1. sample ordering units conditional on `u_i` and weekday/weekend;
-2. condition on at least one ordering unit because the location is active;
-3. sample extra parcels with a negative-binomial model; and
-4. sample parcel volumes from a truncated lognormal distribution and sum them.
-
-```text
-demand_i = sum(volume_ij),  j=1,...,package_count_i.
-```
-
-Demand and vehicle capacity are both stored in `cm3`.
-
-### 7.2 Service time
-
-The stop-level conditional model is
-
-```text
-s_i = clip((beta_0
-            + beta_pkg * package_count_i
-            + beta_vol * demand_i) * lognormal_noise,
-           s_min, s_max).
-```
-
-Amazon defines planned service time at package level, so the calibration script
-sums package-level values at each stop before fitting stop-level summaries. The
-package-count and volume terms make service time increase with the amount
-delivered at one physical location.
-
-### 7.3 One time window per active location
-
-The instance first draws a day-level TW-presence probability from a
-weekday/weekend beta distribution. Each active location then receives either
-the full operating horizon or one sampled `strain`/`loose` interval. Window
-width and center are sampled from the versioned profile.
-
-A time window is clipped only to the declared `08:00-24:00` model support. It
-is never moved, widened, or shortened using travel-time feasibility.
-
-### 7.4 Sample-then-validate policy
-
-Packages, demand, service time, and TW are sampled first. A constructive
-one-customer certificate then checks volume, energy, TW, and return before the
-horizon end. If an order draw fails, the order attributes are replaced for the
-same physical location. Rejection attempts and reason counts are stored.
-
-If a location is structurally impossible even with minimum service time, the
-matrix-family attempt fails and the outer deterministic retry selects a new
-family realization. The implementation never edits a sampled TW to force
-acceptance.
-
-The current bound of 64 order draws is an algorithmic fail-safe, not an
-industry parameter. Exhaustion is an error, never silent truncation.
-
-## 8. Vehicle and energy model
-
-### 8.1 Reference vehicle
-
-V1 freezes the Rivian Commercial Van Delivery 700. Rivian's 2025 reference
-guide reports:
-
+- battery capacity: 100 kWh;
 - cargo volume: 18.5 m3 = 18,500,000 cm3;
-- EPA-estimated range: 160 mi = 257 km;
-- battery pack: 100 kWh LFP;
-- AC charging rate: 11 kW; and
-- DC charging rate: up to 100 kW.
+- reference range: 257 km;
+- AC cap: 11 kW; and
+- DC cap: 100 kW.
 
-See the
-[Rivian Commercial Van Reference Guide](https://assets.ctfassets.net/2md5qhoeajym/5FQcJgfAOa4vDYu9rWwEYO/2fa75339d6e533532ba08bf395275015/RCV-QuickRef-v17.pdf).
-The vehicle is a reference configuration; the benchmark does not claim that
-every Amazon delivery route uses the same trim or state of battery health.
-
-### 8.2 Constant distance consumption
-
-The classical V1 energy contract is:
+The classical energy model is linear:
 
 ```text
-h = 100 kWh / 257 km
-  = 0.3891050584 kWh/km
-
-energy(P) = h * distance(P).
+h = 100 / 257 kWh/km
+energy(path) = h * path_distance.
 ```
 
-Travel speed, waiting, turn time, and auxiliary load do not change V1 energy.
-This keeps the resource model linear and compatible with classical EVRPTW
-exact and heuristic baselines. Constant per-distance consumption is a common
-EVRPTW abstraction; see the original EVRPTW formulation by
-[Schneider, Stenger, and Goeke](https://doi.org/10.1287/trsc.2013.0490) and a
-later comparison of charging formulations that explicitly uses a constant
-consumption rate
-([Operational Research article](https://link.springer.com/article/10.1007/s12351-023-00806-5)).
-
-This is a modeling simplification, not a claim that real EDV consumption is
-speed-independent. Weather, payload, elevation, HVAC, and driving behavior can
-be added by another energy adapter in a future benchmark track.
-
-## 9. Charging and feasibility cache
-
-At a CS with effective power `p_q`, V1 full linear charging from current
-energy `b` takes
+Full charging from state `b` at site `q` takes:
 
 ```text
-charge_time(q,b) = (battery_capacity - b) / (eta * p_q) * 3600.
+charge_time(q,b) = (battery_capacity - b) / (eta * p_effective(q)) * 3600.
 ```
 
-The reference profile uses `eta=1`. Therefore AFDC/vehicle-capped kW is treated
-as effective battery-side charging power. This convention avoids claiming an
-unobserved charger/vehicle efficiency; alternative profiles may provide an
-explicit efficiency and must document whether station power is input-side or
-battery-side.
+For runtime feasibility checks, every view stores the fastest feasible time
+from each CS, departing full, to the depot. Reverse shortest-path computation
+over depot/CS full-battery states permits multiple CS hops and includes travel
+and intermediate full-charge time. This is static instance data, not a stored
+action mask.
 
-For mask acceleration, each view stores
-`full_cs_to_depot_time_s[q]`: depart CS `q` full and reach the depot by the
-fastest energy-feasible sequence, including intermediate CS travel and
-charging, excluding charging at the origin and depot. Reverse Dijkstra on the
-full-state depot/CS graph permits multiple CS hops.
+## 14. Phase-1 evaluation and persisted metrics
 
-Energy is derived from the fastest-path distance matrix and `h`; the cache
-does not use distance-shortest-path energy.
+The purpose of Phase 1 is to evaluate whether the spatial activation mechanism
+does what its contract says before expensive benchmark generation is accepted.
+Correctness gates and realism diagnostics are kept separate.
 
-## 10. Four stored matrices
+### 14.1 Hard correctness gates
 
-Each parent family persists exactly four `float32` matrices:
+Every family must pass:
 
-1. `distance_matrix_km`: physical distance of the distance-shortest path;
-2. `distance_path_travel_time_s`: turn-inclusive time on that path;
-3. `running_time_shortest_matrix_s`: exact turn-aware fastest time; and
-4. `running_time_path_distance_km`: physical distance of the fastest path.
+- exactly N parent customers;
+- globally unique customer IDs;
+- a declared split pool;
+- exact route margins and decile margins;
+- exact, pairwise-disjoint nested-view partitions; and
+- exact child sizes.
 
-The loader derives:
+Failure rejects the family; it is not averaged away at corpus level.
 
-```text
-distance_path_energy_kwh
-    = distance_matrix_km * h
+### 14.2 Spatial diagnostics
 
-running_time_path_energy_kwh
-    = running_time_path_distance_km * h.
-```
+The generator records:
 
-The consumer API still exposes both energy arrays, but they are not duplicated
-on disk. Four matrices are necessary because the distance-minimizing and
-time-minimizing paths can differ, while time and energy feasibility must match
-the path being evaluated.
+- **M1 radial agreement:** normalized Wasserstein-1 distance between generated
+  depot times and the Amazon structure target, compared with the radial
+  baseline;
+- **M2 nearest-neighbour time:** generated network nearest-neighbour
+  distribution versus the Amazon reference distribution;
+- **M3 within-region compactness:** generated within-region pairwise network
+  time P50/P90 versus source-route references;
+- **M4 region structure:** region count, region-size distribution, and routes
+  dropped only by controlled rounding; and
+- **M5 community concentration:** active-community count, largest-community
+  share, and HHI, always shown beside the radial baseline.
 
-## 11. Current numerical profile audit
+M1 is the primary comparative candidate. M2, M3, and M5 are report-only in the
+current pilot because cross-city topology and the obfuscated Amazon geometry do
+not justify freezing universal numeric thresholds before seeing the eleven-city
+results.
 
-The JSON profile is the executable source of truth. This table makes its main
-values and evidence level readable without implying that every development
-coefficient is already publication-ready.
+### 14.3 Reliability and selection-bias diagnostics
 
-| Submodel | Current V1 value | Source/evidence level | Why it is present |
-| --- | --- | --- | --- |
-| Day type | weekday:weekend = 5:2 | calendar-based benchmark mixture | separates the two frozen operating-day profiles without time-of-day traffic |
-| MOVES restricted-access factor | weekday mean/std 0.96/0.035; weekend 0.98/0.030 | MOVES stratum; numerical fit still development | one transferable day-level factor for H roads |
-| MOVES unrestricted-access factor | weekday 0.92/0.050; weekend 0.95/0.045 | MOVES stratum; numerical fit still development | shared factor for M/U while their reference speeds remain different |
-| Minimum road speed | 5 km/h | numerical safeguard, not empirical claim | prevents zero/infinite edge time |
-| Connector speed | 36.403361 km/h | NREL U-mode prior | treats private access as delivery-access travel |
-| Turn classes | straight <=30 degrees; U-turn >=150 degrees | geometry convention | deterministic portable angle classification |
-| Turn time | right 3 s; left 8 s; U-turn 20 s | development benchmark constants | adds asymmetric maneuver cost without unavailable signal timing |
-| Depot evidence weight | strict:optional = 2:1 | development sampling rule | favors strong logistics evidence while retaining depot diversity |
-| Depot catchment | start 40 km, step 10 km, maximum 100 km | development sampling rule | expands only when the eligible pool is insufficient |
-| Catchment pool buffer | 1.5 x requested locations | development sampling rule | leaves a nontrivial pool for stochastic activation |
-| Community target | lognormal median 141.6661, sigma 0.1835, bounds 56--205 | Amazon route stop-count descriptive prior | controls spatial spread, not order total |
-| Community capacity/activity | buffer 1.08; lognormal sigma 0.85; distance decay 30 km | development spatial sampling rule | avoids a single dense community dominating every family |
-| Per-unit order probability | weekday 0.028; weekend 0.022 | development cross-data calibration | links CLE unit evidence to daily active orders |
-| Charger coverage score | weighted mean + 0.25 p90 + 0.10 maximum | development facility-sampling rule | balances average and tail community coverage without using daily IDs |
-| Extra-package model | mean 0.62194, dispersion 0.327 | Amazon-aggregate development fit | permits multiple parcels per ordering unit |
-| Package volume | lognormal median 7,000 cm3, sigma 1.0, cap 300,000 cm3 | Amazon package dimensions; development fit | produces positive heavy-tailed volumetric demand |
-| Service time | base 28.1626 s, 46.9063 s/package, 0.000358429 s/cm3 | Amazon planned-service aggregates; development fit | makes service depend on both count and delivered volume |
-| Service noise/bounds | lognormal sigma 0.75; 5-8,007 s | development residual/bound table | preserves heterogeneity and rejects pathological tails |
-| TW occurrence | weekday Beta(6.1,60.7); weekend Beta(5.9,58.5) | Amazon aggregate development fit | varies the tight-window share by operating day |
-| TW interval profiles | `strain` and `loose` center/width distributions in JSON | Amazon aggregate development fit | supports one practical interval or the full horizon |
-| Order retry bound | 64 | algorithmic fail-safe | fails visibly if acceptance sampling cannot finish |
-| Battery/range | 100 kWh / 257 km | Rivian official guide | defines the reference battery and linear coefficient |
-| Cargo volume | 18,500,000 cm3 | Rivian official guide | keeps demand and capacity in the same volume unit |
-| AC/DC caps | 11/100 kW | Rivian official guide | caps AFDC station power by the vehicle |
-| Charging efficiency | 1.0 effective-rate convention | explicit V1 assumption | avoids inventing an unobserved loss factor |
+Each family additionally stores territory reserve ratio, energy-screen removal
+share, decile fallback count, region redraw count, community-growth steps, and
+assignment-competition expansions. Corpus aggregation reports:
 
-The Amazon-related values must be accompanied by the generated
-`amazon_arcd_training_statistics_v1.json`, source hashes, fitting notebook or
-script, and sensitivity table before the profile can become
-`release_calibrated`. The turn and road-factor values need the same treatment:
-either publish a supporting calibration or retain them as clearly labeled
-configurable benchmark assumptions.
+- first-attempt success rate by planned family slot;
+- conditional attempt success rate;
+- rejection error-type counts;
+- distributions of redraw and fallback behaviour; and
+- all metrics stratified by city, weekday/weekend, and parent scale.
 
-## 12. Parameter provenance and release state
+The statistical unit is an attempted parent family. Reporting the rejected
+attempts prevents survivorship bias from disappearing behind successful output.
+No pilot-derived numeric threshold is silently encoded as a scientific gate.
 
-| Parameter group | Source role | Current state |
-| --- | --- | --- |
-| Road topology/legal speed | OSM; HPMS in the U.S. reference adapter | public-data grounded |
-| H/M/U reference speed | NREL Fleet DNA mode prior | built-in adapter |
-| Weekday/weekend road factor structure | EPA MOVES strata | structure grounded; numerical distributions still development |
-| Package volume, service, TW summaries | Amazon ARCD aggregates | development calibration; frozen artifact required |
-| House/apartment conditioning | NSI units + CLE type + Amazon aggregates | disclosed semi-synthetic cross-data model |
-| Battery, range, cargo volume, AC/DC caps | Rivian official guide | frozen reference specification |
-| Energy consumption | battery/range ratio plus classical EVRPTW linear model | frozen V1 assumption |
-| Turn penalties | geometry-only configurable adapter | development parameter table |
-| Full-charge policy, infinite ports/fleet | benchmark contract | frozen V1 assumption |
+## 15. Verification and claim limits
 
-No profile may be marked `release_calibrated` until its source snapshot,
-analysis command, fitted table, sensitivity report, and citation list are
-published. Structural test success alone is not scientific validation.
+The family verifier checks matrices, dimensions, finite values, asymmetry,
+energy derivation, charging caches, per-customer feasibility certificates,
+Amazon template provenance, metric-file row counts, and all Phase-1 hard gates.
 
-## 13. Primary references
-
-- Merchán et al. (2022), *2021 Amazon Last Mile Routing Research Challenge:
-  Data Set*, Transportation Science:
-  <https://doi.org/10.1287/trsc.2022.1173>
-- Rivian (2025), *Commercial Van 500/700 Reference Guide*:
-  <https://assets.ctfassets.net/2md5qhoeajym/5FQcJgfAOa4vDYu9rWwEYO/2fa75339d6e533532ba08bf395275015/RCV-QuickRef-v17.pdf>
-- U.S. EPA, MOVES Algorithms:
-  <https://www.epa.gov/moves/moves-algorithms>
-- NREL Fleet DNA:
-  <https://www.nrel.gov/transportation/fleettest-fleet-dna.html>
-- Konan et al. (2017), NREL/TP-5400-65921:
-  <https://doi.org/10.2172/1397153>
-- Schneider, Stenger, and Goeke (2014), *The Electric Vehicle-Routing Problem
-  with Time Windows and Recharging Stations*:
-  <https://doi.org/10.1287/trsc.2013.0490>
-- FHWA, NPMRDS overview:
-  <https://ops.fhwa.dot.gov/publications/fhwahop20028/>
+The benchmark supports the claim that the generator composes public city data
+and observed delivery templates through a deterministic, auditable mechanism.
+It does not support claims that generated instances reproduce an individual
+carrier's service territory, fleet dispatch, traffic trace, or proprietary
+customer coordinates. Those boundaries are part of the method, not hidden
+limitations.

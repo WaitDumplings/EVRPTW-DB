@@ -74,14 +74,15 @@ in [STAGE2_PERFORMANCE.md](STAGE2_PERFORMANCE.md).
 
 ## Full-corpus resource envelope
 
-The frozen contract contains 7,000 Cus1000 parent families: 5,000 train, 500
-validation, and 500 each for Test-1, Test-2, and Test-3. Cus2000 adds 100 parent
-families. Using observed pilot file sizes, parent matrices alone require:
+The current frozen contract contains 7,500 Cus1000 parent families: 5,000
+train, 500 validation, 500 each for Test-1, Test-2, and Test-3, plus 500
+Cus1000 controls paired with Cus2000. Cus2000 adds 500 parent families. Using
+the same observed pilot file sizes, parent matrices alone require:
 
 ```text
-7,000 x 17,674,128 + 100 x 67,306,128
-= 130,449,508,800 bytes
-= 121.49 GiB
+7,500 x 17,674,128 + 500 x 67,306,128
+= 166,209,024,000 bytes
+= 154.79 GiB
 ```
 
 View attributes, split manifests, plans, QA reports, and filesystem overhead
@@ -89,6 +90,16 @@ are additional. The measured optimized steady state implies approximately
 22-30 wall-clock hours on the tested 16 GiB machine with two workers, allowing
 for verification and cross-city variation. Family-level resume and
 deterministic multi-server sharding are available for production.
+
+## Speed-contract update
+
+The measured CLE and Stage-2 artifacts in this report were produced before the
+`evrptw_directed_speed_profiles_v6` MOVES5 adapter. The resource and pipeline
+measurements remain useful engineering evidence, but the old CLE speed tables
+and all matrices derived from them are stale. The current code requires a full
+eleven-city CLE rebuild followed by Stage-2 matrix regeneration. A regenerated
+artifact must report profile ID
+`us_epa_moves5_20241112_source32_static_08_24_v1` in every city speed manifest.
 
 ## Release boundary
 

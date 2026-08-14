@@ -149,3 +149,33 @@ def test_registered_city_refuses_existing_manifest_before_extraction(tmp_path: P
             output_root=output_root,
         )
     assert not (output_root / ".staging").exists()
+
+
+def test_record_on_extraction_registry_does_not_require_prepinned_source(tmp_path: Path) -> None:
+    config_path, source_root, output_root = _fixture(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["source_integrity_mode"] = "record_on_extraction"
+    entry = payload["cities"]["sample-city"]
+    entry["source_sha256"] = None
+    entry["source_bytes"] = None
+    entry["source_feature_count"] = None
+    _write_json(config_path, payload)
+
+    report = preflight_registered_city(
+        config_path=config_path,
+        city_slug="sample-city",
+        source_root=source_root,
+        output_root=output_root,
+    )
+    assert report["passed"]
+    assert report["checks"]["source_sha256"] == "deferred_to_staged_extraction"
+
+    manifest = extract_registered_city(
+        config_path=config_path,
+        city_slug="sample-city",
+        source_root=source_root,
+        output_root=output_root,
+    )
+    assert manifest["source"]["integrity_mode"] == "record_on_extraction"
+    assert len(manifest["source"]["sha256"]) == 64
+    assert manifest["source"]["feature_count"] == 2

@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from .hpms_match import discover_hpms_source
+from .moves_speed import load_moves_speed_profile
 from .util import sha256_file
 
 AFDC_REQUIRED_COLUMNS = {
@@ -131,15 +132,18 @@ def preflight_profile(
             generator_root, profile["source_paths"]["microsoft_building_root"]
         )
         building_path = building_root / str(building_entry.get("source_file", ""))
+        expected_building_sha = building_entry.get("source_sha256")
+        building_source_record = (
+            _record_file(building_path, expected_sha256=expected_building_sha)
+            if expected_building_sha
+            else _record_large_source(building_path)
+        )
         city_record = {
             "city_slug": slug,
             "census_place_geoid": item.get("census_place_geoid"),
             "admin_boundary": _record_file(boundary),
             "service_boundary": _record_file(service_boundary),
-            "building_source": _record_file(
-                building_path,
-                expected_sha256=building_entry.get("source_sha256"),
-            ),
+            "building_source": building_source_record,
             "pbf_path": str(pbf),
         }
         for field in ("admin_boundary", "service_boundary", "building_source"):
@@ -225,6 +229,27 @@ def preflight_profile(
                     )
 
     hpms_records: list[dict[str, Any]] = []
+    moves_profile_value = (
+        profile.get("speed_profile", {}).get("moves_source", {}).get("profile")
+    )
+    moves_profile_path = (
+        resolve_from(generator_root, moves_profile_value)
+        if moves_profile_value
+        else None
+    )
+    moves_profile_record = (
+        _record_file(moves_profile_path) if moves_profile_path is not None else None
+    )
+    if moves_profile_path is None:
+        errors.append("speed_profile.moves_source.profile is missing")
+    elif not moves_profile_path.is_file():
+        errors.append(f"missing compact MOVES5 speed profile: {moves_profile_path}")
+    else:
+        try:
+            loaded_moves_profile = load_moves_speed_profile(moves_profile_path)
+            moves_profile_record["profile_id"] = loaded_moves_profile["profile_id"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            errors.append(f"invalid compact MOVES5 speed profile: {error}")
     hpms_raw_root_value = source_paths.get("hpms_raw_root")
     hpms_registry_value = source_paths.get("hpms_source_registry")
     hpms_required = bool(
@@ -290,6 +315,7 @@ def preflight_profile(
             "city_preset": _record_file(preset_path),
             "building_registry": _record_file(building_registry_path),
             "afdc": afdc_record,
+            "moves5_speed_profile": moves_profile_record,
             "hpms_source_registry": (
                 _record_file(hpms_registry_path) if hpms_registry_path else None
             ),

@@ -9,7 +9,6 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from evrptw_cle.access_audit import build_service_access_local_route_audit
 from evrptw_cle.building_registry import extract_registered_city
 from evrptw_cle.cle import (
     assemble_cle,
@@ -35,7 +34,6 @@ from evrptw_cle.nsi import (
     verify_nsi_customer_cle,
 )
 from evrptw_cle.speed import build_legal_speed_layer
-from evrptw_cle.speed_audit import build_static_speed_route_audit
 from evrptw_cle.util import sha256_file
 from evrptw_cle.verification import verify_city_output
 
@@ -130,18 +128,11 @@ def main() -> None:
     parser.add_argument("--hpms-ambiguity-overlap-margin", type=float, default=0.20)
     parser.add_argument("--vehicle-speed-cap-kph", type=float)
     parser.add_argument(
-        "--include-pilot-speed-scenarios",
-        action="store_true",
-        help="Write engineering weekday/weekend scenarios for QA; official scenarios belong to Stage 2.",
+        "--moves-speed-profile",
+        type=Path,
+        default=Path("configs/us_moves5_speed_profile_v1.json"),
+        help="Compact speed-retention profile derived from a frozen MOVES5 database.",
     )
-    parser.add_argument("--speed-scenario-seed", type=int, default=20270805)
-    parser.add_argument("--speed-scenarios-per-day-type", type=int, default=2)
-    parser.add_argument("--speed-global-sigma", type=float, default=0.02)
-    parser.add_argument("--speed-road-group-sigma", type=float, default=0.04)
-    parser.add_argument("--speed-corridor-sigma", type=float, default=0.05)
-    parser.add_argument("--speed-direction-sigma", type=float, default=0.03)
-    parser.add_argument("--speed-factor-min", type=float, default=0.75)
-    parser.add_argument("--speed-factor-max", type=float, default=1.15)
     parser.add_argument(
         "--refresh-facilities",
         action="store_true",
@@ -156,14 +147,6 @@ def main() -> None:
         help=(
             "Relabel the frozen customer-access layer with directed SCC fields, rebuild "
             "facility SCC labels, and refresh dependent CLE manifests."
-        ),
-    )
-    parser.add_argument(
-        "--refresh-speed-route-qa",
-        action="store_true",
-        help=(
-            "Recompute the static speed route QA and rebuild the final manifest hashes. "
-            "All source and intermediate layers are still reused after verification."
         ),
     )
     args = parser.parse_args()
@@ -364,6 +347,7 @@ def main() -> None:
     speed_layer_rebuilt = False
     if speed_manifest.exists():
         recorded_speed = _read_json(speed_manifest)
+        expected_moves_profile = _read_json(args.moves_speed_profile)
         recorded_hpms = recorded_speed.get("hpms_edge_evidence")
         expected_hpms_sha = (
             sha256_file(hpms_edge_evidence)
@@ -376,87 +360,37 @@ def main() -> None:
             else None
         )
         speed_is_current = (
-            recorded_speed.get("schema") == "evrptw_directed_speed_profiles_v5"
+            recorded_speed.get("schema") == "evrptw_directed_speed_profiles_v6"
             and recorded_speed.get("graph", {}).get("sha256") == sha256_file(graph)
             and recorded_hpms_sha == expected_hpms_sha
+            and recorded_speed.get("reference_speed_contract", {}).get("profile_id")
+            == expected_moves_profile.get("profile_id")
         )
         if not speed_is_current:
             _step(
                 "speed",
-                "discard stale generated profile after graph/HPMS contract change",
+                "discard stale generated profile after graph/HPMS/MOVES contract change",
             )
             shutil.rmtree(speed_dir)
     if not speed_manifest.exists():
         _step(
             "speed",
-            "build the HPMS/OSM legal layer and NREL H/M/U reference-speed profile",
+            "build HPMS/OSM legal speeds and MOVES5 weekday/weekend references",
         )
         build_legal_speed_layer(
             city_slug=slug,
             graph_path=graph,
             output_dir=speed_dir,
             hpms_edge_evidence_path=hpms_edge_evidence,
+            moves_speed_profile_path=args.moves_speed_profile,
             vehicle_speed_cap_kph=args.vehicle_speed_cap_kph,
-            build_pilot_scenarios=args.include_pilot_speed_scenarios,
-            scenario_seed=args.speed_scenario_seed,
-            scenarios_per_day_type=args.speed_scenarios_per_day_type,
-            global_sigma=args.speed_global_sigma,
-            road_group_sigma=args.speed_road_group_sigma,
-            corridor_sigma=args.speed_corridor_sigma,
-            direction_sigma=args.speed_direction_sigma,
-            factor_min=args.speed_factor_min,
-            factor_max=args.speed_factor_max,
         )
         speed_layer_rebuilt = True
     else:
         _step("speed", "reuse directed legal-speed layer")
 
-    refresh_speed_route_qa = (
-        args.refresh_speed_route_qa or refresh_facilities or speed_layer_rebuilt
-    )
-    speed_route_audit = cle_dir / "qa/static_speed_route_audit.json"
-    if args.include_pilot_speed_scenarios and (
-        not speed_route_audit.exists() or refresh_speed_route_qa
-    ):
-        _step("speed-route-QA", "audit directed OD asymmetry and scenario-dependent fastest paths")
-        build_static_speed_route_audit(
-            graph_path=graph,
-            locations_path=access_candidates,
-            depots_path=facility_dir / "depots.parquet",
-            scenarios_path=speed_dir / "static_operational_scenarios.parquet",
-            output_dir=cle_dir / "qa",
-            seed=args.speed_scenario_seed,
-        )
-    elif args.include_pilot_speed_scenarios:
-        _step("speed-route-QA", "reuse static speed route audit")
-    else:
-        _step("speed-route-QA", "skip: operational scenarios are a Stage-2 concern")
-
-    local_access_audit = (
-        cle_dir / "qa/local_access/service_access_local_route_audit.json"
-    )
-    if args.include_pilot_speed_scenarios and not local_access_audit.exists():
-        _step(
-            "customer-local-route-QA",
-            "materialize active virtual stops and test exact same-edge directed routes",
-        )
-        build_service_access_local_route_audit(
-            graph_path=graph,
-            access_candidates_path=access_candidates,
-            service_nodes_path=access_dir / "service_access_nodes.parquet",
-            projection_nodes_path=access_dir / "road_projection_nodes.parquet",
-            connectors_path=access_dir / "service_access_connectors.parquet",
-            scenarios_path=speed_dir / "static_operational_scenarios.parquet",
-            output_dir=cle_dir / "qa/local_access",
-            seed=args.speed_scenario_seed,
-        )
-    elif args.include_pilot_speed_scenarios:
-        _step("customer-local-route-QA", "reuse exact virtual-access route audit")
-    else:
-        _step("customer-local-route-QA", "skip weighted route QA until Stage-2 speed realization")
-
     final_manifest = cle_dir / "manifest.json"
-    if refresh_speed_route_qa and final_manifest.exists():
+    if (refresh_facilities or speed_layer_rebuilt) and final_manifest.exists():
         final_manifest.unlink()
     if not final_manifest.exists():
         _step("assembler", "assemble source registry, layer table, QA gates, and checksums")

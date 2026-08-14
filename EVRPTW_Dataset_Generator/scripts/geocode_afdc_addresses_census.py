@@ -11,6 +11,7 @@ import argparse
 import csv
 import io
 import json
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -107,6 +108,13 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=9000)
     parser.add_argument("--timeout-s", type=float, default=300.0)
     parser.add_argument("--retries", type=int, default=3)
+    parser.add_argument(
+        "--state",
+        help=(
+            "Optional two-letter state filter. The arbitrary-city adapter geocodes the "
+            "whole state so coordinate QA does not depend on an invented city radius."
+        ),
+    )
     args = parser.parse_args()
 
     if args.chunk_size < 1 or args.chunk_size > 10_000:
@@ -119,6 +127,13 @@ def main() -> None:
         raise ValueError(f"AFDC input is missing address columns: {sorted(missing)}")
     if afdc["ID"].duplicated().any():
         raise ValueError("AFDC ID values must be unique")
+    state_filter = args.state.upper() if args.state else None
+    if state_filter:
+        if not re.fullmatch(r"[A-Z]{2}", state_filter):
+            parser.error("--state must be a two-letter state abbreviation")
+        afdc = afdc.loc[afdc["State"].astype(str).str.upper().eq(state_filter)].copy()
+        if afdc.empty:
+            raise ValueError(f"AFDC input contains no rows for state {state_filter}")
 
     outputs: list[pd.DataFrame] = []
     for start in range(0, len(afdc), args.chunk_size):
@@ -146,6 +161,7 @@ def main() -> None:
         "source_endpoint": ENDPOINT,
         "benchmark": args.benchmark,
         "row_count": len(result),
+        "state_filter": state_filter,
         "match_status_counts": status_counts,
         "input": {"path": str(args.afdc.resolve()), "sha256": sha256_file(args.afdc)},
         "output": {"path": str(args.output.resolve()), "sha256": sha256_file(args.output)},

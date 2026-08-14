@@ -249,6 +249,17 @@ def _read_depots(
     return points
 
 
+def _afdc_manifest_output_sha256(manifest: dict[str, Any]) -> str | None:
+    """Read either a raw-snapshot or coordinate-resolution manifest hash."""
+
+    output = manifest.get("output")
+    if isinstance(output, dict):
+        value = output.get("sha256")
+        return str(value) if value else None
+    value = manifest.get("sha256") or manifest.get("output_sha256")
+    return str(value) if value else None
+
+
 def build_facility_layers(
     *,
     city_slug: str,
@@ -273,7 +284,7 @@ def build_facility_layers(
         afdc_resolution_manifest = json.loads(
             afdc_resolution_manifest_path.read_text(encoding="utf-8")
         )
-        recorded_hash = afdc_resolution_manifest.get("output", {}).get("sha256")
+        recorded_hash = _afdc_manifest_output_sha256(afdc_resolution_manifest)
         if recorded_hash and recorded_hash != sha256_file(afdc_path):
             raise ValueError("AFDC table and coordinate-resolution manifest hashes differ")
     depot_summary = json.loads(depot_summary_path.read_text(encoding="utf-8"))

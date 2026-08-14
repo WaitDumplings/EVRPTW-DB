@@ -7,7 +7,6 @@ import pytest
 from shapely.geometry import LineString
 
 from evrptw_cle.speed import (
-    _build_static_operational_scenarios,
     _hpms_corridor_is_usable,
     _hpms_speed_is_usable,
     _select_directional_speed,
@@ -97,6 +96,13 @@ def test_legal_speed_priority_osm_then_verified_hpms_then_imputation(
         "within_city_class_imputation"
     )
     assert speeds.loc["3:4:0", "speed_limit_kph"] == pytest.approx(40.2336)
+    assert set(speeds["moves_road_type"]) == {"urban_unrestricted_access"}
+    assert speeds.loc["1:2:0", "reference_speed_weekday_kph"] == pytest.approx(
+        48.28032 * 0.545059133
+    )
+    assert speeds.loc["1:2:0", "reference_speed_weekend_kph"] == pytest.approx(
+        48.28032 * 0.564078022
+    )
 
 
 def test_parse_osm_maxspeed_handles_mph_kph_and_multivalue() -> None:
@@ -157,41 +163,3 @@ def test_hmu_mode_mapping_prefers_explicit_functional_semantics() -> None:
     assert operating_mode_from_osm("primary") == "M"
     assert operating_mode_from_osm("residential") == "U"
     assert operating_mode_from_osm("unexpected_new_tag") == "U"
-
-
-def test_static_operational_scenarios_are_reproducible_capped_and_directional() -> None:
-    frame = pd.DataFrame(
-        {
-            "edge_u": ["1", "2"],
-            "edge_v": ["2", "1"],
-            "edge_key": ["0", "0"],
-            "edge_id": ["1:2:0", "2:1:0"],
-            "physical_segment_id": ["segment", "segment"],
-            "corridor_id": ["corridor", "corridor"],
-            "direction_id": ["corridor|forward", "corridor|reverse"],
-            "length_m": [100.0, 100.0],
-            "highway": ["residential", "residential"],
-            "road_group": ["local", "local"],
-            "speed_limit_kph": [40.0, 40.0],
-            "reference_speed_kph": [25.0, 25.0],
-            "directional_variation_eligible": [True, True],
-        }
-    )
-    kwargs = {
-        "seed": 7,
-        "scenarios_per_day_type": 1,
-        "global_sigma": 0.02,
-        "road_group_sigma": 0.04,
-        "corridor_sigma": 0.05,
-        "direction_sigma": 0.03,
-        "factor_min": 0.75,
-        "factor_max": 1.15,
-    }
-    first = _build_static_operational_scenarios(frame, **kwargs)
-    second = _build_static_operational_scenarios(frame, **kwargs)
-    pd.testing.assert_frame_equal(first, second)
-    assert len(first) == 4
-    assert set(first["day_type"]) == {"weekday", "weekend"}
-    assert (first["speed_kph"] <= first["speed_limit_kph"]).all()
-    paired = first.pivot(index="scenario_id", columns="edge_id", values="speed_kph")
-    assert (paired["1:2:0"] != paired["2:1:0"]).all()

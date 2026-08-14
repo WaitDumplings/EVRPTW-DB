@@ -1,11 +1,28 @@
 {
   "schema": "cle_evrptw_us_reference_instance_profile_v1",
-  "profile_id": "us_public_last_mile_reference_v1-development",
+  "profile_id": "us_public_last_mile_reference_v2-moves5",
   "profile_status": "development_calibration",
   "official_generation_eligible": false,
   "day_type": {
     "weekday_weight": 5,
     "weekend_weight": 2
+  },
+  "stage2_spatial": {
+    "contract_id": "amazon_stationday_multi_region_community_graph_v3",
+    "depot_track": "practical",
+    "territory_time_metric": "directed_edge_time_without_turn_penalty",
+    "territory_energy_screen": "direct_depot_customer_depot_sufficient_condition",
+    "pool_floor": 1.0,
+    "region_redraw_cap": 3,
+    "region_seed_policy": "quota_descending_network_time_maxmin",
+    "region_growth_priority": [
+      "unmet_decile_capacity",
+      "minimum_directed_crossing_time",
+      "stable_hash_tie_break"
+    ],
+    "customer_reservation_unit": "latent_customer_id",
+    "customer_sampling_weight": "max_1_residential_units",
+    "charging_station_fill": "active_community_and_depot_corridor_proxy_coverage"
   },
   "customer_activation": {
     "target_active_locations_per_community": 141.6661,
@@ -28,25 +45,20 @@
     }
   },
   "road_state": {
-    "model_id": "moves_day_road_type_factor_v2-development",
-    "mode_to_moves_road_type": {
-      "H": "urban_restricted_access",
-      "M": "urban_unrestricted_access",
-      "U": "urban_unrestricted_access"
-    },
+    "model_id": "moves5_reference_with_neutral_residual_v1",
     "factor_by_day_and_moves_road_type": {
       "weekday": {
-        "urban_restricted_access": {"mean": 0.96, "std": 0.035, "min": 0.82, "max": 1.04},
-        "urban_unrestricted_access": {"mean": 0.92, "std": 0.050, "min": 0.72, "max": 1.04}
+        "urban_restricted_access": {"mean": 1.0, "std": 0.0, "min": 1.0, "max": 1.0},
+        "urban_unrestricted_access": {"mean": 1.0, "std": 0.0, "min": 1.0, "max": 1.0}
       },
       "weekend": {
-        "urban_restricted_access": {"mean": 0.98, "std": 0.030, "min": 0.86, "max": 1.05},
-        "urban_unrestricted_access": {"mean": 0.95, "std": 0.045, "min": 0.76, "max": 1.05}
+        "urban_restricted_access": {"mean": 1.0, "std": 0.0, "min": 1.0, "max": 1.0},
+        "urban_unrestricted_access": {"mean": 1.0, "std": 0.0, "min": 1.0, "max": 1.0}
       }
     },
     "minimum_speed_kph": 5.0,
     "connector_operating_mode": "U",
-    "connector_reference_speed_kph": 36.403361
+    "connector_speed_policy": "same_city_day_type_length_weighted_median_U_edge_speed"
   },
   "turn_penalty": {
     "model_id": "geometry_only_turn_penalty_v1",

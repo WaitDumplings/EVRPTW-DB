@@ -12,12 +12,18 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .amazon import AmazonStage2Artifacts
 from .config import Stage2Config
-from .orders import FULL_CS_TO_DEPOT_CACHE_CONTRACT, build_view_attributes
+from .metrics import build_phase1_family_metrics
+from .orders import (
+    FULL_CS_TO_DEPOT_CACHE_CONTRACT,
+    build_view_attributes_from_amazon,
+    match_amazon_order_templates,
+)
 from .reader import PortableCLE
 from .road_state import build_family_road_state
 from .routing import PhysicalRoadNetwork, RoutingMatrices
-from .selection import select_family_terminals
+from .selection import select_family_terminals_v2
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -69,8 +75,11 @@ def materialize_family(
     family: Mapping[str, Any],
     views: pd.DataFrame,
     customer_split_path: str | Path,
+    community_adjacency_path: str | Path,
+    amazon_artifacts: AmazonStage2Artifacts,
     output_root: str | Path,
     routing_topology_cache: dict[str, PhysicalRoadNetwork] | None = None,
+    community_adjacency_cache: dict[str, pd.DataFrame] | None = None,
 ) -> dict[str, Any]:
     family_id = str(family["family_id"])
     if views.empty:
@@ -82,16 +91,10 @@ def materialize_family(
         raise FileExistsError(f"Refusing to overwrite materialized family: {final_dir}")
     final_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    terminal_index, selection_report = select_family_terminals(
-        cle,
-        family=family,
-        customer_split_path=str(customer_split_path),
-        profile=profile,
-    )
     directed_speeds = pd.read_parquet(cle.speeds_path)
     road_state, road_state_report = build_family_road_state(
         directed_speeds,
-        day_type=str(selection_report["day_type"]),
+        day_type=str(family["day_type"]),
         road_state_seed=int(family["road_state_seed"]),
         profile=profile,
     )
@@ -104,14 +107,92 @@ def materialize_family(
             routing_topology_cache[cle.city_slug] = network
     else:
         network = cached_network.with_road_state(road_state, profile)
+    terminal_index, selection_report, radial_baseline = select_family_terminals_v2(
+        cle,
+        family=family,
+        customer_split_path=str(customer_split_path),
+        community_adjacency_path=str(community_adjacency_path),
+        profile=profile,
+        network=network,
+        amazon=amazon_artifacts,
+        community_adjacency_cache=community_adjacency_cache,
+    )
     matrices = network.route_terminals(terminal_index)
     matrix_payload = _matrix_payload(matrices)
+    parent_customer_count = int(family["parent_customer_count"])
+    parent_charger_rows = terminal_index.loc[
+        terminal_index["terminal_kind"].eq("charging_station")
+    ]
+    parent_charging_power = parent_charger_rows[
+        "effective_charging_power_kw"
+    ].to_numpy(dtype=np.float32)
+    order_source_candidates = amazon_artifacts.order_sources(
+        day_type=str(selection_report["day_type"]),
+        customer_count=parent_customer_count,
+        seed=int(family["family_seed"]),
+    )
+    if not order_source_candidates:
+        raise ValueError(
+            "PF2_ORDER_UNSUPPORTED: no single-day or same-station composite order source"
+        )
+    matched_templates, order_source_report = match_amazon_order_templates(
+        customer_count=parent_customer_count,
+        order_sources=[
+            (source, amazon_artifacts.templates_for_source(source))
+            for source in order_source_candidates
+        ],
+        matching_seed=int(family["family_seed"]),
+        operating_start_s=config.operating_horizon_start_s,
+        operating_end_s=config.operating_horizon_end_s,
+        running_time_matrix_s=matrices.running_time_shortest_matrix_s,
+        running_time_path_distance_matrix_km=matrices.running_time_path_distance_km,
+        charging_power_kw=parent_charging_power,
+        profile=profile,
+    )
+    terminal_index["order_template_id"] = pd.NA
+    terminal_index["order_station_day_id"] = pd.NA
+    terminal_index["order_source_mode"] = pd.NA
+    customer_terminal_rows = np.arange(1, 1 + parent_customer_count)
+    terminal_index.loc[customer_terminal_rows, "order_template_id"] = matched_templates[
+        "template_id"
+    ].astype(str).to_numpy()
+    terminal_index.loc[customer_terminal_rows, "order_station_day_id"] = matched_templates[
+        "station_day_id"
+    ].astype(str).to_numpy()
+    terminal_index.loc[customer_terminal_rows, "order_source_mode"] = order_source_report[
+        "selected_order_source_mode"
+    ]
 
     with tempfile.TemporaryDirectory(prefix=f".{family_id}-", dir=final_dir.parent) as temp_name:
         temp_dir = Path(temp_name)
         matrix_dir = temp_dir / "matrices"
         matrix_dir.mkdir()
         terminal_index.to_parquet(temp_dir / "terminal_index.parquet", index=False)
+        phase1_metrics, phase1_observations, phase1_region_pairs = (
+            build_phase1_family_metrics(
+                family_manifest_fields={
+                    "family_id": family_id,
+                    "family_cohort_id": str(family["family_cohort_id"]),
+                    "city_slug": cle.city_slug,
+                    "day_type": str(selection_report["day_type"]),
+                    "parent_scale_id": str(family["parent_scale_id"]),
+                    "materialization_attempt_number": int(
+                        family.get("materialization_attempt_number", 0)
+                    ),
+                },
+                terminal_index=terminal_index,
+                running_time_matrix_s=matrices.running_time_shortest_matrix_s,
+                radial_baseline=radial_baseline,
+                selection_report=selection_report,
+            )
+        )
+        _write_json(temp_dir / "phase1_metrics.json", phase1_metrics)
+        phase1_observations.to_parquet(
+            temp_dir / "phase1_observations.parquet", index=False
+        )
+        phase1_region_pairs.to_parquet(
+            temp_dir / "phase1_region_pair_metrics.parquet", index=False
+        )
         matrix_files: dict[str, str] = {}
         for name, array in matrix_payload.items():
             relative = f"matrices/{name}.npy"
@@ -135,18 +216,21 @@ def materialize_family(
             charging_power = charger_rows["effective_charging_power_kw"].to_numpy(dtype=np.float32)
             running_time = matrices.running_time_shortest_matrix_s[np.ix_(indices, indices)]
             running_distance = matrices.running_time_path_distance_km[np.ix_(indices, indices)]
-            attributes = build_view_attributes(
+            parent_customer_positions = indices[1 : 1 + customer_count] - 1
+            view_templates = matched_templates.iloc[
+                parent_customer_positions.astype(int)
+            ].reset_index(drop=True)
+            attributes = build_view_attributes_from_amazon(
                 customer_rows,
+                view_templates,
                 day_type=str(selection_report["day_type"]),
-                package_seed=int(view["package_seed"]),
-                service_time_seed=int(view["service_time_seed"]),
-                time_window_seed=int(view["time_window_seed"]),
                 operating_start_s=config.operating_horizon_start_s,
                 operating_end_s=config.operating_horizon_end_s,
                 running_time_matrix_s=running_time,
                 running_time_path_distance_matrix_km=running_distance,
                 charging_power_kw=charging_power,
                 profile=profile,
+                order_source_report=order_source_report,
             )
             view_id = str(view["view_id"])
             view_dir = temp_dir / "views" / view_id
@@ -211,6 +295,8 @@ def materialize_family(
                 "charging_policy": dict(profile["charging"]),
                 "runtime_mask_stored": False,
                 "attribute_report": attributes.report,
+                "order_source": order_source_report,
+                "order_template_ids_inherited_from_parent": True,
                 "generation_mode": cle.mode,
                 "non_release_pilot": cle.non_release_pilot,
                 "materialization_attempt_number": int(
@@ -229,6 +315,7 @@ def materialize_family(
         }
         manifest = {
             "schema": "cle_evrptw_materialized_matrix_family_v2",
+            "stage2_generation_contract": "amazon_spatial_activation_v2",
             "family_id": family_id,
             "family_cohort_id": str(family["family_cohort_id"]),
             "city_slug": cle.city_slug,
@@ -247,6 +334,8 @@ def materialize_family(
             "view_count": len(view_manifests),
             "view_ids": [item["view_id"] for item in view_manifests],
             "selection_report": selection_report,
+            "order_source_report": order_source_report,
+            "order_template_assignment": "terminal_index.parquet",
             "road_state_report": road_state_report,
             "routing_report": matrices.report,
             "road_state_storage": "deterministic_reconstruction_from_seed_cle_and_profile",
@@ -272,6 +361,14 @@ def materialize_family(
             "generation_mode": cle.mode,
             "non_release_pilot": cle.non_release_pilot,
             "materialization_status": "complete",
+            "phase1_metrics": "phase1_metrics.json",
+            "phase1_observations": "phase1_observations.parquet",
+            "phase1_region_pair_metrics": "phase1_region_pair_metrics.parquet",
+            "phase1_metric_files": {
+                "phase1_metrics": "phase1_metrics.json",
+                "phase1_observations": "phase1_observations.parquet",
+                "phase1_region_pair_metrics": "phase1_region_pair_metrics.parquet",
+            },
         }
         _write_json(temp_dir / "family_manifest.json", manifest)
         os.replace(temp_dir, final_dir)

@@ -29,7 +29,12 @@ def _write_fake_cle(root: Path, *, release_eligible: bool = False) -> Path:
     city = root / "cities" / "test-city"
     for directory in ("graph", "service_locations", "infrastructure", "profiles"):
         (city / directory).mkdir(parents=True, exist_ok=True)
-    (city / "graph" / "graph_operational.graphml").write_text("<graphml/>", encoding="utf-8")
+    graph = nx.MultiDiGraph()
+    graph.add_node("1", x=0.005, y=0.005)
+    graph.add_node("2", x=0.025, y=0.005)
+    graph.add_edge("1", "2", key=0, length=2_000.0)
+    graph.add_edge("2", "1", key=0, length=2_000.0)
+    nx.write_graphml(graph, city / "graph" / "graph_operational.graphml")
 
     locations = gpd.GeoDataFrame(
         {
@@ -73,10 +78,21 @@ def _write_fake_cle(root: Path, *, release_eligible: bool = False) -> Path:
             "edge_key": [0],
             "length_m": [100.0],
             "legal_speed_kph": [40.0],
-            "reference_speed_kph": [30.0],
+            "moves_road_type": ["urban_unrestricted_access"],
+            "reference_speed_weekday_kph": [30.0],
+            "reference_speed_weekend_kph": [31.0],
             "operating_mode": ["U"],
         }
     ).to_parquet(city / "profiles" / "directed_legal_speeds.parquet", index=False)
+    (city / "profiles" / "speed_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "evrptw_directed_speed_profiles_v6",
+                "reference_speed_contract": {"profile_id": "test-moves-profile"},
+            }
+        ),
+        encoding="utf-8",
+    )
     manifest = {
         "schema": "evrptw_city_logistics_environment_v1",
         "city_slug": "test-city",
@@ -89,6 +105,7 @@ def _write_fake_cle(root: Path, *, release_eligible: bool = False) -> Path:
             "depots": "infrastructure/depots.parquet",
             "chargers": "infrastructure/chargers.parquet",
             "directed_legal_speeds": "profiles/directed_legal_speeds.parquet",
+            "speed_manifest": "profiles/speed_manifest.json",
         },
     }
     (city / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -118,7 +135,13 @@ def test_stage2_road_state_uses_moves_road_type_factor_without_edge_noise() -> N
             "length_m": [100.0, 100.0, 100.0],
             "operating_mode": ["H", "M", "U"],
             "legal_speed_kph": [100.0, 70.0, 45.0],
-            "reference_speed_kph": [80.0, 50.0, 30.0],
+            "moves_road_type": [
+                "urban_restricted_access",
+                "urban_unrestricted_access",
+                "urban_unrestricted_access",
+            ],
+            "reference_speed_weekday_kph": [80.0, 50.0, 30.0],
+            "reference_speed_weekend_kph": [85.0, 55.0, 35.0],
         }
     )
     state, report = build_family_road_state(
@@ -134,6 +157,10 @@ def test_stage2_road_state_uses_moves_road_type_factor_without_edge_noise() -> N
     }
     assert "edge_energy_kwh" not in state
     assert report["additional_random_edge_factors"] is False
+    assert report["reference_speed_column"] == "reference_speed_weekday_kph"
+    np.testing.assert_array_equal(
+        state["instance_speed_kph"].to_numpy(), np.asarray([80.0, 50.0, 30.0])
+    )
 
 
 def test_stage2_road_state_replays_stored_baselines_without_rng() -> None:
@@ -150,7 +177,13 @@ def test_stage2_road_state_replays_stored_baselines_without_rng() -> None:
             "length_m": [100.0, 100.0, 100.0],
             "operating_mode": ["H", "M", "U"],
             "legal_speed_kph": [100.0, 70.0, 45.0],
-            "reference_speed_kph": [80.0, 50.0, 30.0],
+            "moves_road_type": [
+                "urban_restricted_access",
+                "urban_unrestricted_access",
+                "urban_unrestricted_access",
+            ],
+            "reference_speed_weekday_kph": [80.0, 50.0, 30.0],
+            "reference_speed_weekend_kph": [85.0, 55.0, 35.0],
         }
     )
     sampled, sampled_report = build_family_road_state(
@@ -186,6 +219,29 @@ def test_official_reader_rejects_unreleased_cle(tmp_path: Path) -> None:
             tmp_path,
             "test-city",
             mode="official",
+            minimum_customers=1,
+            minimum_depots=1,
+            minimum_chargers=1,
+        )
+
+
+def test_reader_rejects_stale_speed_contract(tmp_path: Path) -> None:
+    city = _write_fake_cle(tmp_path, release_eligible=False)
+    speed_manifest = city / "profiles" / "speed_manifest.json"
+    speed_manifest.write_text(
+        json.dumps(
+            {
+                "schema": "evrptw_directed_speed_profiles_v5",
+                "reference_speed_contract": {"profile_id": "old-profile"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(CLEEligibilityError, match="stale speed schema"):
+        load_portable_cle(
+            tmp_path,
+            "test-city",
+            mode="research",
             minimum_customers=1,
             minimum_depots=1,
             minimum_chargers=1,
@@ -276,12 +332,12 @@ def test_official_generation_plan_has_frozen_family_and_view_counts() -> None:
     config = load_stage2_config(CONFIG_PATH)
     families, views, registry = build_generation_plan(config)
     assert len(families) == 7_500
-    assert len(views) == 172_500
+    assert len(views) == 173_000
     assert registry["view_counts_by_scale"] == {
         "cus50": 101_000,
         "cus100": 52_000,
         "cus500": 12_000,
-        "cus1000": 7_000,
+        "cus1000": 7_500,
         "cus2000": 500,
     }
     assert families.groupby("family_id")["family_cohort_id"].nunique().max() == 1
@@ -292,6 +348,20 @@ def test_official_generation_plan_has_frozen_family_and_view_counts() -> None:
         "cus500": 10_000,
         "cus1000": 5_000,
     }
+    for (_, _, _), group in families.groupby(
+        ["city_slug", "family_cohort_id", "parent_scale_id"], sort=True
+    ):
+        counts = group["day_type"].value_counts()
+        assert int(counts.get("weekday", 0) + counts.get("weekend", 0)) == len(group)
+        assert abs(float(counts.get("weekday", 0) / len(group)) - 5 / 7) <= 1 / len(group)
+    evaluation = views.loc[
+        views["family_cohort_id"].eq("core/test/test1_new_seed")
+    ]
+    for _, group in evaluation.groupby("family_id"):
+        branches = group.set_index("scale_id")["branch_index"].astype(int)
+        assert branches["cus100"] == branches["cus50"] // 2
+        assert branches["cus500"] == branches["cus50"] // 10
+        assert branches["cus1000"] == 0
 
 
 def test_materialization_attempt_seeds_are_deterministic_and_isolated() -> None:
@@ -355,6 +425,7 @@ def test_edge_projection_routing_uses_directional_partial_edge_costs() -> None:
             "edge_key": ["0", "0"],
             "length_m": [100.0, 100.0],
             "edge_travel_time_s": [10.0, 20.0],
+            "instance_speed_kph": [36.0, 18.0],
         }
     )
     network = PhysicalRoadNetwork(graph, road_state, profile)
@@ -413,11 +484,13 @@ def test_cached_topology_accepts_new_family_road_state() -> None:
             "edge_key": ["0", "0"],
             "length_m": [100.0, 100.0],
             "edge_travel_time_s": [10.0, 20.0],
+            "instance_speed_kph": [36.0, 18.0],
         }
     )
     cached = PhysicalRoadNetwork(graph, road_state, profile)
     next_state = road_state.copy()
     next_state["edge_travel_time_s"] = [5.0, 40.0]
+    next_state["instance_speed_kph"] = [72.0, 9.0]
     network = cached.with_road_state(next_state, profile)
     terminals = pd.DataFrame(
         {
@@ -490,6 +563,7 @@ def test_cached_topology_reselects_equal_length_parallel_edge() -> None:
             "edge_key": ["0", "1"],
             "length_m": [100.0, 100.0],
             "edge_travel_time_s": [5.0, 10.0],
+            "instance_speed_kph": [72.0, 36.0],
         }
     )
     cached = PhysicalRoadNetwork(graph, road_state, profile)
@@ -498,6 +572,7 @@ def test_cached_topology_reselects_equal_length_parallel_edge() -> None:
 
     next_state = road_state.copy()
     next_state["edge_travel_time_s"] = [20.0, 2.0]
+    next_state["instance_speed_kph"] = [18.0, 180.0]
     network = cached.with_road_state(next_state, profile)
 
     assert network._distance_adjacency is cached._distance_adjacency
@@ -539,6 +614,7 @@ def test_running_time_path_optimizes_turn_penalties_not_only_edge_times() -> Non
             "edge_key": ["0"] * len(edges),
             "length_m": [edge[2] for edge in edges],
             "edge_travel_time_s": [edge[3] for edge in edges],
+            "instance_speed_kph": [edge[2] / edge[3] * 3.6 for edge in edges],
         }
     )
     network = PhysicalRoadNetwork(graph, road_state, profile)

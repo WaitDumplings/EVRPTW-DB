@@ -170,8 +170,8 @@ def _cle_command(
     hpms_source_path: Path | None,
     require_hpms_match: bool,
     hpms_match_options: dict[str, Any],
+    moves_speed_profile_path: Path,
     vehicle_speed_cap_kph: float | None,
-    include_pilot_speed_scenarios: bool,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -200,6 +200,8 @@ def _cle_command(
         str(output_root / "cles"),
         "--nsi-workers",
         str(nsi_workers),
+        "--moves-speed-profile",
+        str(moves_speed_profile_path),
     ]
     if hpms_edge_evidence_root is not None:
         command.extend(["--hpms-edge-evidence-root", str(hpms_edge_evidence_root)])
@@ -230,8 +232,6 @@ def _cle_command(
             command.extend([flag, str(hpms_match_options[name])])
     if vehicle_speed_cap_kph is not None:
         command.extend(["--vehicle-speed-cap-kph", str(vehicle_speed_cap_kph)])
-    if include_pilot_speed_scenarios:
-        command.append("--include-pilot-speed-scenarios")
     if refresh_facilities:
         command.append("--refresh-facilities")
     if refresh_protected_connectivity:
@@ -295,7 +295,6 @@ def _city_index_row(
                 "optional_depot_candidates": counts.get("optional_depot_candidates", 0),
                 "charger_candidates": counts["charger_candidates"],
                 "directed_legal_speed_edges": counts["directed_legal_speed_edges"],
-                "static_speed_scenarios": counts["static_operational_scenarios"],
                 "release_eligible": manifest["release_eligible"],
                 "release_blocker_count": manifest["release_blocker_count"],
                 "manifest_path": str(
@@ -397,12 +396,6 @@ def main() -> None:
         default=None,
         help="Portable CLE package root under EVRPTW_Dataset.",
     )
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=None,
-        help="Deprecated alias for --work-root; retained for old local commands.",
-    )
     parser.add_argument("--stages", choices=STAGES, nargs="+", default=list(STAGES))
     parser.add_argument("--cities", nargs="+")
     parser.add_argument("--nsi-workers", type=int, default=4)
@@ -417,7 +410,6 @@ def main() -> None:
     parser.add_argument("--hpms-source-root", type=Path)
     parser.add_argument("--hpms-source-registry", type=Path)
     parser.add_argument("--vehicle-speed-cap-kph", type=float)
-    parser.add_argument("--include-pilot-speed-scenarios", action="store_true")
     parser.add_argument(
         "--refresh-facilities",
         action="store_true",
@@ -470,14 +462,10 @@ def main() -> None:
     afdc_path = args.afdc or (resolved_afdc if resolved_afdc.exists() else raw_afdc)
     if not afdc_path.is_absolute():
         afdc_path = repo_root / afdc_path
-    if args.work_root is not None and args.output_root is not None:
-        parser.error("use --work-root or deprecated --output-root, not both")
-    configured_work_root = profile.get("work_root", profile.get("output_root"))
+    configured_work_root = profile.get("work_root")
     if configured_work_root is None:
         parser.error("profile must define work_root")
-    work_root = args.work_root or args.output_root or profile_path_value(
-        configured_work_root
-    )
+    work_root = args.work_root or profile_path_value(configured_work_root)
     if not work_root.is_absolute():
         work_root = repo_root / work_root
     configured_release_root = profile.get("release_root")
@@ -514,6 +502,12 @@ def main() -> None:
     hpms_match_options = dict(
         profile["speed_profile"].get("hpms_matching", {}).get("parameters", {})
     )
+    moves_profile_value = profile["speed_profile"].get("moves_source", {}).get(
+        "profile"
+    )
+    if not moves_profile_value:
+        parser.error("speed_profile.moves_source.profile is required")
+    moves_speed_profile_path = profile_path_value(moves_profile_value)
     if hpms_required and (hpms_source_root is None or hpms_source_registry is None):
         parser.error(
             "profile requires HPMS matching but does not define hpms_raw_root and "
@@ -605,8 +599,8 @@ def main() -> None:
                         hpms_source_path=hpms_sources[slug],
                         require_hpms_match=hpms_required,
                         hpms_match_options=hpms_match_options,
+                        moves_speed_profile_path=moves_speed_profile_path,
                         vehicle_speed_cap_kph=vehicle_speed_cap_kph,
-                        include_pilot_speed_scenarios=args.include_pilot_speed_scenarios,
                     ),
                     repo_root,
                 )

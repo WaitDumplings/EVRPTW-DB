@@ -19,6 +19,32 @@ from .road_state import connector_costs
 NO_PREDECESSOR = -9999
 
 
+def _connector_reference_speed_kph(frame: pd.DataFrame) -> float:
+    """Use the length-weighted median U-edge speed, or all edges if U is absent."""
+
+    if "instance_speed_kph" not in frame.columns:
+        raise ValueError("Road state lacks instance_speed_kph")
+    speeds = pd.to_numeric(frame["instance_speed_kph"], errors="coerce")
+    candidates = frame.assign(_connector_speed_kph=speeds)
+    if "operating_mode" in candidates.columns:
+        u_candidates = candidates.loc[candidates["operating_mode"].astype(str).eq("U")]
+        if not u_candidates.empty:
+            candidates = u_candidates
+    ordered = candidates.sort_values("_connector_speed_kph")
+    weights = ordered["length_m"].to_numpy(dtype=float)
+    values = ordered["_connector_speed_kph"].to_numpy(dtype=float)
+    if (
+        not np.isfinite(weights).all()
+        or not np.isfinite(values).all()
+        or np.any(weights <= 0.0)
+        or np.any(values <= 0.0)
+    ):
+        raise ValueError("Cannot derive a positive finite connector reference speed")
+    midpoint = float(weights.sum()) / 2.0
+    index = min(int(np.searchsorted(np.cumsum(weights), midpoint)), len(values) - 1)
+    return float(values[index])
+
+
 def _bearing_degrees(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     lon1_rad, lat1_rad, lon2_rad, lat2_rad = map(math.radians, (lon1, lat1, lon2, lat2))
     delta_lon = lon2_rad - lon1_rad
@@ -70,6 +96,23 @@ class RoutingMatrices:
     report: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class DepotTerminalStar:
+    """Directed depot-to-terminal and terminal-to-depot preselection costs.
+
+    These vectors use the same edge projections and connector costs as the
+    final closure, but omit turn penalties.  They are used only to define the
+    Amazon-calibrated territory before a small final terminal set is routed
+    with the exact turn-aware policy.
+    """
+
+    outbound_time_s: np.ndarray
+    inbound_time_s: np.ndarray
+    outbound_distance_km: np.ndarray
+    inbound_distance_km: np.ndarray
+    report: dict[str, Any]
+
+
 class PhysicalRoadNetwork:
     """Static topology plus one family-level speed realization."""
 
@@ -105,6 +148,7 @@ class PhysicalRoadNetwork:
             "edge_key",
             "length_m",
             "edge_travel_time_s",
+            "instance_speed_kph",
         }
         missing = required - set(frame.columns)
         if missing:
@@ -133,6 +177,7 @@ class PhysicalRoadNetwork:
         self.edge_bearing_degrees = frame["bearing_degrees"].to_numpy(dtype=float)
         self.edge_u_index = frame["u_index"].to_numpy(dtype=np.int32)
         self.edge_v_index = frame["v_index"].to_numpy(dtype=np.int32)
+        self.connector_speed_kph = _connector_reference_speed_kph(frame)
         self.edge_by_key = {
             (str(row.edge_u), str(row.edge_v), str(row.edge_key)): int(index)
             for index, row in frame.iterrows()
@@ -140,6 +185,7 @@ class PhysicalRoadNetwork:
         if len(self.edge_by_key) != len(frame):
             raise ValueError("Road-state edge keys are not unique")
         self._distance_adjacency: csr_matrix
+        self._time_adjacency: csr_matrix
         self._distance_chosen_edge: dict[tuple[int, int], int]
         self._distance_tie_candidates: dict[tuple[int, int], np.ndarray]
         self._turn_aware_adjacency: csr_matrix
@@ -149,6 +195,7 @@ class PhysicalRoadNetwork:
         self._turn_transition_penalties_s: np.ndarray
         self._turn_penalty_lookup: dict[int, float]
         self._build_distance_graph()
+        self._build_time_graph()
         self._build_turn_aware_graph()
 
     @classmethod
@@ -171,7 +218,14 @@ class PhysicalRoadNetwork:
         """Reuse immutable city topology with a new family-level speed state."""
 
         frame = road_state.reset_index(drop=True)
-        required = {"edge_u", "edge_v", "edge_key", "edge_travel_time_s"}
+        required = {
+            "edge_u",
+            "edge_v",
+            "edge_key",
+            "length_m",
+            "edge_travel_time_s",
+            "instance_speed_kph",
+        }
         missing = required - set(frame.columns)
         if missing:
             raise ValueError(f"Road state is missing routing columns: {sorted(missing)}")
@@ -186,6 +240,8 @@ class PhysicalRoadNetwork:
         )
         if edge_keys != self._edge_keys_in_order:
             raise ValueError("Road-state edge order differs from cached city topology")
+        frame["u_index"] = self.edge_u_index
+        frame["v_index"] = self.edge_v_index
 
         network = object.__new__(PhysicalRoadNetwork)
         for name in (
@@ -200,7 +256,9 @@ class PhysicalRoadNetwork:
             "edge_u_index",
             "edge_v_index",
             "edge_by_key",
+            "connector_speed_kph",
             "_distance_adjacency",
+            "_time_adjacency",
             "_distance_chosen_edge",
             "_distance_tie_candidates",
             "_incoming_edges_by_node",
@@ -227,6 +285,7 @@ class PhysicalRoadNetwork:
         ) != network._turn_penalty_signature:
             raise ValueError("Cached city topology requires the same turn-penalty profile")
         network.edge_time_s = frame["edge_travel_time_s"].to_numpy(dtype=float)
+        network.connector_speed_kph = _connector_reference_speed_kph(frame)
         if network._distance_tie_candidates:
             network._distance_chosen_edge = network._distance_chosen_edge.copy()
             for pair, candidates in network._distance_tie_candidates.items():
@@ -245,6 +304,22 @@ class PhysicalRoadNetwork:
         network._turn_aware_adjacency = csr_matrix(
             (weights, (network._turn_transition_rows, network._turn_transition_columns)),
             shape=(network.edge_count, network.edge_count),
+            dtype=np.float64,
+        )
+        ordered_time = frame.assign(_edge_position=np.arange(len(frame))).sort_values(
+            ["u_index", "v_index", "edge_travel_time_s", "length_m", "edge_key"],
+            kind="stable",
+        )
+        chosen_time = ordered_time.drop_duplicates(["u_index", "v_index"], keep="first")
+        network._time_adjacency = csr_matrix(
+            (
+                chosen_time["edge_travel_time_s"].to_numpy(dtype=float),
+                (
+                    chosen_time["u_index"].to_numpy(dtype=np.int32),
+                    chosen_time["v_index"].to_numpy(dtype=np.int32),
+                ),
+            ),
+            shape=(len(network.node_ids), len(network.node_ids)),
             dtype=np.float64,
         )
         return network
@@ -281,6 +356,24 @@ class PhysicalRoadNetwork:
             (int(u_index), int(v_index)): group.index.to_numpy(dtype=np.int32)
             for (u_index, v_index), group in tied.groupby(["u_index", "v_index"], sort=False)
         }
+
+    def _build_time_graph(self) -> None:
+        ordered = self.edges.sort_values(
+            ["u_index", "v_index", "edge_travel_time_s", "length_m", "edge_key"],
+            kind="stable",
+        )
+        chosen = ordered.drop_duplicates(["u_index", "v_index"], keep="first")
+        self._time_adjacency = csr_matrix(
+            (
+                chosen["edge_travel_time_s"].to_numpy(dtype=float),
+                (
+                    chosen["u_index"].to_numpy(dtype=np.int32),
+                    chosen["v_index"].to_numpy(dtype=np.int32),
+                ),
+            ),
+            shape=(len(self.node_ids), len(self.node_ids)),
+            dtype=np.float64,
+        )
 
     def _build_turn_aware_graph(self) -> None:
         """Build a directed line graph whose transition weights include turns."""
@@ -394,13 +487,157 @@ class PhysicalRoadNetwork:
                 )
             )
         connector_distance_km, connector_time_s = connector_costs(
-            float(terminal_row["connector_length_m"]), profile=self.profile
+            float(terminal_row["connector_length_m"]),
+            speed_kph=self.connector_speed_kph,
         )
         return TerminalAccess(
             terminal_index=int(terminal_row["terminal_index"]),
             connector_distance_m=connector_distance_km * 1000.0,
             connector_time_s=connector_time_s,
             options=tuple(options),
+        )
+
+    def route_depot_star(self, terminal_index: pd.DataFrame) -> DepotTerminalStar:
+        """Route one depot against a large candidate roster in linear storage.
+
+        Row zero must be the depot.  The approximation is deliberately limited
+        to territory eligibility; the materialized matrices still use
+        :meth:`route_terminals` and therefore include exact edge projections
+        and turn penalties.
+        """
+
+        expected = np.arange(len(terminal_index))
+        if not np.array_equal(terminal_index["terminal_index"].to_numpy(dtype=int), expected):
+            raise ValueError("terminal_index rows must be ordered contiguously from zero")
+        terminals = tuple(self._parse_access(row) for _, row in terminal_index.iterrows())
+        if not terminals:
+            raise ValueError("Depot star requires at least one terminal")
+        depot = terminals[0]
+        count = len(terminals)
+        outbound_time = np.full(count, np.inf, dtype=np.float64)
+        inbound_time = np.full(count, np.inf, dtype=np.float64)
+        outbound_distance = np.full(count, np.inf, dtype=np.float64)
+        inbound_distance = np.full(count, np.inf, dtype=np.float64)
+        outbound_time[0] = inbound_time[0] = 0.0
+        outbound_distance[0] = inbound_distance[0] = 0.0
+
+        destination_nodes = sorted(
+            {option.inbound_node for terminal in terminals for option in terminal.options}
+        )
+        for depot_option in depot.options:
+            time_values = dijkstra(
+                self._time_adjacency,
+                directed=True,
+                indices=depot_option.outbound_node,
+            )
+            distance_values = dijkstra(
+                self._distance_adjacency,
+                directed=True,
+                indices=depot_option.outbound_node,
+            )
+            for terminal_position, destination in enumerate(terminals[1:], start=1):
+                for destination_option in destination.options:
+                    direct = self._direct_candidate(
+                        depot, depot_option, destination, destination_option
+                    )
+                    if direct is not None:
+                        outbound_distance[terminal_position] = min(
+                            outbound_distance[terminal_position], direct[0]
+                        )
+                        outbound_time[terminal_position] = min(
+                            outbound_time[terminal_position], direct[1]
+                        )
+                    node = destination_option.inbound_node
+                    if not np.isfinite(time_values[node]) or not np.isfinite(
+                        distance_values[node]
+                    ):
+                        continue
+                    candidate_time = (
+                        depot.connector_time_s
+                        + depot_option.outbound_time_s
+                        + float(time_values[node])
+                        + destination_option.inbound_time_s
+                        + destination.connector_time_s
+                    )
+                    candidate_distance = (
+                        depot.connector_distance_m
+                        + depot_option.outbound_distance_m
+                        + float(distance_values[node])
+                        + destination_option.inbound_distance_m
+                        + destination.connector_distance_m
+                    )
+                    if (candidate_time, candidate_distance) < (
+                        outbound_time[terminal_position],
+                        outbound_distance[terminal_position],
+                    ):
+                        outbound_time[terminal_position] = candidate_time
+                        outbound_distance[terminal_position] = candidate_distance
+
+        # Reversed node-level shortest paths give every candidate's return to
+        # each depot inbound node without one Dijkstra call per customer.
+        for depot_option in depot.options:
+            reverse_time = dijkstra(
+                self._time_adjacency.T,
+                directed=True,
+                indices=depot_option.inbound_node,
+            )
+            reverse_distance = dijkstra(
+                self._distance_adjacency.T,
+                directed=True,
+                indices=depot_option.inbound_node,
+            )
+            for terminal_position, source in enumerate(terminals[1:], start=1):
+                for source_option in source.options:
+                    direct = self._direct_candidate(
+                        source, source_option, depot, depot_option
+                    )
+                    if direct is not None:
+                        inbound_distance[terminal_position] = min(
+                            inbound_distance[terminal_position], direct[0]
+                        )
+                        inbound_time[terminal_position] = min(
+                            inbound_time[terminal_position], direct[1]
+                        )
+                    node = source_option.outbound_node
+                    if not np.isfinite(reverse_time[node]) or not np.isfinite(
+                        reverse_distance[node]
+                    ):
+                        continue
+                    candidate_time = (
+                        source.connector_time_s
+                        + source_option.outbound_time_s
+                        + float(reverse_time[node])
+                        + depot_option.inbound_time_s
+                        + depot.connector_time_s
+                    )
+                    candidate_distance = (
+                        source.connector_distance_m
+                        + source_option.outbound_distance_m
+                        + float(reverse_distance[node])
+                        + depot_option.inbound_distance_m
+                        + depot.connector_distance_m
+                    )
+                    if (candidate_time, candidate_distance) < (
+                        inbound_time[terminal_position],
+                        inbound_distance[terminal_position],
+                    ):
+                        inbound_time[terminal_position] = candidate_time
+                        inbound_distance[terminal_position] = candidate_distance
+        arrays = (outbound_time, inbound_time, outbound_distance, inbound_distance)
+        if any(not np.isfinite(array).all() for array in arrays):
+            raise ValueError("At least one territory candidate is unreachable from the depot")
+        return DepotTerminalStar(
+            outbound_time_s=outbound_time,
+            inbound_time_s=inbound_time,
+            outbound_distance_km=outbound_distance / 1000.0,
+            inbound_distance_km=inbound_distance / 1000.0,
+            report={
+                "schema": "cle_evrptw_depot_terminal_star_v1",
+                "terminal_count": count,
+                "path_policy": "directed_edge_time_without_turn_penalty_for_territory_only_v1",
+                "turn_aware_final_matrix_required": True,
+                "destination_node_count": len(destination_nodes),
+            },
         )
 
     def _partial_costs(self, option: AccessOption, *, outbound: bool) -> tuple[float, float]:

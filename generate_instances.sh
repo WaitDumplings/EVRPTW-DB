@@ -10,6 +10,9 @@ INSTANCE_MODE="${INSTANCE_MODE:-research}"
 INSTANCE_METHOD="${INSTANCE_METHOD:-stage2}"
 CLE_ROOT="${CLE_ROOT:-$ROOT_DIR/EVRPTW_Dataset/CLE_v1/us_11city}"
 INSTANCE_OUTPUT_ROOT="${INSTANCE_OUTPUT_ROOT:-$ROOT_DIR/EVRPTW_Dataset/Instances_v1/us_11city}"
+AMAZON_MODEL_BUILD_INPUTS="${AMAZON_MODEL_BUILD_INPUTS:-$GENERATOR_DIR/data/sources/amazon-last-mile-2021/model_build_inputs}"
+AMAZON_ARTIFACT_ROOT="${AMAZON_ARTIFACT_ROOT:-$ROOT_DIR/EVRPTW_Dataset/Calibration_v1/amazon_stage2_v2}"
+MAX_ATTEMPTS_PER_FAMILY="${MAX_ATTEMPTS_PER_FAMILY:-4}"
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "Python executable not found: $PYTHON_BIN" >&2
@@ -21,7 +24,6 @@ if [[ ! -d "$CLE_ROOT/cities" ]]; then
   echo "Run ./generate_cle.sh first." >&2
   exit 2
 fi
-
 case "$INSTANCE_METHOD" in
   stage2|restore) ;;
   *)
@@ -29,6 +31,17 @@ case "$INSTANCE_METHOD" in
     exit 2
     ;;
 esac
+
+if [[ "$INSTANCE_METHOD" == "stage2" && ! -f "$AMAZON_ARTIFACT_ROOT/manifest.json" ]]; then
+  for amazon_file in route_data.json package_data.json travel_times.json; do
+    if [[ ! -f "$AMAZON_MODEL_BUILD_INPUTS/$amazon_file" ]]; then
+      echo "Amazon model-build input is missing: $AMAZON_MODEL_BUILD_INPUTS/$amazon_file" >&2
+      echo "Run EVRPTW_Dataset_Generator/scripts/download_amazon_last_mile_2021.sh" >&2
+      echo "or set AMAZON_MODEL_BUILD_INPUTS to an existing ALMRRC 2021 model_build_inputs directory." >&2
+      exit 2
+    fi
+  done
+fi
 
 if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
   case "$INSTANCE_MODE" in
@@ -47,6 +60,12 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+
+if [[ "$INSTANCE_METHOD" == "stage2" && ! -f "$AMAZON_ARTIFACT_ROOT/manifest.json" ]]; then
+  "$PYTHON_BIN" scripts/build_amazon_stage2_artifacts.py \
+    --model-build-inputs "$AMAZON_MODEL_BUILD_INPUTS" \
+    --output-dir "$AMAZON_ARTIFACT_ROOT"
+fi
 
 extra_args=("$@")
 if [[ "$INSTANCE_METHOD" == "stage2" && "$INSTANCE_MODE" == "non_release_pilot" ]]; then
@@ -70,9 +89,11 @@ if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
     --block-group-preset configs/us_census_block_groups_v1.json \
     --block-group-source-dir data/sources/census_block_groups_2025 \
     --output-root "$INSTANCE_OUTPUT_ROOT" \
+    --amazon-artifact-root "$AMAZON_ARTIFACT_ROOT" \
     --mode "$INSTANCE_MODE" \
     --workers "$WORKERS" \
     --families-per-worker-task "$FAMILIES_PER_WORKER_TASK" \
+    --max-attempts-per-family "$MAX_ATTEMPTS_PER_FAMILY" \
     "${extra_args[@]}"
 else
   INSTANCE_ROOT="$INSTANCE_OUTPUT_ROOT" \
@@ -83,3 +104,6 @@ else
 fi
 
 echo "Instance output: $INSTANCE_OUTPUT_ROOT"
+if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
+  echo "Phase-1 metrics: $INSTANCE_OUTPUT_ROOT/reports/phase1"
+fi

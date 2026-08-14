@@ -150,7 +150,9 @@ than file hashes:
 
 ## 6. Production estimate
 
-The frozen plan has 7,000 Cus1000 parent families and 100 Cus2000 families.
+The current frozen plan has 7,500 Cus1000 parent families, including 500
+Cus1000 controls paired with the 500 Cus2000 families, and 500 Cus2000 parent
+families.
 Using the measured steady-state New York throughput, two local workers imply
 approximately 22-30 hours including family verification. The range allows for
 startup, city changes, graph-size variation, and storage overhead. It replaces

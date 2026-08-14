@@ -17,7 +17,7 @@ import pandas as pd
 from evrptw_cle.preflight import AFDC_REQUIRED_COLUMNS
 from evrptw_cle.util import sha256_file, write_json
 
-API_URL = "https://developer.nrel.gov/api/alt-fuel-stations/v1/all.csv"
+API_URL = "https://developer.nlr.gov/api/alt-fuel-stations/v1.csv"
 
 
 def main() -> None:
@@ -27,11 +27,15 @@ def main() -> None:
         type=Path,
         default=Path("data/sources/afdc/afdc_us_public_available_electric.csv"),
     )
-    parser.add_argument("--api-key", default=os.environ.get("NREL_API_KEY"))
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("NLR_API_KEY") or os.environ.get("NREL_API_KEY"),
+        help="NLR Developer Network key; NLR_API_KEY and legacy NREL_API_KEY are supported.",
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     if not args.api_key:
-        parser.error("provide --api-key or set NREL_API_KEY")
+        parser.error("provide --api-key or set NLR_API_KEY (legacy NREL_API_KEY also works)")
     root = Path(__file__).resolve().parents[1]
     output = args.output if args.output.is_absolute() else root / args.output
     if output.exists() and not args.force:

@@ -29,6 +29,8 @@
   "demand": {
     "unit": "cm3",
     "vehicle_capacity_unit": "cm3",
+    "source": "amazon_last_mile_2021_station_day_templates",
+    "template_policy": "single_day_then_same_station_same_day_type_composite",
     "package_count_stored_separately": true,
     "mass_track_enabled": false
   },
@@ -49,6 +51,17 @@
     "base_geography": "census_block_group",
     "road_subgroup_field": "anchor_scc_id"
   },
+  "spatial_activation": {
+    "contract_id": "amazon_stationday_multi_region_community_graph_v3",
+    "territory_envelope": "amazon_station_to_stop_time_q99",
+    "structure_source_is_independent_of_order_source": true,
+    "structure_scaling_policy": "downscale_only",
+    "quota_rounding": "deterministic_min_cost_controlled_matrix_rounding",
+    "reservation_unit": "latent_customer_id",
+    "community_transit_graph": "directed_osm_cross_block_group_edges",
+    "view_partition": "region_by_decile_controlled_rounding_tree",
+    "region_redraw_cap_provisional": 3
+  },
   "matrix_family": {
     "dtype": "float32",
     "path_policy_id": "distance_shortest_directed_physical_path_v1",
@@ -61,6 +74,9 @@
     "core_test_parent_families_per_track": 500,
     "scalability_parent_families": 500,
     "lower_scale_storage": "index_view_only",
+    "train_view_tree": "1000_to_2x500_to_10x100_to_20x50",
+    "evaluation_view_policy": "one_strictly_nested_chain",
+    "scalability_pair": "cus1000_control_subset_of_cus2000",
     "store_runtime_masks": false
   },
   "scales": [

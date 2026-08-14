@@ -5,7 +5,11 @@ import json
 import geopandas as gpd
 from shapely.geometry import LineString, Point
 
-from evrptw_cle.facilities import _anchor_points_to_edges, _connector_tokens
+from evrptw_cle.facilities import (
+    _afdc_manifest_output_sha256,
+    _anchor_points_to_edges,
+    _connector_tokens,
+)
 
 
 def test_connector_tokens_normalize_afdc_values() -> None:
@@ -15,6 +19,15 @@ def test_connector_tokens_normalize_afdc_values() -> None:
         "TESLA",
     }
     assert _connector_tokens(None) == set()
+
+
+def test_afdc_manifest_hash_supports_raw_and_resolved_schemas() -> None:
+    assert _afdc_manifest_output_sha256({"sha256": "raw-hash", "output": "/tmp/a.csv"}) == (
+        "raw-hash"
+    )
+    assert _afdc_manifest_output_sha256(
+        {"output": {"path": "/tmp/a.csv", "sha256": "resolved-hash"}}
+    ) == "resolved-hash"
 
 
 def test_facility_point_retains_directed_edge_refs() -> None:

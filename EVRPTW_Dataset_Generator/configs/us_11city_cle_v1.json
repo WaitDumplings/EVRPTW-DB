@@ -54,7 +54,7 @@
     "road_access_distance_policy": "retain_all_and_flag_tail"
   },
   "speed_profile": {
-    "profile_id": "us_hpms_nrel_v1",
+    "profile_id": "us_hpms_osm_moves5_v1",
     "functional_class_priority": ["high_confidence_hpms_f_system", "osm_highway_fallback"],
     "legal_speed_priority": [
       "osm_directional_maxspeed",
@@ -80,14 +80,15 @@
         "ambiguity_overlap_margin": 0.2
       }
     },
-    "nrel_source": {
-      "report": "NREL/TP-5400-65921",
-      "doi": "10.2172/1397153",
-      "table": 14,
-      "statistic": "Average Driving Speed profile means for FDNA clusters 3, 2, and 1",
-      "hmu_mapping_status": "explicit US adapter assumption, not an NREL road-label assignment"
+    "moves_source": {
+      "profile": "configs/us_moves5_speed_profile_v1.json",
+      "model": "U.S. EPA MOVES5",
+      "database": "movesdb20241112",
+      "source_type_id": 32,
+      "service_window": "08:00-24:00",
+      "free_flow_method": "weekend 06:00-10:00 VHT-weighted speed-bin Q85",
+      "edge_free_flow_proxy": "direction-applicable legal speed"
     },
-    "nrel_mode_speed_mph": {"H": 48.57, "M": 33.64, "U": 22.62},
     "vehicle_speed_cap_kph": null,
     "instance_operational_scenarios": "stage_2"
   }

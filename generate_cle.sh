@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GENERATOR_DIR="$ROOT_DIR/EVRPTW_Dataset_Generator"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+CLE_PROFILE="${CLE_PROFILE:-$GENERATOR_DIR/configs/us_11city_cle_v1.json}"
 WORK_ROOT="${CLE_WORK_ROOT:-$GENERATOR_DIR/work/us-11city-v1}"
 RELEASE_ROOT="${CLE_RELEASE_ROOT:-$ROOT_DIR/EVRPTW_Dataset/CLE_v1/us_11city}"
 NSI_CACHE_ROOT="${NSI_CACHE_ROOT:-$GENERATOR_DIR/data/sources/nsi-us-11city}"
@@ -17,6 +18,10 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
 fi
 if ! command -v osmium >/dev/null 2>&1; then
   echo "osmium is required. Activate the environment from environment.yml." >&2
+  exit 2
+fi
+if [[ ! -f "$CLE_PROFILE" ]]; then
+  echo "CLE profile is missing: $CLE_PROFILE" >&2
   exit 2
 fi
 
@@ -36,9 +41,16 @@ fi
 
 cd "$GENERATOR_DIR"
 export PYTHONPATH="$GENERATOR_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+
+echo "CLE profile: $CLE_PROFILE"
+echo "CLE work root: $WORK_ROOT"
 
 "$PYTHON_BIN" scripts/build_cle_cohort.py \
-  --profile configs/us_11city_cle_v1.json \
+  --profile "$CLE_PROFILE" \
   --work-root "$WORK_ROOT" \
   --release-root "$RELEASE_ROOT" \
   --nsi-workers "$NSI_WORKERS" \

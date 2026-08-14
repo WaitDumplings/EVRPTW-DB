@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Stage2Config
+from .rounding import largest_remainder
 
 CORE_SCALES = ("cus100", "cus500", "cus1000")
 
@@ -172,7 +173,7 @@ def _view_scales_for_cohort(cohort_id: str) -> tuple[str, ...]:
     }:
         return CORE_SCALES
     if cohort_id == "scalability_cus2000/test/unseen_scale_same_cities":
-        return ("cus2000",)
+        return ("cus1000", "cus2000")
     raise KeyError(cohort_id)
 
 
@@ -225,6 +226,37 @@ def build_generation_plan(
             counts = {city: int(pilot_families_per_city) for city in cities}
 
         for city_slug in cities:
+            city_count = counts[city_slug]
+            fractional_day_counts = np.asarray(
+                [
+                    city_count * config.weekday_weight
+                    / (config.weekday_weight + config.weekend_weight),
+                    city_count * config.weekend_weight
+                    / (config.weekday_weight + config.weekend_weight),
+                ],
+                dtype=float,
+            )
+            day_counts = largest_remainder(
+                fractional_day_counts,
+                total=city_count,
+                seed=config.master_seed,
+                namespace=f"day_type_quota:{cohort['cohort_id']}:{city_slug}",
+                labels=["weekday", "weekend"],
+            )
+            day_labels = np.asarray(
+                ["weekday"] * int(day_counts[0])
+                + ["weekend"] * int(day_counts[1]),
+                dtype=object,
+            )
+            day_rng = np.random.default_rng(
+                derive_seed(
+                    config.master_seed,
+                    "day_type_slot_shuffle",
+                    cohort["cohort_id"],
+                    city_slug,
+                )
+            )
+            day_rng.shuffle(day_labels)
             for city_ordinal in range(counts[city_slug]):
                 family_id = _family_id(
                     config.dataset_id, str(cohort["cohort_id"]), city_slug, city_ordinal
@@ -249,6 +281,8 @@ def build_generation_plan(
                     "parent_charging_station_count": parent_scale.charging_stations,
                     "parent_terminal_count": parent_scale.terminal_count,
                     "customer_pool": str(cohort["customer_pool"]),
+                    "day_type": str(day_labels[city_ordinal]),
+                    "day_type_allocation_policy": "fixed_city_cohort_largest_remainder_5_to_2_v1",
                     "family_seed": family_seed,
                     "depot_seed": derive_seed(family_seed, "depot"),
                     "customer_superset_seed": derive_seed(family_seed, "customers"),
@@ -264,10 +298,21 @@ def build_generation_plan(
 
                 for scale_id in _view_scales_for_cohort(str(cohort["cohort_id"])):
                     scale = config.scale(scale_id)
-                    count = _branch_count(scale_id)
-                    branch_indices = range(count) if cohort["split_id"] == "train" else (
-                        derive_seed(family_seed, "evaluation_branch", scale_id) % count,
-                    )
+                    count = parent_scale.customers // scale.customers
+                    if cohort["cohort_id"] == "scalability_cus2000/test/unseen_scale_same_cities":
+                        branch_indices = (0,)
+                    elif cohort["split_id"] == "train":
+                        branch_indices = range(count)
+                    else:
+                        leaf = derive_seed(family_seed, "evaluation_chain_leaf") % 20
+                        branch_indices = (
+                            {
+                                "cus50": leaf,
+                                "cus100": leaf // 2,
+                                "cus500": leaf // 10,
+                                "cus1000": 0,
+                            }[scale_id],
+                        )
                     for branch_index in branch_indices:
                         view_id = _view_id(family_id, scale_id, int(branch_index))
                         consumer = _consumer_cohort(str(cohort["cohort_id"]), scale_id)
@@ -288,6 +333,10 @@ def build_generation_plan(
                                 "branch_index": int(branch_index),
                                 "branch_count": int(count),
                                 "customer_pool": str(cohort["customer_pool"]),
+                                "day_type": str(day_labels[city_ordinal]),
+                                "nested_evaluation_chain": bool(
+                                    cohort["split_id"] != "train"
+                                ),
                                 "view_seed": view_seed,
                                 "package_seed": derive_seed(view_seed, "packages"),
                                 "service_time_seed": derive_seed(view_seed, "service_time"),
@@ -333,13 +382,8 @@ def build_generation_plan(
         )
         for scale_id, group in family_frame.groupby("parent_scale_id", sort=True)
     }
-    legacy_six_matrix_bytes = int(
-        sum(matrix_bytes_by_parent_scale.values())
-        * 6
-        / config.stored_parent_matrix_count
-    )
     registry = {
-        "schema": "cle_evrptw_generation_plan_v1",
+        "schema": "cle_evrptw_generation_plan_v2",
         "dataset_id": config.dataset_id,
         "benchmark_version": config.benchmark_version,
         "master_seed": config.master_seed,
@@ -359,10 +403,6 @@ def build_generation_plan(
         "stored_parent_matrix_count": config.stored_parent_matrix_count,
         "estimated_parent_matrix_bytes_by_scale": matrix_bytes_by_parent_scale,
         "estimated_parent_matrix_bytes_total": int(sum(matrix_bytes_by_parent_scale.values())),
-        "legacy_six_matrix_bytes_total": legacy_six_matrix_bytes,
-        "matrix_storage_savings_vs_legacy_six_fraction": (
-            1.0 - config.stored_parent_matrix_count / 6.0
-        ),
     }
     return family_frame, view_frame, registry
 

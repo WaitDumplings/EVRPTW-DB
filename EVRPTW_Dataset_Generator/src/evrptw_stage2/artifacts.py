@@ -11,7 +11,6 @@ import pandas as pd
 
 from .orders import (
     FULL_CS_TO_DEPOT_CACHE_CONTRACT,
-    _build_full_state_route_cache,
     _single_customer_certificates,
 )
 
@@ -58,74 +57,36 @@ def load_materialized_view(
             allow_pickle=False,
         )
         matrices[name] = np.asarray(parent[np.ix_(parent_indices, parent_indices)])
-    if all(name in family_manifest["matrix_files"] for name in DERIVED_MATRIX_NAMES):
-        # Backward-compatible loading of old non-release six-matrix pilots.
-        for name in DERIVED_MATRIX_NAMES:
-            parent = np.load(
-                root / family_manifest["matrix_files"][name],
-                mmap_mode=mmap_mode,
-                allow_pickle=False,
-            )
-            matrices[name] = np.asarray(
-                parent[np.ix_(parent_indices, parent_indices)]
-            )
-        energy_matrix_source = "stored_legacy_v1"
-    else:
-        energy_model = family_manifest.get("energy_model", {})
-        specific_energy = float(
-            energy_model.get(
-                "specific_energy_consumption_kwh_per_km",
-                view_manifest["vehicle"][
-                    "specific_energy_consumption_kwh_per_km"
-                ],
-            )
-        )
-        matrices["distance_path_energy_kwh"] = (
-            matrices["distance_matrix_km"] * specific_energy
-        ).astype(np.float32)
-        matrices["running_time_path_energy_kwh"] = (
-            matrices["running_time_path_distance_km"] * specific_energy
-        ).astype(np.float32)
-        energy_matrix_source = "derived_from_path_distance"
+    specific_energy = float(
+        family_manifest["energy_model"]["specific_energy_consumption_kwh_per_km"]
+    )
+    matrices["distance_path_energy_kwh"] = (
+        matrices["distance_matrix_km"] * specific_energy
+    ).astype(np.float32)
+    matrices["running_time_path_energy_kwh"] = (
+        matrices["running_time_path_distance_km"] * specific_energy
+    ).astype(np.float32)
     with np.load(view_root / view_manifest["customer_attributes"], allow_pickle=False) as data:
         attributes = {key: data[key] for key in data.files}
     customer_count = int(view_manifest["customer_count"])
     charger_count = int(view_manifest["charging_station_count"])
-    if "charging_attributes" in view_manifest:
-        cache_contract = view_manifest.get("full_cs_to_depot_cache", {})
-        if cache_contract != FULL_CS_TO_DEPOT_CACHE_CONTRACT:
-            raise ValueError("Full-CS-to-depot cache contract mismatch")
-        with np.load(
-            view_root / view_manifest["charging_attributes"], allow_pickle=False
-        ) as data:
-            charging_power = data["charging_power_kw"].astype(
-                np.float32, copy=False
-            )
-            full_cs_to_depot_time = data["full_cs_to_depot_time_s"].astype(
-                np.float32, copy=False
-            )
-        full_cs_cache_source = "stored"
-    else:
-        # Backward-compatible loading for non-release v1 pilots. New artifacts
-        # always store this vector in charging_attributes.npz.
-        charging_power = np.load(
-            view_root / view_manifest["charging_power"], allow_pickle=False
-        ).astype(np.float32, copy=False)
-        cache = _build_full_state_route_cache(
-            customer_count=customer_count,
-            running_time_matrix_s=matrices["running_time_shortest_matrix_s"],
-            running_time_energy_matrix_kwh=matrices["running_time_path_energy_kwh"],
-            charging_power_kw=charging_power,
-            battery_capacity_kwh=float(
-                view_manifest["vehicle"]["battery_capacity_kwh"]
-            ),
-            charging_efficiency=float(
-                view_manifest["charging_policy"]["charging_efficiency"]
-            ),
+    cache_contract = view_manifest.get("full_cs_to_depot_cache", {})
+    if cache_contract != FULL_CS_TO_DEPOT_CACHE_CONTRACT:
+        raise ValueError("Full-CS-to-depot cache contract mismatch")
+    with np.load(
+        view_root / view_manifest["charging_attributes"], allow_pickle=False
+    ) as data:
+        charging_power = data["charging_power_kw"].astype(np.float32, copy=False)
+        full_cs_to_depot_time = data["full_cs_to_depot_time_s"].astype(
+            np.float32, copy=False
         )
-        full_cs_to_depot_time = cache.to_depot_s[1:].astype(np.float32)
-        full_cs_cache_source = "computed_legacy_v1"
     coordinates = terminals[["longitude", "latitude"]].to_numpy(dtype=np.float32)
+    customer_terminals = terminals.iloc[1 : 1 + customer_count]
+    def _customer_strings(column: str) -> np.ndarray:
+        if column not in customer_terminals:
+            return np.full(customer_count, "", dtype=str)
+        return customer_terminals[column].fillna("").astype(str).to_numpy()
+
     payload = {
         "schema": "cle_evrptw_loaded_view_v3",
         "instance_id": view_id,
@@ -138,6 +99,9 @@ def load_materialized_view(
         "customers": coordinates[1 : 1 + customer_count],
         "charging_stations": coordinates[1 + customer_count :],
         "terminal_source_ids": terminals["source_id"].astype(str).to_numpy(),
+        "order_template_ids": _customer_strings("order_template_id"),
+        "order_station_day_ids": _customer_strings("order_station_day_id"),
+        "order_template_source_modes": _customer_strings("order_source_mode"),
         "terminal_parent_indices": parent_indices,
         "package_counts": attributes["package_counts"].astype(np.int32, copy=False),
         "demands_cm3": attributes["demands_cm3"].astype(np.float32, copy=False),
@@ -189,8 +153,8 @@ def load_materialized_view(
             "non_release_pilot": bool(view_manifest["non_release_pilot"]),
             "reference_profile_id": family_manifest["reference_profile_id"],
             "source_view_schema": str(view_manifest["schema"]),
-            "full_cs_to_depot_cache_source": full_cs_cache_source,
-            "energy_matrix_source": energy_matrix_source,
+            "full_cs_to_depot_cache_source": "stored",
+            "energy_matrix_source": "derived_from_path_distance",
         },
         **matrices,
     }
@@ -315,6 +279,48 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
         errors.append("terminal_index row count does not match family manifest")
     if terminal_index["source_id"].astype(str).duplicated().any():
         errors.append("terminal_index contains duplicate source IDs")
+    current_contract = manifest.get("stage2_generation_contract") == (
+        "amazon_spatial_activation_v2"
+    )
+    customer_count = int(manifest.get("parent_customer_count", 0))
+    customer_rows = terminal_index.iloc[1 : 1 + customer_count]
+    if current_contract:
+        for column in (
+            "order_template_id",
+            "order_station_day_id",
+            "order_source_mode",
+        ):
+            if column not in customer_rows:
+                errors.append(f"terminal_index is missing {column}")
+            elif customer_rows[column].isna().any():
+                errors.append(f"terminal_index has missing customer {column}")
+
+    phase1_paths = manifest.get("phase1_metric_files", {})
+    expected_phase1 = {
+        "phase1_metrics",
+        "phase1_observations",
+        "phase1_region_pair_metrics",
+    }
+    if current_contract and set(phase1_paths) != expected_phase1:
+        errors.append("family manifest does not declare the three Phase-1 metric files")
+    elif phase1_paths:
+        for label, relative in phase1_paths.items():
+            if not (root / relative).is_file():
+                errors.append(f"missing {label} file")
+        metrics_path = root / phase1_paths["phase1_metrics"]
+        observations_path = root / phase1_paths["phase1_observations"]
+        if metrics_path.is_file():
+            phase1 = _read_json(metrics_path)
+            if phase1.get("schema") != "evrptw_phase1_family_metrics_v1":
+                errors.append("Phase-1 family metric schema mismatch")
+            if phase1.get("family_id") != manifest.get("family_id"):
+                errors.append("Phase-1 family metric family_id mismatch")
+            if not bool(phase1.get("hard_gates", {}).get("passed", False)):
+                errors.append("Phase-1 hard correctness gates did not pass")
+        if observations_path.is_file():
+            phase1_observations = pd.read_parquet(observations_path)
+            if len(phase1_observations) != customer_count:
+                errors.append("Phase-1 observation row count does not match parent customers")
     matrix_metrics: dict[str, Any] = {}
     stored_names = tuple(manifest["matrix_files"])
     expected_stored = set(STORED_MATRIX_NAMES)
@@ -357,7 +363,6 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
     requires_charging_customer_count = 0
     maximum_charging_visit_count = 0
     stored_full_cs_cache_view_count = 0
-    legacy_computed_full_cs_cache_view_count = 0
     unreachable_full_cs_return_count = 0
     for view_id in view_ids:
         try:
@@ -397,14 +402,7 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
             certificate = payload["feasibility_certificate"]
             for error in _verify_view_feasibility_certificate(payload):
                 errors.append(f"{view_id}: {error}")
-            if payload["metadata"]["full_cs_to_depot_cache_source"] == "stored":
-                stored_full_cs_cache_view_count += 1
-            else:
-                legacy_computed_full_cs_cache_view_count += 1
-                if not bool(manifest.get("non_release_pilot", False)):
-                    errors.append(
-                        f"{view_id}: official view does not store full-CS-to-depot cache"
-                    )
+            stored_full_cs_cache_view_count += 1
             unreachable_full_cs_return_count += int(
                 (~np.isfinite(payload["full_cs_to_depot_time_s"])).sum()
             )
@@ -423,11 +421,6 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
             errors.append(f"{view_id}: {error}")
     if bool(manifest.get("non_release_pilot", False)):
         warnings.append("Family is a non-release pilot and cannot be published as an official split.")
-    if legacy_computed_full_cs_cache_view_count:
-        warnings.append(
-            "Legacy v1 views do not store the full-CS-to-depot cache; the loader "
-            "recomputed it for verification. Regenerated v2 views store it."
-        )
     if manifest.get("reference_profile_status") != "release_calibrated":
         warnings.append("Reference operations profile is not release calibrated.")
     return {
@@ -444,9 +437,6 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
         "requires_charging_customer_count": requires_charging_customer_count,
         "maximum_charging_visit_count": maximum_charging_visit_count,
         "stored_full_cs_cache_view_count": stored_full_cs_cache_view_count,
-        "legacy_computed_full_cs_cache_view_count": (
-            legacy_computed_full_cs_cache_view_count
-        ),
         "unreachable_full_cs_return_count": unreachable_full_cs_return_count,
         "matrix_total_bytes": int(manifest["matrix_total_bytes"]),
         "matrix_metrics": matrix_metrics,

@@ -22,10 +22,11 @@ time, or realized time window.
 
 ### Stage 2: CLE-EVRPTW instances
 
-An instance selects active locations and facilities, samples package demand,
-service time, and one time window per active location, chooses a vehicle/fleet
-policy, creates one static directed weekday or weekend speed realization, and
-exports paired distance-shortest and exact turn-aware fastest-path matrices.
+An instance selects a depot and exactly N active locations, chooses relevant
+real charging sites, attaches distinct feasible Amazon stop-level order
+templates, chooses a vehicle/fleet policy, creates one static directed weekday
+or weekend road state, and exports paired distance-shortest and exact
+turn-aware fastest-path matrices.
 The four dense matrices are a deterministic local cache: a portable release
 may omit them and reconstruct them bit-for-bit from the frozen CLE, stored
 family road-state factors, and terminal projections. The two energy matrices
@@ -65,7 +66,12 @@ It integrates public/freely accessible sources with distinct roles:
 - NREL Alternative Fuels Data Center charging sites;
 - FHWA HPMS functional-class and legal-speed evidence, conflated to OSM by the
   Generator with an auditable direction-aware matcher;
-- an explicitly documented NREL Fleet DNA running-speed prior.
+- EPA MOVES5 national light-commercial-truck speed distributions, converted
+  into weekday/weekend road-class retention factors rather than treated as
+  edge observations; and
+- Amazon Last Mile Routing Research Challenge 2021 depot-day route structure
+  and stop-level package/service/time-window templates, without transferring
+  its obfuscated coordinates to CLE cities.
 
 The result is best described as a **real-geography, public-data-integrated,
 semi-synthetic benchmark substrate**. Public data grounds topology, geometry,
@@ -86,6 +92,41 @@ Optimized local workers, memory limits, exact-output benchmarks, resume, and
 multi-server sharding are documented in
 [`docs/STAGE2_PERFORMANCE.md`](EVRPTW_Dataset_Generator/docs/STAGE2_PERFORMANCE.md).
 
+The current speed schema is `evrptw_directed_speed_profiles_v6`. CLEs generated
+under the previous NREL-anchor profile must be regenerated before producing
+matrices with the MOVES5 reference model; old matrices must not be mixed with
+v6 CLEs.
+
+### One city by name (not limited to the reference 11)
+
+The frozen 11-city cohort remains the paper benchmark. A separate U.S. city
+adapter accepts any Census Place name plus its state and constructs a compatible
+single-city profile. It does not silently add the city to the paper cohort.
+
+```bash
+conda activate evrptw-cle
+export NLR_API_KEY=YOUR_FREE_NLR_DEVELOPER_KEY
+
+# State-wide OSM extract (generic default).
+./generate_us_city_cle.sh --city "San Antonio" --state TX
+
+# An official smaller Geofabrik extract may be selected when available.
+./generate_us_city_cle.sh \
+  --city "San Diego" --state CA \
+  --geofabrik-region california/socal
+```
+
+The adapter resolves the name inside the specified state against 2025 Census
+Places, builds the city-proper land boundary, downloads/reuses OSM, Microsoft
+building, bounded FHWA HPMS, and national AFDC inputs. It then derives OSM POI
+and Census-address evidence for AFDC coordinate QA before invoking the same CLE
+builder and verifier. Raw AFDC coordinates remain in the evidence table, and a
+Census address anchor is not labeled as exact EVSE geometry. NSI is queried and
+cached by the existing customer stage.
+Ambiguous place names fail with candidate GEOIDs; they are never geocoded by a
+best-effort web search. Outputs are written under
+`EVRPTW_Dataset/CLE_v1/us_custom/<city>/`.
+
 After unpacking the server bundle:
 
 ```bash
@@ -93,8 +134,23 @@ cd EVRPTW_Dataset_Generator
 conda env create -f environment.yml
 conda activate evrptw-cle
 cd ..
+EVRPTW_Dataset_Generator/scripts/download_amazon_last_mile_2021.sh
 ./generate_cle.sh
 ./generate_instances.sh
+```
+
+The downloader retrieves only the three public Amazon training JSON files used
+by Stage 2, plus the upstream license and README. It uses unsigned access to
+the AWS Open Data bucket, so no AWS account is required. Raw Amazon files stay
+outside Git; see
+[`AMAZON_LAST_MILE_2021.md`](EVRPTW_Dataset_Generator/docs/AMAZON_LAST_MILE_2021.md)
+for the compact-artifact and release-license policy.
+
+For a complete isolated San Diego vertical slice after the source bundle is in
+place:
+
+```bash
+./validate_san_diego.sh
 ```
 
 For an existing Python 3.11 environment, the repository-level pip equivalent
@@ -111,9 +167,15 @@ a missing dependency fails immediately with the corresponding install command.
 These are the two production entry points. `generate_cle.sh` writes the eleven
 portable CLEs under `EVRPTW_Dataset/CLE_v1/us_11city/` and removes its
 intermediate work tree after a complete successful run. `generate_instances.sh`
-uses 12 processes by default and writes the split plan, community ledgers,
-matrix families, views, and verification reports under
+uses 12 processes by default and writes the split plan, community adjacency,
+matrix families, views, verification reports, rejected-attempt records, and
+Phase-1 metrics under
 `EVRPTW_Dataset/Instances_v1/us_11city/`.
+
+`generate_us_city_cle.sh` is the exploratory single-city entry point. A custom
+city can later be promoted into a new frozen cohort only by versioning its
+source snapshot and cohort configuration; changing a city name does not mutate
+the 11-city benchmark.
 
 The combined entry point exposes both supported CLE-backed acquisition modes:
 
@@ -163,16 +225,15 @@ checksum manifests.
 
 ## Current implementation status
 
-The new Generator implements both the Stage-1 CLE boundary and a separate
-`evrptw_stage2` package. Stage 2 now has a strict portable-CLE reader,
-official-versus-pilot gates, Census-block-group community partitioning,
-deterministic family/view plans, unit-aware customer activation, depot-aware
-catchments, nested charger selection independent of daily active-customer IDs,
-directed edge-level weekday/weekend road states, projected-edge
-routing, exact turn-aware dual-path matrix families, volume/package/service/time-window
-attributes, a sufficient feasibility gate, a stored full-CS-to-depot
-fastest-feasible-time cache for dynamic mask acceleration, a consumer loader,
-and a structural verifier. The cache is static instance data, not a stored
+The Generator implements both Stage-1 CLE construction and a separate
+`evrptw_stage2` package. Stage 2 now includes a strict portable-CLE reader,
+complete-community held-out splits, a directed road-community adjacency graph,
+deterministic family/view plans, physical-facility depot grouping,
+Amazon-envelope territory construction, route-by-decile controlled rounding,
+road-contiguous region growth, globally unique customer assignment, customer-
+relevant real-CS selection, observed Amazon order-template covering, exact
+turn-aware dual-path matrices, a full-CS-to-depot multi-hop cache, and family-
+plus-corpus Phase-1 metrics. The cache is static instance data, not a stored
 runtime action mask.
 
 All eleven CLE packages have passed technical and package-portability

@@ -7,8 +7,9 @@ environment.
 - **Stage 1** freezes the city boundary, directed road graph, latent service
   locations, depot/charging candidates, and legal/reference road speeds.
 - **Stage 2** activates daily customers and generates package volume, service
-  time, one time window per location, a weekday/weekend road state, terminal
-  matrices, and feasibility certificates.
+  time, one time window per location by matching observed Amazon stop
+  templates, a weekday/weekend road state, terminal matrices, and feasibility
+  certificates.
 
 A CLE is not an instance. In particular, package count, realized demand,
 service time, time windows, and active-customer flags do not belong in Stage 1.
@@ -22,6 +23,8 @@ service time, time windows, and active-customer flags do not belong in Stage 1.
 - [Stage-2 中文审阅版](docs/STAGE2_INSTANCE_MODEL_CN.md): 与英文规范对应的
   中文模型、参数和 release-gap 说明。
 - [Data sources](docs/DATA_SOURCES.md): provenance and source limitations.
+- [Amazon source contract](docs/AMAZON_LAST_MILE_2021.md): official download,
+  local/release storage, and CC BY-NC attribution boundary.
 - [Output schema](docs/OUTPUT_SCHEMA.md): CLE and instance artifact contracts.
 - [Portability](docs/PORTABILITY.md): adapters for other cities/countries.
 - [11-city build report](docs/US_11CITY_BUILD_REPORT.md): completed CLE and
@@ -38,8 +41,9 @@ Dallas, and Fort Worth. Jacksonville is the eleventh CLE and held-out Test-3
 city.
 
 The reference adapter integrates Census, OSM, Microsoft US Building
-Footprints, USACE NSI, AFDC, HPMS, NREL Fleet DNA, EPA MOVES, Amazon
-ARCD aggregates, and official Rivian Commercial Van specifications. It is one
+Footprints, USACE NSI, AFDC, HPMS, EPA MOVES5, Amazon Last Mile Routing
+Research Challenge 2021 templates, and official Rivian Commercial Van
+specifications. It is one
 portable U.S. implementation of the canonical schemas, not a requirement that
 another country use the same sources.
 
@@ -55,20 +59,93 @@ conda activate evrptw-cle
 `pip install -e .` is also supported when system dependencies are already
 available.
 
+## Generate any U.S. city by name
+
+The paper cohort and the reusable city adapter are intentionally separate:
+
+- `./generate_cle.sh` rebuilds the frozen 11-city benchmark profile.
+- `./generate_us_city_cle.sh --city NAME --state STATE` creates a new
+  single-city profile without editing the frozen cohort.
+
+From the repository root:
+
+```bash
+conda activate evrptw-cle
+export NLR_API_KEY=YOUR_FREE_NLR_DEVELOPER_KEY
+
+./generate_us_city_cle.sh --city "San Antonio" --state TX
+```
+
+The command performs these steps in order:
+
+1. Resolve `city + state` to exactly one 2025 Census Place GEOID. If the name
+   is ambiguous, stop and report candidates; `--census-place-geoid` is the
+   explicit disambiguation interface.
+2. Download Census Place, County, and AREAWATER inputs and construct the
+   city-proper administrative and land-only service boundaries.
+3. Download/reuse the official Microsoft state building archive.
+4. Download/reuse an official Geofabrik OSM PBF. The generic default is the
+   state extract; `--geofabrik-region california/socal` or `--pbf-url URL`
+   may select a smaller official extract that fully contains the city.
+5. Query the official FHWA 2018 HPMS public FeatureServer only over a padded
+   city bounding box. HPMS remains evidence for functional class and, after
+   direction verification, missing posted speed; it is never the routing graph.
+6. Download/reuse the national public/available AFDC electric-station snapshot.
+   A free `NLR_API_KEY` is required only when that shared file is absent.
+   The legacy environment name `NREL_API_KEY` remains accepted for compatibility.
+7. Extract OSM charging POIs for the city, batch-geocode the state's AFDC
+   addresses with the Census Geocoder, and build a city-specific resolved AFDC
+   evidence table. Raw AFDC coordinates are always retained. An address match
+   is labeled as an address anchor, not as exact EVSE geometry.
+8. Run the normal road, building, depot, NSI/customer, facility, speed,
+   connectivity, packaging, and portable-verification stages.
+
+Generated configs and resumable work stay under
+`work/us-city-adapter/<city>/`; the portable result is
+`../EVRPTW_Dataset/CLE_v1/us_custom/<city>/`. Public state/national inputs stay
+under `data/sources/` and are reused by later cities. Useful modes are:
+
+```bash
+# Resolve the Census Place and inspect the generated contract only.
+./generate_us_city_cle.sh --city "Austin" --state TX --prepare-only
+
+# Prepare configs and all sources but stop before the expensive CLE build.
+./generate_us_city_cle.sh --city "Austin" --state TX --sources-only
+
+# Force fresh public-source downloads (normally unnecessary).
+./generate_us_city_cle.sh --city "Austin" --state TX --force-downloads
+```
+
+Research-mode custom building registries do not pre-scan a multi-gigabyte state
+file solely to pin a hash and feature count. Those values are recorded during
+the one extraction pass. The final public release workflow may pin and verify
+the resulting source snapshot. This optimization changes provenance timing,
+not the extracted locations or CLE schema.
+
 ## Two production commands
 
 Run both commands from the repository root:
 
 ```bash
+EVRPTW_Dataset_Generator/scripts/download_amazon_last_mile_2021.sh
 ./generate_cle.sh
 ./generate_instances.sh
 ```
 
+`generate_instances.sh` accepts only the current Stage-1 speed contract:
+`evrptw_directed_speed_profiles_v6` with a versioned reference profile ID.
+After changing the legal-speed evidence or MOVES profile, rerun
+`generate_cle.sh` first and then regenerate all matrix families. The reader
+rejects legacy single-column `reference_speed_kph` CLEs so old and new speed
+semantics cannot be mixed silently.
+
 The first command generates all eleven CLEs and writes them only below
 `EVRPTW_Dataset/CLE_v1/us_11city/`. The second generates the frozen research
 benchmark with 12 spawn-safe processes and writes it below
-`EVRPTW_Dataset/Instances_v1/us_11city/`. Both runners are resumable. The full
-completed corpus uses about 146.56 GiB for the four parent matrices alone. A
+`EVRPTW_Dataset/Instances_v1/us_11city/`. Before generation it converts the
+three Amazon model-build JSON files into a compact, reusable artifact layer.
+Both runners are resumable. The full
+completed corpus uses about 154.79 GiB for the four parent matrices alone. A
 slim export omits that deterministic cache and is about 4.09 GiB before
 compression.
 
@@ -78,6 +155,7 @@ Useful environment overrides are:
 WORKERS=8 ./generate_instances.sh
 KEEP_CLE_WORK=1 ./generate_cle.sh
 INSTANCE_MODE=non_release_pilot WORKERS=1 \
+AMAZON_MODEL_BUILD_INPUTS=/data/almrrc2021-data-training/model_build_inputs \
   ./generate_instances.sh --cities san-diego --tracks train --max-families 1
 ```
 
@@ -127,6 +205,13 @@ data/sources/
     arizona.parquet
     pennsylvania.parquet
     florida.parquet
+  moves5/                             # optional reproducibility input
+    movesdb20241112.sql
+  amazon-last-mile-2021/              # may instead live outside the repo
+    model_build_inputs/
+      route_data.json
+      package_data.json
+      travel_times.json
 ```
 
 The server bundle already includes the frozen NSI API tile responses, so the
@@ -140,7 +225,7 @@ python scripts/fetch_pbf_sources.py \
   --preset configs/us_11city_population_v1.json \
   --manifest data/sources/geofabrik/source_manifest.json
 
-export NREL_API_KEY=YOUR_KEY
+export NLR_API_KEY=YOUR_KEY
 python scripts/download_afdc_snapshot.py
 python scripts/extract_osm_charging_pois.py
 python scripts/geocode_afdc_addresses_census.py \
@@ -150,7 +235,16 @@ python scripts/resolve_afdc_coordinates.py \
   --census-results data/sources/afdc/afdc_census_address_anchors.csv \
   --osm-pois data/sources/osm/osm_charging_pois_us_11city.csv \
   --output data/sources/afdc/afdc_us_public_available_electric_resolved_us_11city_v1.csv
+
+# Stage-2 source only; downloads the three used JSON files plus license/README.
+scripts/download_amazon_last_mile_2021.sh
 ```
+
+The Amazon downloader uses the public AWS Open Data bucket with
+`--no-sign-request`; no AWS account or API key is required. Raw Amazon JSON is
+kept under the ignored `data/sources/` tree and is not committed to Git. See
+[the Amazon source contract](docs/AMAZON_LAST_MILE_2021.md) before publishing
+the compact artifact or generated instances.
 
 The HPMS files are public FHWA geospatial extracts. Their exact extension is
 not fixed; the city-to-source mapping is versioned in
@@ -173,6 +267,22 @@ Build all eleven CLEs from the repository root:
 ```bash
 ./generate_cle.sh
 ```
+
+The repository includes the compact, frozen
+`configs/us_moves5_speed_profile_v1.json` used by CLE generation. It was
+derived from EPA database `movesdb20241112`; the raw 373 MiB SQL dump is not a
+runtime dependency. To reproduce the profile from the official database:
+
+```bash
+PYTHONPATH=src python scripts/derive_moves5_speed_profile.py \
+  --moves-sql data/sources/moves5/movesdb20241112.sql \
+  --output configs/us_moves5_speed_profile_v1.json
+```
+
+MOVES is not a road network. Its default tables provide national distributions
+by broad vehicle/road/day/hour strata. OSM/HPMS still supplies every edge,
+direction, class, and legal-speed scale; MOVES supplies only two urban
+speed-retention priors. See [the Stage-1 speed model](docs/PIPELINE.md#62-legal-free-flow-proxy-and-reference-speed).
 
 The underlying runner is composable for debugging:
 
@@ -228,6 +338,19 @@ The protocol and adapter are separate:
 - `configs/us_reference_instance_profile_v1.json` supplies replaceable U.S.
   activation, speed, order, vehicle, charging, and feasibility parameters.
 
+Build the compact Amazon artifact layer once (the production shell performs
+this automatically when `manifest.json` is absent):
+
+```bash
+PYTHONPATH=src python scripts/build_amazon_stage2_artifacts.py \
+  --model-build-inputs /data/almrrc2021-data-training/model_build_inputs \
+  --output-dir ../EVRPTW_Dataset/Calibration_v1/amazon_stage2_v2
+```
+
+The artifact layer records single-day and same-station multi-day-composite
+support, route/decile spatial references, stop-level order templates, and
+preprocessing attrition. It does not export Amazon coordinates.
+
 Download Census block groups, preflight one CLE, and freeze its community
 split:
 
@@ -271,6 +394,8 @@ evrptw-stage2 materialize-family \
   --plan-root work/stage2-pilot-v1/generation_plan \
   --family-id <family_id> \
   --customer-split work/stage2-pilot-v1/customer_splits/san-diego/customer_split_manifest.parquet \
+  --community-adjacency work/stage2-pilot-v1/customer_splits/san-diego/community_adjacency.parquet \
+  --amazon-artifact-root ../EVRPTW_Dataset/Calibration_v1/amazon_stage2_v2 \
   --output-root work/stage2-pilot-v1/materialized
 ```
 
@@ -279,8 +404,22 @@ Or run the repository-level vertical-slice shell:
 ```bash
 cd ..
 INSTANCE_MODE=non_release_pilot WORKERS=1 \
+AMAZON_MODEL_BUILD_INPUTS=/data/almrrc2021-data-training/model_build_inputs \
   ./generate_instances.sh --cities san-diego --tracks train --max-families 1
 ```
+
+To rebuild both stages in isolated directories and verify one complete San
+Diego family, run from the repository root:
+
+```bash
+./validate_san_diego.sh
+```
+
+This validation requires the same frozen Stage-1 U.S. source bundle as the
+eleven-city build. It writes the CLE, one family, the Stage-2 run report, and
+the Phase-1 metric bundle below
+`EVRPTW_Dataset/Validation/san-diego/`; it does not replace the production
+US-11-city release tree.
 
 The production shell defaults to 12 processes and one BLAS/OpenMP thread per
 process. A worker keeps one city's immutable routing topology across a
@@ -310,6 +449,17 @@ plus exact turn-aware fastest time and its path distance. The loader derives
 both energy matrices from the frozen linear coefficient
 `h = 100/257 kWh/km`. Lower scales store only parent indices and daily
 attributes; runtime masks are never stored.
+
+Every completed parent family also stores `phase1_metrics.json`, one row per
+parent customer in `phase1_observations.parquet`, and per-region pairwise
+diagnostics. A complete unsharded run aggregates them under
+`reports/phase1/`. For multi-server shards, aggregate after all family folders
+have been merged:
+
+```bash
+PYTHONPATH=src python scripts/aggregate_phase1_metrics.py \
+  --instance-root ../EVRPTW_Dataset/Instances_v1/us_11city
+```
 
 ### Slim instance distribution and reconstruction
 
@@ -407,7 +557,8 @@ plus Jacksonville Test-3, one 33-view nested training family, and one Cus2000
 family. Full measurements and remaining gates are in
 [US_11CITY_BUILD_REPORT.md](docs/US_11CITY_BUILD_REPORT.md).
 
-The frozen corpus contains 7,000 Cus1000 parent families and 500 Cus2000
+The frozen corpus contains 7,500 Cus1000 parent families (including the 500
+Cus1000 controls paired with Cus2000) and 500 Cus2000
 families. The completed build stores about 146.56 GiB of parent matrices,
 before view attributes and metadata. The optimized New York pilot reduced a
 four-family Cus1000 run from 121.80 s serial to 64.14 s with two workers; the
@@ -433,9 +584,11 @@ measurements, and multi-server sharding workflow.
 PYTHONPATH=src python -m pytest -q
 ```
 
-The Stage-2 suite covers split isolation, family/view counts, projected-edge
-routing, exact turn-aware path choice, package/volume/time-window generation,
-linear energy derivation, multi-hop CS return caching, and family verification.
+The Stage-2 suite covers split isolation, family/view counts, Amazon artifact
+preprocessing, controlled two-margin rounding, road-contiguous activation,
+global customer uniqueness, nested views, order-template covering,
+projected-edge routing, exact turn-aware path choice, linear energy derivation,
+multi-hop CS return caching, Phase-1 metrics, and family verification.
 
 The previous synthetic `evrptw_hierarchy` pipeline has been retired. The
 supported generator consists only of the CLE builder and CLE-backed Stage 2

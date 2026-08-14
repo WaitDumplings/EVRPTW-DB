@@ -115,10 +115,18 @@ def test_package_cle_copies_runtime_graph_and_survives_source_removal(
                 {"inputs": {"afdc": {"path": str(tmp_path / "afdc.csv")}}}
             ),
         ),
-        (
-            "profiles/speed_manifest.json",
-            json.dumps({"graph": {"path": str(graph)}}),
-        ),
+            (
+                "profiles/speed_manifest.json",
+                json.dumps(
+                    {
+                        "schema": "evrptw_directed_speed_profiles_v6",
+                        "graph": {"path": str(graph)},
+                        "reference_speed_contract": {
+                            "profile_id": "test-moves-profile"
+                        },
+                    }
+                ),
+            ),
     ):
         path = source_cle / relative
         path.parent.mkdir(parents=True, exist_ok=True)

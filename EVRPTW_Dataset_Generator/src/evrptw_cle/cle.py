@@ -504,23 +504,6 @@ def assemble_cle(
         "source_registry": source_registry_path,
         "qa_report": report_path,
     }
-    operational_scenarios = cle_dir / "profiles/static_operational_scenarios.parquet"
-    if operational_scenarios.exists():
-        output_paths["static_operational_scenarios"] = operational_scenarios
-    for output_key, name in (
-        ("static_speed_route_audit_report", "static_speed_route_audit.json"),
-        ("static_speed_route_samples", "static_speed_route_samples.csv"),
-        ("static_speed_route_audit_plot", "static_speed_route_audit.png"),
-    ):
-        path = qa_dir / name
-        if path.exists():
-            output_paths[output_key] = path
-    local_access_report = qa_dir / "local_access/service_access_local_route_audit.json"
-    local_access_samples = qa_dir / "local_access/service_access_local_routes.csv"
-    if local_access_report.exists():
-        output_paths["service_access_local_route_audit"] = local_access_report
-    if local_access_samples.exists():
-        output_paths["service_access_local_route_samples"] = local_access_samples
     missing = [name for name, path in output_paths.items() if not path.exists()]
     if missing:
         raise FileNotFoundError(f"City Logistics Environment outputs are missing: {missing}")
@@ -572,10 +555,6 @@ def assemble_cle(
                 "optional_candidate_eligible_count", 0
             ),
             "directed_legal_speed_edges": speed_manifest["edge_count"],
-            "static_operational_scenarios": speed_manifest.get("scenario_count", 0),
-            "static_operational_scenario_edge_rows": speed_manifest.get(
-                "scenario_edge_row_count", 0
-            ),
         },
         "outputs": {
             name: str(path.relative_to(cle_dir)) for name, path in output_paths.items()
@@ -1013,6 +992,19 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
     speed_path = cle_dir / manifest.get("outputs", {}).get(
         "directed_legal_speeds", "profiles/directed_legal_speeds.parquet"
     )
+    declared_speed_manifest = manifest.get("outputs", {}).get("speed_manifest")
+    if declared_speed_manifest:
+        speed_manifest_path = cle_dir / declared_speed_manifest
+        if not speed_manifest_path.is_file():
+            errors.append("speed manifest is missing")
+        else:
+            speed_manifest = _read_json(speed_manifest_path)
+            if speed_manifest.get("schema") != "evrptw_directed_speed_profiles_v6":
+                errors.append("speed manifest does not use the current v6 schema")
+            if not speed_manifest.get("reference_speed_contract", {}).get("profile_id"):
+                errors.append("speed manifest lacks a versioned reference profile ID")
+    elif speed_path.exists():
+        errors.append("speed layer is present but its manifest is not declared")
     if speed_path.exists():
         speeds = pd.read_parquet(speed_path)
         expected_edges = manifest.get("layer_counts", {}).get("directed_legal_speed_edges")
@@ -1021,30 +1013,20 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
         if speeds["edge_id"].duplicated().any():
             errors.append("directed legal-speed edge_id is not unique")
         required_numeric = ["length_m", "speed_limit_kph", "legal_travel_time_s"]
-        if "reference_speed_kph" in speeds.columns:
-            required_numeric.extend(["reference_speed_kph", "reference_travel_time_s"])
-            if (speeds["reference_speed_kph"] > speeds["speed_limit_kph"] + 1e-9).any():
-                errors.append("reference speed exceeds legal speed")
+        moves_reference_columns = {
+            "reference_speed_weekday_kph": "reference_travel_time_weekday_s",
+            "reference_speed_weekend_kph": "reference_travel_time_weekend_s",
+        }
+        if set(moves_reference_columns).issubset(speeds.columns):
+            for speed_column, time_column in moves_reference_columns.items():
+                required_numeric.extend([speed_column, time_column])
+                if (speeds[speed_column] > speeds["speed_limit_kph"] + 1e-9).any():
+                    errors.append(f"{speed_column} exceeds legal speed")
+        else:
+            errors.append("speed layer lacks MOVES weekday/weekend reference speeds")
         numeric = speeds[required_numeric].to_numpy(dtype=float)
         if not np.isfinite(numeric).all() or (numeric <= 0).any():
             errors.append("legal-speed layer contains nonpositive or nonfinite values")
-    scenario_path = cle_dir / manifest.get("outputs", {}).get(
-        "static_operational_scenarios", "profiles/static_operational_scenarios.parquet"
-    )
-    if "static_operational_scenarios" in manifest.get("outputs", {}) and scenario_path.exists():
-        scenarios = pd.read_parquet(scenario_path)
-        expected_rows = manifest.get("layer_counts", {}).get(
-            "static_operational_scenario_edge_rows"
-        )
-        if expected_rows is not None and len(scenarios) != expected_rows:
-            errors.append("static operational scenario row count differs from manifest")
-        scenario_numeric = scenarios[
-            ["operational_variation_factor", "speed_kph", "travel_time_s"]
-        ].to_numpy(dtype=float)
-        if not np.isfinite(scenario_numeric).all() or (scenario_numeric <= 0).any():
-            errors.append("static operational scenarios contain invalid numeric values")
-        if (scenarios["speed_kph"] > scenarios["speed_limit_kph"] + 1e-9).any():
-            errors.append("static operational scenario speed exceeds legal speed")
     report_path = cle_dir / manifest.get("outputs", {}).get(
         "qa_report", "qa/cle_report.json"
     )

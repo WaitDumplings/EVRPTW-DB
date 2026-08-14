@@ -162,13 +162,30 @@ def load_portable_cle(
         )
 
     outputs = manifest.get("outputs", {})
+    if not outputs.get("speed_manifest"):
+        raise CLEEligibilityError(
+            f"CLE {city_slug} manifest lacks the v6 speed_manifest output"
+        )
     paths = {
         "graph": _resolve_inside(root, str(outputs["operational_graph"]), "operational_graph"),
         "customers": _resolve_inside(root, str(outputs["latent_locations"]), "latent_locations"),
         "depots": _resolve_inside(root, str(outputs["depots"]), "depots"),
         "chargers": _resolve_inside(root, str(outputs["chargers"]), "chargers"),
         "speeds": _resolve_inside(root, str(outputs["directed_legal_speeds"]), "directed_legal_speeds"),
+        "speed_manifest": _resolve_inside(
+            root, str(outputs["speed_manifest"]), "speed_manifest"
+        ),
     }
+    speed_manifest = _read_json(paths["speed_manifest"])
+    if speed_manifest.get("schema") != "evrptw_directed_speed_profiles_v6":
+        raise CLEEligibilityError(
+            f"CLE {city_slug} uses stale speed schema "
+            f"{speed_manifest.get('schema')!r}; rebuild Stage 1 with the v6 adapter"
+        )
+    if not speed_manifest.get("reference_speed_contract", {}).get("profile_id"):
+        raise CLEEligibilityError(
+            f"CLE {city_slug} speed manifest lacks a versioned reference profile ID"
+        )
 
     official_fields = (
         "customer_release_eligible",
@@ -193,10 +210,21 @@ def load_portable_cle(
             "edge_key",
             "length_m",
             "legal_speed_kph",
-            "reference_speed_kph",
             "operating_mode",
         },
     }
+    speed_columns = _parquet_columns(paths["speeds"])
+    moves_reference_columns = {
+        "moves_road_type",
+        "reference_speed_weekday_kph",
+        "reference_speed_weekend_kph",
+    }
+    if not moves_reference_columns.issubset(speed_columns):
+        raise CLEEligibilityError(
+            f"{paths['speeds']} lacks the v6 MOVES weekday/weekend "
+            "reference-speed columns"
+        )
+    required[paths["speeds"]].update(moves_reference_columns)
     for path, expected_columns in required.items():
         missing = expected_columns - _parquet_columns(path)
         if missing:

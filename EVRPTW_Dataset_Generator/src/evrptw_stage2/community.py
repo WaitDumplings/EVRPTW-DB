@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
+import networkx as nx
 import numpy as np
 import pandas as pd
+
+from evrptw_cle.protected_connectivity import build_directed_component_index
 
 from .reader import PortableCLE
 
@@ -66,6 +69,107 @@ def _group_features(locations: pd.DataFrame) -> pd.DataFrame:
             record[f"band__{value}"] = int(band_counts.get(value, 0))
         records.append(record)
     return pd.DataFrame.from_records(records)
+
+
+def _community_id(city_slug: str, geoid: str, scc_id: str) -> str:
+    return f"{city_slug}:bg:{geoid}:scc:{scc_id}"
+
+
+def _build_road_community_adjacency(
+    cle: PortableCLE,
+    block_groups: gpd.GeoDataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Map directed road crossings to Census-BG × road-SCC communities.
+
+    Communities without an eligible latent customer remain in the transit
+    graph with zero capacity.  This prevents a held-out or empty block group
+    from becoming an artificial wall between two delivery regions.
+    """
+
+    graph = nx.read_graphml(cle.graph_path)
+    if not isinstance(graph, nx.MultiDiGraph):
+        graph = nx.MultiDiGraph(graph)
+    component_index = build_directed_component_index(graph)
+    node_items = list(graph.nodes(data=True))
+    node_ids = [str(node) for node, _ in node_items]
+    nodes = gpd.GeoDataFrame(
+        {
+            "road_node_id": node_ids,
+            "road_connectivity_subgroup": [
+                component_index.node_to_scc[node] for node in node_ids
+            ],
+        },
+        geometry=gpd.points_from_xy(
+            [float(data["x"]) for _, data in node_items],
+            [float(data["y"]) for _, data in node_items],
+        ),
+        crs="EPSG:4326",
+    )
+    joined = gpd.sjoin(nodes, block_groups, how="left", predicate="within")
+    if joined.index.duplicated().any():
+        joined = joined.sort_values("census_block_group_geoid").loc[
+            ~joined.index.duplicated(keep="first")
+        ]
+    joined = joined.dropna(subset=["census_block_group_geoid"]).copy()
+    joined["census_block_group_geoid"] = joined[
+        "census_block_group_geoid"
+    ].astype(str)
+    joined["community_id"] = [
+        _community_id(cle.city_slug, geoid, scc)
+        for geoid, scc in zip(
+            joined["census_block_group_geoid"],
+            joined["road_connectivity_subgroup"],
+        )
+    ]
+    node_to_community = joined.set_index("road_node_id")["community_id"].to_dict()
+    records: list[dict[str, Any]] = []
+    for u, v, key, data in graph.edges(keys=True, data=True):
+        source = node_to_community.get(str(u))
+        target = node_to_community.get(str(v))
+        if source is None or target is None or source == target:
+            continue
+        records.append(
+            {
+                "source_community_id": source,
+                "target_community_id": target,
+                "edge_u": str(u),
+                "edge_v": str(v),
+                "edge_key": str(key),
+                "crossing_length_m": float(data.get("length", data.get("length_m", 0.0))),
+            }
+        )
+    adjacency = pd.DataFrame.from_records(records)
+    if not adjacency.empty:
+        adjacency = adjacency.sort_values(
+            [
+                "source_community_id",
+                "target_community_id",
+                "crossing_length_m",
+                "edge_u",
+                "edge_v",
+                "edge_key",
+            ],
+            kind="stable",
+        ).drop_duplicates(
+            ["source_community_id", "target_community_id", "edge_u", "edge_v", "edge_key"]
+        )
+    transit = (
+        joined.groupby(
+            ["community_id", "census_block_group_geoid", "road_connectivity_subgroup"],
+            observed=True,
+        )
+        .size()
+        .rename("road_node_count")
+        .reset_index()
+    )
+    return adjacency, transit, {
+        "road_node_count": graph.number_of_nodes(),
+        "directed_edge_count": graph.number_of_edges(),
+        "road_node_with_block_group_count": len(joined),
+        "road_community_count": len(transit),
+        "directed_intercommunity_edge_count": len(adjacency),
+        "reference_scc_id": component_index.reference_scc_id,
+    }
 
 
 def _normalized_error(current: np.ndarray, target: np.ndarray) -> float:
@@ -188,8 +292,9 @@ def build_customer_split(
     out.mkdir(parents=True, exist_ok=True)
     ledger_path = out / "customer_split_manifest.parquet"
     community_path = out / "community_manifest.parquet"
+    adjacency_path = out / "community_adjacency.parquet"
     report_path = out / "customer_split_report.json"
-    for path in (ledger_path, community_path, report_path):
+    for path in (ledger_path, community_path, adjacency_path, report_path):
         if path.exists():
             raise FileExistsError(f"Refusing to overwrite frozen split artifact: {path}")
 
@@ -236,13 +341,12 @@ def build_customer_split(
             f"{int(unmatched.sum())} eligible customer locations did not match a Census block group"
         )
     joined["road_connectivity_subgroup"] = joined["anchor_scc_id"].astype(str)
-    joined["community_id"] = (
-        cle.city_slug
-        + ":bg:"
-        + joined["census_block_group_geoid"].astype(str)
-        + ":scc:"
-        + joined["road_connectivity_subgroup"]
-    )
+    joined["community_id"] = [
+        _community_id(cle.city_slug, geoid, scc)
+        for geoid, scc in zip(
+            joined["census_block_group_geoid"], joined["road_connectivity_subgroup"]
+        )
+    ]
 
     communities = _group_features(joined)
     communities = _assign_group_split(
@@ -273,6 +377,38 @@ def build_customer_split(
     ledger["source_cle_mode"] = cle.mode
     ledger["non_release_pilot"] = cle.non_release_pilot
     ledger.to_parquet(ledger_path, index=False)
+    adjacency, road_communities, adjacency_report = _build_road_community_adjacency(
+        cle,
+        block_groups,
+    )
+    adjacency.to_parquet(adjacency_path, index=False)
+    location_community_ids = set(communities["community_id"].astype(str))
+    transit_only = road_communities.loc[
+        ~road_communities["community_id"].astype(str).isin(location_community_ids)
+    ].copy()
+    if not transit_only.empty:
+        transit_only["location_count"] = 0
+        transit_only["residential_units"] = 0.0
+        transit_only["centroid_lon"] = np.nan
+        transit_only["centroid_lat"] = np.nan
+        transit_only["customer_pool"] = "transit_only"
+        transit_only["training_ineligible"] = True
+        transit_only["split_priority"] = np.nan
+        transit_only["split_restart"] = int(communities["split_restart"].iloc[0])
+        for column in communities.columns:
+            if column not in transit_only:
+                transit_only[column] = 0 if column.startswith(("type__", "band__")) else pd.NA
+        communities = pd.concat(
+            [communities, transit_only[communities.columns]], ignore_index=True
+        )
+    communities = communities.merge(
+        road_communities[["community_id", "road_node_count"]],
+        on="community_id",
+        how="left",
+        validate="one_to_one",
+    )
+    communities["road_node_count"] = communities["road_node_count"].fillna(0).astype(int)
+    communities["transit_only"] = communities["location_count"].eq(0)
     communities.insert(0, "city_slug", cle.city_slug)
     communities["partition_version"] = partition_version
     communities["split_seed"] = int(split_seed)
@@ -311,7 +447,10 @@ def build_customer_split(
         "outputs": {
             "customer_split_manifest": ledger_path.name,
             "community_manifest": community_path.name,
+            "community_adjacency": adjacency_path.name,
         },
+        "community_adjacency": adjacency_report,
+        "transit_only_community_count": int(communities["transit_only"].sum()),
         "warnings": list(cle.warnings),
     }
     _write_json(report_path, report)

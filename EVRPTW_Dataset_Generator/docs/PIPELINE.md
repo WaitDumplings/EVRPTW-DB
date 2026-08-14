@@ -182,35 +182,77 @@ confidence and the matched OSM physical segment has a unique verified one-way
 direction. Bidirectional or ambiguous corridor evidence can still classify the
 road but cannot supply a directional speed.
 
-### 6.2 Legal and reference speed
+### 6.2 Legal, free-flow proxy, and reference speed
 
-Each directed physical edge keeps three separate concepts:
+Each directed physical edge keeps separate evidence and model fields:
 
 1. `legal_speed_kph`: direction-applicable OSM `maxspeed`, generic OSM
    `maxspeed`, direction-verified high-confidence HPMS `SPEED_LIMIT` when OSM
-   is missing, then transparent within-city class/mode/parent/global median
-   imputation.
+   is missing, then transparent within-city class/mode/parent/global
+   length-weighted-median imputation.
 2. `operating_mode`: HPMS `F_SYSTEM` 1-2 -> H, 3-6 -> M, 7 -> U when a
    high-confidence normalized match exists; otherwise OSM `highway=*` fallback.
-3. `reference_speed_kph`: a running-speed prior used before Stage-2 variation.
+3. `moves_road_type`: an independent adapter. HPMS `F_SYSTEM` 1-2 maps to
+   MOVES urban restricted access (`roadTypeID=4`), 3-7 to urban unrestricted
+   access (`roadTypeID=5`). OSM fallback treats motorway/trunk and their links
+   as restricted and other driveable classes as unrestricted.
+4. `free_flow_speed_proxy_kph`: equal to the direction-applicable legal speed.
+   It is explicitly a proxy, not an observed low-flow edge speed.
+5. `reference_speed_weekday_kph` and `reference_speed_weekend_kph`: static
+   edge running speeds produced by the model below.
 
-The U.S. adapter uses Table 14 of NREL/TP-5400-65921. The source reports
-Average Driving Speed profile means of 48.57, 33.64, and 22.62 mph for FDNA
-clusters 3, 2, and 1. Our adapter explicitly maps those descending profiles to
-H/M/U; NREL does not assign H/M/U labels to OSM road edges.
+MOVES5 is a model/database, not a spatial network. Its default
+`AvgSpeedDistribution` is one national distribution by source type, broad road
+type, day type, hour, and speed bin. `HourVMTFraction` is a normalized national
+temporal allocation, not traffic volume on an OSM edge and not EDV-specific.
+The U.S. adapter uses sourceTypeID 32 (Light Commercial Truck).
+
+For each MOVES road type `r`, day type `d`, and hour `h`, first compute the
+hourly mean from MOVES VHT fractions `p` and bin-center speeds `s`:
 
 ```text
-reference_speed(edge) = min(
-    legal_speed(edge),
-    NREL_FDNA_profile_speed(mode(edge)),
-    optional_versioned_vehicle_cap
-)
+v_hour(r,d,h) = sum_b p(r,d,h,b) * s(b)
 ```
 
-This is running speed on the edge, not depot-to-customer or door-to-door route
-average. Stop/service time and instance-static weekday/weekend directed
-variation belong to Stage 2. Pilot scenario generation is available only for
-engineering QA and is off by default.
+Normalize `HourVMTFraction` inside the 08:00-24:00 service window. The window
+effective speed preserves total travel time and is therefore VMT/VHT, a
+VMT-weighted harmonic aggregation rather than an equal-hour arithmetic mean:
+
+```text
+w(r,d,h) = HourVMTFraction(r,d,h) / sum_{k=08:00}^{24:00} HourVMTFraction(r,d,k)
+v_effective(r,d) = 1 / sum_{h=08:00}^{24:00} w(r,d,h) / v_hour(r,d,h)
+```
+
+Following FHWA's off-peak approach, the class-level low-flow benchmark is the
+85th percentile of the VHT-weighted weekend 06:00-10:00 MOVES speed-bin
+distribution. It is a national class benchmark, not an edge free-flow
+observation. The transferable speed-retention factor is:
+
+```text
+rho(r,d) = v_effective(r,d) / Q85_low_flow(r)
+reference_speed(edge,d) = legal_speed(edge) * rho(moves_road_type(edge),d)
+```
+
+The frozen `movesdb20241112` extraction is:
+
+| MOVES urban class | Low-flow Q85 | Weekday effective | Weekend effective | Weekday rho | Weekend rho |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Restricted access | 70.00 mph | 53.115 mph | 58.902 mph | 0.758791 | 0.841456 |
+| Unrestricted access | 45.00 mph | 24.528 mph | 25.384 mph | 0.545059 | 0.564078 |
+
+Using the absolute MOVES effective speed directly would collapse the network
+to two speeds. The ratio adapter instead preserves edge-specific legal-speed
+scale and direction: a 45 mph arterial and a 25 mph residential edge share the
+national unrestricted retention factor but do not receive the same reference
+speed. This proportional transfer is a documented national-to-edge modeling
+assumption; MOVES does not validate it on individual streets.
+
+The compact derived table is versioned in
+`configs/us_moves5_speed_profile_v1.json`, and
+`scripts/derive_moves5_speed_profile.py` reproduces it from the official SQL
+dump. Stage 1 does not write a stochastic speed-scenario bank; Stage 2 selects
+the weekday or weekend reference column and the canonical residual factor is
+fixed at 1.0.
 
 ## 7. Assembly, packaging, and verification
 

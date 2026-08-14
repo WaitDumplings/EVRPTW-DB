@@ -8,7 +8,10 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.sparse.csgraph import dijkstra
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra, maximum_bipartite_matching
+
+from .rounding import stable_u64
 
 FULL_CS_TO_DEPOT_CACHE_CONTRACT = {
     "semantics": "full_departure_cs_to_depot_fastest_feasible_time_v2",
@@ -69,6 +72,147 @@ class FullStateRouteCache:
     to_depot_s: np.ndarray
     from_depot_predecessor: np.ndarray
     to_depot_reverse_predecessor: np.ndarray
+
+
+def _certificates_for_view(
+    *,
+    customer_count: int,
+    running_time_matrix_s: np.ndarray,
+    running_time_path_distance_matrix_km: np.ndarray,
+    charging_power_kw: np.ndarray,
+    profile: Mapping[str, Any],
+) -> SingleCustomerCertificates:
+    return _single_customer_certificates(
+        customer_count=customer_count,
+        running_time_matrix_s=running_time_matrix_s,
+        running_time_path_distance_matrix_km=running_time_path_distance_matrix_km,
+        specific_energy_consumption_kwh_per_km=float(
+            profile["energy"]["specific_energy_consumption_kwh_per_km"]
+        ),
+        charging_power_kw=np.asarray(charging_power_kw, dtype=np.float32),
+        battery_capacity_kwh=float(profile["energy"]["battery_capacity_kwh"]),
+        charging_efficiency=float(profile["charging"]["charging_efficiency"]),
+    )
+
+
+def match_amazon_order_templates(
+    *,
+    customer_count: int,
+    order_sources: list[tuple[dict[str, Any], pd.DataFrame]],
+    matching_seed: int,
+    operating_start_s: int,
+    operating_end_s: int,
+    running_time_matrix_s: np.ndarray,
+    running_time_path_distance_matrix_km: np.ndarray,
+    charging_power_kw: np.ndarray,
+    profile: Mapping[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Find a covering customer-template matching from an admissible source.
+
+    Every customer receives one distinct observed Amazon stop template.  A
+    template edge exists only when the single-customer certificate can serve
+    its time window and return within the operating horizon.
+    """
+
+    certificates = _certificates_for_view(
+        customer_count=customer_count,
+        running_time_matrix_s=running_time_matrix_s,
+        running_time_path_distance_matrix_km=running_time_path_distance_matrix_km,
+        charging_power_kw=charging_power_kw,
+        profile=profile,
+    )
+    arrival = float(operating_start_s) + certificates.arrival_elapsed_s.astype(float)
+    if not np.isfinite(arrival).all() or not np.isfinite(
+        certificates.return_duration_s
+    ).all():
+        raise ValueError("Customer parent fails structural energy reachability before orders")
+    cargo_capacity = float(profile["vehicle"]["cargo_capacity_cm3"])
+    source_attempts: list[dict[str, Any]] = []
+    for source_rank, (source, raw_templates) in enumerate(order_sources):
+        templates = raw_templates.copy()
+        templates["_rank"] = [
+            stable_u64(matching_seed, "order_template", template_id)
+            for template_id in templates["template_id"].astype(str)
+        ]
+        templates = templates.sort_values(["_rank", "template_id"], kind="stable").drop(
+            columns="_rank"
+        )
+        template_count = len(templates)
+        if template_count < customer_count:
+            source_attempts.append(
+                {
+                    "source_rank": source_rank,
+                    "source_mode": source["order_source_mode"],
+                    "template_count": template_count,
+                    "matched_customer_count": 0,
+                    "status": "insufficient_template_count",
+                }
+            )
+            continue
+        tw_start = templates["tw_start_s"].to_numpy(dtype=float)
+        tw_end = templates["tw_end_s"].to_numpy(dtype=float)
+        service = templates["service_time_s"].to_numpy(dtype=float)
+        demand = templates["demand_cm3"].to_numpy(dtype=float)
+        row_indices: list[np.ndarray] = []
+        column_indices: list[np.ndarray] = []
+        for customer_start in range(0, customer_count, 128):
+            customer_stop = min(customer_count, customer_start + 128)
+            block_arrival = arrival[customer_start:customer_stop, None]
+            service_start = np.maximum(block_arrival, tw_start[None, :])
+            feasible = (
+                (service_start <= tw_end[None, :] + 1e-6)
+                & (
+                    service_start
+                    + service[None, :]
+                    + certificates.return_duration_s[customer_start:customer_stop, None]
+                    <= float(operating_end_s) + 1e-6
+                )
+                & (demand[None, :] <= cargo_capacity + 1e-6)
+            )
+            block_rows, block_columns = np.nonzero(feasible)
+            row_indices.append(block_rows + customer_start)
+            column_indices.append(block_columns)
+        rows = np.concatenate(row_indices) if row_indices else np.zeros(0, dtype=int)
+        columns = (
+            np.concatenate(column_indices) if column_indices else np.zeros(0, dtype=int)
+        )
+        graph = csr_matrix(
+            (np.ones(len(rows), dtype=np.int8), (rows, columns)),
+            shape=(customer_count, template_count),
+        )
+        matching = maximum_bipartite_matching(graph, perm_type="column")
+        matched_count = int(np.sum(matching >= 0))
+        source_attempts.append(
+            {
+                "source_rank": source_rank,
+                "source_mode": source["order_source_mode"],
+                "station_code": source["station_code"],
+                "station_day_ids": list(source["station_day_ids"]),
+                "template_count": template_count,
+                "feasible_edge_count": int(graph.nnz),
+                "matched_customer_count": matched_count,
+                "status": "accepted" if matched_count == customer_count else "hall_failure",
+            }
+        )
+        if matched_count != customer_count:
+            continue
+        matched = templates.iloc[matching].reset_index(drop=True)
+        matched.insert(0, "parent_customer_position", np.arange(customer_count, dtype=int))
+        return matched, {
+            "policy": "amazon_stationday_covering_bipartite_matching_v1",
+            "selected_order_source_mode": source["order_source_mode"],
+            "selected_station_code": source["station_code"],
+            "selected_station_day_ids": list(source["station_day_ids"]),
+            "source_attempt_count": source_rank + 1,
+            "source_attempts": source_attempts,
+            "customer_count": customer_count,
+            "template_reuse": False,
+            "hall_coverage_complete": True,
+        }
+    raise ValueError(
+        "ORDER_SOURCE_EXHAUSTED: no admissible single-day or same-station composite "
+        f"covers all customers; attempts={source_attempts}"
+    )
 
 
 def _build_full_state_route_cache(
@@ -713,5 +857,135 @@ def build_view_attributes(
         ),
         full_cs_to_depot_time_s=certificates.full_cs_to_depot_time_s,
         order_sampling_attempts=attempts,
+        report=report,
+    )
+
+
+def build_view_attributes_from_amazon(
+    customer_rows: pd.DataFrame,
+    order_templates: pd.DataFrame,
+    *,
+    day_type: str,
+    operating_start_s: int,
+    operating_end_s: int,
+    running_time_matrix_s: np.ndarray,
+    running_time_path_distance_matrix_km: np.ndarray,
+    charging_power_kw: np.ndarray,
+    profile: Mapping[str, Any],
+    order_source_report: Mapping[str, Any],
+) -> ViewAttributes:
+    """Attach already matched Amazon templates and recompute view certificates."""
+
+    customer_count = len(customer_rows)
+    if len(order_templates) != customer_count:
+        raise ValueError("Amazon template count differs from view customer count")
+    templates = order_templates.reset_index(drop=True)
+    certificates = _certificates_for_view(
+        customer_count=customer_count,
+        running_time_matrix_s=running_time_matrix_s,
+        running_time_path_distance_matrix_km=running_time_path_distance_matrix_km,
+        charging_power_kw=charging_power_kw,
+        profile=profile,
+    )
+    package_counts = templates["package_count"].to_numpy(dtype=np.int32)
+    demands = templates["demand_cm3"].to_numpy(dtype=np.float32)
+    service = templates["service_time_s"].to_numpy(dtype=np.float32)
+    windows = templates[["tw_start_s", "tw_end_s"]].to_numpy(dtype=np.float32)
+    feasible_arrival = float(operating_start_s) + certificates.arrival_elapsed_s
+    service_start = np.maximum(feasible_arrival, windows[:, 0])
+    time_feasible = (
+        (service_start <= windows[:, 1] + 1e-6)
+        & (
+            service_start + service + certificates.return_duration_s
+            <= float(operating_end_s) + 1e-6
+        )
+    )
+    energy_feasible = np.isfinite(certificates.arrival_elapsed_s) & np.isfinite(
+        certificates.return_duration_s
+    )
+    capacity_feasible = demands <= float(profile["vehicle"]["cargo_capacity_cm3"]) + 1e-6
+    if not (time_feasible & energy_feasible & capacity_feasible).all():
+        raise ValueError(
+            "Inherited Amazon template fails a descendant-view certificate: "
+            f"time={int((~time_feasible).sum())}, "
+            f"energy={int((~energy_feasible).sum())}, "
+            f"capacity={int((~capacity_feasible).sum())}"
+        )
+    cached_returns = certificates.full_cs_to_depot_time_s.astype(float)
+    finite_cached_returns = cached_returns[np.isfinite(cached_returns)]
+    tight = (windows[:, 0] > operating_start_s) | (windows[:, 1] < operating_end_s)
+    report = {
+        "schema": "cle_evrptw_view_attribute_report_v3",
+        "day_type": day_type,
+        "customer_count": customer_count,
+        "order_attribute_source": "amazon_last_mile_2021_observed_stop_templates",
+        "order_template_inheritance": True,
+        "package_count_mean": float(package_counts.mean()),
+        "package_count_p90": float(np.quantile(package_counts, 0.90)),
+        "demand_cm3_mean": float(demands.mean()),
+        "demand_cm3_p90": float(np.quantile(demands, 0.90)),
+        "service_time_s_mean": float(service.mean()),
+        "service_time_s_p90": float(np.quantile(service, 0.90)),
+        "time_windows": {
+            "tight_window_count": int(tight.sum()),
+            "actual_tight_window_rate": float(tight.mean()),
+            "feasibility_clipping_applied": False,
+        },
+        "order_matching": dict(order_source_report),
+        "energy": {
+            "model_id": str(profile["energy"]["model_id"]),
+            "specific_energy_consumption_kwh_per_km": float(
+                profile["energy"]["specific_energy_consumption_kwh_per_km"]
+            ),
+            "stored_energy_matrices": False,
+        },
+        "full_cs_to_depot_cache": {
+            "semantics": FULL_CS_TO_DEPOT_CACHE_CONTRACT["semantics"],
+            "charging_station_count": len(cached_returns),
+            "finite_return_count": len(finite_cached_returns),
+            "unreachable_return_count": int((~np.isfinite(cached_returns)).sum()),
+            "minimum_time_s": (
+                float(finite_cached_returns.min()) if len(finite_cached_returns) else None
+            ),
+            "median_time_s": (
+                float(np.median(finite_cached_returns)) if len(finite_cached_returns) else None
+            ),
+            "maximum_time_s": (
+                float(finite_cached_returns.max()) if len(finite_cached_returns) else None
+            ),
+        },
+        "feasibility_gate": {
+            "policy": "fixed_amazon_template_single_customer_certificate_v1",
+            "time_feasible_count": int(time_feasible.sum()),
+            "energy_feasible_count": int(energy_feasible.sum()),
+            "capacity_feasible_count": int(capacity_feasible.sum()),
+            "requires_charging_count": int(certificates.requires_charging.sum()),
+            "maximum_charging_visit_count": int(certificates.charging_visit_count.max()),
+            "minimum_customer_transition_energy_margin_kwh": float(
+                certificates.customer_transition_energy_margin_kwh.min()
+            ),
+            "passed": True,
+        },
+    }
+    return ViewAttributes(
+        package_counts=package_counts,
+        demands_cm3=demands,
+        service_time_s=service,
+        time_windows_s=windows,
+        feasible_arrival_time_s=feasible_arrival.astype(np.float32),
+        feasible_return_duration_s=certificates.return_duration_s,
+        feasibility_requires_charging=certificates.requires_charging,
+        feasibility_charging_visit_count=certificates.charging_visit_count,
+        feasibility_inbound_full_state_terminal_index=(
+            certificates.inbound_full_state_terminal_index
+        ),
+        feasibility_first_post_customer_charger_terminal_index=(
+            certificates.first_post_customer_charger_terminal_index
+        ),
+        feasibility_energy_margin_kwh=(
+            certificates.customer_transition_energy_margin_kwh
+        ),
+        full_cs_to_depot_time_s=certificates.full_cs_to_depot_time_s,
+        order_sampling_attempts=np.ones(customer_count, dtype=np.int16),
         report=report,
     )

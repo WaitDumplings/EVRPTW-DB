@@ -81,6 +81,11 @@ def main() -> None:
     parser.add_argument("--preset", type=Path, required=True)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument(
+        "--skip-sha256",
+        action="store_true",
+        help="Research mode: validate readability and record size/timestamp without hashing the PBF.",
+    )
     args = parser.parse_args()
 
     preset = json.loads(args.preset.read_text(encoding="utf-8"))
@@ -107,7 +112,7 @@ def main() -> None:
                 "file": str(path),
                 "source_url": url,
                 "bytes": path.stat().st_size,
-                "sha256": sha256_file(path),
+                "sha256": None if args.skip_sha256 else sha256_file(path),
                 "pbf_replication_timestamp_utc": replication_timestamp(path),
             }
         )

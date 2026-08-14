@@ -94,9 +94,18 @@ def _build_tiny_full_dataset(tmp_path: Path) -> tuple[Path, Path]:
             "length_m": [100.0] * len(directed_edges),
             "operating_mode": ["U"] * len(directed_edges),
             "legal_speed_kph": [50.0] * len(directed_edges),
-            "reference_speed_kph": [36.0] * len(directed_edges),
+            "moves_road_type": ["urban_unrestricted_access"] * len(directed_edges),
+            "reference_speed_weekday_kph": [36.0] * len(directed_edges),
+            "reference_speed_weekend_kph": [37.0] * len(directed_edges),
         }
     ).to_parquet(city_root / "profiles" / "directed_legal_speeds.parquet", index=False)
+    _write_json(
+        city_root / "profiles" / "speed_manifest.json",
+        {
+            "schema": "evrptw_directed_speed_profiles_v6",
+            "reference_speed_contract": {"profile_id": "test-moves-profile"},
+        },
+    )
     pd.DataFrame(
         {
             "latent_service_location_id": ["customer"],
@@ -132,6 +141,7 @@ def _build_tiny_full_dataset(tmp_path: Path) -> tuple[Path, Path]:
                 "depots": "infrastructure/depots.parquet",
                 "chargers": "infrastructure/chargers.parquet",
                 "directed_legal_speeds": "profiles/directed_legal_speeds.parquet",
+                "speed_manifest": "profiles/speed_manifest.json",
             },
         },
     )
@@ -171,7 +181,7 @@ def _build_tiny_full_dataset(tmp_path: Path) -> tuple[Path, Path]:
         "view_count": 1,
         "road_state_seed": 123,
         "road_state_report": {
-            "moves_road_type_baseline_factors": {"urban_unrestricted_access": 0.91}
+            "moves_road_type_baseline_factors": {"urban_unrestricted_access": 1.0}
         },
         "reference_profile_id": profile["profile_id"],
         "reference_profile_status": profile["profile_status"],

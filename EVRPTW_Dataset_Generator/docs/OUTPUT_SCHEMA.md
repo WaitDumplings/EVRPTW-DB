@@ -92,10 +92,14 @@ EVRPTW_Dataset/CLE_v1/us_11city/
 ```text
 edge_u, edge_v, edge_key, edge_id, physical_segment_id, corridor_id,
 length_m, highway, operating_mode, operating_mode_source,
+ moves_road_type, moves_road_type_source, moves_is_ramp,
 legal_speed_kph, legal_speed_source, legal_speed_confidence,
 legal_speed_imputed, legal_travel_time_s,
-v_model_nrel_kph, reference_speed_kph, reference_speed_source,
-reference_travel_time_s
+free_flow_speed_proxy_kph,
+moves_speed_retention_weekday, moves_speed_retention_weekend,
+reference_speed_weekday_kph, reference_speed_weekend_kph,
+reference_travel_time_weekday_s, reference_travel_time_weekend_s,
+reference_speed_source
 ```
 
 Raw directional/generic OSM values and parsed HGV evidence are retained. HPMS
@@ -103,6 +107,12 @@ audit fields include the source segment ID, `F_SYSTEM`, `SPEED_LIMIT`, match
 method/confidence, lateral distance, overlap ratio, orientation difference,
 `hpms_corridor_match_usable`, `hpms_direction_verified`,
 `hpms_speed_usable`, and OSM/HPMS conflict flags.
+
+`profiles/speed_manifest.json` must use schema
+`evrptw_directed_speed_profiles_v6` and record
+`reference_speed_contract.profile_id`. Stage 2 rejects the former legacy
+single-column `reference_speed_kph` contract; any matrix family must be rebuilt
+after its parent CLE speed profile changes.
 
 ## Required latent-location concepts
 
@@ -157,6 +167,9 @@ family store:
 ```text
 Instances_v1/us_11city/
   customer_splits/<city>/
+    customer_split_manifest.parquet
+    community_manifest.parquet
+    community_adjacency.parquet
   generation_plan/
     core/train/
     core/validation/
@@ -166,6 +179,12 @@ Instances_v1/us_11city/
     compatibility_cus50/
     scalability_cus2000/
   materialized/families/<family_id>/
+  rejections/
+  reports/phase1/
+    family_metrics.parquet
+    stratified_metrics.csv
+    rejected_attempts.parquet
+    summary.json
   stage2_run_report.json
 ```
 
@@ -178,6 +197,9 @@ A `cle_evrptw_materialized_matrix_family_v2` directory contains:
 ```text
 family_manifest.json
 terminal_index.parquet
+phase1_metrics.json
+phase1_observations.parquet
+phase1_region_pair_metrics.parquet
 matrices/
   distance_matrix_km.npy
   distance_path_travel_time_s.npy
@@ -201,6 +223,18 @@ running_time_path_energy_kwh = running_time_path_distance_km * h
 
 The loader exposes the two derived arrays for solver compatibility and labels
 `metadata.energy_matrix_source=derived_from_path_distance`.
+
+Customer rows in `terminal_index.parquet` also retain
+`order_template_id`, `order_station_day_id`, and `order_source_mode`. These
+fields distinguish a direct single-day empirical source from a same-station
+multi-day composite and allow every child view to inherit the exact parent
+order assignment.
+
+The three `phase1_*` files are part of the family contract, not disposable
+logs. The JSON file contains hard correctness gates and family diagnostics;
+the two Parquet files preserve customer-level radial observations and
+region-level pairwise metrics. Family verification fails when they are absent,
+have the wrong parent-customer count, or report a failed hard gate.
 
 ### Slim release and deterministic matrix cache
 
@@ -226,7 +260,8 @@ Reconstruction uses, in order:
 
 1. `road_state_report.moves_road_type_baseline_factors` stored in the family
    manifest (it does not replay a random-number generator);
-2. CLE `reference_speed_kph`, `legal_speed_kph`, and the frozen profile;
+2. CLE weekday/weekend reference speeds, `legal_speed_kph`,
+   `moves_road_type`, and the frozen profile;
 3. the complete `terminal_index.parquet` edge-access contract, especially
    `directed_projection_offsets` and `connector_length_m`; and
 4. the same distance-shortest and turn-aware running-time routing code used by
@@ -253,5 +288,6 @@ view-specific attributes. `customer_attributes.npz` contains:
 hops and excludes charging at its origin and at the depot.
 
 `view_manifest.json` records the split/track/scale, operating horizon,
-vehicle and charging policies, energy model, rejection summary, and source
-parent matrices. No runtime action mask is stored.
+vehicle and charging policies, energy model, Amazon order-source inheritance,
+and source parent matrices. The consumer loader exposes the parent customer
+template/station-day/source-mode IDs. No runtime action mask is stored.

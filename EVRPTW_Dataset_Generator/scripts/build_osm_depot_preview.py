@@ -28,6 +28,7 @@ import numpy as np
 import osmnx as ox
 import pandas as pd
 from shapely.geometry import LineString, MultiLineString, mapping
+from shapely.strtree import STRtree
 
 OSMIUM_FILTERS = [
     "nwr/building=warehouse",
@@ -104,6 +105,9 @@ OUTPUT_COLUMNS = [
     "candidate_rank",
     "city_slug",
     "candidate_id",
+    "facility_group_id",
+    "facility_group_member_count",
+    "facility_group_merge_rules_json",
     "source_osm_id",
     "source_osm_url",
     "facility_name",
@@ -481,6 +485,103 @@ def _classify_candidates(
     }
     retained = raw.loc[raw["evidence_tier"].isin({"A_osm_explicit", "B_warehouse_proxy"})]
     return gpd.GeoDataFrame(retained, geometry="geometry", crs=4326), tier_counts
+
+
+def _normalized_facility_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _text(value).lower())
+
+
+def _assign_facility_groups(
+    candidates: gpd.GeoDataFrame,
+    boundary: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """Group OSM objects only when shared-facility evidence is explicit.
+
+    R2 uses containment by an industrial/logistics/warehouse/depot land-use
+    polygon. R3 uses a normalized name/operator match plus either an identical
+    address or touching polygons. All other objects remain R5 singletons.
+    The former 1000 m2 area flag is not a grouping or eligibility condition.
+    """
+
+    frame = candidates.reset_index(drop=True).copy()
+    parent = list(range(len(frame)))
+    merge_rules: dict[int, set[str]] = {index: set() for index in range(len(frame))}
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int, rule: str) -> None:
+        root_left = find(left)
+        root_right = find(right)
+        if root_left != root_right:
+            winner, loser = sorted((root_left, root_right))
+            parent[loser] = winner
+            merge_rules[winner] |= merge_rules[loser]
+        merge_rules[find(left)].add(rule)
+
+    metric = frame.to_crs(boundary.estimate_utm_crs())
+    geometries = np.asarray(metric.geometry.to_numpy(), dtype=object)
+    tree = STRtree(geometries)
+    pairs = tree.query(geometries, predicate="intersects")
+    names = [
+        _normalized_facility_text(name or operator)
+        for name, operator in zip(
+            frame.get("facility_name", pd.Series("", index=frame.index)),
+            frame.get("operator", pd.Series("", index=frame.index)),
+        )
+    ]
+    addresses = [
+        _normalized_facility_text(value)
+        for value in frame.get("address", pd.Series("", index=frame.index))
+    ]
+    tags = [json.loads(value) for value in frame["osm_tags_json"].astype(str)]
+    accepted_landuse = {"industrial", "logistics", "warehouse", "depot"}
+    for left, right in zip(pairs[0], pairs[1]):
+        left = int(left)
+        right = int(right)
+        if left >= right:
+            continue
+        left_geometry = geometries[left]
+        right_geometry = geometries[right]
+        left_landuse = str(tags[left].get("landuse") or "").lower()
+        right_landuse = str(tags[right].get("landuse") or "").lower()
+        r2 = (
+            left_landuse in accepted_landuse
+            and left_geometry.covers(right_geometry.representative_point())
+        ) or (
+            right_landuse in accepted_landuse
+            and right_geometry.covers(left_geometry.representative_point())
+        )
+        same_identity = bool(names[left]) and names[left] == names[right]
+        same_address = bool(addresses[left]) and addresses[left] == addresses[right]
+        touching = left_geometry.touches(right_geometry)
+        if r2:
+            union(left, right, "R2_shared_industrial_or_logistics_landuse")
+        elif same_identity and (same_address or touching):
+            union(left, right, "R3_name_operator_and_address_or_touching")
+
+    groups: dict[int, list[int]] = {}
+    for index in range(len(frame)):
+        groups.setdefault(find(index), []).append(index)
+    group_id_by_index: dict[int, str] = {}
+    group_rules_by_index: dict[int, str] = {}
+    group_size_by_index: dict[int, int] = {}
+    for root, members in groups.items():
+        member_ids = sorted(frame.iloc[members]["source_osm_id"].astype(str))
+        token = "|".join(member_ids).encode()
+        group_id = "depot_group_" + hashlib.blake2b(token, digest_size=10).hexdigest()
+        rules = sorted(merge_rules.get(find(root), set())) or ["R5_singleton"]
+        for index in members:
+            group_id_by_index[index] = group_id
+            group_rules_by_index[index] = json.dumps(rules, sort_keys=True)
+            group_size_by_index[index] = len(members)
+    frame["facility_group_id"] = frame.index.map(group_id_by_index)
+    frame["facility_group_member_count"] = frame.index.map(group_size_by_index).astype(int)
+    frame["facility_group_merge_rules_json"] = frame.index.map(group_rules_by_index)
+    return gpd.GeoDataFrame(frame, geometry="geometry", crs=candidates.crs)
 
 
 def _anchor_candidates(
@@ -932,6 +1033,7 @@ def main() -> None:
         boundary,
         args.min_warehouse_area_m2,
     )
+    candidates = _assign_facility_groups(candidates, boundary)
     anchored, graph, graph_summary = _anchor_candidates(
         candidates, graph_path, args.max_road_snap_m, city_slug
     )
@@ -971,6 +1073,20 @@ def main() -> None:
             "A_osm_explicit": "known parcel carrier plus physical warehouse, dispatch-function name, or explicit depot/logistics evidence; retail counters are excluded; still requires manual verification",
             "B_warehouse_proxy": "warehouse/logistics facility proxy without strict carrier-dispatch confirmation; area is retained as a continuous sensitivity attribute",
             "C_industrial_proxy": "generic industrial evidence, carrier retail counter, or carrier-branded point without physical dispatch-facility evidence; excluded from the official candidate layer",
+        },
+        "facility_grouping": {
+            "group_count": int(anchored["facility_group_id"].nunique()),
+            "multi_object_group_count": int(
+                anchored.loc[anchored["facility_group_member_count"].gt(1), "facility_group_id"]
+                .nunique()
+            ),
+            "rules": {
+                "R2": "shared industrial/logistics/warehouse/depot land-use containment",
+                "R3": "normalized name/operator plus identical address or touching polygons",
+                "R5": "singleton fallback",
+            },
+            "R4_shared_road_projection_merge": False,
+            "area_hard_gate": False,
         },
         "classification_policy": {
             "reference_warehouse_area_flag_m2": args.min_warehouse_area_m2,
