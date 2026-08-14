@@ -150,6 +150,89 @@ Amazon files stay outside Git; see
 [`AMAZON_LAST_MILE_2021.md`](EVRPTW_Dataset_Generator/docs/AMAZON_LAST_MILE_2021.md)
 for the compact-artifact and release-license policy.
 
+### Server-agent production runbook
+
+The server agent should execute the production build in this order. Do not run
+CLE and instance generation concurrently.
+
+1. Start from the repository root, record the code revision, and confirm the
+   host has sufficient resources. The complete matrix cache is about 155 GiB;
+   at least 300 GiB free disk is recommended for sources, work files, CLEs,
+   matrices, and reports.
+
+   ```bash
+   # Fresh host:
+   # git clone git@github.com:WaitDumplings/EVRPTW-DB.git /data/Maojie/ICLR/EVRPTW-DB
+   cd /data/Maojie/ICLR/EVRPTW-DB
+   git pull --ff-only origin main
+   git status --short
+   git rev-parse HEAD
+   free -h
+   df -h .
+   ```
+
+2. Create the environment on a new host, or update it after pulling a newer
+   commit. The environment includes `osmium` and the AWS CLI.
+
+   ```bash
+   conda env create -f EVRPTW_Dataset_Generator/environment.yml
+   # For an existing environment instead:
+   # conda env update -n evrptw-cle -f EVRPTW_Dataset_Generator/environment.yml --prune
+   conda activate evrptw-cle
+   export NLR_API_KEY=YOUR_FREE_NLR_DEVELOPER_KEY
+   mkdir -p logs
+   ```
+
+3. Generate all eleven CLEs. This command first downloads only missing source
+   inputs, reuses existing inputs, and then runs the resumable CLE builder.
+
+   ```bash
+   nohup bash -c './generate_cle.sh; code=$?; printf "%s\n" "$code" > logs/generate_cle.exit; exit "$code"' \
+     > logs/generate_cle.log 2>&1 &
+   echo $! > logs/generate_cle.pid
+   tail -f logs/generate_cle.log
+   ```
+
+4. After the CLE process ends, require exit code zero and verify the cohort
+   index before starting Stage 2.
+
+   ```bash
+   cat logs/generate_cle.exit
+   jq '{status, verified_cle_count, failures}' \
+     EVRPTW_Dataset/CLE_v1/us_11city/cle_index.json
+   ```
+
+   Expected values are `status="complete"`, `verified_cle_count=11`, and
+   `failures=[]`.
+
+5. Generate the full research instance corpus. The runner uses 12 workers by
+   default, downloads the three required Amazon files when absent, builds the
+   compact calibration artifact, and reuses completed families on restart.
+
+   ```bash
+   nohup bash -c 'INSTANCE_MODE=research ./generate_instances.sh; code=$?; printf "%s\n" "$code" > logs/generate_instances.exit; exit "$code"' \
+     > logs/generate_instances.log 2>&1 &
+   echo $! > logs/generate_instances.pid
+   tail -f logs/generate_instances.log
+   ```
+
+6. After Stage 2 ends, require exit code zero and inspect the authoritative run
+   report and Phase-1 aggregate directory.
+
+   ```bash
+   cat logs/generate_instances.exit
+   jq '{passed, unresolved_family_count: (.unresolved_family_ids | length), verified_family_count: (.verified | length)}' \
+     EVRPTW_Dataset/Instances_v1/us_11city/stage2_run_report.json
+   ls EVRPTW_Dataset/Instances_v1/us_11city/reports/phase1
+   ```
+
+   Expected values are `passed=true` and `unresolved_family_count=0`.
+
+If either process is interrupted, preserve the source, work, and output trees
+and rerun the same command. Do not delete partial downloads or completed family
+folders: the acquisition and generation stages are designed to resume and
+reuse them. Do not start solver benchmarks until both checks above pass.
+
 For a complete isolated San Diego vertical slice after the source bundle is in
 place:
 

@@ -137,6 +137,9 @@ It downloads only missing fixed-cohort sources and reuses every existing
 nonempty input. The second command uses 12 workers by default and downloads the
 three Amazon model-build JSON files automatically when its compact calibration
 artifact and raw inputs are both absent.
+For the exact server execution order, background commands, success criteria,
+and restart policy, follow the root README section
+[`Server-agent production runbook`](../README.md#server-agent-production-runbook).
 
 `generate_instances.sh` accepts only the current Stage-1 speed contract:
 `evrptw_directed_speed_profiles_v6` with a versioned reference profile ID.
