@@ -58,7 +58,7 @@ EVRPTW-DB does not need the complete evaluation/scoring corpus.
 - **Raw Amazon JSON:** keep as a local/server source cache. It is ignored by
   Git and should not be committed to the code repository.
 - **Compact Stage-2 artifact:** generated once under
-  `EVRPTW_Dataset/Calibration_v1/amazon_stage2_v2/`. It contains only the
+  `EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3/`. It contains only the
   fields and empirical summaries consumed by the generator; it does not
   contain Amazon stop coordinates. Its manifest stores portable upstream
   object IDs and the public registry/license identifiers rather than a local

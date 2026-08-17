@@ -17,9 +17,11 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -251,11 +253,11 @@ def validate_dataset_layout(dataset_root: Path) -> dict[str, Any]:
     release = _read_json(dataset_root / "release_manifest.json")
     if release.get("schema") != RELEASE_MANIFEST_SCHEMA:
         raise ArchiveWorkflowError("Extracted release_manifest.json has the wrong schema")
-    cle_root = dataset_root / "CLE_v1" / "us_11city"
-    instance_root = dataset_root / "Instances_v1" / "us_11city"
+    cle_root = dataset_root / "CLE_v2" / "us_11city"
+    instance_root = dataset_root / "Instances_v2" / "us_11city"
     contract_path = instance_root / "_reconstruction" / "reconstruction_contract.json"
     if not (cle_root / "cities").is_dir():
-        raise ArchiveWorkflowError("Extracted archive is missing CLE_v1/us_11city/cities")
+        raise ArchiveWorkflowError("Extracted archive is missing CLE_v2/us_11city/cities")
     if not (instance_root / "materialized" / "families").is_dir():
         raise ArchiveWorkflowError("Extracted archive is missing materialized families")
     contract = _read_json(contract_path)
@@ -404,6 +406,328 @@ def initialize_job(args: argparse.Namespace) -> None:
             destination=str(destination),
             log=str(job_dir / "restore.log"),
         )
+
+
+def _validate_regular_tree(root: Path, label: str) -> None:
+    """Reject links and special files before copying release source data."""
+
+    if not root.is_dir() or root.is_symlink():
+        raise ArchiveWorkflowError(f"{label} is not a regular directory: {root}")
+    for path in root.rglob("*"):
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise ArchiveWorkflowError(f"{label} contains a link: {path}")
+        if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+            raise ArchiveWorkflowError(f"{label} contains a special file: {path}")
+
+
+def _tree_file_bytes(root: Path) -> int:
+    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+
+
+def _source_acceptance(cle_root: Path, instance_root: Path) -> dict[str, Any]:
+    cle_index = _read_json(cle_root / "cle_index.json")
+    if (
+        cle_index.get("status") != "complete"
+        or int(cle_index.get("verified_cle_count", -1)) != 11
+        or cle_index.get("failures") != []
+    ):
+        raise ArchiveWorkflowError(
+            "CLE acceptance failed; require status=complete, verified_cle_count=11, "
+            "and failures=[]"
+        )
+
+    stage2 = _read_json(instance_root / "stage2_run_report.json")
+    unresolved = stage2.get("unresolved_family_ids")
+    if not stage2.get("passed") or not isinstance(unresolved, list) or unresolved:
+        raise ArchiveWorkflowError(
+            "Stage-2 acceptance failed; require passed=true and no unresolved families"
+        )
+
+    phase1 = _read_json(instance_root / "reports" / "phase1" / "summary.json")
+    if not phase1.get("all_hard_gates_passed"):
+        raise ArchiveWorkflowError(
+            "Phase-1 acceptance failed; not every hard correctness gate passed"
+        )
+    realism = _read_json(instance_root / "reports" / "stage2_repair" / "q90_gate.json")
+    if not realism.get("release_calibrated"):
+        raise ArchiveWorkflowError(
+            "Stage-2 realism acceptance failed; release_calibrated is not true"
+        )
+    return {
+        "cle_index": cle_index,
+        "stage2": stage2,
+        "phase1": phase1,
+        "realism": realism,
+    }
+
+
+def _git_head(repo_root: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    commit = result.stdout.strip().lower()
+    if result.returncode != 0 or len(commit) != 40 or any(
+        character not in "0123456789abcdef" for character in commit
+    ):
+        raise ArchiveWorkflowError(f"Cannot resolve repository HEAD: {result.stderr.strip()}")
+    return commit
+
+
+def _write_tar_zstd(
+    dataset_root: Path,
+    archive: Path,
+    *,
+    zstd_bin: str,
+    compression_threads: int,
+    compression_level: int,
+) -> None:
+    """Stream a link-free, single-root tar through zstd into an atomic output."""
+
+    temporary = archive.with_name(f".{archive.name}.part-{os.getpid()}")
+    temporary.unlink(missing_ok=True)
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        with temporary.open("xb") as compressed:
+            process = subprocess.Popen(
+                [
+                    zstd_bin,
+                    f"-{compression_level}",
+                    f"-T{compression_threads}",
+                    "--no-progress",
+                    "-c",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=compressed,
+                stderr=subprocess.PIPE,
+            )
+            assert process.stdin is not None
+            assert process.stderr is not None
+            try:
+                with tarfile.open(
+                    fileobj=process.stdin,
+                    mode="w|",
+                    format=tarfile.PAX_FORMAT,
+                    dereference=False,
+                ) as tar:
+                    paths = [dataset_root, *sorted(dataset_root.rglob("*"))]
+                    for path in paths:
+                        relative = path.relative_to(dataset_root)
+                        arcname = (
+                            ARCHIVE_ROOT
+                            if not relative.parts
+                            else f"{ARCHIVE_ROOT}/{relative.as_posix()}"
+                        )
+                        info = tar.gettarinfo(str(path), arcname=arcname)
+                        if not (info.isdir() or info.isreg()):
+                            raise ArchiveWorkflowError(
+                                f"Release staging contains an unsupported file: {path}"
+                            )
+                        if info.isreg():
+                            with path.open("rb") as source:
+                                tar.addfile(info, source)
+                        else:
+                            tar.addfile(info)
+                process.stdin.close()
+                stderr = process.stderr.read().decode("utf-8", errors="replace")
+                return_code = process.wait()
+            except BaseException:
+                if not process.stdin.closed:
+                    process.stdin.close()
+                process.terminate()
+                process.wait(timeout=30)
+                raise
+            if return_code != 0:
+                raise ArchiveWorkflowError(
+                    f"zstd compression failed (exit {return_code}): {stderr.strip()}"
+                )
+            compressed.flush()
+            os.fsync(compressed.fileno())
+        try:
+            os.link(temporary, archive)
+        except FileExistsError as exc:
+            raise ArchiveWorkflowError(f"Archive appeared during creation: {archive}") from exc
+        temporary.unlink()
+        directory_fd = os.open(archive.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            process.wait(timeout=30)
+        temporary.unlink(missing_ok=True)
+
+
+def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
+    """Create one accepted CLE + slim-instance release archive and checksum."""
+
+    started = time.perf_counter()
+    cle_root = args.cle_root.expanduser().resolve(strict=True)
+    instance_root = args.instance_root.expanduser().resolve(strict=True)
+    profile = args.profile.expanduser().resolve(strict=True)
+    repo_root = args.repo_root.expanduser().resolve(strict=True)
+    archive = args.archive.expanduser().resolve()
+    checksum = (
+        args.sha256_file.expanduser().resolve()
+        if args.sha256_file is not None
+        else Path(f"{archive}.sha256")
+    )
+    if archive.suffixes[-2:] != [".tar", ".zst"]:
+        raise ArchiveWorkflowError("Release archive name must end in .tar.zst")
+    if args.compression_threads <= 0 or not 1 <= args.compression_level <= 19:
+        raise ArchiveWorkflowError("Compression threads must be positive and level must be 1..19")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    if archive.exists() or checksum.exists():
+        raise ArchiveWorkflowError(
+            f"Refusing to overwrite an archive or checksum: {archive}, {checksum}"
+        )
+    for source in (cle_root, instance_root):
+        if source in archive.parents:
+            raise ArchiveWorkflowError("Release archive must be outside its source trees")
+
+    _validate_regular_tree(cle_root, "CLE source")
+    _validate_regular_tree(instance_root, "Stage-2 source")
+    acceptance = _source_acceptance(cle_root, instance_root)
+    commit = _git_head(repo_root)
+
+    staging_parent = Path(
+        tempfile.mkdtemp(prefix=f".{archive.name}.build-", dir=archive.parent)
+    )
+    archive_created = False
+    checksum_created = False
+    try:
+        payload = staging_parent / ARCHIVE_ROOT
+        cle_release = payload / "CLE_v2" / "us_11city"
+        instances_release = payload / "Instances_v2" / "us_11city"
+        cle_release.parent.mkdir(parents=True)
+        shutil.copytree(cle_root, cle_release)
+
+        generator_src = repo_root / "EVRPTW_Dataset_Generator" / "src"
+        if str(generator_src) not in sys.path:
+            sys.path.insert(0, str(generator_src))
+        from evrptw_stage2.reconstruction import export_slim_dataset  # noqa: PLC0415
+
+        contract = export_slim_dataset(
+            instance_root,
+            instances_release,
+            cle_root=cle_release,
+            profile_path=profile,
+        )
+        family_count = int(contract["family_count"])
+        view_count = int(contract["view_count"])
+        stage2 = acceptance["stage2"]
+        phase1 = acceptance["phase1"]
+        selected_count = int(stage2.get("execution", {}).get("selected_family_count", -1))
+        verified_count = len(stage2.get("verified", []))
+        successful_count = int(phase1.get("successful_parent_family_count", -1))
+        if not (
+            selected_count == verified_count == successful_count == family_count
+        ):
+            raise ArchiveWorkflowError(
+                "Acceptance reports do not cover every slim family "
+                f"(slim={family_count}, selected={selected_count}, "
+                f"verified={verified_count}, phase1={successful_count})"
+            )
+        if _matrix_payload_bytes(instances_release) != 0:
+            raise ArchiveWorkflowError("Slim export unexpectedly contains matrix payload files")
+
+        release = {
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "archive_layout": ARCHIVE_ROOT,
+            "code_commit": commit,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "dataset_mode": str(stage2.get("mode", "unknown")),
+            "cities": contract["cities"],
+            "family_count": family_count,
+            "view_count": view_count,
+            "matrix_names": contract["matrix_names"],
+            "matrix_file_count_omitted": family_count * len(contract["matrix_names"]),
+            "matrix_payload_bytes_omitted": int(contract["source_matrix_bytes_omitted"]),
+            "cle_payload_bytes": _tree_file_bytes(cle_release),
+            "slim_instance_payload_bytes": _tree_file_bytes(instances_release),
+            "reference_profile_id": contract["reference_profile"]["profile_id"],
+            "reference_profile_sha256": contract["reference_profile"]["sha256"],
+            "acceptance": {
+                "cle_status": acceptance["cle_index"]["status"],
+                "verified_cle_count": int(
+                    acceptance["cle_index"]["verified_cle_count"]
+                ),
+                "stage2_passed": True,
+                "phase1_all_hard_gates_passed": True,
+                "stage2_realism_release_calibrated": True,
+            },
+        }
+        _atomic_write_json(payload / "release_manifest.json", release)
+        markdown_fence = chr(96) * 3
+        (payload / "README_SLIM.md").write_text(
+            "# EVRPTW-DB portable slim dataset\n\n"
+            "This archive contains the accepted 11-city CLE and all lightweight "
+            "Stage-2 family/view parameters. Dense matrix files are intentionally "
+            "omitted and must be reconstructed with the repository code.\n\n"
+            "After cloning a compatible repository revision, keep the SHA-256 "
+            "sidecar beside the archive and run:\n\n"
+            f"{markdown_fence}bash\n"
+            "./auto.sh archive start --archive /path/to/release.tar.zst "
+            "--destination /data --workers 12\n"
+            "./auto.sh archive wait --destination /data\n"
+            f"{markdown_fence}\n\n"
+            "Do not use the restored dataset until archive status is succeeded.\n",
+            encoding="utf-8",
+        )
+        validate_dataset_layout(payload)
+        _write_tar_zstd(
+            payload,
+            archive,
+            zstd_bin=str(args.zstd_bin),
+            compression_threads=int(args.compression_threads),
+            compression_level=int(args.compression_level),
+        )
+        archive_created = True
+        inspection = inspect_archive(archive, str(args.zstd_bin))
+        if inspection["release_manifest"] != release:
+            raise ArchiveWorkflowError("Archived release manifest differs from staging")
+        digest = _sha256_file(archive)
+        checksum.parent.mkdir(parents=True, exist_ok=True)
+        temporary_checksum = checksum.with_name(f".{checksum.name}.tmp-{os.getpid()}")
+        try:
+            with temporary_checksum.open("x", encoding="utf-8") as handle:
+                handle.write(f"{digest}  {archive.name}\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary_checksum, checksum)
+            except FileExistsError as exc:
+                raise ArchiveWorkflowError(
+                    f"Checksum appeared during creation: {checksum}"
+                ) from exc
+            temporary_checksum.unlink()
+            checksum_created = True
+        finally:
+            temporary_checksum.unlink(missing_ok=True)
+        return {
+            "archive": str(archive),
+            "sha256_file": str(checksum),
+            "archive_sha256": digest,
+            "archive_bytes": archive.stat().st_size,
+            "logical_file_bytes": int(inspection["logical_file_bytes"]),
+            "family_count": family_count,
+            "view_count": view_count,
+            "matrix_payload_bytes_omitted": int(contract["source_matrix_bytes_omitted"]),
+            "wall_seconds": time.perf_counter() - started,
+        }
+    except BaseException:
+        if checksum_created:
+            checksum.unlink(missing_ok=True)
+        if archive_created:
+            archive.unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(staging_parent, ignore_errors=True)
 
 
 def _matrix_payload_bytes(instance_root: Path) -> int:
@@ -626,7 +950,7 @@ def job_status(job_dir: Path, field: str | None = None) -> int:
     state = _read_json(state_path)
     config = _load_config(job_dir)
     dataset_root = Path(config["dataset_root"])
-    instance_root = dataset_root / "Instances_v1" / "us_11city"
+    instance_root = dataset_root / "Instances_v2" / "us_11city"
     expected = int(state.get("family_count", 0))
     completed = 0
     families = instance_root / "materialized" / "families"
@@ -650,6 +974,17 @@ def job_status(job_dir: Path, field: str | None = None) -> int:
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    create = commands.add_parser("create")
+    create.add_argument("--cle-root", type=Path, required=True)
+    create.add_argument("--instance-root", type=Path, required=True)
+    create.add_argument("--profile", type=Path, required=True)
+    create.add_argument("--archive", type=Path, required=True)
+    create.add_argument("--sha256-file", type=Path)
+    create.add_argument("--repo-root", type=Path, required=True)
+    create.add_argument("--zstd-bin", required=True)
+    create.add_argument("--compression-threads", type=int, default=12)
+    create.add_argument("--compression-level", type=int, default=9)
+
     init = commands.add_parser("init")
     init.add_argument("--archive", type=Path, required=True)
     init.add_argument("--sha256-file", type=Path, required=True)
@@ -678,7 +1013,15 @@ def make_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = make_parser().parse_args()
     try:
-        if args.command == "init":
+        if args.command == "create":
+            print(
+                json.dumps(
+                    create_release_archive(args),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        elif args.command == "init":
             initialize_job(args)
         elif args.command == "run":
             run_job(args.job_dir)

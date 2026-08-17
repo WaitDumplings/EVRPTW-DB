@@ -78,6 +78,7 @@ def make_parser() -> argparse.ArgumentParser:
     materialize.add_argument("--customer-split", type=Path, required=True)
     materialize.add_argument("--community-adjacency", type=Path, required=True)
     materialize.add_argument("--amazon-artifact-root", type=Path, required=True)
+    materialize.add_argument("--amazon-cohort-split", type=Path, required=True)
     materialize.add_argument("--output-root", type=Path, required=True)
 
     verify_family = subparsers.add_parser(
@@ -190,7 +191,10 @@ def main() -> None:
         city = str(family["city_slug"])
         cle = load_portable_cle(args.cle_root, city, mode=args.mode)
         profile = load_reference_profile(args.profile, official=args.mode == "official")
-        amazon_artifacts = load_amazon_stage2_artifacts(args.amazon_artifact_root)
+        amazon_artifacts = load_amazon_stage2_artifacts(
+            args.amazon_artifact_root,
+            cohort_split_path=args.amazon_cohort_split,
+        )
         manifest = materialize_family(
             cle,
             config=config,

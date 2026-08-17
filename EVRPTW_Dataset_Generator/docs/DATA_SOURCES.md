@@ -14,7 +14,8 @@
 | Commercial-vehicle operating-speed prior | U.S. EPA MOVES5 default database `movesdb20241112` | Compact derived profile is built in; raw SQL is optional for reproduction | National sourceTypeID 32 speed-bin distributions and hourly VMT fractions for urban restricted/unrestricted access and weekday/weekend | Not a road network, edge observation, city traffic count, or Rivian telemetry |
 | Operating-day statistics | Amazon Last Mile Routing Research Challenge 2021 | Stage 2 only | Package volume, service-time and time-window aggregate calibration | Coordinates are obfuscated; no house/apartment label |
 | Reference EV specification | Rivian Commercial Van Delivery 700 Reference Guide | Stage 2 U.S. adapter | 18.5 m3 cargo, 100 kWh battery, 257 km range, 11/100 kW AC/DC caps | Reference configuration, not route telemetry |
-| Energy resource model | Classical EVRPTW literature | Stage 2 V1 contract | Constant `h = battery/range` and linear path-distance energy | Deliberately omits payload, weather, HVAC and speed dependence |
+| Energy resource model | Classical EVRPTW literature | Stage 2 V2 contract | Constant `h = battery/range` and linear path-distance energy | Deliberately omits payload, weather, HVAC and speed dependence |
+| Missing charger power | AFDC EV Charging Ports connector-specific power snapshot | Stage 2 V2 adapter | Frozen connector-port-weighted U.S. medians: L2 6.5 kW, CCS DC 200 kW | National imputation only; vehicle caps and 0.90 benchmark derating apply later |
 
 ## Arbitrary U.S. city acquisition contract
 
@@ -63,6 +64,8 @@ Official/source entry points:
 - Microsoft USBuildingFootprints: <https://github.com/microsoft/USBuildingFootprints>
 - USACE NSI: <https://www.hec.usace.army.mil/confluence/nsi/>
 - AFDC API: <https://developer.nlr.gov/docs/transportation/alt-fuel-stations-v1/>
+- AFDC EV Charging Ports API:
+  <https://developer.nlr.gov/docs/transportation/alt-fuel-stations-v1/ev-charging-units/>
 - NLR developer-domain transition:
   <https://developer.nlr.gov/docs/nlr-domain-transition/>
 - FHWA HPMS: <https://www.fhwa.dot.gov/policyinformation/hpms.cfm>
@@ -96,8 +99,9 @@ calibrated priors, and benchmark assumptions are in
 4. Native fields are preserved beside canonical fields. Examples include OSM
    `highway`, HPMS `F_SYSTEM`, AFDC connector text, and NSI `occtype`.
 5. Automatic coordinate resolution never deletes raw coordinates.
-6. A missing value is not replaced with an unverifiable claim. In particular,
-   missing charger power remains missing.
+6. Native missing values remain missing in the CLE source layer. Stage 2 V2
+   may derive an explicitly labeled value only from its frozen national
+   connector-mode registry; a missing registry value is a hard error.
 7. Profiles are versioned when a source snapshot, cohort, boundary, semantic
    rule, or crosswalk changes.
 

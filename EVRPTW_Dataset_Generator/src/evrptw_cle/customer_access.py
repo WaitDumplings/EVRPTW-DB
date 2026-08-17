@@ -344,6 +344,8 @@ def _write_service_access_contract(
             "anchor_scc_id",
             "reference_scc_id",
             "anchor_in_reference_scc",
+            "protected_inbound_access_eligible",
+            "protected_outbound_access_eligible",
             "protected_roundtrip_eligible",
             "protected_roundtrip_status",
         ]
@@ -368,6 +370,8 @@ def _write_service_access_contract(
             "anchor_scc_id",
             "reference_scc_id",
             "anchor_in_reference_scc",
+            "protected_inbound_access_eligible",
+            "protected_outbound_access_eligible",
             "protected_roundtrip_eligible",
             "protected_roundtrip_status",
         ]
@@ -392,6 +396,8 @@ def _write_service_access_contract(
             "anchor_scc_id",
             "reference_scc_id",
             "anchor_in_reference_scc",
+            "protected_inbound_access_eligible",
+            "protected_outbound_access_eligible",
             "protected_roundtrip_eligible",
             "protected_roundtrip_status",
         ]

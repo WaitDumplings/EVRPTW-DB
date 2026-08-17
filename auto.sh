@@ -5,6 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_METHOD="${DATA_METHOD:-stage2}"
 if [[ "${1:-}" == "archive" ]]; then
   shift
+  if [[ "${1:-}" == "create" ]]; then
+    shift
+    exec "$ROOT_DIR/create_dataset_archive.sh" "$@"
+  fi
   exec "$ROOT_DIR/restore_dataset_archive.sh" "$@"
 fi
 if [[ "${1:-}" == "stage2" || "${1:-}" == "restore" ]]; then

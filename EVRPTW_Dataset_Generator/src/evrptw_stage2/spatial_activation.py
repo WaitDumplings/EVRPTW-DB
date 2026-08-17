@@ -553,53 +553,133 @@ def _assign_with_competition_expansion(
             )
 
 
-def _partition_ids(
+
+def _region_first_partition(
     frame: pd.DataFrame,
     *,
     child_sizes: list[int],
     seed: int,
     namespace: str,
-) -> list[pd.DataFrame]:
-    cell_columns = ["sampling_cluster_id", "activation_decile"]
-    grouped = list(frame.groupby(cell_columns, sort=True, observed=True))
-    cell_labels = [f"{key[0]}:d{int(key[1])}" for key, _ in grouped]
-    allocation = balanced_cell_partition(
-        np.asarray([len(group) for _, group in grouped], dtype=int),
-        np.asarray(child_sizes, dtype=int),
-        seed=seed,
-        namespace=namespace,
-        cell_labels=cell_labels,
-        child_labels=[f"child_{index}" for index in range(len(child_sizes))],
-    )
+    community_graph: nx.DiGraph | None,
+) -> tuple[list[pd.DataFrame], dict[str, Any]]:
+    """Partition exact children while preserving whole structure regions first."""
+
     children: list[list[pd.DataFrame]] = [[] for _ in child_sizes]
-    for cell_index, ((_, group), label) in enumerate(zip(grouped, cell_labels)):
-        ordered = group.copy()
-        ordered["_partition_rank"] = [
-            stable_u64(seed, namespace, label, customer_id)
-            for customer_id in ordered["latent_service_location_id"].astype(str)
-        ]
-        ordered = ordered.sort_values(
-            ["_partition_rank", "latent_service_location_id"], kind="stable"
-        ).drop(columns="_partition_rank")
-        cursor = 0
-        for child_index, count in enumerate(allocation[cell_index]):
-            count = int(count)
-            children[child_index].append(ordered.iloc[cursor : cursor + count])
-            cursor += count
-        if cursor != len(ordered):
-            raise AssertionError("Cell partition failed to consume every customer")
+    remaining = np.asarray(child_sizes, dtype=int)
+    split_regions: set[str] = set()
+    groups = []
+    for region_id, group in frame.groupby("sampling_cluster_id", sort=True):
+        groups.append(
+            (
+                -len(group),
+                stable_u64(seed, namespace, "region", str(region_id)),
+                str(region_id),
+                group.copy(),
+            )
+        )
+    for _, _, region_id, group in sorted(groups):
+        fitting = np.flatnonzero(remaining >= len(group))
+        if len(fitting):
+            child = min(
+                map(int, fitting),
+                key=lambda index: (-int(remaining[index]), index),
+            )
+            children[child].append(group)
+            remaining[child] -= len(group)
+            continue
+
+        split_regions.add(region_id)
+        target = np.zeros(len(child_sizes), dtype=int)
+        left = len(group)
+        for child in sorted(range(len(child_sizes)), key=lambda index: (-remaining[index], index)):
+            take = min(left, int(remaining[child]))
+            target[child] = take
+            left -= take
+            if not left:
+                break
+        if left:
+            raise AssertionError("Region-first split could not satisfy remaining capacities")
+        decile_groups = list(group.groupby("activation_decile", sort=True, observed=True))
+        allocation = balanced_cell_partition(
+            np.asarray([len(rows) for _, rows in decile_groups], dtype=int),
+            target,
+            seed=seed,
+            namespace=f"{namespace}:split:{region_id}",
+            cell_labels=[f"d{int(decile)}" for decile, _ in decile_groups],
+            child_labels=[f"child_{index}" for index in range(len(child_sizes))],
+        )
+        for decile_index, (decile, rows) in enumerate(decile_groups):
+            ordered = rows.copy()
+            ordered["_region_first_rank"] = [
+                stable_u64(
+                    seed,
+                    namespace,
+                    region_id,
+                    int(decile),
+                    customer_id,
+                )
+                for customer_id in ordered["latent_service_location_id"].astype(str)
+            ]
+            ordered = ordered.sort_values(
+                ["_region_first_rank", "latent_service_location_id"], kind="stable"
+            ).drop(columns="_region_first_rank")
+            cursor = 0
+            for child, count in enumerate(allocation[decile_index]):
+                count = int(count)
+                if count:
+                    children[child].append(ordered.iloc[cursor : cursor + count])
+                cursor += count
+        remaining -= target
+
     result = [
         pd.concat(parts, ignore_index=True) if parts else frame.iloc[0:0].copy()
         for parts in children
     ]
-    ids = [set(child["latent_service_location_id"].astype(str)) for child in result]
-    if set.union(*ids) != set(frame["latent_service_location_id"].astype(str)):
-        raise AssertionError("Partition child union differs from parent")
-    if sum(map(len, ids)) != len(set.union(*ids)):
-        raise AssertionError("Partition children are not disjoint")
-    if [len(child) for child in result] != child_sizes:
-        raise AssertionError("Partition child size mismatch")
-    return result
+    if remaining.any() or [len(child) for child in result] != child_sizes:
+        raise AssertionError("Region-first child sizes are not exact")
+    parent_ids = set(frame["latent_service_location_id"].astype(str))
+    child_ids = [set(child["latent_service_location_id"].astype(str)) for child in result]
+    if set.union(*child_ids) != parent_ids or sum(map(len, child_ids)) != len(parent_ids):
+        raise AssertionError("Region-first children are not a disjoint exact union")
+
+    occurrences: dict[str, int] = {}
+    for child in result:
+        for region in set(child["sampling_cluster_id"].astype(str)):
+            occurrences[region] = occurrences.get(region, 0) + 1
+    split_actual = {region for region, count in occurrences.items() if count > 1}
+    node_reports = []
+    for child_index, child in enumerate(result):
+        region_sizes = child["sampling_cluster_id"].astype(str).value_counts()
+        shares = region_sizes.to_numpy(dtype=float) / len(child)
+        communities = set(child["community_id"].astype(str))
+        component_count = 1
+        if community_graph is not None and communities:
+            component_count = nx.number_weakly_connected_components(
+                community_graph.subgraph(communities)
+            )
+        node_reports.append(
+            {
+                "child_index": child_index,
+                "child_size": len(child),
+                "region_count": int(len(region_sizes)),
+                "parent_regions_touched": sorted(region_sizes.index.tolist()),
+                "split_region_count": int(sum(region in split_actual for region in region_sizes.index)),
+                "fragmentation_score": int(
+                    sum(max(0, occurrences[region] - 1) for region in region_sizes.index)
+                ),
+                "largest_region_share": float(shares.max()),
+                "region_hhi": float(np.square(shares).sum()),
+                "road_community_component_count": int(component_count),
+            }
+        )
+    return result, {
+        "namespace": namespace,
+        "child_sizes": child_sizes,
+        "split_region_ids": sorted(split_actual),
+        "split_region_count": len(split_actual),
+        "fragmentation_score": int(sum(max(0, count - 1) for count in occurrences.values())),
+        "children": node_reports,
+    }
 
 
 def nested_customer_order(
@@ -607,42 +687,51 @@ def nested_customer_order(
     *,
     customer_count: int,
     seed: int,
+    community_graph: nx.DiGraph | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Order parent customers so contiguous views encode the frozen tree."""
+    """Order parent customers so contiguous views encode the region-first tree."""
 
+    levels: list[dict[str, Any]] = []
     if customer_count == 1000:
-        cus500 = _partition_ids(
+        cus500, report = _region_first_partition(
             assignment,
             child_sizes=[500, 500],
             seed=seed,
             namespace="tree_1000_to_500",
+            community_graph=community_graph,
         )
+        levels.append(report)
         leaves: list[pd.DataFrame] = []
         for group_index, group in enumerate(cus500):
-            cus100 = _partition_ids(
+            cus100, report = _region_first_partition(
                 group,
                 child_sizes=[100] * 5,
                 seed=seed,
                 namespace=f"tree_500_{group_index}_to_100",
+                community_graph=community_graph,
             )
+            levels.append(report)
             for node_index, node in enumerate(cus100):
-                leaves.extend(
-                    _partition_ids(
-                        node,
-                        child_sizes=[50, 50],
-                        seed=seed,
-                        namespace=f"tree_100_{group_index}_{node_index}_to_50",
-                    )
+                pair, report = _region_first_partition(
+                    node,
+                    child_sizes=[50, 50],
+                    seed=seed,
+                    namespace=f"tree_100_{group_index}_{node_index}_to_50",
+                    community_graph=community_graph,
                 )
+                leaves.extend(pair)
+                levels.append(report)
         ordered = pd.concat(leaves, ignore_index=True)
         shape = {"cus500_nodes": 2, "cus100_nodes": 10, "cus50_nodes": 20}
     elif customer_count == 2000:
-        controls = _partition_ids(
+        controls, report = _region_first_partition(
             assignment,
             child_sizes=[1000, 1000],
             seed=seed,
             namespace="scalability_2000_to_1000",
+            community_graph=community_graph,
         )
+        levels.append(report)
         ordered = pd.concat(controls, ignore_index=True)
         shape = {"paired_cus1000_control_nodes": 2}
     else:
@@ -651,11 +740,12 @@ def nested_customer_order(
     if ordered["latent_service_location_id"].duplicated().any() or len(ordered) != customer_count:
         raise AssertionError("Nested customer order violated parent invariants")
     return ordered, {
-        "policy": "region_decile_controlled_rounding_tree_v1",
+        "policy": "deterministic_region_first_nested_partition_v1",
         "parent_customer_count": customer_count,
         "union_exact": True,
         "pairwise_disjoint": True,
         "child_sizes_exact": True,
+        "partition_levels": levels,
         **shape,
     }
 
@@ -784,6 +874,7 @@ def activate_spatial_customers(
         assignment,
         customer_count=customer_count,
         seed=seed,
+        community_graph=graph,
     )
     customer_lookup = customers.set_index("latent_service_location_id", drop=False)
     selected = customer_lookup.loc[

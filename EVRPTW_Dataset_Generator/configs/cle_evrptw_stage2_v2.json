@@ -1,0 +1,88 @@
+{
+  "schema": "cle_evrptw_stage2_config_v2",
+  "dataset_id": "CLE_EVRPTW_v2",
+  "benchmark_version": "2.0.0-stage2-repair-candidate",
+  "master_seed": 20260810,
+  "cities": {
+    "train": ["new-york", "los-angeles", "chicago", "houston", "phoenix", "philadelphia", "san-antonio", "san-diego", "dallas", "fort-worth"],
+    "heldout": "jacksonville"
+  },
+  "operating_horizon": {"start_s": 28800, "end_s": 86400},
+  "day_type": {"weekday_weight": 5, "weekend_weight": 2},
+  "demand": {
+    "unit": "cm3",
+    "vehicle_capacity_unit": "cm3",
+    "source": "amazon_last_mile_2021_station_day_templates_v3",
+    "template_policy": "cohort_constrained_single_day_primary_v2",
+    "package_count_stored_separately": true,
+    "mass_track_enabled": false
+  },
+  "reference_vehicle": {
+    "profile_id": "rivian_commercial_van_delivery_700_reference_v1",
+    "dc_cap_kw": 100.0,
+    "ac_l2_cap_kw": 11.0,
+    "full_charging": true,
+    "linear_charging": true,
+    "charging_power_derating_factor": 0.90,
+    "infinite_ports": true,
+    "unlimited_fleet": true
+  },
+  "customer_split": {
+    "partition_version": "census_block_group_road_scc_80_20_v1",
+    "heldout_fraction": 0.2,
+    "minimum_unit": "complete_community",
+    "base_geography": "census_block_group",
+    "road_subgroup_field": "anchor_scc_id"
+  },
+  "amazon_source": {
+    "cohort_split_config": "configs/amazon_cohort_split_v1.json",
+    "track_pool": {"train": "GEN-TRAIN", "validation": "GEN-EVAL", "test": "GEN-EVAL", "scalability": "GEN-EVAL"},
+    "primary_source_mode": ["SINGLE_STRUCTURE_DAY", "SINGLE_ORDER_DAY"],
+    "composite_role": "cus2000_report_only",
+    "territory_envelope": "per_structure_source_p99_v1",
+    "metric_holdout_use": "metrics_only"
+  },
+  "spatial_activation": {
+    "contract_id": "amazon_stationday_per_source_region_first_v4",
+    "structure_source_precedes_territory": true,
+    "structure_scaling_policy": "downscale_only",
+    "quota_rounding": "deterministic_min_cost_controlled_matrix_rounding",
+    "reservation_unit": "latent_customer_id",
+    "community_transit_graph": "directed_osm_cross_block_group_edges",
+    "view_partition": "deterministic_region_first_v1",
+    "region_redraw_cap": 3
+  },
+  "matrix_family": {
+    "dtype": "float32",
+    "path_policy_id": "distance_shortest_directed_physical_path_v1",
+    "running_time_path_policy_id": "directed_zero_turn_shortest_running_time_v3",
+    "matrix_bundle_id": "dual_path_four_matrix_v3",
+    "stored_parent_matrix_count": 4,
+    "parent_scale_id": "cus1000",
+    "train_parent_families": 5000,
+    "validation_parent_families": 500,
+    "core_test_parent_families_per_track": 500,
+    "scalability_parent_families": 500,
+    "lower_scale_storage": "arbitrary_index_view_only",
+    "train_view_tree": "1000_region_first_to_2x500_to_10x100_to_20x50",
+    "evaluation_view_policy": "one_strictly_nested_region_first_chain",
+    "scalability_pair": "cus1000_control_subset_of_cus2000",
+    "store_runtime_masks": false
+  },
+  "acceptance": {
+    "realism_gate": "station_block_q90_m2_m3_v1",
+    "primary_scales": ["cus100", "cus500", "cus1000"],
+    "compatibility_scale": "cus50",
+    "report_only_scales": ["cus2000"],
+    "pair_subsampling_allowed": false,
+    "max_attempts_per_family": 4
+  },
+  "output": {"calibration_root": "Calibration_v2", "instances_root": "Instances_v2"},
+  "scales": [
+    {"scale_id": "cus50", "customers": 50, "charging_stations": 10, "role": "compatibility_budgeted_mip", "train_views": 100000, "validation_instances": 500, "test_instances": {"test1_new_seed_same_cities": 500}},
+    {"scale_id": "cus100", "customers": 100, "charging_stations": 20, "role": "core", "train_views": 50000, "validation_instances": 500, "test_instances": {"test1_new_seed": 500, "test2_heldout_locations": 500, "test3_heldout_city": 500}},
+    {"scale_id": "cus500", "customers": 500, "charging_stations": 50, "role": "core", "train_views": 10000, "validation_instances": 500, "test_instances": {"test1_new_seed": 500, "test2_heldout_locations": 500, "test3_heldout_city": 500}},
+    {"scale_id": "cus1000", "customers": 1000, "charging_stations": 50, "role": "core", "train_views": 5000, "validation_instances": 500, "test_instances": {"test1_new_seed": 500, "test2_heldout_locations": 500, "test3_heldout_city": 500}},
+    {"scale_id": "cus2000", "customers": 2000, "charging_stations": 50, "role": "same_city_unseen_scale_report_only", "train_views": 0, "validation_instances": 0, "test_instances": {"unseen_scale_same_cities": 500}}
+  ]
+}

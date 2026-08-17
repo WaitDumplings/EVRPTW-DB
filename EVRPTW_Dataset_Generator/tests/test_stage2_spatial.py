@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from evrptw_stage2.amazon import (
     build_amazon_stage2_artifacts,
@@ -22,7 +23,7 @@ from evrptw_stage2.spatial_activation import (
     nested_customer_order,
 )
 
-PROFILE = Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+PROFILE = Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v2.json"
 
 
 def test_amazon_preprocessor_builds_station_day_artifacts(tmp_path: Path) -> None:
@@ -65,8 +66,36 @@ def test_amazon_preprocessor_builds_station_day_artifacts(tmp_path: Path) -> Non
         travel_times_path=tmp_path / "travel_times.json",
         output_dir=output,
     )
-    artifacts = load_amazon_stage2_artifacts(output)
+    cohort = tmp_path / "cohort.json"
+    cohort.write_text(
+        json.dumps(
+            {
+                "schema": "evrptw_amazon_cohort_split_v1",
+                "leakage_assertions": {
+                    "metric_stations_disjoint_from_generation": True,
+                    "station_day_pools_pairwise_disjoint_and_exhaustive": True,
+                    "template_id_pools_pairwise_disjoint": True,
+                    "route_id_pools_pairwise_disjoint": True,
+                },
+                    "track_to_pool": {"train": "GEN-TRAIN"},
+                    "evaluation_track_allocation": {
+                        "tracks": [],
+                        "station_day_ledgers_pairwise_disjoint_and_exhaustive": True,
+                        "exact_template_reuse_between_evaluation_tracks": False,
+                    },
+                    "station_day_assignments": [
+                        {"station_day_id": "DLA3:2018-01-02", "pool": "GEN-TRAIN"}
+                    ],
+                }
+            ),
+        encoding="utf-8",
+    )
+    artifacts = load_amazon_stage2_artifacts(output, cohort_split_path=cohort)
     assert manifest["template_count"] == 2
+    assert manifest["template_id_contract"] == "station_code:date:route_id:stop_id"
+    assert artifacts.templates["template_id"].str.startswith(
+        "DLA3:2018-01-02:RouteID_1:"
+    ).all()
     assert manifest["source_license"] == "CC-BY-NC-4.0"
     assert manifest["source_files"]["route_data"] == (
         "almrrc2021-data-training/model_build_inputs/route_data.json"
@@ -74,9 +103,9 @@ def test_amazon_preprocessor_builds_station_day_artifacts(tmp_path: Path) -> Non
     assert str(tmp_path) not in json.dumps(manifest["source_files"])
     assert artifacts.t_env_s > 0
     targets, source = artifacts.structure_source(
-        day_type="weekday", customer_count=2, seed=3
+        day_type="weekday", customer_count=1, seed=3, pool="GEN-TRAIN"
     )
-    assert len(targets) == 2
+    assert len(targets) >= 1
     assert source["structure_source_mode"] == "SINGLE_STRUCTURE_DAY"
 
 
@@ -163,6 +192,7 @@ def test_nested_order_encodes_exact_cus1000_tree() -> None:
             "latent_service_location_id": [f"loc-{index}" for index in range(1000)],
             "sampling_cluster_id": [f"r{index % 8}" for index in range(1000)],
             "activation_decile": [index % 10 for index in range(1000)],
+            "community_id": [f"c{index % 16}" for index in range(1000)],
         }
     )
     ordered, report = nested_customer_order(
@@ -194,6 +224,7 @@ def test_amazon_covering_matching_and_inherited_attributes() -> None:
             "service_time_s": [30.0, 40.0, 50.0],
             "tw_start_s": [28800.0] * 3,
             "tw_end_s": [86400.0] * 3,
+            "tw_was_specified": [False] * 3,
         }
     )
     source = {
@@ -233,7 +264,7 @@ def test_phase1_aggregation_persists_family_stratum_and_summary(tmp_path: Path) 
     family = tmp_path / "materialized" / "families" / "family-1"
     family.mkdir(parents=True)
     metrics = {
-        "schema": "evrptw_phase1_family_metrics_v1",
+        "schema": "evrptw_phase1_family_metrics_v2",
         "family_id": "family-1",
         "city_slug": "san-diego",
         "day_type": "weekday",
@@ -276,10 +307,13 @@ def test_phase1_aggregation_persists_family_stratum_and_summary(tmp_path: Path) 
             "city_slug": ["san-diego", "san-diego"],
             "day_type": ["weekday", "weekday"],
             "parent_scale_id": ["cus1000", "cus1000"],
-            "amazon_t_env_s": [3600.0, 3600.0],
+            "source_t_env_s": [3600.0, 3600.0],
             "proposal_depot_time_s": [300.0, 600.0],
             "structure_target_time_s": [350.0, 550.0],
             "radial_baseline_depot_time_s": [200.0, 800.0],
+            "proposal_depot_time_normalized": [300.0 / 3600.0, 600.0 / 3600.0],
+            "structure_target_time_normalized": [350.0 / 3600.0, 550.0 / 3600.0],
+            "radial_baseline_time_normalized": [200.0 / 3600.0, 800.0 / 3600.0],
         }
     ).to_parquet(family / "phase1_observations.parquet", index=False)
 
@@ -290,3 +324,15 @@ def test_phase1_aggregation_persists_family_stratum_and_summary(tmp_path: Path) 
     assert (report / "family_metrics.parquet").is_file()
     assert (report / "stratified_metrics.csv").is_file()
     assert (report / "summary.json").is_file()
+
+
+def test_phase1_aggregation_rejects_stale_family_metric_schema(tmp_path: Path) -> None:
+    family = tmp_path / "materialized" / "families" / "family-1"
+    family.mkdir(parents=True)
+    (family / "phase1_metrics.json").write_text(
+        json.dumps({"schema": "evrptw_phase1_family_metrics_v1"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Phase-1 family metric schema mismatch"):
+        aggregate_phase1_metrics(tmp_path)

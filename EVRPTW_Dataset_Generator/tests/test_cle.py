@@ -12,10 +12,20 @@ from evrptw_cle.cle import package_cle, verify_cle
 from evrptw_cle.util import sha256_file, write_json
 
 
+TEST_CODE_PROVENANCE = {
+    "schema": "evrptw_code_provenance_v1",
+    "code_commit": "a" * 40,
+    "code_branch": "stage2-repair-candidate",
+    "working_tree_clean": True,
+}
+
+
 def test_cle_build_verifier_checks_output_hashes(tmp_path: Path) -> None:
     output = tmp_path / "evidence.txt"
     output.write_text("frozen", encoding="utf-8")
     manifest = {
+        "code_provenance": TEST_CODE_PROVENANCE,
+        "connectivity_contract": {"id": "directed_projection_roundtrip_v2"},
         "status": "technical_cle_build_complete_release_blocked",
         "release_eligible": False,
         "release_blocker_count": 1,
@@ -35,6 +45,8 @@ def test_strict_portability_rejects_build_only_cle(tmp_path: Path) -> None:
     output = tmp_path / "evidence.txt"
     output.write_text("frozen", encoding="utf-8")
     manifest = {
+        "code_provenance": TEST_CODE_PROVENANCE,
+        "connectivity_contract": {"id": "directed_projection_roundtrip_v2"},
         "status": "technical_cle_build_complete_release_blocked",
         "release_eligible": False,
         "release_blocker_count": 1,
@@ -68,6 +80,7 @@ def test_verifier_reports_missing_connectivity_column_without_crashing(
     write_json(
         tmp_path / "manifest.json",
         {
+            "connectivity_contract": {"id": "directed_projection_roundtrip_v2"},
             "status": "legacy_work_artifact",
             "release_eligible": False,
             "release_blocker_count": 1,
@@ -148,6 +161,7 @@ def test_package_cle_copies_runtime_graph_and_survives_source_removal(
         },
     )
     manifest = {
+        "connectivity_contract": {"id": "directed_projection_roundtrip_v2"},
         "status": "technical_cle_build_complete_release_blocked",
         "release_eligible": False,
         "release_blocker_count": 1,
@@ -156,7 +170,10 @@ def test_package_cle_copies_runtime_graph_and_survives_source_removal(
     }
     write_json(source_cle / "manifest.json", manifest)
 
-    destination = tmp_path / "release/CLE_v1/test-city"
+    manifest["code_provenance"] = TEST_CODE_PROVENANCE
+    write_json(source_cle / "manifest.json", manifest)
+
+    destination = tmp_path / "release/CLE_v2/test-city"
     result = package_cle(
         source_cle_dir=source_cle,
         graph_path=graph,

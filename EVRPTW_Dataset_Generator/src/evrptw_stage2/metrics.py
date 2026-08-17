@@ -11,6 +11,9 @@ import pandas as pd
 from scipy.stats import wasserstein_distance
 
 
+PHASE1_FAMILY_METRICS_SCHEMA = "evrptw_phase1_family_metrics_v2"
+
+
 def _normalized_w1(left: np.ndarray, right: np.ndarray, normalizer: float) -> float:
     if not len(left) or not len(right):
         return float("nan")
@@ -38,10 +41,7 @@ def _frame_numeric_mean(frame: pd.DataFrame, column: str) -> float | None:
 def _nearest_neighbor_times(customer_time: np.ndarray) -> np.ndarray:
     values = np.asarray(customer_time, dtype=float).copy()
     np.fill_diagonal(values, np.inf)
-    # Symmetrization makes the generated diagnostic comparable to Amazon's
-    # bidirectional stop-pair average used in preprocessing.
-    symmetric = (values + values.T) / 2.0
-    return np.min(symmetric, axis=1)
+    return np.min(values, axis=1)
 
 
 def _within_region_pairwise(
@@ -63,8 +63,7 @@ def _within_region_pairwise(
             )
             continue
         sub = customer_time[np.ix_(indices, indices)]
-        symmetric = (sub + sub.T) / 2.0
-        values = symmetric[np.triu_indices(len(indices), k=1)]
+        values = sub[~np.eye(len(indices), dtype=bool)]
         records.append(
             {
                 "sampling_cluster_id": region,
@@ -113,7 +112,7 @@ def build_phase1_family_metrics(
     baseline_radial = pd.to_numeric(
         radial_baseline["depot_running_time_s"], errors="coerce"
     ).to_numpy(dtype=float)
-    t_env = float(selection_report["territory"]["amazon_t_env_s"])
+    t_env = float(selection_report["territory"]["source_t_env_s"])
     generated_nn = _nearest_neighbor_times(customer_time)
     amazon_reference = selection_report.get("amazon_spatial_reference", {})
     amazon_nn = np.asarray(amazon_reference.get("nearest_neighbor_time_s", []), dtype=float)
@@ -143,12 +142,12 @@ def build_phase1_family_metrics(
     }
     hard_gates["passed"] = all(hard_gates.values())
     metrics = {
-        "schema": "evrptw_phase1_family_metrics_v1",
+        "schema": PHASE1_FAMILY_METRICS_SCHEMA,
         "statistical_unit": "attempted_parent_family",
         **family_manifest_fields,
         "hard_gates": hard_gates,
         "m1_radial": {
-            "normalizer": "amazon_t_env_s",
+            "normalizer": "source_t_env_s",
             "proposal_family_normalized_w1": _normalized_w1(
                 proposal_radial, target_radial, t_env
             ),
@@ -244,16 +243,89 @@ def build_phase1_family_metrics(
             "city_slug": family_manifest_fields["city_slug"],
             "day_type": family_manifest_fields["day_type"],
             "parent_scale_id": family_manifest_fields["parent_scale_id"],
-            "amazon_t_env_s": t_env,
+            "source_t_env_s": t_env,
             "proposal_depot_time_s": proposal_radial,
             "structure_target_time_s": target_radial,
             "radial_baseline_depot_time_s": baseline_radial,
+            "proposal_depot_time_normalized": proposal_radial / max(t_env, 1.0),
+            "structure_target_time_normalized": target_radial / max(t_env, 1.0),
+            "radial_baseline_time_normalized": baseline_radial / max(t_env, 1.0),
             "sampling_cluster_id": customer_rows["sampling_cluster_id"].astype(str).to_numpy(),
             "community_id": customer_rows["community_id"].astype(str).to_numpy(),
             "activation_decile": customer_rows["activation_decile"].astype(int).to_numpy(),
         }
     )
     return metrics, observations, region_pair
+
+
+def _write_source_audit_frames(
+    report_root: Path,
+    *,
+    source_rows: list[dict[str, Any]],
+    template_rows: list[dict[str, Any]],
+    bias_rows: list[dict[str, Any]],
+    fragmentation_rows: list[dict[str, Any]],
+    charger_rows: list[dict[str, Any]],
+) -> dict[str, str]:
+    source_frame = pd.DataFrame.from_records(source_rows)
+    template_frame = pd.DataFrame.from_records(template_rows)
+    bias_frame = pd.DataFrame.from_records(bias_rows)
+    fragmentation_frame = pd.json_normalize(fragmentation_rows, sep=".")
+    charger_frame = pd.DataFrame.from_records(charger_rows)
+    template_family_counts = template_frame.groupby("order_template_id")[
+        "family_id"
+    ].nunique()
+    template_frame["corpus_family_reuse_count"] = template_frame[
+        "order_template_id"
+    ].map(template_family_counts)
+    source_frame.to_parquet(report_root / "amazon_source_family_ledger.parquet", index=False)
+    template_frame.to_parquet(report_root / "amazon_template_usage.parquet", index=False)
+    bias_frame.to_parquet(report_root / "matching_bias_audit.parquet", index=False)
+    fragmentation_frame.to_parquet(report_root / "fragmentation_audit.parquet", index=False)
+    charger_frame.to_parquet(report_root / "charger_selection_audit.parquet", index=False)
+    within_family_duplicate_count = int(
+        template_frame.duplicated(["family_id", "order_template_id"]).sum()
+    )
+    source_usage_summary = {
+        "schema": "evrptw_amazon_source_usage_summary_v1",
+        "family_count": len(source_frame),
+        "source_pool_counts": source_frame["source_pool"].value_counts().sort_index().to_dict(),
+        "generation_track_counts": source_frame["generation_track"]
+        .value_counts()
+        .sort_index()
+        .to_dict(),
+        "structure_source_mode_counts": source_frame["structure_source_mode"]
+        .value_counts()
+        .sort_index()
+        .to_dict(),
+        "order_source_mode_counts": source_frame["order_source_mode"]
+        .value_counts()
+        .sort_index()
+        .to_dict(),
+        "structure_order_relationship_counts": source_frame[
+            "structure_order_source_relationship"
+        ]
+        .value_counts()
+        .sort_index()
+        .to_dict(),
+        "order_template_assignment_count": len(template_frame),
+        "unique_order_template_count": int(template_frame["order_template_id"].nunique()),
+        "templates_reused_across_families_count": int((template_family_counts > 1).sum()),
+        "within_family_template_duplicate_count": within_family_duplicate_count,
+        "within_family_template_reuse_forbidden_and_absent": within_family_duplicate_count == 0,
+    }
+    (report_root / "source_usage_summary.json").write_text(
+        json.dumps(source_usage_summary, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "amazon_source_family_ledger": "amazon_source_family_ledger.parquet",
+        "amazon_template_usage": "amazon_template_usage.parquet",
+        "source_usage_summary": "source_usage_summary.json",
+        "matching_bias_audit": "matching_bias_audit.parquet",
+        "fragmentation_audit": "fragmentation_audit.parquet",
+        "charger_selection_audit": "charger_selection_audit.parquet",
+    }
 
 
 def aggregate_phase1_metrics(output_root: str | Path) -> dict[str, Any]:
@@ -266,6 +338,22 @@ def aggregate_phase1_metrics(output_root: str | Path) -> dict[str, Any]:
     if not metric_paths:
         raise FileNotFoundError("No completed family Phase-1 metrics were found")
     metrics = [json.loads(path.read_text(encoding="utf-8")) for path in metric_paths]
+    stale_metric_paths = [
+        str(path)
+        for path, payload in zip(metric_paths, metrics, strict=True)
+        if payload.get("schema") != PHASE1_FAMILY_METRICS_SCHEMA
+    ]
+    if stale_metric_paths:
+        raise ValueError(
+            "Phase-1 family metric schema mismatch; expected "
+            f"{PHASE1_FAMILY_METRICS_SCHEMA}: {stale_metric_paths}"
+        )
+    family_manifest_paths = [path.parent / "family_manifest.json" for path in metric_paths]
+    family_manifests = (
+        [json.loads(path.read_text(encoding="utf-8")) for path in family_manifest_paths]
+        if all(path.is_file() for path in family_manifest_paths)
+        else []
+    )
     flat = pd.json_normalize(metrics, sep=".")
     flat.to_parquet(report_root / "family_metrics.parquet", index=False)
     observations = pd.concat(
@@ -291,13 +379,10 @@ def aggregate_phase1_metrics(output_root: str | Path) -> dict[str, Any]:
             & flat["parent_scale_id"].astype(str).eq(str(keys[2]))
         ]
 
-        proposal = group["proposal_depot_time_s"].to_numpy(dtype=float)
-        target = group["structure_target_time_s"].to_numpy(dtype=float)
-        baseline = group["radial_baseline_depot_time_s"].to_numpy(dtype=float)
-        normalizer_values = group["amazon_t_env_s"].to_numpy(dtype=float)
-        if not np.allclose(normalizer_values, normalizer_values[0]):
-            raise ValueError(f"Amazon T_env is inconsistent within stratum {keys}")
-        normalizer = float(normalizer_values[0])
+        proposal = group["proposal_depot_time_normalized"].to_numpy(dtype=float)
+        target = group["structure_target_time_normalized"].to_numpy(dtype=float)
+        baseline = group["radial_baseline_time_normalized"].to_numpy(dtype=float)
+        normalizer = 1.0
         strata.append(
             {
                 "city_slug": keys[0],
@@ -374,6 +459,252 @@ def aggregate_phase1_metrics(output_root: str | Path) -> dict[str, Any]:
         )
     strata_frame = pd.DataFrame.from_records(strata)
     strata_frame.to_csv(report_root / "stratified_metrics.csv", index=False)
+    corpus_rows: list[dict[str, Any]] = []
+    for keys, group in observations.groupby(
+        ["day_type", "parent_scale_id"], sort=True
+    ):
+        family_group = flat.loc[
+            flat["day_type"].astype(str).eq(str(keys[0]))
+            & flat["parent_scale_id"].astype(str).eq(str(keys[1]))
+        ]
+        corpus_rows.append(
+            {
+                "day_type": str(keys[0]),
+                "scale_id": str(keys[1]),
+                "family_count": int(group["family_id"].nunique()),
+                "city_count": int(group["city_slug"].nunique()),
+                "customer_observation_count": len(group),
+                "m1_corpus_generated_to_assigned_structure_normalized_w1": (
+                    _normalized_w1(
+                        group["proposal_depot_time_normalized"].to_numpy(dtype=float),
+                        group["structure_target_time_normalized"].to_numpy(dtype=float),
+                        1.0,
+                    )
+                ),
+                "m1_corpus_radial_baseline_to_assigned_structure_normalized_w1": (
+                    _normalized_w1(
+                        group["radial_baseline_time_normalized"].to_numpy(dtype=float),
+                        group["structure_target_time_normalized"].to_numpy(dtype=float),
+                        1.0,
+                    )
+                ),
+                "m1_family_generated_normalized_w1_mean": _frame_numeric_mean(
+                    family_group, "m1_radial.proposal_family_normalized_w1"
+                ),
+            }
+        )
+    pd.DataFrame.from_records(corpus_rows).to_csv(
+        report_root / "corpus_metrics.csv", index=False
+    )
+
+    source_rows: list[dict[str, Any]] = []
+    template_rows: list[dict[str, Any]] = []
+    bias_rows: list[dict[str, Any]] = []
+    fragmentation_rows: list[dict[str, Any]] = []
+    charger_rows: list[dict[str, Any]] = []
+    for manifest_path, manifest in zip(family_manifest_paths, family_manifests):
+        family_dir = manifest_path.parent
+        family_id = str(manifest["family_id"])
+        structure = manifest["selection_report"]["amazon_structure_source"]
+        order = manifest["order_source_report"]
+        source_rows.append(
+            {
+                "family_id": family_id,
+                "city_slug": str(manifest["city_slug"]),
+                "day_type": str(manifest["day_type"]),
+                "parent_scale_id": str(manifest["parent_scale_id"]),
+                "source_pool": str(order["source_pool"]),
+                "generation_track": str(order["generation_track"]),
+                "structure_source_mode": str(structure["structure_source_mode"]),
+                "structure_source_ids": "|".join(
+                    sorted(map(str, structure["structure_source_ids"]))
+                ),
+                "order_source_mode": str(order["selected_order_source_mode"]),
+                "order_source_ids": "|".join(
+                    sorted(map(str, order["selected_station_day_ids"]))
+                ),
+                "structure_order_source_relationship": str(
+                    order["structure_order_source_relationship"]
+                ),
+                "release_role": str(order["release_role"]),
+            }
+        )
+        bias_rows.append(
+            {
+                "family_id": family_id,
+                "city_slug": str(manifest["city_slug"]),
+                "day_type": str(manifest["day_type"]),
+                "parent_scale_id": str(manifest["parent_scale_id"]),
+                **{
+                    f"eligible_pool_{key}": value
+                    for key, value in order["matching_bias_audit"]["eligible_pool"].items()
+                },
+                **{
+                    f"matched_templates_{key}": value
+                    for key, value in order["matching_bias_audit"]["matched_templates"].items()
+                },
+            }
+        )
+        terminal_index = pd.read_parquet(
+            family_dir / manifest["terminal_index"],
+            columns=[
+                "terminal_kind",
+                "order_template_id",
+                "reference_charge_mode",
+                "effective_charging_power_source",
+            ],
+        )
+        assigned = terminal_index.loc[
+            terminal_index["terminal_kind"].eq("customer"), "order_template_id"
+        ].dropna()
+        template_rows.extend(
+            {
+                "family_id": family_id,
+                "city_slug": str(manifest["city_slug"]),
+                "day_type": str(manifest["day_type"]),
+                "parent_scale_id": str(manifest["parent_scale_id"]),
+                "source_pool": str(order["source_pool"]),
+                "order_template_id": str(template_id),
+            }
+            for template_id in assigned.astype(str)
+        )
+        parent_chargers = manifest["selection_report"]["charger_selection"]
+        legacy_audit = parent_chargers["road_time_vs_haversine_legacy_audit"]
+        selected_positions = list(map(int, parent_chargers["selected_roster_positions"]))
+        parent_charger_terminals = terminal_index.loc[
+            terminal_index["terminal_kind"].eq("charging_station")
+        ]
+        charger_rows.append(
+            {
+                "family_id": family_id,
+                "view_id": None,
+                "scale_id": str(manifest["parent_scale_id"]),
+                "selection_level": "parent",
+                "candidate_roster_count": int(parent_chargers["candidate_roster_count"]),
+                "bidirectional_energy_eligible_count": int(
+                    parent_chargers["bidirectional_energy_eligible_count"]
+                ),
+                "selected_count": len(selected_positions),
+                "selected_roster_positions": "|".join(map(str, selected_positions)),
+                "prefix_semantics": False,
+                "is_literal_roster_prefix": selected_positions
+                == list(range(len(selected_positions))),
+                "road_time_delta_mean_s": float(
+                    legacy_audit["road_time_delta"]["mean_s"]
+                ),
+                "road_time_delta_p95_s": float(
+                    legacy_audit["road_time_delta"]["p95_s"]
+                ),
+                "haversine_legacy_delta_mean_s": float(
+                    legacy_audit["haversine_legacy_road_time_delta"]["mean_s"]
+                ),
+                "haversine_legacy_delta_p95_s": float(
+                    legacy_audit["haversine_legacy_road_time_delta"]["p95_s"]
+                ),
+                "road_time_haversine_selected_overlap_count": int(
+                    legacy_audit["selected_roster_overlap_count"]
+                ),
+                "selected_dc_fast_count": int(
+                    parent_charger_terminals["reference_charge_mode"].eq("dc_fast").sum()
+                ),
+                "selected_ac_level2_count": int(
+                    parent_charger_terminals["reference_charge_mode"].eq("ac_level2").sum()
+                ),
+                "reported_power_count": int(
+                    parent_charger_terminals["effective_charging_power_source"]
+                    .astype(str)
+                    .str.startswith("reported")
+                    .sum()
+                ),
+                "national_mode_median_power_count": int(
+                    parent_charger_terminals["effective_charging_power_source"]
+                    .astype(str)
+                    .str.startswith("national_mode")
+                    .sum()
+                ),
+            }
+        )
+        for view_manifest_path in sorted((family_dir / "views").glob("*/view_manifest.json")):
+            view = json.loads(view_manifest_path.read_text(encoding="utf-8"))
+            m4 = view["spatial_metrics"]["m4_region_first_partition"]
+            fragmentation_rows.append(
+                {
+                    "family_id": family_id,
+                    "view_id": str(view["view_id"]),
+                    "city_slug": str(view["city_slug"]),
+                    "day_type": str(view["day_type"]),
+                    "scale_id": str(view["scale_id"]),
+                    **m4,
+                }
+            )
+            terminal_indices = list(
+                map(int, view["charger_selection"]["parent_terminal_indices"])
+            )
+            child_charger_terminals = terminal_index.iloc[terminal_indices]
+            charger_rows.append(
+                {
+                    "family_id": family_id,
+                    "view_id": str(view["view_id"]),
+                    "scale_id": str(view["scale_id"]),
+                    "selection_level": "child_view",
+                    "candidate_roster_count": int(
+                        manifest["parent_charging_station_count"]
+                    ),
+                    "bidirectional_energy_eligible_count": int(
+                        manifest["parent_charging_station_count"]
+                    ),
+                    "selected_count": len(terminal_indices),
+                    "selected_roster_positions": "|".join(map(str, terminal_indices)),
+                    "prefix_semantics": bool(
+                        view["charger_selection"]["prefix_semantics"]
+                    ),
+                    "is_literal_roster_prefix": terminal_indices
+                    == list(
+                        range(
+                            1 + int(manifest["parent_customer_count"]),
+                            1
+                            + int(manifest["parent_customer_count"])
+                            + len(terminal_indices),
+                        )
+                    ),
+                    "road_time_delta_mean_s": None,
+                    "road_time_delta_p95_s": None,
+                    "haversine_legacy_delta_mean_s": None,
+                    "haversine_legacy_delta_p95_s": None,
+                    "road_time_haversine_selected_overlap_count": None,
+                    "selected_dc_fast_count": int(
+                        child_charger_terminals["reference_charge_mode"].eq("dc_fast").sum()
+                    ),
+                    "selected_ac_level2_count": int(
+                        child_charger_terminals["reference_charge_mode"].eq("ac_level2").sum()
+                    ),
+                    "reported_power_count": int(
+                        child_charger_terminals["effective_charging_power_source"]
+                        .astype(str)
+                        .str.startswith("reported")
+                        .sum()
+                    ),
+                    "national_mode_median_power_count": int(
+                        child_charger_terminals["effective_charging_power_source"]
+                        .astype(str)
+                        .str.startswith("national_mode")
+                        .sum()
+                    ),
+                }
+            )
+
+    source_outputs = (
+        _write_source_audit_frames(
+            report_root,
+            source_rows=source_rows,
+            template_rows=template_rows,
+            bias_rows=bias_rows,
+            fragmentation_rows=fragmentation_rows,
+            charger_rows=charger_rows,
+        )
+        if family_manifests
+        else {}
+    )
     successful_attempts = len(metrics)
     rejected_attempts = len(rejection_records)
     attempted_attempts = successful_attempts + rejected_attempts
@@ -422,15 +753,18 @@ def aggregate_phase1_metrics(output_root: str | Path) -> dict[str, Any]:
         "outputs": {
             "family_metrics": "family_metrics.parquet",
             "stratified_metrics": "stratified_metrics.csv",
+            "corpus_metrics": "corpus_metrics.csv",
             "rejected_attempts": (
                 "rejected_attempts.parquet" if not rejections.empty else None
             ),
+            **source_outputs,
         },
         "gating_policy": {
             "hard_correctness_gates": True,
-            "m1_comparative_gate_candidate": True,
-            "m2_m3_m5_report_only": True,
-            "numeric_thresholds_frozen": False,
+            "m1_report_only": True,
+            "m2_m3_release_gate": "reports/stage2_repair/q90_gate.json",
+            "m4_m5_report_only": True,
+            "numeric_thresholds_frozen": True,
         },
     }
     (report_root / "summary.json").write_text(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,11 +13,42 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import dijkstra
+from scipy.sparse.csgraph import breadth_first_order, dijkstra
 
 from .road_state import connector_costs
 
 NO_PREDECESSOR = -9999
+
+
+class TerminalConnectivityError(ValueError):
+    """A terminal roster violates the exact directed routing contract."""
+
+    retryable = False
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        roster_fingerprint: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.roster_fingerprint = roster_fingerprint
+
+
+def terminal_index_fingerprint(terminal_index: pd.DataFrame) -> str:
+    required = {"terminal_kind", "source_id"}
+    if missing := required - set(terminal_index.columns):
+        raise ValueError(f"Terminal roster lacks fingerprint columns: {sorted(missing)}")
+    payload = "\n".join(
+        sorted(
+            f"{kind}:{source_id}"
+            for kind, source_id in zip(
+                terminal_index["terminal_kind"].astype(str),
+                terminal_index["source_id"].astype(str),
+            )
+        )
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _connector_reference_speed_kph(frame: pd.DataFrame) -> float:
@@ -110,7 +142,20 @@ class DepotTerminalStar:
     inbound_time_s: np.ndarray
     outbound_distance_km: np.ndarray
     inbound_distance_km: np.ndarray
+    node_outbound_reachable: np.ndarray
+    node_return_reachable: np.ndarray
+    turn_outbound_reachable: np.ndarray
+    turn_return_reachable: np.ndarray
     report: dict[str, Any]
+
+    @property
+    def connectivity_eligible(self) -> np.ndarray:
+        return (
+            self.node_outbound_reachable
+            & self.node_return_reachable
+            & self.turn_outbound_reachable
+            & self.turn_return_reachable
+        )
 
 
 class PhysicalRoadNetwork:
@@ -267,6 +312,7 @@ class PhysicalRoadNetwork:
             "_turn_transition_penalties_s",
             "_turn_penalty_lookup",
             "_turn_penalty_signature",
+            "_topological_reversal_forbidden_count",
         ):
             setattr(network, name, getattr(self, name))
         network.profile = profile
@@ -387,21 +433,38 @@ class PhysicalRoadNetwork:
         self._incoming_edges_by_node = tuple(
             np.asarray(values, dtype=np.int32) for values in incoming
         )
-        transition_count = sum(len(outgoing[int(v_index)]) for v_index in self.edge_v_index)
-        rows = np.empty(transition_count, dtype=np.int32)
-        columns = np.empty(transition_count, dtype=np.int32)
-        weights = np.empty(transition_count, dtype=np.float64)
-        turn_penalties = np.empty(transition_count, dtype=np.float64)
-        cursor = 0
+        rows_list: list[int] = []
+        columns_list: list[int] = []
+        weights_list: list[float] = []
+        penalties_list: list[float] = []
+        forbid_reversal = (
+            self.profile["turn_penalty"].get(
+                "virtual_access_connector_immediate_reversal"
+            )
+            == "topologically_forbidden"
+        )
+        forbidden_count = 0
         for incoming_edge, v_index in enumerate(self.edge_v_index):
             next_edges = outgoing[int(v_index)]
             for outgoing_edge in next_edges:
-                rows[cursor] = incoming_edge
-                columns[cursor] = outgoing_edge
+                if forbid_reversal and (
+                    int(self.edge_u_index[incoming_edge])
+                    == int(self.edge_v_index[outgoing_edge])
+                    and int(self.edge_v_index[incoming_edge])
+                    == int(self.edge_u_index[outgoing_edge])
+                ):
+                    forbidden_count += 1
+                    continue
                 penalty = self._compute_turn_penalty_s(incoming_edge, outgoing_edge)
-                turn_penalties[cursor] = penalty
-                weights[cursor] = float(self.edge_time_s[outgoing_edge]) + penalty
-                cursor += 1
+                rows_list.append(incoming_edge)
+                columns_list.append(outgoing_edge)
+                penalties_list.append(penalty)
+                weights_list.append(float(self.edge_time_s[outgoing_edge]) + penalty)
+        rows = np.asarray(rows_list, dtype=np.int32)
+        columns = np.asarray(columns_list, dtype=np.int32)
+        weights = np.asarray(weights_list, dtype=np.float64)
+        turn_penalties = np.asarray(penalties_list, dtype=np.float64)
+        self._topological_reversal_forbidden_count = forbidden_count
         self._turn_transition_rows = rows
         self._turn_transition_columns = columns
         self._turn_transition_penalties_s = turn_penalties
@@ -623,22 +686,109 @@ class PhysicalRoadNetwork:
                     ):
                         inbound_time[terminal_position] = candidate_time
                         inbound_distance[terminal_position] = candidate_distance
-        arrays = (outbound_time, inbound_time, outbound_distance, inbound_distance)
-        if any(not np.isfinite(array).all() for array in arrays):
-            raise ValueError("At least one territory candidate is unreachable from the depot")
+        node_outbound_reachable = np.isfinite(outbound_time) & np.isfinite(
+            outbound_distance
+        )
+        node_return_reachable = np.isfinite(inbound_time) & np.isfinite(
+            inbound_distance
+        )
+        turn_outbound_reachable, turn_return_reachable = (
+            self._turn_aware_depot_reachability(terminals)
+        )
+        connectivity_eligible = (
+            node_outbound_reachable
+            & node_return_reachable
+            & turn_outbound_reachable
+            & turn_return_reachable
+        )
         return DepotTerminalStar(
             outbound_time_s=outbound_time,
             inbound_time_s=inbound_time,
             outbound_distance_km=outbound_distance / 1000.0,
             inbound_distance_km=inbound_distance / 1000.0,
+            node_outbound_reachable=node_outbound_reachable,
+            node_return_reachable=node_return_reachable,
+            turn_outbound_reachable=turn_outbound_reachable,
+            turn_return_reachable=turn_return_reachable,
             report={
-                "schema": "cle_evrptw_depot_terminal_star_v1",
+                "schema": "cle_evrptw_depot_terminal_star_v2",
                 "terminal_count": count,
                 "path_policy": "directed_edge_time_without_turn_penalty_for_territory_only_v1",
                 "turn_aware_final_matrix_required": True,
                 "destination_node_count": len(destination_nodes),
+                "node_outbound_unreachable_count": int(
+                    (~node_outbound_reachable).sum()
+                ),
+                "node_return_unreachable_count": int((~node_return_reachable).sum()),
+                "turn_outbound_unreachable_count": int(
+                    (~turn_outbound_reachable).sum()
+                ),
+                "turn_return_unreachable_count": int((~turn_return_reachable).sum()),
+                "connectivity_quarantined_count": int((~connectivity_eligible).sum()),
+                "connectivity_preflight": (
+                    "depot_bidirectional_node_and_canonical_turn_topology_v1"
+                ),
             },
         )
+
+    @staticmethod
+    def _reachable_union(adjacency: csr_matrix, sources: list[int]) -> np.ndarray:
+        reachable = np.zeros(adjacency.shape[0], dtype=bool)
+        for source in sorted(set(map(int, sources))):
+            order = breadth_first_order(
+                adjacency,
+                i_start=source,
+                directed=True,
+                return_predecessors=False,
+            )
+            reachable[np.asarray(order, dtype=np.int32)] = True
+        return reachable
+
+    def _turn_aware_depot_reachability(
+        self,
+        terminals: tuple[TerminalAccess, ...],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Audit terminal communication using the canonical directed line graph."""
+
+        depot = terminals[0]
+        forward_edges = self._reachable_union(
+            self._turn_aware_adjacency,
+            [option.edge_index for option in depot.options],
+        )
+        depot_arrival_edges = [
+            edge
+            for option in depot.options
+            for edge in option.inbound_arrival_edges
+        ]
+        return_edges = self._reachable_union(
+            self._turn_aware_adjacency.T.tocsr(),
+            depot_arrival_edges,
+        )
+        outbound = np.zeros(len(terminals), dtype=bool)
+        inbound = np.zeros(len(terminals), dtype=bool)
+        outbound[0] = inbound[0] = True
+        for position, terminal in enumerate(terminals[1:], start=1):
+            outbound[position] = any(
+                forward_edges[edge]
+                for option in terminal.options
+                for edge in option.inbound_arrival_edges
+            )
+            inbound[position] = any(
+                return_edges[option.edge_index] for option in terminal.options
+            )
+            if not outbound[position]:
+                outbound[position] = any(
+                    self._direct_candidate(depot, left, terminal, right) is not None
+                    for left in depot.options
+                    for right in terminal.options
+                )
+            if not inbound[position]:
+                inbound[position] = any(
+                    self._direct_candidate(terminal, left, depot, right) is not None
+                    for left in terminal.options
+                    for right in depot.options
+                )
+        return outbound, inbound
 
     def _partial_costs(self, option: AccessOption, *, outbound: bool) -> tuple[float, float]:
         if outbound:
@@ -1071,7 +1221,11 @@ class PhysicalRoadNetwork:
         running_time = self._route_running_time(terminals)
         arrays = (*distance[:2], *running_time[:2])
         if any(not np.isfinite(array).all() for array in arrays):
-            raise ValueError("At least one selected terminal pair is unreachable")
+            raise TerminalConnectivityError(
+                "NONRETRYABLE_TERMINAL_CONNECTIVITY: exact selected-terminal "
+                "closure contains at least one unreachable directed pair after preflight",
+                roster_fingerprint=terminal_index_fingerprint(terminal_index),
+            )
         distance_km = distance[0] / 1000.0
         running_distance_km = running_time[0] / 1000.0
         off_diagonal = ~np.eye(len(terminals), dtype=bool)
@@ -1087,6 +1241,10 @@ class PhysicalRoadNetwork:
                 np.mean(np.abs(running_distance_km - running_distance_km.T)[off_diagonal] > 1e-6)
             ),
         }
+        canonical_zero_turn = all(
+            value == 0.0
+            for value in (self._right_turn_s, self._left_turn_s, self._u_turn_s)
+        )
         report = {
             "schema": "cle_evrptw_family_routing_report_v2",
             "terminal_count": len(terminals),
@@ -1096,9 +1254,20 @@ class PhysicalRoadNetwork:
             "distance_path_policy": (
                 "directed_shortest_physical_distance_with_exact_edge_projection_v1"
             ),
-            "running_time_path_policy": "directed_turn_aware_shortest_running_time_v2",
-            "turn_penalty_in_running_time_path_optimization": True,
+            "running_time_path_policy": (
+                "directed_zero_turn_shortest_running_time_v3"
+                if canonical_zero_turn
+                else "geometry_turn_penalty_v1_optional_adapter"
+            ),
+            "turn_penalty_in_running_time_path_optimization": not canonical_zero_turn,
             "turn_penalty_model_id": str(self.profile["turn_penalty"]["model_id"]),
+            "canonical_zero_turn": canonical_zero_turn,
+            "topological_immediate_edge_reversal_rule": (
+                "forbidden" if self._topological_reversal_forbidden_count else "not_triggered"
+            ),
+            "topological_immediate_edge_reversal_transition_count": int(
+                self._topological_reversal_forbidden_count
+            ),
             "signal_delay_included": bool(self.profile["turn_penalty"]["signal_delay_included"]),
             "route_storage": (
                 "reconstruct_on_demand_from_cle_road_state_terminal_access_and_policy"

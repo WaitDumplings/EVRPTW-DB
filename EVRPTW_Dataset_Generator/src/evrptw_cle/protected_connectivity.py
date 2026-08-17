@@ -89,6 +89,32 @@ def projection_scc_id(
     return "S_UNRESOLVED"
 
 
+def projection_reference_access(
+    directed_projection_offsets: str,
+    index: DirectedComponentIndex,
+) -> tuple[bool, bool]:
+    """Return protected inbound/outbound access under Stage-2 edge semantics.
+
+    Stage-2 reaches a projection from the directed edge's ``u`` endpoint and
+    leaves it toward ``v``. Endpoint membership alone is therefore
+    insufficient: a fraction-1 projection still needs an inbound path through
+    ``u``, and a fraction-0 projection still needs an outbound path through
+    ``v``. Multiple directed references may supply the two directions
+    independently.
+    """
+
+    refs = json.loads(directed_projection_offsets)
+    inbound = any(
+        index.node_to_scc.get(str(ref["u"])) == index.reference_scc_id
+        for ref in refs
+    )
+    outbound = any(
+        index.node_to_scc.get(str(ref["v"])) == index.reference_scc_id
+        for ref in refs
+    )
+    return inbound, outbound
+
+
 def label_projection_connectivity(
     frame: pd.DataFrame,
     index: DirectedComponentIndex,
@@ -111,17 +137,30 @@ def label_projection_connectivity(
     result["anchor_in_reference_scc"] = result["anchor_scc_id"].eq(
         index.reference_scc_id
     )
-    result["protected_roundtrip_eligible"] = result[
-        "anchor_in_reference_scc"
-    ]
-    result["protected_roundtrip_status"] = result[
-        "protected_roundtrip_eligible"
-    ].map(
-        {
-            True: "passed_reference_scc",
-            False: "quarantine_outside_reference_scc",
-        }
+    access_by_offsets = {
+        value: projection_reference_access(str(value), index)
+        for value in unique_offsets
+    }
+    access = result["directed_projection_offsets"].map(access_by_offsets)
+    result["protected_inbound_access_eligible"] = access.map(lambda item: item[0])
+    result["protected_outbound_access_eligible"] = access.map(lambda item: item[1])
+    result["protected_roundtrip_eligible"] = (
+        result["protected_inbound_access_eligible"]
+        & result["protected_outbound_access_eligible"]
     )
+
+    def status(row: pd.Series) -> str:
+        inbound = bool(row["protected_inbound_access_eligible"])
+        outbound = bool(row["protected_outbound_access_eligible"])
+        if inbound and outbound:
+            return "passed_reference_scc_directional_access"
+        if not inbound and not outbound:
+            return "quarantine_no_reference_scc_directional_access"
+        if not inbound:
+            return "quarantine_no_reference_scc_inbound_access"
+        return "quarantine_no_reference_scc_outbound_access"
+
+    result["protected_roundtrip_status"] = result.apply(status, axis=1)
     return result
 
 
@@ -141,6 +180,12 @@ def connectivity_summary(
         "anchor_count": len(frame),
         "roundtrip_eligible_anchor_count": int(eligible.sum()),
         "roundtrip_quarantined_anchor_count": int((~eligible).sum()),
+        "inbound_access_eligible_anchor_count": int(
+            frame["protected_inbound_access_eligible"].astype(bool).sum()
+        ),
+        "outbound_access_eligible_anchor_count": int(
+            frame["protected_outbound_access_eligible"].astype(bool).sum()
+        ),
         "roundtrip_eligible_anchor_share": float(eligible.mean()) if len(frame) else 0.0,
         "policy": (
             "retain all source locations; default benchmark candidates must inherit "

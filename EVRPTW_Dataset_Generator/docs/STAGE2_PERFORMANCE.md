@@ -1,5 +1,8 @@
 # Stage-2 execution and performance
 
+> Timing numbers from the 2026-08-10 build are Legacy V1 measurements. V2.1
+> keeps the execution techniques but requires new pilot timing evidence.
+
 This document describes how the reference generator materializes the frozen
 Stage-2 family plan efficiently without changing its routing or instance
 semantics. The benchmark contract remains in
@@ -20,31 +23,32 @@ Rejection ledgers remain family-specific.
 
 ## 2. Optimized routing path
 
-The implementation keeps the exact V1 policies:
+The implementation keeps the exact V2 directed-routing policies:
 
 - directed shortest physical distance, with travel time accumulated along that
   same path;
-- directed fastest running-time routing on the turn-aware line graph; and
+- directed fastest zero-turn running-time routing on the edge-state graph,
+  including the virtual-split immediate-reversal ban; and
 - exact projected-edge access for depots, customers, and charging stations.
 
 The performance changes are semantic-preserving:
 
 1. Projection partial-distance and partial-time costs are computed once per
    terminal access option rather than inside every OD pair.
-2. Valid turn transitions and their penalties are computed once per city
-   topology.
+2. Valid edge-state transitions and the reversal prohibition are computed once
+   per city topology; canonical temporal turn costs are zero.
 3. A worker reuses immutable graph topology, node/edge mappings, distance
    adjacency, and turn-transition structure across family road states from the
    same city. Only family-dependent edge times and the time-weighted adjacency
    are rebuilt.
-4. Destination-option evaluation for the turn-aware fastest-time matrix is
+4. Destination-option evaluation for the zero-turn fastest-time matrix is
    vectorized while preserving lexicographic tie rules and option witnesses.
 5. CLEs are loaded one city at a time in the parent runner rather than retaining
    all eleven cities simultaneously.
 
-The generator does not replace exact routing with Euclidean distance, remove
-turn penalties, approximate the directed graph, or reuse a time matrix across
-different family road states.
+The generator does not replace exact routing with Euclidean distance,
+approximate the directed graph, reactivate the optional 3/8/20 adapter, or
+reuse a time matrix across different family road states.
 
 ## 3. Local multiprocessing
 
@@ -53,13 +57,17 @@ contains a single-city chunk, so topology reuse occurs inside each process.
 
 ```bash
 PYTHONPATH=src python scripts/build_stage2_instances.py \
-  --config configs/cle_evrptw_stage2_v1.json \
-  --profile configs/us_reference_instance_profile_v1.json \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
+  --config configs/cle_evrptw_stage2_v2.json \
+  --profile configs/us_reference_instance_profile_v2.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
   --block-group-preset configs/us_census_block_groups_v1.json \
   --block-group-source-dir data/sources/census_block_groups_2025 \
   --output-root <output-root> \
-  --mode <official-or-non_release_pilot> \
+  --amazon-artifact-root ../EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3 \
+  --mode non_release_pilot \
+  --cities san-diego \
+  --tracks train validation \
+  --pilot-families-per-city 1 \
   --workers 2 \
   --families-per-worker-task 25
 ```
@@ -79,17 +87,20 @@ server configurations but should not be used merely to obtain more processes:
 
 ## 4. Multi-server sharding
 
-Create the complete plan and customer splits once:
+After the calibration pilot has been reviewed and the full run has been
+explicitly approved, create the complete plan and customer splits once:
 
 ```bash
 PYTHONPATH=src python scripts/build_stage2_instances.py \
-  --config configs/cle_evrptw_stage2_v1.json \
-  --profile configs/us_reference_instance_profile_v1.json \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
+  --config configs/cle_evrptw_stage2_v2.json \
+  --profile configs/us_reference_instance_profile_v2.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
   --block-group-preset configs/us_census_block_groups_v1.json \
   --block-group-source-dir data/sources/census_block_groups_2025 \
   --output-root <shared-output-root> \
+  --amazon-artifact-root ../EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3 \
   --mode official \
+  --full-run-approved \
   --stages preflight splits plan
 ```
 
@@ -99,13 +110,15 @@ the same command and output root on every server, changing only
 
 ```bash
 PYTHONPATH=src python scripts/build_stage2_instances.py \
-  --config configs/cle_evrptw_stage2_v1.json \
-  --profile configs/us_reference_instance_profile_v1.json \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
+  --config configs/cle_evrptw_stage2_v2.json \
+  --profile configs/us_reference_instance_profile_v2.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
   --block-group-preset configs/us_census_block_groups_v1.json \
   --block-group-source-dir data/sources/census_block_groups_2025 \
   --output-root <shared-output-root> \
+  --amazon-artifact-root ../EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3 \
   --mode official \
+  --full-run-approved \
   --stages preflight materialize verify \
   --workers <safe-workers-on-this-server> \
   --families-per-worker-task 25 \

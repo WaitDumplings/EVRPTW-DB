@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GENERATOR_DIR="$ROOT_DIR/EVRPTW_Dataset_Generator"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 CLE_PROFILE="${CLE_PROFILE:-$GENERATOR_DIR/configs/us_11city_cle_v1.json}"
-WORK_ROOT="${CLE_WORK_ROOT:-$GENERATOR_DIR/work/us-11city-v1}"
-RELEASE_ROOT="${CLE_RELEASE_ROOT:-$ROOT_DIR/EVRPTW_Dataset/CLE_v1/us_11city}"
+WORK_ROOT="${CLE_WORK_ROOT:-$GENERATOR_DIR/work/us-11city-v2}"
+RELEASE_ROOT="${CLE_RELEASE_ROOT:-$ROOT_DIR/EVRPTW_Dataset/CLE_v2/us_11city}"
 NSI_CACHE_ROOT="${NSI_CACHE_ROOT:-$GENERATOR_DIR/data/sources/nsi-us-11city}"
 NSI_WORKERS="${NSI_WORKERS:-4}"
 KEEP_CLE_WORK="${KEEP_CLE_WORK:-0}"
@@ -25,6 +25,17 @@ if [[ ! -f "$CLE_PROFILE" ]]; then
   echo "CLE profile is missing: $CLE_PROFILE" >&2
   exit 2
 fi
+
+# Every generated artifact must bind to one clean candidate revision.  The
+# checker exports nothing; resolve the values here after it has rejected a
+# dirty tree or a non-candidate branch.
+"$PYTHON_BIN" "$GENERATOR_DIR/scripts/check_candidate_revision.py" \
+  --repo-root "$ROOT_DIR" \
+  --require-branch stage2-repair-candidate
+export EVRPTW_CODE_COMMIT
+EVRPTW_CODE_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+export EVRPTW_CODE_BRANCH
+EVRPTW_CODE_BRANCH="$(git -C "$ROOT_DIR" branch --show-current)"
 
 export PYTHONPATH="$GENERATOR_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"

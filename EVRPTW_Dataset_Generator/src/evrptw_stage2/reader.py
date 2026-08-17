@@ -140,7 +140,13 @@ def load_portable_cle(
 ) -> PortableCLE:
     if mode not in {"official", "research", "non_release_pilot"}:
         raise ValueError(f"Unsupported Stage-2 run mode: {mode!r}")
-    root = Path(cle_root) / "cities" / city_slug
+    cle_root_path = Path(cle_root)
+    if "CLE_v1" in cle_root_path.parts:
+        raise CLEEligibilityError(
+            "CLE_v1 is retained as read-only legacy evidence and is forbidden for "
+            "Stage-2 V2 generation; use EVRPTW_Dataset/CLE_v2/us_11city"
+        )
+    root = cle_root_path / "cities" / city_slug
     manifest_path = root / "manifest.json"
     if not manifest_path.is_file():
         raise CLEEligibilityError(f"Portable CLE manifest is missing: {manifest_path}")
@@ -152,6 +158,12 @@ def load_portable_cle(
     if str(manifest.get("city_slug")) != city_slug:
         raise CLEEligibilityError(
             f"CLE city_slug mismatch: requested={city_slug!r}, manifest={manifest.get('city_slug')!r}"
+        )
+    connectivity_contract = manifest.get("connectivity_contract", {})
+    if connectivity_contract.get("id") != "directed_projection_roundtrip_v2":
+        raise CLEEligibilityError(
+            f"CLE {city_slug} lacks directed_projection_roundtrip_v2; rebuild Stage 1 "
+            "before any new Stage-2 pilot"
         )
     if not bool(manifest.get("portable_package_verified", False)):
         raise CLEEligibilityError(f"CLE {city_slug} is not a verified portable package")
@@ -200,10 +212,19 @@ def load_portable_cle(
     customer_field, depot_field, charger_field = (
         official_fields if mode == "official" else candidate_fields
     )
+    directional_access_fields = {
+        "protected_inbound_access_eligible",
+        "protected_outbound_access_eligible",
+        "protected_roundtrip_eligible",
+    }
     required = {
-        paths["customers"]: {"latent_service_location_id", customer_field},
-        paths["depots"]: {"candidate_id", depot_field},
-        paths["chargers"]: {"charger_id", charger_field},
+        paths["customers"]: {
+            "latent_service_location_id",
+            customer_field,
+            *directional_access_fields,
+        },
+        paths["depots"]: {"candidate_id", depot_field, *directional_access_fields},
+        paths["chargers"]: {"charger_id", charger_field, *directional_access_fields},
         paths["speeds"]: {
             "edge_u",
             "edge_v",

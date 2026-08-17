@@ -149,9 +149,9 @@ rejects legacy single-column `reference_speed_kph` CLEs so old and new speed
 semantics cannot be mixed silently.
 
 The first command generates all eleven CLEs and writes them only below
-`EVRPTW_Dataset/CLE_v1/us_11city/`. The second generates the frozen research
-benchmark with 12 spawn-safe processes and writes it below
-`EVRPTW_Dataset/Instances_v1/us_11city/`. Before generation it converts the
+`EVRPTW_Dataset/CLE_v2/us_11city/`. Stage-2 is currently authorized only through
+the C1/C2 gates, Los Angeles smoke, and 140-family non-release pilot. Before
+generation it converts the
 three Amazon model-build JSON files into a compact, reusable artifact layer.
 Both runners are resumable. The full
 completed corpus uses about 154.79 GiB for the four parent matrices alone. A
@@ -169,11 +169,10 @@ AMAZON_MODEL_BUILD_INPUTS=/data/almrrc2021-data-training/model_build_inputs \
   ./generate_instances.sh --cities san-diego --tracks train --max-families 1
 ```
 
-`research` is the default full-size generation mode. It uses the technically
-verified default customer/depot/charger candidate pools and records
-`generation_mode=research` in every family and view manifest. It does not
-relabel those artifacts as a final scientific release. `official` remains a
-separate stricter mode.
+`research` remains accepted only by lower-level exploratory APIs; the production
+runner forbids a research-mode full corpus. A full run requires an advisor-signed
+promotion to a `release_calibrated` profile, `official` mode, a clean acceptance
+commit, a new output root, and `--full-run-approved`.
 
 ## Stage 1 quick start
 
@@ -294,13 +293,13 @@ CLE_WORK_ROOT=/tmp/cle-work CLE_RELEASE_ROOT=/tmp/cle-release \
 ```
 
 Work products stay under `work/us-11city-v1/`. Self-contained packages are
-written under `../EVRPTW_Dataset/CLE_v1/us_11city/cities/<city>/`.
+written under `../EVRPTW_Dataset/CLE_v2/us_11city/cities/<city>/`.
 
 Check one portable CLE without the work tree:
 
 ```bash
 python scripts/package_cle.py \
-  --destination-cle ../EVRPTW_Dataset/CLE_v1/us_11city/cities/san-diego \
+  --destination-cle ../EVRPTW_Dataset/CLE_v2/us_11city/cities/san-diego \
   --verify-only
 ```
 
@@ -309,7 +308,7 @@ Generate the paper/appendix cohort tables from portable manifests:
 ```bash
 PYTHONPATH=src conda run -n maojie --no-capture-output \
   python scripts/build_cle_appendix_tables.py \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
   --replace
 ```
 
@@ -335,9 +334,9 @@ portable CLE package and never silently falls back to
 
 The protocol and adapter are separate:
 
-- `configs/cle_evrptw_stage2_v1.json` freezes splits, scales, horizon,
+- `configs/cle_evrptw_stage2_v2.json` freezes splits, scales, horizon,
   matrix-family layout, and benchmark policies.
-- `configs/us_reference_instance_profile_v1.json` supplies replaceable U.S.
+- `configs/us_reference_instance_profile_v2.json` supplies replaceable U.S.
   activation, speed, order, vehicle, charging, and feasibility parameters.
 
 Build the compact Amazon artifact layer once (the production shell performs
@@ -346,7 +345,7 @@ this automatically when `manifest.json` is absent):
 ```bash
 PYTHONPATH=src python scripts/build_amazon_stage2_artifacts.py \
   --model-build-inputs /data/almrrc2021-data-training/model_build_inputs \
-  --output-dir ../EVRPTW_Dataset/Calibration_v1/amazon_stage2_v2
+  --output-dir ../EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3
 ```
 
 The artifact layer records single-day and same-station multi-day-composite
@@ -362,14 +361,14 @@ python scripts/fetch_census_block_groups.py \
   --output-dir data/sources/census_block_groups_2025
 
 evrptw-stage2 preflight \
-  --config configs/cle_evrptw_stage2_v1.json \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
+  --config configs/cle_evrptw_stage2_v2.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
   --mode non_release_pilot \
   --cities san-diego
 
 evrptw-stage2 build-customer-split \
-  --config configs/cle_evrptw_stage2_v1.json \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
+  --config configs/cle_evrptw_stage2_v2.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
   --mode non_release_pilot \
   --city san-diego \
   --block-groups data/sources/census_block_groups_2025/tl_2025_06_bg.zip \
@@ -380,24 +379,24 @@ Build a small plan and materialize one family:
 
 ```bash
 evrptw-stage2 plan \
-  --config configs/cle_evrptw_stage2_v1.json \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
+  --config configs/cle_evrptw_stage2_v2.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
   --mode non_release_pilot \
   --cities san-diego \
-  --tracks train validation test1_new_seed test2_heldout_locations \
+  --tracks train validation \
   --pilot-families-per-city 2 \
   --output-root work/stage2-pilot-v1/generation_plan
 
 evrptw-stage2 materialize-family \
-  --config configs/cle_evrptw_stage2_v1.json \
-  --profile configs/us_reference_instance_profile_v1.json \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
+  --config configs/cle_evrptw_stage2_v2.json \
+  --profile configs/us_reference_instance_profile_v2.json \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
   --mode non_release_pilot \
   --plan-root work/stage2-pilot-v1/generation_plan \
   --family-id <family_id> \
   --customer-split work/stage2-pilot-v1/customer_splits/san-diego/customer_split_manifest.parquet \
   --community-adjacency work/stage2-pilot-v1/customer_splits/san-diego/community_adjacency.parquet \
-  --amazon-artifact-root ../EVRPTW_Dataset/Calibration_v1/amazon_stage2_v2 \
+  --amazon-artifact-root ../EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3 \
   --output-root work/stage2-pilot-v1/materialized
 ```
 
@@ -446,8 +445,9 @@ instance = load_materialized_view(
 )
 ```
 
-Each parent family stores four matrices: distance-shortest distance and time,
-plus exact turn-aware fastest time and its path distance. The loader derives
+Each parent family stores four matrices: distance-shortest distance and
+zero-turn time, plus exact zero-turn fastest time and its path distance. The
+edge-state graph still enforces the virtual-split immediate-reversal ban. The loader derives
 both energy matrices from the frozen linear coefficient
 `h = 100/257 kWh/km`. Lower scales store only parent indices and daily
 attributes; runtime masks are never stored.
@@ -460,7 +460,7 @@ have been merged:
 
 ```bash
 PYTHONPATH=src python scripts/aggregate_phase1_metrics.py \
-  --instance-root ../EVRPTW_Dataset/Instances_v1/us_11city
+  --instance-root ../EVRPTW_Dataset/Instances_v2/us_11city
 ```
 
 ### Slim instance distribution and reconstruction
@@ -471,18 +471,18 @@ slim tree:
 
 ```bash
 PYTHONPATH=src python scripts/reconstruct_stage2_instances.py export-slim \
-  --source-root ../EVRPTW_Dataset/Instances_v1/us_11city \
-  --output-root ../EVRPTW_Dataset/Instances_v1_slim/us_11city \
-  --cle-root ../EVRPTW_Dataset/CLE_v1/us_11city \
-  --profile configs/us_reference_instance_profile_v1.json
+  --source-root ../EVRPTW_Dataset/Instances_v2/us_11city \
+  --output-root ../EVRPTW_Dataset/Instances_v2_slim/us_11city \
+  --cle-root ../EVRPTW_Dataset/CLE_v2/us_11city \
+  --profile configs/us_reference_instance_profile_v2.json
 ```
 
 On another server, place the slim tree at the desired final instance path and
 restore every family:
 
 ```bash
-CLE_ROOT=/data/EVRPTW_Dataset/CLE_v1/us_11city \
-INSTANCE_ROOT=/data/EVRPTW_Dataset/Instances_v1/us_11city \
+CLE_ROOT=/data/EVRPTW_Dataset/CLE_v2/us_11city \
+INSTANCE_ROOT=/data/EVRPTW_Dataset/Instances_v2/us_11city \
 WORKERS=12 scripts/restore_stage2_instances.sh
 ```
 
@@ -500,6 +500,17 @@ checks the CLE and profile hashes, and accepts the output only when all four
 `.npy` checksums match the original export. It never overwrites a partial or
 conflicting matrix directory. See [OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md)
 for the reconstruction contract.
+
+At repository level, the production archive creator performs the slim export,
+copies CLE, enforces the CLE/Stage-2/Phase-1 acceptance reports, and publishes
+the archive plus checksum atomically:
+
+```bash
+cd ..
+./auto.sh archive create \
+  --archive /data/EVRPTW_Dataset_us11city_research_slim_v1.tar.zst \
+  --compression-threads 12
+```
 
 If CLE and slim parameters are distributed together as the supported
 `EVRPTW_Dataset` archive layout, use the repository-level background workflow
@@ -551,25 +562,17 @@ to them. Test is subdivided into `test1_new_seed`,
 scalability Cus2000 keep their own consumer cohorts without duplicating a
 shared parent matrix.
 
-## Verified build status
+## Stage-2 V2.1 candidate status
 
-The 2026-08-10 engineering build produced and verified all 11 portable CLE
-packages. Three Stage-2 non-release pilots also passed: all 10 Test-2 cities
-plus Jacksonville Test-3, one 33-view nested training family, and one Cus2000
-family. Full measurements and remaining gates are in
-[US_11CITY_BUILD_REPORT.md](docs/US_11CITY_BUILD_REPORT.md).
+The 2026-08-10 build report and its outputs are Legacy evidence and are not
+inputs to this candidate. V2.1 rebuilds CLE and instances from the current
+sources into `Calibration_v2/` and `Instances_v2/` only.
 
-The frozen corpus contains 7,500 Cus1000 parent families (including the 500
-Cus1000 controls paired with Cus2000) and 500 Cus2000
-families. The completed build stores about 146.56 GiB of parent matrices,
-before view attributes and metadata. The optimized New York pilot reduced a
-four-family Cus1000 run from 121.80 s serial to 64.14 s with two workers; the
-Cus2000 materialization fell from 125.27 s to 44.87 s. Outputs were compared
-array by array and remained exactly equal. Extrapolating the measured steady
-state gives roughly 22-30 hours on the tested 16 GiB machine with two workers,
-before allowing for cross-city variation. See
-[STAGE2_PERFORMANCE.md](docs/STAGE2_PERFORMANCE.md) for the execution model,
-measurements, and multi-server sharding workflow.
+The authorized calibration pilot covers the ten training cities and only the
+train/validation tracks. Test2, Jacksonville/Test3, Cus2000, and the complete
+7,500-family corpus are blocked until the M1-M5/Q90 pilot evidence has been
+reviewed and explicitly approved. The legacy performance report remains useful
+only as historical engineering context; it is not V2.1 acceptance evidence.
 
 ## Generation modes
 
@@ -589,7 +592,8 @@ PYTHONPATH=src python -m pytest -q
 The Stage-2 suite covers split isolation, family/view counts, Amazon artifact
 preprocessing, controlled two-margin rounding, road-contiguous activation,
 global customer uniqueness, nested views, order-template covering,
-projected-edge routing, exact turn-aware path choice, linear energy derivation,
+projected-edge routing, exact zero-turn path choice and reversal validation,
+linear energy derivation,
 multi-hop CS return caching, Phase-1 metrics, and family verification.
 
 The previous synthetic `evrptw_hierarchy` pipeline has been retired. The

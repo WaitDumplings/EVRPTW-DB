@@ -34,6 +34,7 @@ EVRPTW_Dataset_Generator/work/
 *.log
 *.nbc
 *.nbi
+/logs/
 
 # OS/editor
 .DS_Store

@@ -26,7 +26,7 @@ An instance selects a depot and exactly N active locations, chooses relevant
 real charging sites, attaches distinct feasible Amazon stop-level order
 templates, chooses a vehicle/fleet policy, creates one static directed weekday
 or weekend road state, and exports paired distance-shortest and exact
-turn-aware fastest-path matrices.
+canonical zero-turn fastest-path matrices.
 The four dense matrices are a deterministic local cache: a portable release
 may omit them and reconstruct them bit-for-bit from the frozen CLE, stored
 family road-state factors, and terminal projections. The two energy matrices
@@ -199,31 +199,29 @@ CLE and instance generation concurrently.
    ```bash
    cat logs/generate_cle.exit
    jq '{status, verified_cle_count, failures}' \
-     EVRPTW_Dataset/CLE_v1/us_11city/cle_index.json
+     EVRPTW_Dataset/CLE_v2/us_11city/cle_index.json
    ```
 
    Expected values are `status="complete"`, `verified_cle_count=11`, and
    `failures=[]`.
 
-5. Generate the full research instance corpus. The runner uses 12 workers by
-   default, downloads the three required Amazon files when absent, builds the
-   compact calibration artifact, and reuses completed families on restart.
+5. Do not launch the full corpus from this quick-start. The current approved
+   boundary ends after C1/C2, the Los Angeles smoke, and the 140-family pilot.
+   Follow the exact commands and stop rules in
+   [`STAGE2_CONNECTIVITY_REPAIR_AND_PIPELINE_REVIEW_ZH.md`](EVRPTW_Dataset_Generator/docs/stage2_repair/STAGE2_CONNECTIVITY_REPAIR_AND_PIPELINE_REVIEW_ZH.md).
+   Full generation requires a separately signed profile promotion, a clean
+   acceptance commit, `INSTANCE_MODE=official`, a new output root, and
+   `--full-run-approved`.
 
-   ```bash
-   nohup bash -c 'INSTANCE_MODE=research ./generate_instances.sh; code=$?; printf "%s\n" "$code" > logs/generate_instances.exit; exit "$code"' \
-     > logs/generate_instances.log 2>&1 &
-   echo $! > logs/generate_instances.pid
-   tail -f logs/generate_instances.log
-   ```
-
-6. After Stage 2 ends, require exit code zero and inspect the authoritative run
-   report and Phase-1 aggregate directory.
+6. After the authorized pilot ends, require exit code zero and inspect the
+   authoritative run report and Phase-1 aggregate directory, then stop for
+   review.
 
    ```bash
    cat logs/generate_instances.exit
    jq '{passed, unresolved_family_count: (.unresolved_family_ids | length), verified_family_count: (.verified | length)}' \
-     EVRPTW_Dataset/Instances_v1/us_11city/stage2_run_report.json
-   ls EVRPTW_Dataset/Instances_v1/us_11city/reports/phase1
+     EVRPTW_Dataset/Instances_v2/us_11city/stage2_run_report.json
+   ls EVRPTW_Dataset/Instances_v2/us_11city/reports/phase1
    ```
 
    Expected values are `passed=true` and `unresolved_family_count=0`.
@@ -252,12 +250,12 @@ archive launcher checks the Stage-2 restore imports before checksum scanning so
 a missing dependency fails immediately with the corresponding install command.
 
 These are the two production entry points. `generate_cle.sh` writes the eleven
-portable CLEs under `EVRPTW_Dataset/CLE_v1/us_11city/` and removes its
+portable CLEs under `EVRPTW_Dataset/CLE_v2/us_11city/` and removes its
 intermediate work tree after a complete successful run. `generate_instances.sh`
 uses 12 processes by default and writes the split plan, community adjacency,
 matrix families, views, verification reports, rejected-attempt records, and
 Phase-1 metrics under
-`EVRPTW_Dataset/Instances_v1/us_11city/`.
+`EVRPTW_Dataset/Instances_v2/us_11city/`.
 
 `generate_us_city_cle.sh` is the exploratory single-city entry point. A custom
 city can later be promoted into a new frozen cohort only by versioning its
@@ -272,10 +270,23 @@ The combined entry point exposes both supported CLE-backed acquisition modes:
 
 # Reconstruct after transferring CLE plus the slim instance-parameter tree.
 # Add --view-id/--view-id-file to restore only selected parent families.
-CLE_ROOT=/data/EVRPTW_Dataset/CLE_v1/us_11city \
-INSTANCE_OUTPUT_ROOT=/data/EVRPTW_Dataset/Instances_v1/us_11city \
+CLE_ROOT=/data/EVRPTW_Dataset/CLE_v2/us_11city \
+INSTANCE_OUTPUT_ROOT=/data/EVRPTW_Dataset/Instances_v2/us_11city \
 WORKERS=12 ./auto.sh restore
 ```
+
+After CLE and the full Stage-2 corpus pass the checks above, create the
+transferable CLE + slim-instance archive and its required SHA-256 sidecar:
+
+```bash
+./auto.sh archive create \
+  --archive /data/EVRPTW_Dataset_us11city_research_slim_v1.tar.zst \
+  --compression-threads 12
+```
+
+Creation refuses incomplete reports, failed Phase-1 hard gates, links or special
+files, existing output paths, and any slim export that still contains matrix
+payloads. It validates the finished archive before publishing the checksum.
 
 For a transferred slim release archive, one command verifies its SHA-256,
 checks every archive member, unpacks it safely, and restores all matrix
@@ -304,7 +315,7 @@ exact manifest-based space check before extraction.
 
 The build keeps raw sources, caches, and debug artifacts under
 `EVRPTW_Dataset_Generator/`, then packages one self-contained CLE per city under
-`EVRPTW_Dataset/CLE_v1/us_11city/`. The release-side verifier requires the
+`EVRPTW_Dataset/CLE_v2/us_11city/`. The release-side verifier requires the
 operational GraphML and all runtime paths to remain inside the city package.
 Large source files and generated GraphML/GeoParquet artifacts are intentionally
 excluded from ordinary Git history and should be distributed with versioned
@@ -319,16 +330,16 @@ deterministic family/view plans, physical-facility depot grouping,
 Amazon-envelope territory construction, route-by-decile controlled rounding,
 road-contiguous region growth, globally unique customer assignment, customer-
 relevant real-CS selection, observed Amazon order-template covering, exact
-turn-aware dual-path matrices, a full-CS-to-depot multi-hop cache, and family-
+zero-turn dual-path matrices with a virtual-split reversal ban, a full-CS-to-depot multi-hop cache, and family-
 plus-corpus Phase-1 metrics. The cache is static instance data, not a stored
 runtime action mask.
 
-All eleven CLE packages have passed technical and package-portability
-verification. Stage-2 held-out-location/held-out-city, nested training-view,
-and Cus2000 vertical slices also pass. The production instance shell defaults
-to `research` mode: it permits the complete frozen benchmark plan while
-retaining its research-generation label and the source provenance. The stricter
-`official` mode remains available for a later final public release. The exact
+The Stage-2 V2.1 candidate rebuilds all eleven CLE packages from current
+sources. Only a ten-training-city train/validation pilot is authorized before
+review; Test2/Jacksonville and the complete 7,500-family corpus remain blocked.
+The production instance shell defaults to `research` mode, but non-pilot
+generation requires explicit post-review approval. The stricter `official`
+mode remains available for a later final public release. The exact
 build evidence is recorded in
 [`US_11CITY_BUILD_REPORT.md`](EVRPTW_Dataset_Generator/docs/US_11CITY_BUILD_REPORT.md).
 

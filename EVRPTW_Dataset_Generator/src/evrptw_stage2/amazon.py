@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-AMAZON_ARTIFACT_SCHEMA = "evrptw_amazon_stage2_artifacts_v2"
+AMAZON_ARTIFACT_SCHEMA = "evrptw_amazon_stage2_artifacts_v3"
 ALLOWED_PACKAGE_STATUSES = {"DELIVERED", "DELIVERY_ATTEMPTED", "REJECTED"}
 STATION_TIMEZONES = {
     "DAU": "America/Chicago",
@@ -139,7 +139,9 @@ def _template_record(
     station_day_id = f"{station_code}:{route_date.isoformat()}"
     return (
         {
-            "template_id": f"{route_id}:{stop_id}",
+            "template_id": (
+                f"{station_code}:{route_date.isoformat()}:{route_id}:{stop_id}"
+            ),
             "station_day_id": station_day_id,
             "station_code": station_code,
             "date": route_date.isoformat(),
@@ -254,16 +256,15 @@ def build_amazon_stage2_artifacts(
         usable_stop_ids = [str(record["stop_id"]) for record in route_records]
         nearest_by_stop = {stop_id: math.inf for stop_id in usable_stop_ids}
         pairwise: list[float] = []
-        for left_position, left in enumerate(usable_stop_ids):
-            for right in usable_stop_ids[left_position + 1 :]:
-                forward = _finite(route_travel.get(left, {}).get(right))
-                reverse = _finite(route_travel.get(right, {}).get(left))
-                if forward is None or reverse is None or min(forward, reverse) < 0.0:
+        for left in usable_stop_ids:
+            for right in usable_stop_ids:
+                if left == right:
                     continue
-                symmetric = (forward + reverse) / 2.0
-                pairwise.append(symmetric)
-                nearest_by_stop[left] = min(nearest_by_stop[left], symmetric)
-                nearest_by_stop[right] = min(nearest_by_stop[right], symmetric)
+                forward = _finite(route_travel.get(left, {}).get(right))
+                if forward is None or forward < 0.0:
+                    continue
+                pairwise.append(forward)
+                nearest_by_stop[left] = min(nearest_by_stop[left], forward)
         for record in route_records:
             nearest = nearest_by_stop[str(record["stop_id"])]
             record["amazon_route_nearest_neighbor_time_s"] = (
@@ -368,7 +369,7 @@ def build_amazon_stage2_artifacts(
         }
     manifest = {
         "schema": AMAZON_ARTIFACT_SCHEMA,
-        "artifact_id": "amazon_stationday_stage2_v2",
+        "artifact_id": "amazon_stationday_stage2_v3",
         "source_scope": "almrrc2021-data-training/model_build_inputs_only",
         "source_files": {
             "route_data": "almrrc2021-data-training/model_build_inputs/route_data.json",
@@ -383,6 +384,7 @@ def build_amazon_stage2_artifacts(
         "operating_horizon_s": [float(horizon_start_s), float(horizon_end_s)],
         "cargo_capacity_cm3": float(cargo_capacity_cm3),
         "template_count": len(templates),
+        "template_id_contract": "station_code:date:route_id:stop_id",
         "station_day_count": len(station_days),
         "route_count": len(route_frame),
         "t_env_s": t_env,
@@ -411,6 +413,38 @@ class AmazonStage2Artifacts:
     structure_routes: pd.DataFrame
     station_days: pd.DataFrame
     route_spatial_reference: pd.DataFrame
+    cohort_split: dict[str, Any]
+    station_day_pool: dict[str, str]
+
+    def pool_for_track(self, track_id: str) -> str:
+        mapping = self.cohort_split["track_to_pool"]
+        if track_id not in mapping:
+            raise ValueError(f"No frozen Amazon pool for track {track_id!r}")
+        pool = str(mapping[track_id])
+        if pool == "METRIC-HOLDOUT":
+            raise ValueError("METRIC-HOLDOUT is metrics-only and cannot generate instances")
+        return pool
+
+    def station_day_ids_for_track(self, track_id: str) -> set[str]:
+        pool = self.pool_for_track(track_id)
+        rows = self.cohort_split["station_day_assignments"]
+        if pool == "GEN-TRAIN":
+            return {
+                str(row["station_day_id"])
+                for row in rows
+                if str(row["pool"]) == pool
+            }
+        if pool == "GEN-EVAL":
+            selected = {
+                str(row["station_day_id"])
+                for row in rows
+                if str(row["pool"]) == pool
+                and str(row.get("generation_track")) == str(track_id)
+            }
+            if not selected:
+                raise ValueError(f"No frozen GEN-EVAL station-day ledger for {track_id!r}")
+            return selected
+        raise ValueError(f"Unsupported generation pool: {pool!r}")
 
     @property
     def t_env_s(self) -> float:
@@ -426,9 +460,33 @@ class AmazonStage2Artifacts:
         day_type: str,
         customer_count: int,
         seed: int,
+        pool: str,
+        track_id: str | None = None,
+        allow_composite: bool = False,
     ) -> tuple[pd.DataFrame, dict[str, Any]]:
-        days = self.station_days.loc[self.station_days["day_type"].eq(day_type)].copy()
-        singles = days.loc[days["structure_usable_stop_count"].ge(customer_count)].copy()
+        days = self.station_days.loc[
+            self.station_days["day_type"].eq(day_type)
+            & self.station_days["station_day_id"].map(self.station_day_pool).eq(pool)
+        ].copy()
+        if track_id is not None:
+            days = days.loc[
+                days["station_day_id"].astype(str).isin(
+                    self.station_day_ids_for_track(track_id)
+                )
+            ].copy()
+        source_counts = {}
+        for station_day_id, rows in self.templates.loc[
+            self.templates["station_day_id"].isin(days["station_day_id"])
+        ].groupby("station_day_id", sort=True):
+            values = rows["station_to_stop_time_s"].to_numpy(dtype=float)
+            source_t_env = float(_quantile(values, np.asarray([0.99]))[0])
+            source_counts[str(station_day_id)] = int(np.count_nonzero(values <= source_t_env))
+        days["per_source_structure_usable_stop_count"] = (
+            days["station_day_id"].astype(str).map(source_counts).fillna(0).astype(int)
+        )
+        singles = days.loc[
+            days["per_source_structure_usable_stop_count"].ge(customer_count)
+        ].copy()
         if not singles.empty:
             singles["_rank"] = [
                 _stable_rank(seed, "single_structure_day", value)
@@ -437,11 +495,11 @@ class AmazonStage2Artifacts:
             selected_day = str(singles.sort_values(["_rank", "station_day_id"]).iloc[0]["station_day_id"])
             source_days = [selected_day]
             mode = "SINGLE_STRUCTURE_DAY"
-        else:
+        elif allow_composite:
             candidates: list[tuple[int, int, str, list[str]]] = []
             for station_code, group in days.groupby("station_code", sort=True):
                 ordered = group.sort_values(
-                    ["structure_usable_stop_count", "date"],
+                    ["per_source_structure_usable_stop_count", "date"],
                     ascending=[False, True],
                     kind="stable",
                 )
@@ -449,7 +507,14 @@ class AmazonStage2Artifacts:
                 total = 0
                 for row in ordered.itertuples(index=False):
                     chosen.append(str(row.station_day_id))
-                    total += int(row.structure_usable_stop_count)
+                    combined_times = self.templates.loc[
+                        self.templates["station_day_id"].isin(chosen),
+                        "station_to_stop_time_s",
+                    ].to_numpy(dtype=float)
+                    combined_t_env = float(
+                        _quantile(combined_times, np.asarray([0.99]))[0]
+                    )
+                    total = int(np.count_nonzero(combined_times <= combined_t_env))
                     if total >= customer_count:
                         candidates.append(
                             (
@@ -466,22 +531,61 @@ class AmazonStage2Artifacts:
                 )
             _, _, _, source_days = min(candidates, key=lambda item: (item[0], item[1], item[2]))
             mode = "SAME_STATION_STRUCTURE_COMPOSITE"
+        else:
+            raise ValueError(
+                f"PRIMARY_SINGLE_STRUCTURE_DAY_UNSUPPORTED: pool={pool}, "
+                f"day_type={day_type}, N={customer_count}"
+            )
         routes = self.structure_routes.loc[
             self.structure_routes["station_day_id"].isin(source_days)
         ].copy()
-        targets = self.templates.loc[
-            self.templates["station_day_id"].isin(source_days)
-            & self.templates["within_spatial_envelope"].astype(bool)
-        ].copy()
+        targets = self.templates.loc[self.templates["station_day_id"].isin(source_days)].copy()
+        source_times = targets["station_to_stop_time_s"].to_numpy(dtype=float)
+        source_t_env = float(_quantile(source_times, np.asarray([0.99]))[0])
+        within = targets["station_to_stop_time_s"].le(source_t_env).to_numpy(dtype=bool)
+        envelope_times = source_times[within]
+        source_edges = _quantile(envelope_times, np.linspace(0.0, 1.0, 11))
+        source_edges[0] = 0.0
+        source_edges[-1] = source_t_env
+        targets["within_spatial_envelope"] = within
+        targets["radial_decile"] = -1
+        targets.loc[within, "radial_decile"] = _assign_deciles(
+            envelope_times, source_edges
+        )
+        targets["radial_decile"] = targets["radial_decile"].astype(np.int8)
+        targets = targets.loc[targets["within_spatial_envelope"]].copy()
         return targets, {
             "structure_source_mode": mode,
+            "structure_source_ids": sorted(source_days),
             "structure_source_dates": sorted(source_days),
+            "source_pool": pool,
+            "generation_track": track_id,
             "structure_source_route_count": len(routes),
             "structure_source_stop_count": len(targets),
+            "source_t_env_s": source_t_env,
+            "source_radial_decile_edges_s": source_edges.tolist(),
         }
 
-    def order_sources(self, *, day_type: str, customer_count: int, seed: int) -> list[dict[str, Any]]:
-        days = self.station_days.loc[self.station_days["day_type"].eq(day_type)].copy()
+    def order_sources(
+        self,
+        *,
+        day_type: str,
+        customer_count: int,
+        seed: int,
+        pool: str,
+        track_id: str | None = None,
+        allow_composite: bool = False,
+    ) -> list[dict[str, Any]]:
+        days = self.station_days.loc[
+            self.station_days["day_type"].eq(day_type)
+            & self.station_days["station_day_id"].map(self.station_day_pool).eq(pool)
+        ].copy()
+        if track_id is not None:
+            days = days.loc[
+                days["station_day_id"].astype(str).isin(
+                    self.station_day_ids_for_track(track_id)
+                )
+            ].copy()
         singles = days.loc[days["order_usable_stop_count"].ge(customer_count)].copy()
         single_records = [
             {
@@ -525,7 +629,11 @@ class AmazonStage2Artifacts:
         composites.sort(
             key=lambda item: (len(item["station_day_ids"]), item["rank"], item["station_code"])
         )
-        return [*single_records, *composites]
+        records = [*single_records, *composites] if allow_composite else single_records
+        for record in records:
+            record["source_pool"] = pool
+            record["generation_track"] = track_id
+        return records
 
     def templates_for_source(self, source: dict[str, Any]) -> pd.DataFrame:
         return self.templates.loc[
@@ -533,11 +641,46 @@ class AmazonStage2Artifacts:
         ].copy()
 
 
-def load_amazon_stage2_artifacts(root: str | Path) -> AmazonStage2Artifacts:
+def load_amazon_stage2_artifacts(
+    root: str | Path,
+    *,
+    cohort_split_path: str | Path,
+) -> AmazonStage2Artifacts:
     artifact_root = Path(root)
     manifest = json.loads((artifact_root / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("schema") != AMAZON_ARTIFACT_SCHEMA:
         raise ValueError(f"Unsupported Amazon Stage-2 artifact: {manifest.get('schema')!r}")
+    if manifest.get("template_id_contract") != "station_code:date:route_id:stop_id":
+        raise ValueError("Stale Amazon v3 artifact lacks the V2.1 template ID contract")
+    cohort_split = json.loads(Path(cohort_split_path).read_text(encoding="utf-8"))
+    if cohort_split.get("schema") != "evrptw_amazon_cohort_split_v1":
+        raise ValueError(f"Unsupported Amazon cohort split: {cohort_split.get('schema')!r}")
+    assertions = cohort_split.get("leakage_assertions", {})
+    if not assertions or not all(bool(value) for value in assertions.values()):
+        raise ValueError("Amazon cohort split leakage assertions are not all true")
+    evaluation_allocation = cohort_split.get("evaluation_track_allocation", {})
+    if not bool(
+        evaluation_allocation.get(
+            "station_day_ledgers_pairwise_disjoint_and_exhaustive", False
+        )
+    ):
+        raise ValueError("GEN-EVAL track station-day ledgers are not a frozen partition")
+    if bool(evaluation_allocation.get("exact_template_reuse_between_evaluation_tracks", True)):
+        raise ValueError("GEN-EVAL track ledger unexpectedly permits exact template reuse")
+    evaluation_tracks = set(map(str, evaluation_allocation.get("tracks", [])))
+    assigned_evaluation_tracks = {
+        str(row.get("generation_track"))
+        for row in cohort_split["station_day_assignments"]
+        if str(row["pool"]) == "GEN-EVAL"
+    }
+    if assigned_evaluation_tracks != evaluation_tracks:
+        raise ValueError(
+            "GEN-EVAL assignment rows do not cover exactly the declared evaluation tracks"
+        )
+    station_day_pool = {
+        str(row["station_day_id"]): str(row["pool"])
+        for row in cohort_split["station_day_assignments"]
+    }
     outputs = manifest["outputs"]
     return AmazonStage2Artifacts(
         root=artifact_root,
@@ -548,4 +691,6 @@ def load_amazon_stage2_artifacts(root: str | Path) -> AmazonStage2Artifacts:
         route_spatial_reference=pd.read_parquet(
             artifact_root / outputs["route_spatial_reference"]
         ),
+        cohort_split=cohort_split,
+        station_day_pool=station_day_pool,
     )

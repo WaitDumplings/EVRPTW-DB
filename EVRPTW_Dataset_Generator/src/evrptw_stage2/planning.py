@@ -60,9 +60,6 @@ def materialization_attempt_inputs(
             int(row["branch_index"]),
         )
         result_views.at[index, "view_seed"] = view_seed
-        result_views.at[index, "package_seed"] = derive_seed(view_seed, "packages")
-        result_views.at[index, "service_time_seed"] = derive_seed(view_seed, "service_time")
-        result_views.at[index, "time_window_seed"] = derive_seed(view_seed, "time_window")
     return result_family, result_views
 
 
@@ -338,9 +335,6 @@ def build_generation_plan(
                                     cohort["split_id"] != "train"
                                 ),
                                 "view_seed": view_seed,
-                                "package_seed": derive_seed(view_seed, "packages"),
-                                "service_time_seed": derive_seed(view_seed, "service_time"),
-                                "time_window_seed": derive_seed(view_seed, "time_window"),
                                 "matrix_storage": (
                                     "parent" if scale_id == parent_scale.scale_id else "index_view"
                                 ),
@@ -383,7 +377,7 @@ def build_generation_plan(
         for scale_id, group in family_frame.groupby("parent_scale_id", sort=True)
     }
     registry = {
-        "schema": "cle_evrptw_generation_plan_v2",
+        "schema": "cle_evrptw_generation_plan_v3",
         "dataset_id": config.dataset_id,
         "benchmark_version": config.benchmark_version,
         "master_seed": config.master_seed,

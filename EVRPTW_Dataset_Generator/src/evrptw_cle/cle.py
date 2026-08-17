@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 from datetime import UTC, datetime
@@ -14,6 +15,27 @@ import numpy as np
 import pandas as pd
 
 from .util import sha256_file, write_json
+
+
+def _code_provenance_from_environment() -> dict[str, Any]:
+    commit = os.environ.get("EVRPTW_CODE_COMMIT", "").lower()
+    branch = os.environ.get("EVRPTW_CODE_BRANCH", "")
+    if len(commit) != 40 or any(
+        character not in "0123456789abcdef" for character in commit
+    ):
+        raise ValueError(
+            "EVRPTW_CODE_COMMIT must bind CLE generation to one clean candidate commit"
+        )
+    if branch != "stage2-repair-candidate":
+        raise ValueError(
+            "EVRPTW_CODE_BRANCH must be stage2-repair-candidate during candidate generation"
+        )
+    return {
+        "schema": "evrptw_code_provenance_v1",
+        "code_commit": commit,
+        "code_branch": branch,
+        "working_tree_clean": True,
+    }
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -509,6 +531,13 @@ def assemble_cle(
         raise FileNotFoundError(f"City Logistics Environment outputs are missing: {missing}")
     manifest = {
         "schema": "evrptw_city_logistics_environment_v1",
+        "code_provenance": _code_provenance_from_environment(),
+        "connectivity_contract": {
+            "id": "directed_projection_roundtrip_v2",
+            "inbound_semantics": "reference_scc_to_directed_edge_u_then_projection",
+            "outbound_semantics": "projection_then_directed_edge_v_to_reference_scc",
+            "stage2_canonical_turn_topology_preflight_required": True,
+        },
         "status": "cle_build_complete_release_gates_open",
         "generated_utc": datetime.now(UTC).isoformat(),
         "city_slug": city_slug,
@@ -831,6 +860,23 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
     manifest = _read_json(manifest_path)
     errors: list[str] = []
     warnings: list[str] = []
+    if (
+        manifest.get("connectivity_contract", {}).get("id")
+        != "directed_projection_roundtrip_v2"
+    ):
+        errors.append(
+            "manifest lacks directed_projection_roundtrip_v2 connectivity contract"
+        )
+    provenance = manifest.get("code_provenance", {})
+    commit = str(provenance.get("code_commit", ""))
+    if (
+        provenance.get("schema") != "evrptw_code_provenance_v1"
+        or len(commit) != 40
+        or any(character not in "0123456789abcdef" for character in commit.lower())
+        or provenance.get("code_branch") != "stage2-repair-candidate"
+        or provenance.get("working_tree_clean") is not True
+    ):
+        errors.append("manifest lacks clean stage2-repair-candidate code provenance")
 
     def has_columns(
         frame: pd.DataFrame,
@@ -885,6 +931,8 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
                 "active_customer",
                 "customer_release_eligible",
                 "cle_candidate_eligible",
+                "protected_inbound_access_eligible",
+                "protected_outbound_access_eligible",
                 "protected_roundtrip_eligible",
             },
             "latent service-location layer",
@@ -940,6 +988,8 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
                 "charger_id",
                 "charger_release_eligible",
                 "charger_candidate_eligible",
+                "protected_inbound_access_eligible",
+                "protected_outbound_access_eligible",
                 "protected_roundtrip_eligible",
                 "coordinate_candidate_eligible",
             },
@@ -974,6 +1024,8 @@ def verify_cle(cle_dir: Path, *, require_portable: bool = False) -> dict[str, An
                 "candidate_id",
                 "depot_release_eligible",
                 "depot_candidate_eligible",
+                "protected_inbound_access_eligible",
+                "protected_outbound_access_eligible",
                 "protected_roundtrip_eligible",
             },
             "depot layer",

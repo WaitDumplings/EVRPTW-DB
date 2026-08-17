@@ -97,6 +97,12 @@ Tier B。Tier C 的 UPS Store/parcel shop 不进入 canonical depot pool。面�
 单独服务时一定可回库。若 territory 少于 N，直接拒绝本次 family attempt；不再
 用拍脑袋的 40/50/.../100 km 半径扩大。
 
+在 `T_env` 和能耗筛选以前，Stage 2 使用与最终 canonical 路由一致的 directed
+node graph 与 zero-turn line graph，分别检查 depot→terminal 和 terminal→depot。
+不可达 customer 会写入确定性 quarantine ledger 并从 roster 移除，而不是让一个
+固定坏点使整个 family 重试。Stage 1 还必须声明
+`directed_projection_roundtrip_v2`；旧 CLE 会被 reader 拒绝。
+
 ## 8. Step 6：空间激活
 
 ### 8.1 精确 quota
@@ -136,28 +142,38 @@ CS 在 customer geography 确定以后选。只能使用 CLE 内真实且兼容�
 direct-roundtrip 充分筛选，core 通常为空。剩余名额覆盖 active communities、
 depot-to-region corridor 和覆盖较差的区域。
 
+所有 charger 候选同样先通过 depot 双向 node/turn topology preflight；坏点进入
+quarantine ledger。过滤后的 roster 才进入 energy communicating-set 和 relevance
+fill。最终选中的 depot、customers、chargers 仍必须通过完整 all-pair closure。
+
 因此 CS 既与配送区域相关，也保留“沿线可补能”的优化意义。固定 CS 数是 benchmark
 shape 合同，不代表每个站都会被最优路线访问。
 
 ```text
-p_effective = min(AFDC reported power 或 city-mode median, vehicle mode cap)
+p_battery = 0.90 * min(AFDC reported power 或冻结的全国 connector-mode median,
+                       vehicle mode cap)
 ```
 
-缺失功率使用同城同 mode median；DC cap 为 100 kW，L2/AC cap 为 11 kW。
+缺失功率使用冻结的全国同 connector-mode median（J1772 L2 6.5 kW、CCS DC
+200 kW）；若注册表缺少相应 mode，生成直接报错，禁止退回 vehicle cap。DC cap 为
+100 kW，L2/AC cap 为 11 kW。0.90 是 benchmark derating factor，不表述为充电效率。
 
 ## 10. 路况、matrix、order 和可行性
 
 Stage 2 直接选择 CLE 的 weekday 或 weekend reference-speed column，不再添加没有
-独立依据的 edge 随机 multiplier。非对称性来自单行道、不同方向限速、不同路径和
-geometry-derived turn penalty。connector 是双向，但不会修改 OSM physical edge。
+独立依据的 edge 随机 multiplier。非对称性来自单行道、不同方向限速和不同路径。
+canonical turn time 为 0；虚拟 access-connector split node 禁止 immediate edge
+reversal。3/8/20 秒 geometry adapter 仅测试，不生成 canonical matrix。connector
+是双向，但不会修改 OSM physical edge。
 
-parent 保存：最短距离、该路径耗时、带转向 penalty 的最快耗时、最快路径距离。
+parent 保存：最短距离、该路径的 zero-turn 耗时、zero-turn 最快耗时、最快路径距离。
 能耗由路径距离乘 `100/257 kWh/km` 得到，不重复存 matrix。
 
 matrix 得到以后才附着 Amazon order。customer-template edge 只有在 volume、TW、
 service 和返回 horizon 都可行时存在。maximum bipartite matching 必须覆盖所有
-customer；不复用模板，也不移动/放宽 TW。每个 customer 保存 template ID、station-
-day ID 和 single/composite source mode。
+customer；不复用模板，也不移动/放宽 TW。Cus100/500/1000 只能换 single-day source
+ID，不能降级 composite；composite 仅用于 report-only Cus2000。每个 customer 保存
+template ID、station-day ID 和 source mode。
 
 每个 view 还保存“从每个 CS 满电出发，允许经其它 CS 多跳，最快回 depot”的时间
 cache。它是静态 instance data，不是 runtime action mask。
@@ -183,5 +199,8 @@ region redraw、community growth、assignment competition expansion、first-atte
 conditional attempt success、rejection reason。统计单位是 attempted parent family，失败
 attempt 也保留，避免只报告成功 family 的 survivorship bias。
 
-当前只冻结 correctness gate。M1 是优先考虑的比较指标；M2/M3/M5 先 report-only。
-在看到 11 城真实分布以前，不人为设定“看起来合理”的 universal threshold。
+V2.1 已冻结 D-5：primary Cus100/Cus500/Cus1000 strata 的每个 M2/M3 component
+必须满足 generated-to-holdout Q90 不大于 real-to-real Q90；缺少 primary support
+也失败。Cus50 是单独 compatibility gate，Cus2000/composite report-only。
+station-block bootstrap confidence interval 只报告，不改变该 gate。M1、M4、M5
+按签字版规定的角色报告，不得在看到结果后修改阈值。

@@ -24,7 +24,13 @@ from evrptw_stage2.community import build_customer_split
 from evrptw_stage2.config import load_stage2_config
 from evrptw_stage2.materialize import materialize_family
 from evrptw_stage2.metrics import aggregate_phase1_metrics
-from evrptw_stage2.parallel import materialize_family_chunk, verify_family_path
+from evrptw_stage2.parallel import (
+    classify_rejection,
+    materialize_family_chunk,
+    rejection_is_retryable,
+    remaining_attempt_numbers,
+    verify_family_path,
+)
 from evrptw_stage2.planning import (
     build_generation_plan,
     derive_seed,
@@ -32,7 +38,12 @@ from evrptw_stage2.planning import (
     write_generation_plan,
 )
 from evrptw_stage2.profile import load_reference_profile
+from evrptw_stage2.provenance import resolve_git_provenance
 from evrptw_stage2.reader import load_portable_cle
+from evrptw_stage2.release_discipline import (
+    PilotStopController,
+    classify_la_smoke,
+)
 
 STAGES = ("preflight", "splits", "plan", "materialize", "verify", "metrics")
 
@@ -56,13 +67,23 @@ def make_parser() -> argparse.ArgumentParser:
         choices=("official", "research", "non_release_pilot"),
         default="research",
     )
+    parser.add_argument(
+        "--run-discipline",
+        choices=("la_smoke", "pilot"),
+        help="Required materialization stop discipline for non-release runs.",
+    )
     parser.add_argument("--cities", nargs="+")
     parser.add_argument("--tracks", nargs="+")
     parser.add_argument("--stages", nargs="+", choices=STAGES, default=list(STAGES))
     parser.add_argument("--pilot-families-per-city", type=int)
     parser.add_argument("--max-families", type=int)
     parser.add_argument("--family-ids", nargs="+")
-    parser.add_argument("--max-attempts-per-family", type=int, default=1)
+    parser.add_argument("--max-attempts-per-family", type=int, default=4)
+    parser.add_argument(
+        "--full-run-approved",
+        action="store_true",
+        help="Required for any non-pilot corpus run after calibration approval.",
+    )
     parser.add_argument(
         "--workers",
         type=int,
@@ -123,7 +144,7 @@ def _load_plan(plan_root: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, A
     registry = json.loads(
         (plan_root / "split_registry.json").read_text(encoding="utf-8")
     )
-    if registry.get("schema") != "cle_evrptw_generation_plan_v2" or "day_type" not in families:
+    if registry.get("schema") != "cle_evrptw_generation_plan_v3" or "day_type" not in families:
         raise ValueError(
             f"Stale Stage-2 plan under {plan_root}; remove generated plan/materialized "
             "outputs and rebuild with the v2 spatial contract"
@@ -193,8 +214,12 @@ def _build_materialization_tasks(
                         ).resolve()
                     ),
                     "amazon_artifact_root": str(args.amazon_artifact_root.resolve()),
+                    "amazon_cohort_split_path": str(
+                        args.amazon_cohort_split_path.resolve()
+                    ),
                     "output_root": str(args.output_root.resolve()),
                     "max_attempts_per_family": int(args.max_attempts_per_family),
+                    "code_provenance": dict(args.code_provenance),
                     "families": families_payload,
                 }
             )
@@ -207,6 +232,8 @@ def _run_bounded_process_tasks(
     tasks: list[Any],
     *,
     max_in_flight: int,
+    supervisor: PilotStopController | None = None,
+    poll_interval_s: float = 60.0,
 ) -> Iterator[tuple[Any, Any]]:
     """Run spawn tasks without placing the complete release in the process queue."""
 
@@ -223,18 +250,40 @@ def _run_bounded_process_tasks(
 
     for _ in range(min(max_in_flight, len(tasks))):
         submit_next()
+    stop_submitting = False
     while pending:
-        done, _ = wait(tuple(pending), return_when=FIRST_COMPLETED)
+        done, _ = wait(
+            tuple(pending),
+            timeout=poll_interval_s if supervisor is not None else None,
+            return_when=FIRST_COMPLETED,
+        )
+        if not done:
+            if supervisor is not None:
+                supervisor.poll(time.perf_counter())
+                stop_submitting = supervisor.stopped
+            continue
         for future in done:
             task = pending.pop(future)
             result = future.result()
-            submit_next()
+            if supervisor is not None:
+                supervisor.observe_chunk(result)
+                supervisor.poll(time.perf_counter())
+                stop_submitting = supervisor.stopped
+            if not stop_submitting:
+                submit_next()
             yield task, result
 
 
 def main() -> None:
     run_started = time.perf_counter()
     args = make_parser().parse_args()
+    repo_root = Path(__file__).resolve().parents[2]
+    code_provenance = resolve_git_provenance(
+        repo_root,
+        require_clean=True,
+        require_branch="stage2-repair-candidate",
+    )
+    args.code_provenance = code_provenance
     if args.max_attempts_per_family <= 0:
         raise ValueError("--max-attempts-per-family must be positive")
     if args.workers <= 0:
@@ -254,19 +303,56 @@ def main() -> None:
             "--allow-memory-oversubscription"
         )
     config = load_stage2_config(args.config)
-    amazon_artifacts = load_amazon_stage2_artifacts(args.amazon_artifact_root)
+    args.amazon_cohort_split_path = args.config.parent.parent / config.raw[
+        "amazon_source"
+    ]["cohort_split_config"]
+    amazon_artifacts = load_amazon_stage2_artifacts(
+        args.amazon_artifact_root,
+        cohort_split_path=args.amazon_cohort_split_path,
+    )
     non_release = args.mode == "non_release_pilot"
     profile = load_reference_profile(args.profile, official=args.mode == "official")
+    if not non_release:
+        if args.mode != "official":
+            raise ValueError(
+                "A full Stage-2 corpus may only use mode=official with a promoted "
+                "release_calibrated profile; research-mode full generation is forbidden"
+            )
+        if not args.full_run_approved:
+            raise ValueError(
+                "Full Stage-2 generation is frozen pending reviewed pilot evidence; "
+                "--full-run-approved is required after explicit approval"
+            )
     all_cities = (*config.train_cities, config.heldout_city)
-    cities = tuple(dict.fromkeys(args.cities or all_cities))
+    cities = tuple(
+        dict.fromkeys(args.cities or (config.train_cities if non_release else all_cities))
+    )
     if non_release and args.pilot_families_per_city is None:
         raise ValueError("non_release_pilot requires --pilot-families-per-city")
+    if non_release:
+        forbidden_cities = sorted(set(cities) - set(config.train_cities))
+        if forbidden_cities:
+            raise ValueError(
+                f"Calibration pilot must not access held-out cities: {forbidden_cities}"
+            )
+        if args.tracks is None:
+            args.tracks = ["train", "validation"]
+        forbidden_tracks = sorted(set(args.tracks) - {"train", "validation"})
+        if forbidden_tracks:
+            raise ValueError(
+                f"Calibration pilot permits only train/validation tracks: {forbidden_tracks}"
+            )
     if not non_release and args.pilot_families_per_city is not None:
         raise ValueError("Official generation cannot use pilot family counts")
+    if "materialize" in args.stages and non_release and args.run_discipline is None:
+        raise ValueError(
+            "Non-release materialization requires --run-discipline la_smoke or pilot"
+        )
     args.output_root.mkdir(parents=True, exist_ok=True)
     run_report: dict[str, Any] = {
-        "schema": "cle_evrptw_stage2_run_report_v1",
+        "schema": "cle_evrptw_stage2_run_report_v2",
         "mode": args.mode,
+        "code_provenance": code_provenance,
         "cities": list(cities),
         "stages": list(args.stages),
         "preflight": [],
@@ -338,6 +424,7 @@ def main() -> None:
             non_release_pilot=non_release,
         )
         registry["cle_preflight"] = run_report["preflight"]
+        registry["code_provenance"] = code_provenance
         write_generation_plan(plan_root, families, views, registry)
     if not needs_plan:
         run_report["passed"] = True
@@ -345,6 +432,12 @@ def main() -> None:
         print(json.dumps(run_report, indent=2, sort_keys=True, ensure_ascii=False))
         return
     families, views, registry = _load_plan(plan_root)
+    plan_provenance = registry.get("code_provenance", {})
+    if plan_provenance.get("code_commit") != code_provenance["code_commit"]:
+        raise ValueError(
+            "Generation plan belongs to a different or unbound code commit; use a new "
+            "output root and rebuild the plan"
+        )
     run_report["generation_plan"] = registry
 
     selected_families = families.sort_values(["city_slug", "family_id"])
@@ -362,6 +455,38 @@ def main() -> None:
     if args.max_families is not None:
         selected_families = selected_families.iloc[: int(args.max_families)]
     run_report["execution"]["selected_family_count"] = len(selected_families)
+    generation_stopped = False
+    pilot_supervisor: PilotStopController | None = None
+    if "materialize" in args.stages and args.run_discipline == "la_smoke":
+        if (
+            args.workers != 1
+            or args.families_per_worker_task != 1
+            or args.max_attempts_per_family != 4
+            or len(selected_families) != 1
+            or set(selected_families["city_slug"].astype(str)) != {"los-angeles"}
+        ):
+            raise ValueError(
+                "la_smoke requires Los Angeles, exactly one selected family, "
+                "workers=1, families-per-worker-task=1, and max-attempts=4"
+            )
+    if "materialize" in args.stages and args.run_discipline == "pilot":
+        expected_cities = set(config.train_cities)
+        if (
+            args.workers != 12
+            or args.families_per_worker_task != 1
+            or args.max_attempts_per_family != 4
+            or len(selected_families) != 140
+            or set(selected_families["city_slug"].astype(str)) != expected_cities
+            or set(selected_families["track_id"].astype(str)) != {"train", "validation"}
+        ):
+            raise ValueError(
+                "pilot discipline requires the frozen 140-family ten-city "
+                "train/validation plan with workers=12, task=1, attempts=4"
+            )
+        pilot_supervisor = PilotStopController(
+            planned_family_count=len(selected_families),
+            started_monotonic=run_started,
+        )
     if "materialize" in args.stages and args.workers > 1:
         tasks = _build_materialization_tasks(
             selected_families,
@@ -378,11 +503,22 @@ def main() -> None:
                 executor,
                 materialize_family_chunk,
                 tasks,
-                max_in_flight=args.workers * 2,
+                max_in_flight=args.workers,
+                supervisor=pilot_supervisor,
             ):
                 run_report["materialized"].extend(chunk_result["materialized"])
                 run_report["rejected_attempts"].extend(chunk_result["rejected_attempts"])
                 run_report["unresolved_family_ids"].extend(chunk_result["unresolved_family_ids"])
+        if pilot_supervisor is not None:
+            run_report["run_discipline"] = pilot_supervisor.report()
+            generation_stopped = pilot_supervisor.stopped
+            if generation_stopped:
+                completed_ids = {
+                    str(item["family_id"]) for item in run_report["materialized"]
+                } | set(map(str, run_report["unresolved_family_ids"]))
+                run_report["not_started_family_ids"] = sorted(
+                    set(selected_families["family_id"].astype(str)) - completed_ids
+                )
         run_report["materialized"].sort(key=lambda item: str(item["family_id"]))
         run_report["rejected_attempts"].sort(
             key=lambda item: (str(item["family_id"]), int(item["attempt_number"]))
@@ -427,12 +563,19 @@ def main() -> None:
             rejection_payload = (
                 json.loads(rejection_path.read_text(encoding="utf-8"))
                 if rejection_path.is_file()
-                else {"schema": "cle_evrptw_family_rejection_ledger_v1", "attempts": []}
+                else {"schema": "cle_evrptw_family_rejection_ledger_v2", "attempts": []}
             )
             first_attempt_number = len(rejection_payload["attempts"])
+            retry_closed = any(
+                attempt.get("retryable") is False
+                for attempt in rejection_payload["attempts"]
+            )
             materialized = False
-            for offset in range(args.max_attempts_per_family):
-                attempt_number = first_attempt_number + offset
+            for attempt_number in remaining_attempt_numbers(
+                first_attempt_number,
+                args.max_attempts_per_family,
+                retry_closed=retry_closed,
+            ):
                 attempt_family, attempt_views = materialization_attempt_inputs(
                     family,
                     family_views,
@@ -462,26 +605,39 @@ def main() -> None:
                         output_root=args.output_root / "materialized",
                         routing_topology_cache=routing_topology_cache,
                         community_adjacency_cache=community_adjacency_cache,
+                        code_provenance=code_provenance,
                     )
                 except Exception as error:  # noqa: BLE001 - persist every failed attempt.
+                    reason_code, reason_detail = classify_rejection(error)
+                    retryable = rejection_is_retryable(error)
                     rejection = {
                         "family_id": family_id,
                         "city_slug": city,
                         "attempt_number": attempt_number,
                         "attempt_seed": int(attempt_family["materialization_attempt_seed"]),
-                        "next_attempt_seed": derive_seed(
-                            int(family["family_seed"]),
-                            "materialization_attempt",
-                            attempt_number + 1,
+                        "next_attempt_seed": (
+                            derive_seed(
+                                int(family["family_seed"]),
+                                "materialization_attempt",
+                                attempt_number + 1,
+                            )
+                            if retryable
+                            else None
                         ),
                         "error_type": type(error).__name__,
-                        "reason": str(error),
+                        "reason_code": reason_code,
+                        "reason": reason_detail,
+                        "retryable": retryable,
+                        "retry_stopped_early": not retryable,
+                        "roster_fingerprint": getattr(error, "roster_fingerprint", None),
                         "elapsed_seconds": time.perf_counter() - materialization_started,
                     }
                     rejection_payload["family_id"] = family_id
                     rejection_payload["attempts"].append(rejection)
                     _write_json(rejection_path, rejection_payload)
                     run_report["rejected_attempts"].append(rejection)
+                    if not retryable:
+                        break
                     continue
                 materialization_seconds = time.perf_counter() - materialization_started
                 run_report["materialized"].append(
@@ -494,6 +650,7 @@ def main() -> None:
                         ),
                         "matrix_total_bytes": manifest["matrix_total_bytes"],
                         "materialization_seconds": materialization_seconds,
+                        "stage_timings_seconds": manifest["stage_timings_seconds"],
                         "terminal_pair_throughput_per_second": (
                             int(manifest["terminal_count"]) ** 2 / materialization_seconds
                         ),
@@ -505,7 +662,34 @@ def main() -> None:
             if not materialized:
                 run_report["unresolved_family_ids"].append(family_id)
 
-    if "verify" in args.stages and args.workers > 1:
+    if "materialize" in args.stages and args.run_discipline == "la_smoke":
+        successful = [
+            item
+            for item in run_report["materialized"]
+            if item.get("status") in {"materialized", "reused_verified"}
+        ]
+        if len(successful) == 1 and not run_report["unresolved_family_ids"]:
+            item = successful[0]
+            smoke = classify_la_smoke(
+                terminal_selection_s=float(
+                    item.get("stage_timings_seconds", {}).get(
+                        "terminal_selection", float("inf")
+                    )
+                ),
+                family_total_s=float(item.get("materialization_seconds", float("inf"))),
+            )
+        else:
+            smoke = {
+                "schema": "cle_evrptw_la_smoke_stop_rule_v1",
+                "status": "RED",
+                "pilot_allowed": False,
+                "exact_performance_optimization_required": False,
+                "reason": "smoke family did not materialize exactly once",
+            }
+        run_report["run_discipline"] = smoke
+        generation_stopped = not bool(smoke["pilot_allowed"])
+
+    if "verify" in args.stages and args.workers > 1 and not generation_stopped:
         existing: list[tuple[str, Path]] = []
         for _, family_row in selected_families.iterrows():
             family_id = str(family_row["family_id"])
@@ -542,7 +726,7 @@ def main() -> None:
         if failed:
             raise ValueError(f"Materialized families failed verification: {failed}")
 
-    if "verify" in args.stages and args.workers == 1:
+    if "verify" in args.stages and args.workers == 1 and not generation_stopped:
         for _, family_row in selected_families.iterrows():
             family_id = str(family_row["family_id"])
             family_dir = args.output_root / "materialized" / "families" / family_id
@@ -563,10 +747,10 @@ def main() -> None:
             if not verification["passed"]:
                 raise ValueError(f"Materialized family {family_id} failed verification")
 
-    run_report["passed"] = not run_report["unresolved_family_ids"] and all(
+    run_report["passed"] = not generation_stopped and not run_report["unresolved_family_ids"] and all(
         bool(item["passed"]) for item in run_report["verified"]
     )
-    if "metrics" in args.stages:
+    if "metrics" in args.stages and not generation_stopped:
         if int(args.shard_count) != 1:
             raise ValueError(
                 "The metrics stage requires a complete unsharded output; run "
@@ -588,7 +772,33 @@ def main() -> None:
             "is the largest individual child peak, not their sum"
         ),
     }
+    run_manifest = {
+        "schema": "cle_evrptw_stage2_run_manifest_v2",
+        "config_schema": config.schema,
+        "profile_schema": profile["schema"],
+        "mode": args.mode,
+        "code_provenance": code_provenance,
+        "max_attempts_per_family": int(args.max_attempts_per_family),
+        "run_discipline": args.run_discipline,
+        "selected_cities": list(cities),
+        "selected_tracks": list(args.tracks or []),
+        "baseline_solver": {
+            "run": False,
+            "solver_version": None,
+            "time_budget_s": None,
+            "soc_tolerance_kwh": None,
+        },
+        "instance_hash_excludes": [
+            "baseline_solver.solver_version",
+            "baseline_solver.time_budget_s",
+            "baseline_solver.soc_tolerance_kwh",
+            "performance",
+        ],
+        "performance": run_report["performance"],
+    }
     _write_json(_run_report_path(args), run_report)
+    if int(args.shard_count) == 1:
+        _write_json(args.output_root / "run_manifest.json", run_manifest)
     print(json.dumps(run_report, indent=2, sort_keys=True, ensure_ascii=False))
     if not run_report["passed"]:
         raise SystemExit(2)

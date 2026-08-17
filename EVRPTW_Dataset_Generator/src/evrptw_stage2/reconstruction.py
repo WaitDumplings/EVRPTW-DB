@@ -241,6 +241,15 @@ def export_slim_dataset(
     reconstruction_root = output / "_reconstruction"
     reconstruction_root.mkdir(parents=True)
     shutil.copy2(profile_file, reconstruction_root / "reference_profile.json")
+    charging_registry_name = str(
+        profile["charging"]["national_mode_median_registry"]
+    )
+    charging_registry = profile_file.parent / charging_registry_name
+    if not charging_registry.is_file():
+        raise FileNotFoundError(
+            f"Frozen charging-power median registry is missing: {charging_registry}"
+        )
+    shutil.copy2(charging_registry, reconstruction_root / charging_registry_name)
     registry = _build_instance_registry(source, families)
     registry.to_parquet(reconstruction_root / "instance_registry.parquet", index=False)
 
@@ -284,6 +293,10 @@ def export_slim_dataset(
             "relative_path": "_reconstruction/reference_profile.json",
             "profile_id": str(profile["profile_id"]),
             "sha256": sha256_file(profile_file),
+            "charging_power_median_registry": {
+                "relative_path": f"_reconstruction/{charging_registry_name}",
+                "sha256": sha256_file(charging_registry),
+            },
         },
         "instance_registry": "_reconstruction/instance_registry.parquet",
         "cle_requirements": cle_contract,
@@ -310,16 +323,29 @@ def _load_profile_for_dataset(
         raise FileNotFoundError(
             f"Reference profile is missing: {path}; provide --profile for a non-slim tree"
         )
-    profile = load_reference_profile(path)
     contract_path = dataset_root / "_reconstruction" / "reconstruction_contract.json"
     if contract_path.is_file():
-        expected = _read_json(contract_path)["reference_profile"]["sha256"]
+        profile_contract = _read_json(contract_path)["reference_profile"]
+        expected = profile_contract["sha256"]
         actual = sha256_file(path)
         if actual != expected:
             raise ReconstructionError(
                 f"Reference profile checksum mismatch: expected={expected}, actual={actual}"
             )
-    return profile
+        registry_contract = profile_contract.get("charging_power_median_registry")
+        if registry_contract:
+            registry_path = dataset_root / registry_contract["relative_path"]
+            if not registry_path.is_file():
+                raise ReconstructionError(
+                    f"Charging-power median registry is missing: {registry_path}"
+                )
+            registry_actual = sha256_file(registry_path)
+            if registry_actual != registry_contract["sha256"]:
+                raise ReconstructionError(
+                    "Charging-power median registry checksum mismatch: "
+                    f"expected={registry_contract['sha256']}, actual={registry_actual}"
+                )
+    return load_reference_profile(path)
 
 
 def _validate_cle_contract(dataset_root: Path, cle_root: Path, cities: Iterable[str]) -> None:

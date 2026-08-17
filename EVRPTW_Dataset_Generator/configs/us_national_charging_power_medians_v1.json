@@ -1,0 +1,36 @@
+{
+  "evidence": {
+    "ac_level2": {
+      "charging_unit_observation_count": 149719,
+      "compatible_connector": "J1772",
+      "connector_port_weight": 149738,
+      "power_column": "EV J1772 Power Output (kW)",
+      "weight_column": "EV J1772 Connector Count"
+    },
+    "dc_fast": {
+      "charging_unit_observation_count": 36211,
+      "compatible_connector": "CCS/J1772COMBO",
+      "connector_port_weight": 37052,
+      "power_column": "EV CCS Power Output (kW)",
+      "weight_column": "EV CCS Connector Count"
+    }
+  },
+  "generated_utc": "2026-08-16T21:24:51.904555+00:00",
+  "national_mode_medians_kw": {
+    "ac_level2": 6.5,
+    "dc_fast": 200.0
+  },
+  "schema": "evrptw_national_charging_power_medians_v1",
+  "selection": {
+    "access": "public",
+    "compatibility": "reference_vehicle_connector_only",
+    "country": "US",
+    "fuel_type": "ELEC",
+    "statistic": "connector_port_count_weighted_median",
+    "status": "E"
+  },
+  "source": "NLR_AFDC_electric_vehicle_charging_ports_API",
+  "source_snapshot": "afdc_us_public_available_electric_ports.csv",
+  "source_snapshot_sha256": "bf3a0c796241b08ed862f650cf6ca299ada55661d5fe02d5c68fec8f28465ff6",
+  "source_url": "https://developer.nlr.gov/api/alt-fuel-stations/v1/ev-charging-units.csv"
+}

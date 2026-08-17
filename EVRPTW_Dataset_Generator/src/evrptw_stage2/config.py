@@ -62,35 +62,35 @@ class Stage2Config:
 
     def validate(self) -> None:
         errors: list[str] = []
-        if self.schema != "cle_evrptw_stage2_config_v1":
+        if self.schema != "cle_evrptw_stage2_config_v2":
             errors.append(f"Unsupported config schema: {self.schema!r}")
         if len(self.train_cities) != 10 or len(set(self.train_cities)) != 10:
             errors.append("train_cities must contain ten unique city slugs")
         if self.heldout_city in self.train_cities:
             errors.append("heldout_city must not occur in train_cities")
         if self.operating_horizon_start_s != 8 * 3600:
-            errors.append("V1 operating horizon must start at 08:00")
+            errors.append("V2 operating horizon must start at 08:00")
         if self.operating_horizon_end_s != 24 * 3600:
-            errors.append("V1 operating horizon must end at 24:00")
+            errors.append("V2 operating horizon must end at 24:00")
         if (self.weekday_weight, self.weekend_weight) != (5, 2):
-            errors.append("V1 weekday/weekend weights must be 5:2")
+            errors.append("V2 weekday/weekend weights must be 5:2")
         if self.demand_unit != "cm3" or self.capacity_unit != "cm3":
-            errors.append("V1 demand and capacity must both use cm3")
+            errors.append("V2 demand and capacity must both use cm3")
         if not 0.0 < self.heldout_community_fraction < 1.0:
             errors.append("heldout_community_fraction must be in (0, 1)")
         if self.matrix_dtype != "float32":
-            errors.append("V1 matrix_dtype must be float32")
+            errors.append("V2 matrix_dtype must be float32")
         if self.matrix_path_policy != "distance_shortest_directed_physical_path_v1":
-            errors.append("V1 matrix path policy must be the frozen distance-shortest policy")
+            errors.append("V2 matrix path policy must be the frozen distance-shortest policy")
         if (
             self.running_time_path_policy
-            != "directed_turn_aware_shortest_running_time_v2"
+            != "directed_zero_turn_shortest_running_time_v3"
         ):
-            errors.append("V1 running-time path policy does not match the frozen adapter")
-        if self.matrix_bundle_id != "dual_path_four_matrix_v2":
-            errors.append("V1 matrix bundle must be dual_path_four_matrix_v2")
+            errors.append("V2 running-time path policy must be canonical zero-turn")
+        if self.matrix_bundle_id != "dual_path_four_matrix_v3":
+            errors.append("V2 matrix bundle must be dual_path_four_matrix_v3")
         if self.stored_parent_matrix_count != 4:
-            errors.append("V1 dual-path matrix families must contain four parent matrices")
+            errors.append("V2 dual-path matrix families must contain four parent matrices")
         expected = {
             "cus50": (50, 10, 100_000, 500),
             "cus100": (100, 20, 50_000, 500),
@@ -100,7 +100,7 @@ class Stage2Config:
         }
         actual_ids = {scale.scale_id for scale in self.scales}
         if actual_ids != set(expected):
-            errors.append(f"V1 scales must be {sorted(expected)}, got {sorted(actual_ids)}")
+            errors.append(f"V2 scales must be {sorted(expected)}, got {sorted(actual_ids)}")
         for scale in self.scales:
             exp = expected.get(scale.scale_id)
             if exp and (
@@ -119,15 +119,26 @@ class Stage2Config:
                     f"{scale.scale_id} violates the 5M active-customer exposure contract"
                 )
         if self.parent_scale_id != "cus1000" or self.train_parent_family_count != 5_000:
-            errors.append("V1 train storage must use 5,000 cus1000 parent families")
+            errors.append("V2 train storage must use 5,000 cus1000 parent families")
         if self.validation_parent_family_count != 500:
-            errors.append("V1 validation must use 500 parent families")
+            errors.append("V2 validation must use 500 parent families")
         if self.core_test_parent_family_count != 500:
-            errors.append("Each V1 core test track must use 500 parent families")
+            errors.append("Each V2 core test track must use 500 parent families")
         if self.scalability_parent_family_count != 500:
-            errors.append("V1 Cus2000 scalability test must use 500 parent families")
+            errors.append("V2 Cus2000 scalability test must use 500 parent families")
         if self.vehicle_dc_cap_kw != 100.0 or self.vehicle_ac_l2_cap_kw != 11.0:
-            errors.append("V1 reference charge caps must be DC 100 kW and AC L2 11 kW")
+            errors.append("V2 reference charge caps must be DC 100 kW and AC L2 11 kW")
+        source = self.raw.get("amazon_source", {})
+        if source.get("cohort_split_config") != "configs/amazon_cohort_split_v1.json":
+            errors.append("V2 must use the frozen Amazon cohort split")
+        if source.get("primary_source_mode") != ["SINGLE_STRUCTURE_DAY", "SINGLE_ORDER_DAY"]:
+            errors.append("V2 primary source mode must be single-day for structure and orders")
+        acceptance = self.raw.get("acceptance", {})
+        if acceptance.get("realism_gate") != "station_block_q90_m2_m3_v1":
+            errors.append("V2 must freeze the station-block Q90 M2/M3 gate")
+        output = self.raw.get("output", {})
+        if output.get("calibration_root") != "Calibration_v2" or output.get("instances_root") != "Instances_v2":
+            errors.append("V2 outputs must use Calibration_v2 and Instances_v2")
         if errors:
             raise ValueError("Invalid Stage-2 config:\n- " + "\n- ".join(errors))
 

@@ -38,7 +38,12 @@ def _write_executable(path: Path, contents: str) -> None:
 
 def _fake_zstd(tmp_path: Path) -> Path:
     executable = tmp_path / "fake-zstd"
-    _write_executable(executable, "#!/bin/sh\nexec /bin/cat \"$3\"\n")
+    _write_executable(
+        executable,
+        "#!/bin/sh\n"
+        "if [ \"$1\" = -dc ]; then exec /bin/cat \"$3\"; fi\n"
+        "exec /bin/cat\n",
+    )
     return executable
 
 
@@ -325,6 +330,106 @@ def test_concurrent_archive_launcher_is_rejected(tmp_path: Path) -> None:
     assert "Another archive launcher is active" in result.stderr
 
 
+def test_create_tiny_release_enforces_acceptance_and_omits_matrices(
+    tmp_path: Path,
+) -> None:
+    reconstruction_spec = importlib.util.spec_from_file_location(
+        "reconstruction_create_fixture",
+        REPOSITORY_ROOT
+        / "EVRPTW_Dataset_Generator"
+        / "tests"
+        / "test_reconstruction.py",
+    )
+    assert reconstruction_spec is not None and reconstruction_spec.loader is not None
+    fixture_module = importlib.util.module_from_spec(reconstruction_spec)
+    reconstruction_spec.loader.exec_module(fixture_module)
+
+    source, cle_source = fixture_module._build_tiny_full_dataset(tmp_path / "fixture")
+    (cle_source / "cle_index.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "verified_cle_count": 11,
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source / "stage2_run_report.json").write_text(
+        json.dumps(
+            {
+                "mode": "research",
+                "passed": True,
+                "unresolved_family_ids": [],
+                "execution": {"selected_family_count": 1},
+                "verified": [{"family_id": "mf-tiny", "passed": True}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    phase1 = source / "reports" / "phase1" / "summary.json"
+    phase1.parent.mkdir(parents=True)
+    phase1.write_text(
+        json.dumps(
+            {
+                "all_hard_gates_passed": True,
+                "successful_parent_family_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    realism = source / "reports" / "stage2_repair" / "q90_gate.json"
+    realism.parent.mkdir(parents=True)
+    realism.write_text(
+        json.dumps({"release_calibrated": True}), encoding="utf-8"
+    )
+    archive = tmp_path / "tiny-created.tar.zst"
+    arguments = argparse.Namespace(
+        cle_root=cle_source,
+        instance_root=source,
+        profile=fixture_module.PROFILE_PATH,
+        archive=archive,
+        sha256_file=None,
+        repo_root=REPOSITORY_ROOT,
+        zstd_bin=str(_fake_zstd(tmp_path)),
+        compression_threads=1,
+        compression_level=1,
+    )
+
+    report = archive_tool.create_release_archive(arguments)
+
+    assert report["family_count"] == 1
+    assert report["view_count"] == 1
+    assert archive.is_file()
+    checksum = Path(f"{archive}.sha256")
+    assert checksum.read_text(encoding="utf-8").split()[0] == hashlib.sha256(
+        archive.read_bytes()
+    ).hexdigest()
+    inspection = archive_tool.inspect_archive(archive, str(_fake_zstd(tmp_path)))
+    assert inspection["release_manifest"]["acceptance"] == {
+        "cle_status": "complete",
+        "phase1_all_hard_gates_passed": True,
+        "stage2_realism_release_calibrated": True,
+        "stage2_passed": True,
+        "verified_cle_count": 11,
+    }
+    with tarfile.open(archive, mode="r:") as created:
+        names = created.getnames()
+    assert not any("/matrices/" in name for name in names)
+
+    phase1.write_text(
+        json.dumps(
+            {
+                "all_hard_gates_passed": False,
+                "successful_parent_family_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(archive_tool.ArchiveWorkflowError, match="Phase-1 acceptance failed"):
+        archive_tool._source_acceptance(cle_source, source)
+
+
 def test_tiny_archive_end_to_end_exact_restore(tmp_path: Path) -> None:
     reconstruction_spec = importlib.util.spec_from_file_location(
         "reconstruction_test_fixture",
@@ -339,8 +444,8 @@ def test_tiny_archive_end_to_end_exact_restore(tmp_path: Path) -> None:
 
     source, cle_source = fixture_module._build_tiny_full_dataset(tmp_path / "fixture")
     payload = tmp_path / "payload" / "EVRPTW_Dataset"
-    cle_release = payload / "CLE_v1" / "us_11city"
-    instances_release = payload / "Instances_v1" / "us_11city"
+    cle_release = payload / "CLE_v2" / "us_11city"
+    instances_release = payload / "Instances_v2" / "us_11city"
     cle_release.parent.mkdir(parents=True)
     shutil.copytree(cle_source, cle_release)
     contract = fixture_module.export_slim_dataset(
@@ -408,7 +513,7 @@ def test_tiny_archive_end_to_end_exact_restore(tmp_path: Path) -> None:
     )
     assert first_run.returncode == 0, first_run.stderr
 
-    instance_root = destination / "EVRPTW_Dataset" / "Instances_v1" / "us_11city"
+    instance_root = destination / "EVRPTW_Dataset" / "Instances_v2" / "us_11city"
     report = json.loads(
         (instance_root / "matrix_restore_report.json").read_text(encoding="utf-8")
     )

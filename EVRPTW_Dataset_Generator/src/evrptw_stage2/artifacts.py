@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .metrics import PHASE1_FAMILY_METRICS_SCHEMA
 from .orders import (
     FULL_CS_TO_DEPOT_CACHE_CONTRACT,
     _single_customer_certificates,
@@ -204,7 +205,9 @@ def _verify_view_feasibility_certificate(payload: dict[str, Any]) -> list[str]:
         ),
         charging_power_kw=payload["charging_power_kw"],
         battery_capacity_kwh=float(vehicle["battery_capacity_kwh"]),
-        charging_efficiency=float(charging["charging_efficiency"]),
+        charging_power_derating_factor=float(
+            charging["charging_power_derating_factor"]
+        ),
     )
     expected_arrival = (
         float(payload["working_start_s"]) + recomputed.arrival_elapsed_s
@@ -311,7 +314,7 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
         observations_path = root / phase1_paths["phase1_observations"]
         if metrics_path.is_file():
             phase1 = _read_json(metrics_path)
-            if phase1.get("schema") != "evrptw_phase1_family_metrics_v1":
+            if phase1.get("schema") != PHASE1_FAMILY_METRICS_SCHEMA:
                 errors.append("Phase-1 family metric schema mismatch")
             if phase1.get("family_id") != manifest.get("family_id"):
                 errors.append("Phase-1 family metric family_id mismatch")
@@ -325,7 +328,7 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
     stored_names = tuple(manifest["matrix_files"])
     expected_stored = set(STORED_MATRIX_NAMES)
     if (
-        manifest.get("schema") == "cle_evrptw_materialized_matrix_family_v2"
+        manifest.get("schema") == "cle_evrptw_materialized_matrix_family_v3"
         and set(stored_names) != expected_stored
     ):
         errors.append("v2 family must persist exactly the four contracted matrices")

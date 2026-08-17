@@ -1,0 +1,5667 @@
+{
+  "directive": "STAGE2_REPAIR_DIRECTIVE_V2.1_FINAL",
+  "evaluation_track_allocation": {
+    "exact_template_reuse_between_evaluation_tracks": false,
+    "policy": "deterministic_disjoint_station_day_mass_balance_with_support_anchors_v1",
+    "station_day_ledgers_pairwise_disjoint_and_exhaustive": true,
+    "support": {
+      "test1_new_seed": {
+        "by_day_type": {
+          "weekday": {
+            "same_station_order_composite_stations_ge_100": 5,
+            "same_station_order_composite_stations_ge_1000": 4,
+            "same_station_order_composite_stations_ge_2000": 4,
+            "same_station_order_composite_stations_ge_500": 5,
+            "same_station_structure_composite_stations_ge_100": 5,
+            "same_station_structure_composite_stations_ge_1000": 4,
+            "same_station_structure_composite_stations_ge_2000": 4,
+            "same_station_structure_composite_stations_ge_500": 5,
+            "single_order_days_ge_100": 6,
+            "single_order_days_ge_1000": 5,
+            "single_order_days_ge_2000": 5,
+            "single_order_days_ge_500": 6,
+            "single_structure_days_ge_100": 6,
+            "single_structure_days_ge_1000": 5,
+            "single_structure_days_ge_2000": 5,
+            "single_structure_days_ge_500": 6,
+            "station_day_count": 6,
+            "usable_template_mass": 18964
+          },
+          "weekend": {
+            "same_station_order_composite_stations_ge_100": 4,
+            "same_station_order_composite_stations_ge_1000": 3,
+            "same_station_order_composite_stations_ge_2000": 2,
+            "same_station_order_composite_stations_ge_500": 3,
+            "same_station_structure_composite_stations_ge_100": 4,
+            "same_station_structure_composite_stations_ge_1000": 3,
+            "same_station_structure_composite_stations_ge_2000": 2,
+            "same_station_structure_composite_stations_ge_500": 3,
+            "single_order_days_ge_100": 5,
+            "single_order_days_ge_1000": 4,
+            "single_order_days_ge_2000": 1,
+            "single_order_days_ge_500": 4,
+            "single_structure_days_ge_100": 5,
+            "single_structure_days_ge_1000": 4,
+            "single_structure_days_ge_2000": 1,
+            "single_structure_days_ge_500": 4,
+            "station_day_count": 5,
+            "usable_template_mass": 6692
+          }
+        },
+        "station_count": 6,
+        "station_day_count": 11,
+        "support_mass_fraction": 0.02855772152659588,
+        "usable_template_mass": 25656
+      },
+      "test2_heldout_locations": {
+        "by_day_type": {
+          "weekday": {
+            "same_station_order_composite_stations_ge_100": 5,
+            "same_station_order_composite_stations_ge_1000": 4,
+            "same_station_order_composite_stations_ge_2000": 4,
+            "same_station_order_composite_stations_ge_500": 5,
+            "same_station_structure_composite_stations_ge_100": 5,
+            "same_station_structure_composite_stations_ge_1000": 4,
+            "same_station_structure_composite_stations_ge_2000": 4,
+            "same_station_structure_composite_stations_ge_500": 5,
+            "single_order_days_ge_100": 8,
+            "single_order_days_ge_1000": 7,
+            "single_order_days_ge_2000": 4,
+            "single_order_days_ge_500": 8,
+            "single_structure_days_ge_100": 8,
+            "single_structure_days_ge_1000": 7,
+            "single_structure_days_ge_2000": 4,
+            "single_structure_days_ge_500": 8,
+            "station_day_count": 8,
+            "usable_template_mass": 21644
+          },
+          "weekend": {
+            "same_station_order_composite_stations_ge_100": 2,
+            "same_station_order_composite_stations_ge_1000": 2,
+            "same_station_order_composite_stations_ge_2000": 2,
+            "same_station_order_composite_stations_ge_500": 2,
+            "same_station_structure_composite_stations_ge_100": 2,
+            "same_station_structure_composite_stations_ge_1000": 2,
+            "same_station_structure_composite_stations_ge_2000": 2,
+            "same_station_structure_composite_stations_ge_500": 2,
+            "single_order_days_ge_100": 3,
+            "single_order_days_ge_1000": 2,
+            "single_order_days_ge_2000": 1,
+            "single_order_days_ge_500": 3,
+            "single_structure_days_ge_100": 3,
+            "single_structure_days_ge_1000": 2,
+            "single_structure_days_ge_2000": 1,
+            "single_structure_days_ge_500": 3,
+            "station_day_count": 3,
+            "usable_template_mass": 5800
+          }
+        },
+        "station_count": 6,
+        "station_day_count": 11,
+        "support_mass_fraction": 0.03054794627283666,
+        "usable_template_mass": 27444
+      },
+      "test3_heldout_city": {
+        "by_day_type": {
+          "weekday": {
+            "same_station_order_composite_stations_ge_100": 9,
+            "same_station_order_composite_stations_ge_1000": 8,
+            "same_station_order_composite_stations_ge_2000": 3,
+            "same_station_order_composite_stations_ge_500": 8,
+            "same_station_structure_composite_stations_ge_100": 9,
+            "same_station_structure_composite_stations_ge_1000": 8,
+            "same_station_structure_composite_stations_ge_2000": 3,
+            "same_station_structure_composite_stations_ge_500": 8,
+            "single_order_days_ge_100": 10,
+            "single_order_days_ge_1000": 8,
+            "single_order_days_ge_2000": 3,
+            "single_order_days_ge_500": 9,
+            "single_structure_days_ge_100": 10,
+            "single_structure_days_ge_1000": 8,
+            "single_structure_days_ge_2000": 3,
+            "single_structure_days_ge_500": 9,
+            "station_day_count": 10,
+            "usable_template_mass": 20977
+          },
+          "weekend": {
+            "same_station_order_composite_stations_ge_100": 4,
+            "same_station_order_composite_stations_ge_1000": 3,
+            "same_station_order_composite_stations_ge_2000": 2,
+            "same_station_order_composite_stations_ge_500": 3,
+            "same_station_structure_composite_stations_ge_100": 4,
+            "same_station_structure_composite_stations_ge_1000": 3,
+            "same_station_structure_composite_stations_ge_2000": 2,
+            "same_station_structure_composite_stations_ge_500": 3,
+            "single_order_days_ge_100": 4,
+            "single_order_days_ge_1000": 3,
+            "single_order_days_ge_2000": 2,
+            "single_order_days_ge_500": 3,
+            "single_structure_days_ge_100": 4,
+            "single_structure_days_ge_1000": 3,
+            "single_structure_days_ge_2000": 2,
+            "single_structure_days_ge_500": 3,
+            "station_day_count": 4,
+            "usable_template_mass": 6588
+          }
+        },
+        "station_count": 11,
+        "station_day_count": 14,
+        "support_mass_fraction": 0.03068263150454535,
+        "usable_template_mass": 27565
+      },
+      "unseen_scale_same_cities": {
+        "by_day_type": {
+          "weekday": {
+            "same_station_order_composite_stations_ge_100": 6,
+            "same_station_order_composite_stations_ge_1000": 4,
+            "same_station_order_composite_stations_ge_2000": 3,
+            "same_station_order_composite_stations_ge_500": 5,
+            "same_station_structure_composite_stations_ge_100": 6,
+            "same_station_structure_composite_stations_ge_1000": 4,
+            "same_station_structure_composite_stations_ge_2000": 3,
+            "same_station_structure_composite_stations_ge_500": 5,
+            "single_order_days_ge_100": 7,
+            "single_order_days_ge_1000": 5,
+            "single_order_days_ge_2000": 3,
+            "single_order_days_ge_500": 6,
+            "single_structure_days_ge_100": 7,
+            "single_structure_days_ge_1000": 5,
+            "single_structure_days_ge_2000": 3,
+            "single_structure_days_ge_500": 6,
+            "station_day_count": 7,
+            "usable_template_mass": 19843
+          },
+          "weekend": {
+            "same_station_order_composite_stations_ge_100": 1,
+            "same_station_order_composite_stations_ge_1000": 1,
+            "same_station_order_composite_stations_ge_2000": 1,
+            "same_station_order_composite_stations_ge_500": 1,
+            "same_station_structure_composite_stations_ge_100": 1,
+            "same_station_structure_composite_stations_ge_1000": 1,
+            "same_station_structure_composite_stations_ge_2000": 1,
+            "same_station_structure_composite_stations_ge_500": 1,
+            "single_order_days_ge_100": 1,
+            "single_order_days_ge_1000": 1,
+            "single_order_days_ge_2000": 1,
+            "single_order_days_ge_500": 1,
+            "single_structure_days_ge_100": 1,
+            "single_structure_days_ge_1000": 1,
+            "single_structure_days_ge_2000": 1,
+            "single_structure_days_ge_500": 1,
+            "station_day_count": 1,
+            "usable_template_mass": 6120
+          }
+        },
+        "station_count": 6,
+        "station_day_count": 8,
+        "support_mass_fraction": 0.028899443560765858,
+        "usable_template_mass": 25963
+      },
+      "validation": {
+        "by_day_type": {
+          "weekday": {
+            "same_station_order_composite_stations_ge_100": 5,
+            "same_station_order_composite_stations_ge_1000": 5,
+            "same_station_order_composite_stations_ge_2000": 4,
+            "same_station_order_composite_stations_ge_500": 5,
+            "same_station_structure_composite_stations_ge_100": 5,
+            "same_station_structure_composite_stations_ge_1000": 5,
+            "same_station_structure_composite_stations_ge_2000": 4,
+            "same_station_structure_composite_stations_ge_500": 5,
+            "single_order_days_ge_100": 10,
+            "single_order_days_ge_1000": 6,
+            "single_order_days_ge_2000": 3,
+            "single_order_days_ge_500": 9,
+            "single_structure_days_ge_100": 10,
+            "single_structure_days_ge_1000": 6,
+            "single_structure_days_ge_2000": 3,
+            "single_structure_days_ge_500": 9,
+            "station_day_count": 10,
+            "usable_template_mass": 21420
+          },
+          "weekend": {
+            "same_station_order_composite_stations_ge_100": 3,
+            "same_station_order_composite_stations_ge_1000": 2,
+            "same_station_order_composite_stations_ge_2000": 1,
+            "same_station_order_composite_stations_ge_500": 3,
+            "same_station_structure_composite_stations_ge_100": 3,
+            "same_station_structure_composite_stations_ge_1000": 2,
+            "same_station_structure_composite_stations_ge_2000": 1,
+            "same_station_structure_composite_stations_ge_500": 3,
+            "single_order_days_ge_100": 3,
+            "single_order_days_ge_1000": 2,
+            "single_order_days_ge_2000": 1,
+            "single_order_days_ge_500": 3,
+            "single_structure_days_ge_100": 3,
+            "single_structure_days_ge_1000": 2,
+            "single_structure_days_ge_2000": 1,
+            "single_structure_days_ge_500": 3,
+            "station_day_count": 3,
+            "usable_template_mass": 6711
+          }
+        },
+        "station_count": 6,
+        "station_day_count": 13,
+        "support_mass_fraction": 0.03131264672063723,
+        "usable_template_mass": 28131
+      }
+    },
+    "tracks": [
+      "validation",
+      "test1_new_seed",
+      "test2_heldout_locations",
+      "test3_heldout_city",
+      "unseen_scale_same_cities"
+    ]
+  },
+  "frozen_seed": 20260810,
+  "leakage_assertions": {
+    "metric_stations_disjoint_from_generation": true,
+    "route_id_pools_pairwise_disjoint": true,
+    "station_day_pools_pairwise_disjoint_and_exhaustive": true,
+    "template_id_pools_pairwise_disjoint": true
+  },
+  "metric_holdout": {
+    "selection_id": "H3",
+    "selection_policy": "three_station_maximin_cus2000_support_then_mass_deviation_v1",
+    "station_codes": [
+      "DCH2",
+      "DLA9",
+      "DSE2"
+    ],
+    "whole_station_isolation": true
+  },
+  "schema": "evrptw_amazon_cohort_split_v1",
+  "source_artifact_id": "amazon_stationday_stage2_v3",
+  "source_artifact_schema": "evrptw_amazon_stage2_artifacts_v3",
+  "source_mode_contract": {
+    "composite_allowed_scales": [
+      "cus2000"
+    ],
+    "composite_release_role": "report_only",
+    "primary_order_source_mode": "SINGLE_ORDER_DAY",
+    "primary_scales": [
+      "cus100",
+      "cus500",
+      "cus1000"
+    ],
+    "primary_structure_source_mode": "SINGLE_STRUCTURE_DAY",
+    "retry_may_change_source_id": true,
+    "retry_may_change_source_mode": false
+  },
+  "station_day_assignments": [
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 183,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-20",
+      "structure_usable_template_mass": 181
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 516,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-21",
+      "structure_usable_template_mass": 510
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 806,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-22",
+      "structure_usable_template_mass": 797
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1003,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-23",
+      "structure_usable_template_mass": 992
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1082,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-24",
+      "structure_usable_template_mass": 1071
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 881,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-25",
+      "structure_usable_template_mass": 872
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 430,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-26",
+      "structure_usable_template_mass": 425
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1440,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-27",
+      "structure_usable_template_mass": 1425
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1483,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-28",
+      "structure_usable_template_mass": 1468
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1686,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-29",
+      "structure_usable_template_mass": 1669
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 736,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-30",
+      "structure_usable_template_mass": 728
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1831,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-07-31",
+      "structure_usable_template_mass": 1812
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 1186,
+      "pool": "GEN-EVAL",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-01",
+      "structure_usable_template_mass": 1174
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1476,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-02",
+      "structure_usable_template_mass": 1461
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1137,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-03",
+      "structure_usable_template_mass": 1125
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 607,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-04",
+      "structure_usable_template_mass": 600
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 814,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-05",
+      "structure_usable_template_mass": 805
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1291,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-06",
+      "structure_usable_template_mass": 1278
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1769,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-07",
+      "structure_usable_template_mass": 1751
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1404,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-08",
+      "structure_usable_template_mass": 1389
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 743,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-09",
+      "structure_usable_template_mass": 735
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1388,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-10",
+      "structure_usable_template_mass": 1374
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 862,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-11",
+      "structure_usable_template_mass": 853
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1542,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-12",
+      "structure_usable_template_mass": 1526
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 544,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-13",
+      "structure_usable_template_mass": 538
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1440,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-14",
+      "structure_usable_template_mass": 1425
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1992,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-15",
+      "structure_usable_template_mass": 1972
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 490,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-16",
+      "structure_usable_template_mass": 485
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 298,
+      "pool": "GEN-TRAIN",
+      "station_code": "DAU1",
+      "station_day_id": "DAU1:2018-08-17",
+      "structure_usable_template_mass": 295
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 480,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-20",
+      "structure_usable_template_mass": 475
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 194,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-22",
+      "structure_usable_template_mass": 192
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 227,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-23",
+      "structure_usable_template_mass": 224
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1242,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-24",
+      "structure_usable_template_mass": 1229
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 657,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-25",
+      "structure_usable_template_mass": 650
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 190,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-26",
+      "structure_usable_template_mass": 188
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 177,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-27",
+      "structure_usable_template_mass": 175
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 379,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-29",
+      "structure_usable_template_mass": 375
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 133,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-07-30",
+      "structure_usable_template_mass": 131
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 82,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-02",
+      "structure_usable_template_mass": 81
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 809,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-03",
+      "structure_usable_template_mass": 800
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 195,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-05",
+      "structure_usable_template_mass": 193
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 415,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-07",
+      "structure_usable_template_mass": 410
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 297,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-08",
+      "structure_usable_template_mass": 294
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 209,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-10",
+      "structure_usable_template_mass": 206
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 427,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-11",
+      "structure_usable_template_mass": 422
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 644,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-13",
+      "structure_usable_template_mass": 637
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 188,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-14",
+      "structure_usable_template_mass": 186
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 335,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-15",
+      "structure_usable_template_mass": 331
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 358,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-16",
+      "structure_usable_template_mass": 354
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 567,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO1",
+      "station_day_id": "DBO1:2018-08-17",
+      "structure_usable_template_mass": 561
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 636,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-20",
+      "structure_usable_template_mass": 629
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1310,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-21",
+      "structure_usable_template_mass": 1296
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 441,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-22",
+      "structure_usable_template_mass": 436
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1398,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-23",
+      "structure_usable_template_mass": 1384
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 1568,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-24",
+      "structure_usable_template_mass": 1552
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1731,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-25",
+      "structure_usable_template_mass": 1713
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1002,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-26",
+      "structure_usable_template_mass": 991
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1363,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-27",
+      "structure_usable_template_mass": 1349
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 982,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-28",
+      "structure_usable_template_mass": 972
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 204,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-29",
+      "structure_usable_template_mass": 201
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "unseen_scale_same_cities",
+      "order_usable_template_mass": 1341,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-30",
+      "structure_usable_template_mass": 1327
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 1247,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-07-31",
+      "structure_usable_template_mass": 1234
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1444,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-01",
+      "structure_usable_template_mass": 1429
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 747,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-02",
+      "structure_usable_template_mass": 739
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1663,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-03",
+      "structure_usable_template_mass": 1646
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 543,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-04",
+      "structure_usable_template_mass": 537
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1008,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-05",
+      "structure_usable_template_mass": 997
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1881,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-06",
+      "structure_usable_template_mass": 1862
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1411,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-07",
+      "structure_usable_template_mass": 1396
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1593,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-08",
+      "structure_usable_template_mass": 1577
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2716,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-09",
+      "structure_usable_template_mass": 2688
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1296,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-10",
+      "structure_usable_template_mass": 1283
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1522,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-11",
+      "structure_usable_template_mass": 1506
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1193,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-12",
+      "structure_usable_template_mass": 1181
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2053,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-13",
+      "structure_usable_template_mass": 2032
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1772,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-14",
+      "structure_usable_template_mass": 1754
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2006,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-15",
+      "structure_usable_template_mass": 1985
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2479,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-16",
+      "structure_usable_template_mass": 2454
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 2576,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO2",
+      "station_day_id": "DBO2:2018-08-17",
+      "structure_usable_template_mass": 2550
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1300,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-20",
+      "structure_usable_template_mass": 1287
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2050,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-21",
+      "structure_usable_template_mass": 2029
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1370,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-22",
+      "structure_usable_template_mass": 1356
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2893,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-23",
+      "structure_usable_template_mass": 2864
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 930,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-24",
+      "structure_usable_template_mass": 920
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2488,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-25",
+      "structure_usable_template_mass": 2463
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 1910,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-26",
+      "structure_usable_template_mass": 1890
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2900,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-27",
+      "structure_usable_template_mass": 2871
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 3104,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-28",
+      "structure_usable_template_mass": 3072
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1925,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-29",
+      "structure_usable_template_mass": 1905
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2608,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-30",
+      "structure_usable_template_mass": 2581
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4283,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-07-31",
+      "structure_usable_template_mass": 4240
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3078,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-01",
+      "structure_usable_template_mass": 3047
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3120,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-02",
+      "structure_usable_template_mass": 3088
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 4310,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-03",
+      "structure_usable_template_mass": 4266
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 2282,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-04",
+      "structure_usable_template_mass": 2259
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 3073,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-05",
+      "structure_usable_template_mass": 3042
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 3431,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-06",
+      "structure_usable_template_mass": 3396
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4249,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-07",
+      "structure_usable_template_mass": 4206
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2507,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-08",
+      "structure_usable_template_mass": 2481
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3987,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-09",
+      "structure_usable_template_mass": 3947
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 4377,
+      "pool": "GEN-EVAL",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-10",
+      "structure_usable_template_mass": 4333
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1830,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-11",
+      "structure_usable_template_mass": 1811
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2208,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-12",
+      "structure_usable_template_mass": 2185
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 5137,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-13",
+      "structure_usable_template_mass": 5085
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3972,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-14",
+      "structure_usable_template_mass": 3932
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 5380,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-15",
+      "structure_usable_template_mass": 5326
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4839,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-16",
+      "structure_usable_template_mass": 4790
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4804,
+      "pool": "GEN-TRAIN",
+      "station_code": "DBO3",
+      "station_day_id": "DBO3:2018-08-17",
+      "structure_usable_template_mass": 4755
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 342,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-19",
+      "structure_usable_template_mass": 338
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 319,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-20",
+      "structure_usable_template_mass": 315
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 817,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-21",
+      "structure_usable_template_mass": 808
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 869,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-22",
+      "structure_usable_template_mass": 860
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 923,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-24",
+      "structure_usable_template_mass": 913
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 586,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-25",
+      "structure_usable_template_mass": 580
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 362,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-26",
+      "structure_usable_template_mass": 358
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 683,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-27",
+      "structure_usable_template_mass": 676
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1280,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-28",
+      "structure_usable_template_mass": 1267
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 526,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-30",
+      "structure_usable_template_mass": 520
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 718,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-07-31",
+      "structure_usable_template_mass": 710
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 736,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-01",
+      "structure_usable_template_mass": 728
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 443,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-02",
+      "structure_usable_template_mass": 438
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1716,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-03",
+      "structure_usable_template_mass": 1698
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1427,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-04",
+      "structure_usable_template_mass": 1412
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 801,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-05",
+      "structure_usable_template_mass": 793
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 653,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-06",
+      "structure_usable_template_mass": 646
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 999,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-07",
+      "structure_usable_template_mass": 989
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 797,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-08",
+      "structure_usable_template_mass": 789
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 385,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-09",
+      "structure_usable_template_mass": 381
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1484,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-10",
+      "structure_usable_template_mass": 1469
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1010,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-11",
+      "structure_usable_template_mass": 999
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1184,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-12",
+      "structure_usable_template_mass": 1172
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 682,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-13",
+      "structure_usable_template_mass": 675
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 1433,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-14",
+      "structure_usable_template_mass": 1418
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1621,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-15",
+      "structure_usable_template_mass": 1604
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 666,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-16",
+      "structure_usable_template_mass": 659
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 736,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH1",
+      "station_day_id": "DCH1:2018-08-17",
+      "structure_usable_template_mass": 728
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 156,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-19",
+      "structure_usable_template_mass": 154
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1658,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-20",
+      "structure_usable_template_mass": 1641
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 740,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-21",
+      "structure_usable_template_mass": 732
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 620,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-22",
+      "structure_usable_template_mass": 613
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1018,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-23",
+      "structure_usable_template_mass": 1007
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1291,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-24",
+      "structure_usable_template_mass": 1278
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1847,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-25",
+      "structure_usable_template_mass": 1828
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1362,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-26",
+      "structure_usable_template_mass": 1348
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1157,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-27",
+      "structure_usable_template_mass": 1145
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1782,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-28",
+      "structure_usable_template_mass": 1764
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 180,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-30",
+      "structure_usable_template_mass": 178
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1591,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-07-31",
+      "structure_usable_template_mass": 1575
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 140,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-01",
+      "structure_usable_template_mass": 138
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 292,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-02",
+      "structure_usable_template_mass": 289
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 498,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-03",
+      "structure_usable_template_mass": 493
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 476,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-04",
+      "structure_usable_template_mass": 471
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1216,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-05",
+      "structure_usable_template_mass": 1203
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 385,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-06",
+      "structure_usable_template_mass": 381
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 953,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-07",
+      "structure_usable_template_mass": 943
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 552,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-08",
+      "structure_usable_template_mass": 546
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 496,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-09",
+      "structure_usable_template_mass": 491
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1115,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-10",
+      "structure_usable_template_mass": 1103
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 820,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-11",
+      "structure_usable_template_mass": 811
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 835,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-12",
+      "structure_usable_template_mass": 826
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 348,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-13",
+      "structure_usable_template_mass": 344
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 481,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-14",
+      "structure_usable_template_mass": 476
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 469,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-15",
+      "structure_usable_template_mass": 464
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 908,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-16",
+      "structure_usable_template_mass": 898
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 365,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DCH2",
+      "station_day_id": "DCH2:2018-08-17",
+      "structure_usable_template_mass": 361
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 200,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-19",
+      "structure_usable_template_mass": 198
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 866,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-20",
+      "structure_usable_template_mass": 857
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 546,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-21",
+      "structure_usable_template_mass": 540
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2235,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-22",
+      "structure_usable_template_mass": 2212
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2603,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-23",
+      "structure_usable_template_mass": 2576
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2123,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-24",
+      "structure_usable_template_mass": 2101
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3563,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-25",
+      "structure_usable_template_mass": 3527
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 938,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-26",
+      "structure_usable_template_mass": 928
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2447,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-27",
+      "structure_usable_template_mass": 2422
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 789,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-28",
+      "structure_usable_template_mass": 781
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1701,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-29",
+      "structure_usable_template_mass": 1685
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 2618,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-30",
+      "structure_usable_template_mass": 2591
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 2477,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-07-31",
+      "structure_usable_template_mass": 2452
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 1584,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-01",
+      "structure_usable_template_mass": 1568
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1142,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-02",
+      "structure_usable_template_mass": 1130
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1656,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-03",
+      "structure_usable_template_mass": 1639
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 1091,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-04",
+      "structure_usable_template_mass": 1080
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1466,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-05",
+      "structure_usable_template_mass": 1451
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1800,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-06",
+      "structure_usable_template_mass": 1782
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1785,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-07",
+      "structure_usable_template_mass": 1767
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2347,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-08",
+      "structure_usable_template_mass": 2323
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 947,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-09",
+      "structure_usable_template_mass": 937
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 749,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-10",
+      "structure_usable_template_mass": 741
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1086,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-11",
+      "structure_usable_template_mass": 1075
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 866,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-12",
+      "structure_usable_template_mass": 857
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1075,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-13",
+      "structure_usable_template_mass": 1064
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3449,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-14",
+      "structure_usable_template_mass": 3414
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1293,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-15",
+      "structure_usable_template_mass": 1280
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2613,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-16",
+      "structure_usable_template_mass": 2586
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1853,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH3",
+      "station_day_id": "DCH3:2018-08-17",
+      "structure_usable_template_mass": 1834
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 364,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-20",
+      "structure_usable_template_mass": 360
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 158,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-22",
+      "structure_usable_template_mass": 156
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1954,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-23",
+      "structure_usable_template_mass": 1934
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2467,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-24",
+      "structure_usable_template_mass": 2442
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 518,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-25",
+      "structure_usable_template_mass": 512
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1455,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-26",
+      "structure_usable_template_mass": 1440
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2212,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-27",
+      "structure_usable_template_mass": 2189
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1762,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-28",
+      "structure_usable_template_mass": 1744
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 1169,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-29",
+      "structure_usable_template_mass": 1157
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1983,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-30",
+      "structure_usable_template_mass": 1963
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3845,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-07-31",
+      "structure_usable_template_mass": 3806
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2821,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-01",
+      "structure_usable_template_mass": 2792
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1140,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-02",
+      "structure_usable_template_mass": 1128
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3325,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-03",
+      "structure_usable_template_mass": 3291
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 179,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-04",
+      "structure_usable_template_mass": 177
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 1085,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-05",
+      "structure_usable_template_mass": 1074
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2300,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-06",
+      "structure_usable_template_mass": 2277
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2449,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-07",
+      "structure_usable_template_mass": 2424
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4224,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-08",
+      "structure_usable_template_mass": 4181
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3135,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-09",
+      "structure_usable_template_mass": 3103
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "unseen_scale_same_cities",
+      "order_usable_template_mass": 3641,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-10",
+      "structure_usable_template_mass": 3604
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1216,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-11",
+      "structure_usable_template_mass": 1203
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2230,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-12",
+      "structure_usable_template_mass": 2207
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3509,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-13",
+      "structure_usable_template_mass": 3473
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 4625,
+      "pool": "GEN-EVAL",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-14",
+      "structure_usable_template_mass": 4578
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3817,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-15",
+      "structure_usable_template_mass": 3778
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3406,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-16",
+      "structure_usable_template_mass": 3371
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2561,
+      "pool": "GEN-TRAIN",
+      "station_code": "DCH4",
+      "station_day_id": "DCH4:2018-08-17",
+      "structure_usable_template_mass": 2535
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 140,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-19",
+      "structure_usable_template_mass": 138
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 377,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-20",
+      "structure_usable_template_mass": 373
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1255,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-21",
+      "structure_usable_template_mass": 1242
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 1948,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-22",
+      "structure_usable_template_mass": 1928
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 256,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-23",
+      "structure_usable_template_mass": 253
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 997,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-24",
+      "structure_usable_template_mass": 987
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1917,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-25",
+      "structure_usable_template_mass": 1897
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1823,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-26",
+      "structure_usable_template_mass": 1804
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1063,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-27",
+      "structure_usable_template_mass": 1052
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1195,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-28",
+      "structure_usable_template_mass": 1183
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 826,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-29",
+      "structure_usable_template_mass": 817
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 361,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-30",
+      "structure_usable_template_mass": 357
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1728,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-07-31",
+      "structure_usable_template_mass": 1710
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 109,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-01",
+      "structure_usable_template_mass": 107
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 232,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-02",
+      "structure_usable_template_mass": 229
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 900,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-03",
+      "structure_usable_template_mass": 891
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1659,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-04",
+      "structure_usable_template_mass": 1642
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1482,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-05",
+      "structure_usable_template_mass": 1467
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 512,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-06",
+      "structure_usable_template_mass": 506
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1713,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-07",
+      "structure_usable_template_mass": 1695
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 906,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-08",
+      "structure_usable_template_mass": 896
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1175,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-09",
+      "structure_usable_template_mass": 1163
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 513,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-10",
+      "structure_usable_template_mass": 507
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1090,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-11",
+      "structure_usable_template_mass": 1079
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1736,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-12",
+      "structure_usable_template_mass": 1718
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 776,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-13",
+      "structure_usable_template_mass": 768
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1840,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-14",
+      "structure_usable_template_mass": 1821
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 325,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-15",
+      "structure_usable_template_mass": 321
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 476,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-16",
+      "structure_usable_template_mass": 471
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 166,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA3",
+      "station_day_id": "DLA3:2018-08-17",
+      "structure_usable_template_mass": 164
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 152,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-19",
+      "structure_usable_template_mass": 150
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2520,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-20",
+      "structure_usable_template_mass": 2494
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 849,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-21",
+      "structure_usable_template_mass": 840
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 274,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-22",
+      "structure_usable_template_mass": 271
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 662,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-23",
+      "structure_usable_template_mass": 655
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1903,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-24",
+      "structure_usable_template_mass": 1883
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1430,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-25",
+      "structure_usable_template_mass": 1415
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1705,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-26",
+      "structure_usable_template_mass": 1687
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 448,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-27",
+      "structure_usable_template_mass": 443
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 463,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-28",
+      "structure_usable_template_mass": 458
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1058,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-29",
+      "structure_usable_template_mass": 1047
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 376,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-30",
+      "structure_usable_template_mass": 372
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 945,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-07-31",
+      "structure_usable_template_mass": 935
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 918,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-01",
+      "structure_usable_template_mass": 908
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 1126,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-02",
+      "structure_usable_template_mass": 1114
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "validation",
+      "order_usable_template_mass": 627,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-05",
+      "structure_usable_template_mass": 620
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 666,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-06",
+      "structure_usable_template_mass": 659
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 114,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-07",
+      "structure_usable_template_mass": 112
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 783,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-08",
+      "structure_usable_template_mass": 775
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1663,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-09",
+      "structure_usable_template_mass": 1646
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 178,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-10",
+      "structure_usable_template_mass": 176
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 986,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-11",
+      "structure_usable_template_mass": 976
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1319,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-12",
+      "structure_usable_template_mass": 1305
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 1555,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-13",
+      "structure_usable_template_mass": 1539
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1439,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-14",
+      "structure_usable_template_mass": 1424
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 1183,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-15",
+      "structure_usable_template_mass": 1171
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1577,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-16",
+      "structure_usable_template_mass": 1561
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 115,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA4",
+      "station_day_id": "DLA4:2018-08-17",
+      "structure_usable_template_mass": 113
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 326,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-19",
+      "structure_usable_template_mass": 322
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 188,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-20",
+      "structure_usable_template_mass": 186
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 567,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-21",
+      "structure_usable_template_mass": 561
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 363,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-22",
+      "structure_usable_template_mass": 359
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 387,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-23",
+      "structure_usable_template_mass": 383
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 530,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-24",
+      "structure_usable_template_mass": 524
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1260,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-25",
+      "structure_usable_template_mass": 1247
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "unseen_scale_same_cities",
+      "order_usable_template_mass": 208,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-26",
+      "structure_usable_template_mass": 205
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 201,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-28",
+      "structure_usable_template_mass": 199
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 142,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-29",
+      "structure_usable_template_mass": 140
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 714,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-30",
+      "structure_usable_template_mass": 706
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1156,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-07-31",
+      "structure_usable_template_mass": 1144
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 524,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-01",
+      "structure_usable_template_mass": 518
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 354,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-02",
+      "structure_usable_template_mass": 350
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 668,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-03",
+      "structure_usable_template_mass": 661
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 324,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-05",
+      "structure_usable_template_mass": 320
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1731,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-07",
+      "structure_usable_template_mass": 1713
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2062,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-08",
+      "structure_usable_template_mass": 2041
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2160,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-09",
+      "structure_usable_template_mass": 2138
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2449,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-10",
+      "structure_usable_template_mass": 2424
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1379,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-11",
+      "structure_usable_template_mass": 1365
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1065,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-12",
+      "structure_usable_template_mass": 1054
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1216,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-13",
+      "structure_usable_template_mass": 1203
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2153,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-14",
+      "structure_usable_template_mass": 2131
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1133,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-15",
+      "structure_usable_template_mass": 1121
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1516,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-16",
+      "structure_usable_template_mass": 1500
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 966,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA5",
+      "station_day_id": "DLA5:2018-08-17",
+      "structure_usable_template_mass": 956
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1182,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-19",
+      "structure_usable_template_mass": 1170
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 7816,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-20",
+      "structure_usable_template_mass": 7737
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 5303,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-21",
+      "structure_usable_template_mass": 5249
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "validation",
+      "order_usable_template_mass": 4120,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-22",
+      "structure_usable_template_mass": 4078
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4104,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-23",
+      "structure_usable_template_mass": 4062
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 5782,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-24",
+      "structure_usable_template_mass": 5724
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 5717,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-25",
+      "structure_usable_template_mass": 5659
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 7446,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-26",
+      "structure_usable_template_mass": 7371
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 6082,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-27",
+      "structure_usable_template_mass": 6021
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 4901,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-28",
+      "structure_usable_template_mass": 4852
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 3965,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-29",
+      "structure_usable_template_mass": 3925
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4791,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-30",
+      "structure_usable_template_mass": 4743
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 5732,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-07-31",
+      "structure_usable_template_mass": 5674
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 6451,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-01",
+      "structure_usable_template_mass": 6386
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "validation",
+      "order_usable_template_mass": 7741,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-02",
+      "structure_usable_template_mass": 7663
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 8594,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-03",
+      "structure_usable_template_mass": 8508
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 5728,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-04",
+      "structure_usable_template_mass": 5670
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 4455,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-05",
+      "structure_usable_template_mass": 4410
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4324,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-06",
+      "structure_usable_template_mass": 4280
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 7063,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-07",
+      "structure_usable_template_mass": 6992
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 5976,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-08",
+      "structure_usable_template_mass": 5916
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 6139,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-09",
+      "structure_usable_template_mass": 6077
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 6051,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-10",
+      "structure_usable_template_mass": 5990
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 4084,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-11",
+      "structure_usable_template_mass": 4043
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "unseen_scale_same_cities",
+      "order_usable_template_mass": 6120,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-12",
+      "structure_usable_template_mass": 6058
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 4064,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-13",
+      "structure_usable_template_mass": 4023
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "unseen_scale_same_cities",
+      "order_usable_template_mass": 8630,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-14",
+      "structure_usable_template_mass": 8543
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 7589,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-15",
+      "structure_usable_template_mass": 7514
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 6863,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-16",
+      "structure_usable_template_mass": 6794
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 6925,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA7",
+      "station_day_id": "DLA7:2018-08-17",
+      "structure_usable_template_mass": 6855
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1161,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-19",
+      "structure_usable_template_mass": 1149
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2379,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-20",
+      "structure_usable_template_mass": 2355
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2029,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-21",
+      "structure_usable_template_mass": 2008
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2122,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-22",
+      "structure_usable_template_mass": 2100
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2787,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-23",
+      "structure_usable_template_mass": 2759
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2858,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-24",
+      "structure_usable_template_mass": 2829
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2764,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-25",
+      "structure_usable_template_mass": 2736
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2230,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-26",
+      "structure_usable_template_mass": 2207
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2703,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-27",
+      "structure_usable_template_mass": 2676
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 3392,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-28",
+      "structure_usable_template_mass": 3358
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "validation",
+      "order_usable_template_mass": 1964,
+      "pool": "GEN-EVAL",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-29",
+      "structure_usable_template_mass": 1944
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1228,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-30",
+      "structure_usable_template_mass": 1215
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2078,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-07-31",
+      "structure_usable_template_mass": 2057
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2066,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-01",
+      "structure_usable_template_mass": 2045
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1810,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-02",
+      "structure_usable_template_mass": 1791
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1509,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-03",
+      "structure_usable_template_mass": 1493
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1041,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-04",
+      "structure_usable_template_mass": 1030
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2121,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-05",
+      "structure_usable_template_mass": 2099
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1234,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-07",
+      "structure_usable_template_mass": 1221
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2116,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-08",
+      "structure_usable_template_mass": 2094
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1699,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-09",
+      "structure_usable_template_mass": 1682
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1198,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-10",
+      "structure_usable_template_mass": 1186
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2280,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-11",
+      "structure_usable_template_mass": 2257
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1321,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-12",
+      "structure_usable_template_mass": 1307
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1563,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-13",
+      "structure_usable_template_mass": 1547
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2244,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-14",
+      "structure_usable_template_mass": 2221
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1784,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-15",
+      "structure_usable_template_mass": 1766
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2442,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-16",
+      "structure_usable_template_mass": 2417
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1236,
+      "pool": "GEN-TRAIN",
+      "station_code": "DLA8",
+      "station_day_id": "DLA8:2018-08-17",
+      "structure_usable_template_mass": 1223
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 615,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-19",
+      "structure_usable_template_mass": 608
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2085,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-20",
+      "structure_usable_template_mass": 2064
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2759,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-21",
+      "structure_usable_template_mass": 2731
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1670,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-22",
+      "structure_usable_template_mass": 1653
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 3154,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-23",
+      "structure_usable_template_mass": 3122
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 3930,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-24",
+      "structure_usable_template_mass": 3890
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2536,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-25",
+      "structure_usable_template_mass": 2510
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1503,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-26",
+      "structure_usable_template_mass": 1487
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1242,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-27",
+      "structure_usable_template_mass": 1229
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1582,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-28",
+      "structure_usable_template_mass": 1566
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1307,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-29",
+      "structure_usable_template_mass": 1293
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1595,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-30",
+      "structure_usable_template_mass": 1579
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2483,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-07-31",
+      "structure_usable_template_mass": 2458
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1559,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-01",
+      "structure_usable_template_mass": 1543
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 668,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-02",
+      "structure_usable_template_mass": 661
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 283,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-03",
+      "structure_usable_template_mass": 280
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2351,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-04",
+      "structure_usable_template_mass": 2327
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 3358,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-05",
+      "structure_usable_template_mass": 3324
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2319,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-06",
+      "structure_usable_template_mass": 2295
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1842,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-07",
+      "structure_usable_template_mass": 1823
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2414,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-08",
+      "structure_usable_template_mass": 2389
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1546,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-09",
+      "structure_usable_template_mass": 1530
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2026,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-10",
+      "structure_usable_template_mass": 2005
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 4977,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-11",
+      "structure_usable_template_mass": 4927
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1707,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-12",
+      "structure_usable_template_mass": 1689
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 4148,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-13",
+      "structure_usable_template_mass": 4106
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 5506,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-14",
+      "structure_usable_template_mass": 5450
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 4547,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-15",
+      "structure_usable_template_mass": 4501
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2435,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-16",
+      "structure_usable_template_mass": 2410
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 4093,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-17",
+      "structure_usable_template_mass": 4052
+    },
+    {
+      "date": "2018-08-18",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 4895,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-18",
+      "structure_usable_template_mass": 4846
+    },
+    {
+      "date": "2018-08-19",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1480,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-19",
+      "structure_usable_template_mass": 1465
+    },
+    {
+      "date": "2018-08-20",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 1797,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-20",
+      "structure_usable_template_mass": 1779
+    },
+    {
+      "date": "2018-08-21",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2903,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-21",
+      "structure_usable_template_mass": 2873
+    },
+    {
+      "date": "2018-08-22",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 3151,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-22",
+      "structure_usable_template_mass": 3119
+    },
+    {
+      "date": "2018-08-23",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2796,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-23",
+      "structure_usable_template_mass": 2768
+    },
+    {
+      "date": "2018-08-24",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 3559,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-24",
+      "structure_usable_template_mass": 3523
+    },
+    {
+      "date": "2018-08-25",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 2333,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-25",
+      "structure_usable_template_mass": 2309
+    },
+    {
+      "date": "2018-08-26",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 3023,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DLA9",
+      "station_day_id": "DLA9:2018-08-26",
+      "structure_usable_template_mass": 2992
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 58,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-19",
+      "structure_usable_template_mass": 57
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 529,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-21",
+      "structure_usable_template_mass": 523
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 161,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-22",
+      "structure_usable_template_mass": 159
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 116,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-23",
+      "structure_usable_template_mass": 114
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 342,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-24",
+      "structure_usable_template_mass": 338
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 410,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-25",
+      "structure_usable_template_mass": 405
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 360,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-26",
+      "structure_usable_template_mass": 356
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 198,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-27",
+      "structure_usable_template_mass": 196
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 348,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-28",
+      "structure_usable_template_mass": 344
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 389,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-29",
+      "structure_usable_template_mass": 385
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 552,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-30",
+      "structure_usable_template_mass": 546
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 412,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-07-31",
+      "structure_usable_template_mass": 407
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 409,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-01",
+      "structure_usable_template_mass": 404
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 114,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-02",
+      "structure_usable_template_mass": 112
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 442,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-03",
+      "structure_usable_template_mass": 437
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 551,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-04",
+      "structure_usable_template_mass": 545
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 431,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-05",
+      "structure_usable_template_mass": 426
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 310,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-06",
+      "structure_usable_template_mass": 306
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 521,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-07",
+      "structure_usable_template_mass": 515
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 437,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-08",
+      "structure_usable_template_mass": 432
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 659,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-09",
+      "structure_usable_template_mass": 652
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 98,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-10",
+      "structure_usable_template_mass": 97
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 183,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-11",
+      "structure_usable_template_mass": 181
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 428,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-12",
+      "structure_usable_template_mass": 423
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 238,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-13",
+      "structure_usable_template_mass": 235
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 252,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-14",
+      "structure_usable_template_mass": 249
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 460,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-15",
+      "structure_usable_template_mass": 455
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 420,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-16",
+      "structure_usable_template_mass": 415
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 173,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-17",
+      "structure_usable_template_mass": 171
+    },
+    {
+      "date": "2018-08-18",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 82,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-18",
+      "structure_usable_template_mass": 81
+    },
+    {
+      "date": "2018-08-19",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 699,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-19",
+      "structure_usable_template_mass": 692
+    },
+    {
+      "date": "2018-08-20",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 86,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-20",
+      "structure_usable_template_mass": 85
+    },
+    {
+      "date": "2018-08-21",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 190,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-21",
+      "structure_usable_template_mass": 188
+    },
+    {
+      "date": "2018-08-22",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 381,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-22",
+      "structure_usable_template_mass": 377
+    },
+    {
+      "date": "2018-08-23",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 386,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-23",
+      "structure_usable_template_mass": 382
+    },
+    {
+      "date": "2018-08-24",
+      "day_type": "weekday",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 412,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-24",
+      "structure_usable_template_mass": 407
+    },
+    {
+      "date": "2018-08-25",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 476,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-25",
+      "structure_usable_template_mass": 471
+    },
+    {
+      "date": "2018-08-26",
+      "day_type": "weekend",
+      "generation_track": "metric_only",
+      "order_usable_template_mass": 249,
+      "pool": "METRIC-HOLDOUT",
+      "station_code": "DSE2",
+      "station_day_id": "DSE2:2018-08-26",
+      "structure_usable_template_mass": 246
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 257,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-19",
+      "structure_usable_template_mass": 254
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "unseen_scale_same_cities",
+      "order_usable_template_mass": 609,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-20",
+      "structure_usable_template_mass": 602
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 755,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-21",
+      "structure_usable_template_mass": 747
+    },
+    {
+      "date": "2018-07-22",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 169,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-22",
+      "structure_usable_template_mass": 167
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 489,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-23",
+      "structure_usable_template_mass": 484
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 759,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-24",
+      "structure_usable_template_mass": 751
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2262,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-25",
+      "structure_usable_template_mass": 2239
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1516,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-26",
+      "structure_usable_template_mass": 1500
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1623,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-27",
+      "structure_usable_template_mass": 1606
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 739,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-28",
+      "structure_usable_template_mass": 731
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 743,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-29",
+      "structure_usable_template_mass": 735
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 937,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-30",
+      "structure_usable_template_mass": 927
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2021,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-07-31",
+      "structure_usable_template_mass": 2000
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1845,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-01",
+      "structure_usable_template_mass": 1826
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1721,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-02",
+      "structure_usable_template_mass": 1703
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2049,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-03",
+      "structure_usable_template_mass": 2028
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 1976,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-04",
+      "structure_usable_template_mass": 1956
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1268,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-05",
+      "structure_usable_template_mass": 1255
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1838,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-06",
+      "structure_usable_template_mass": 1819
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1521,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-07",
+      "structure_usable_template_mass": 1505
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 2132,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-08",
+      "structure_usable_template_mass": 2110
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 1558,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-09",
+      "structure_usable_template_mass": 1542
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1799,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-10",
+      "structure_usable_template_mass": 1781
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1821,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-11",
+      "structure_usable_template_mass": 1802
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1484,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-12",
+      "structure_usable_template_mass": 1469
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2352,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-13",
+      "structure_usable_template_mass": 2328
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2093,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-14",
+      "structure_usable_template_mass": 2072
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1749,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-15",
+      "structure_usable_template_mass": 1731
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2534,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-16",
+      "structure_usable_template_mass": 2509
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1956,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-17",
+      "structure_usable_template_mass": 1937
+    },
+    {
+      "date": "2018-08-18",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2079,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-18",
+      "structure_usable_template_mass": 2058
+    },
+    {
+      "date": "2018-08-19",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 941,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-19",
+      "structure_usable_template_mass": 931
+    },
+    {
+      "date": "2018-08-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1399,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-20",
+      "structure_usable_template_mass": 1385
+    },
+    {
+      "date": "2018-08-21",
+      "day_type": "weekday",
+      "generation_track": "test1_new_seed",
+      "order_usable_template_mass": 2411,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-21",
+      "structure_usable_template_mass": 2386
+    },
+    {
+      "date": "2018-08-22",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2760,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-22",
+      "structure_usable_template_mass": 2732
+    },
+    {
+      "date": "2018-08-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2983,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-23",
+      "structure_usable_template_mass": 2953
+    },
+    {
+      "date": "2018-08-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3054,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-24",
+      "structure_usable_template_mass": 3023
+    },
+    {
+      "date": "2018-08-25",
+      "day_type": "weekend",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 2034,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-25",
+      "structure_usable_template_mass": 2013
+    },
+    {
+      "date": "2018-08-26",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1465,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE4",
+      "station_day_id": "DSE4:2018-08-26",
+      "structure_usable_template_mass": 1450
+    },
+    {
+      "date": "2018-07-19",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 376,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-19",
+      "structure_usable_template_mass": 372
+    },
+    {
+      "date": "2018-07-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 936,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-20",
+      "structure_usable_template_mass": 926
+    },
+    {
+      "date": "2018-07-21",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 674,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-21",
+      "structure_usable_template_mass": 667
+    },
+    {
+      "date": "2018-07-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 350,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-23",
+      "structure_usable_template_mass": 346
+    },
+    {
+      "date": "2018-07-24",
+      "day_type": "weekday",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 1219,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-24",
+      "structure_usable_template_mass": 1206
+    },
+    {
+      "date": "2018-07-25",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2719,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-25",
+      "structure_usable_template_mass": 2691
+    },
+    {
+      "date": "2018-07-26",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1693,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-26",
+      "structure_usable_template_mass": 1676
+    },
+    {
+      "date": "2018-07-27",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1487,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-27",
+      "structure_usable_template_mass": 1472
+    },
+    {
+      "date": "2018-07-28",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 950,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-28",
+      "structure_usable_template_mass": 940
+    },
+    {
+      "date": "2018-07-29",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1744,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-29",
+      "structure_usable_template_mass": 1726
+    },
+    {
+      "date": "2018-07-30",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1302,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-30",
+      "structure_usable_template_mass": 1288
+    },
+    {
+      "date": "2018-07-31",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1588,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-07-31",
+      "structure_usable_template_mass": 1572
+    },
+    {
+      "date": "2018-08-01",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1800,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-01",
+      "structure_usable_template_mass": 1782
+    },
+    {
+      "date": "2018-08-02",
+      "day_type": "weekday",
+      "generation_track": "unseen_scale_same_cities",
+      "order_usable_template_mass": 1705,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-02",
+      "structure_usable_template_mass": 1687
+    },
+    {
+      "date": "2018-08-03",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1266,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-03",
+      "structure_usable_template_mass": 1253
+    },
+    {
+      "date": "2018-08-04",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2024,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-04",
+      "structure_usable_template_mass": 2003
+    },
+    {
+      "date": "2018-08-05",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 636,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-05",
+      "structure_usable_template_mass": 629
+    },
+    {
+      "date": "2018-08-06",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 1169,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-06",
+      "structure_usable_template_mass": 1157
+    },
+    {
+      "date": "2018-08-07",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2188,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-07",
+      "structure_usable_template_mass": 2166
+    },
+    {
+      "date": "2018-08-08",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3466,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-08",
+      "structure_usable_template_mass": 3431
+    },
+    {
+      "date": "2018-08-09",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3149,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-09",
+      "structure_usable_template_mass": 3117
+    },
+    {
+      "date": "2018-08-10",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2559,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-10",
+      "structure_usable_template_mass": 2533
+    },
+    {
+      "date": "2018-08-11",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2342,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-11",
+      "structure_usable_template_mass": 2318
+    },
+    {
+      "date": "2018-08-12",
+      "day_type": "weekend",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 3069,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-12",
+      "structure_usable_template_mass": 3038
+    },
+    {
+      "date": "2018-08-13",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2268,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-13",
+      "structure_usable_template_mass": 2245
+    },
+    {
+      "date": "2018-08-14",
+      "day_type": "weekday",
+      "generation_track": "test3_heldout_city",
+      "order_usable_template_mass": 2173,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-14",
+      "structure_usable_template_mass": 2151
+    },
+    {
+      "date": "2018-08-15",
+      "day_type": "weekday",
+      "generation_track": "unseen_scale_same_cities",
+      "order_usable_template_mass": 3709,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-15",
+      "structure_usable_template_mass": 3671
+    },
+    {
+      "date": "2018-08-16",
+      "day_type": "weekday",
+      "generation_track": "test2_heldout_locations",
+      "order_usable_template_mass": 3553,
+      "pool": "GEN-EVAL",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-16",
+      "structure_usable_template_mass": 3517
+    },
+    {
+      "date": "2018-08-17",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2861,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-17",
+      "structure_usable_template_mass": 2832
+    },
+    {
+      "date": "2018-08-18",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 1237,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-18",
+      "structure_usable_template_mass": 1224
+    },
+    {
+      "date": "2018-08-19",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2485,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-19",
+      "structure_usable_template_mass": 2460
+    },
+    {
+      "date": "2018-08-20",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2132,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-20",
+      "structure_usable_template_mass": 2110
+    },
+    {
+      "date": "2018-08-21",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3032,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-21",
+      "structure_usable_template_mass": 3001
+    },
+    {
+      "date": "2018-08-22",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 2557,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-22",
+      "structure_usable_template_mass": 2531
+    },
+    {
+      "date": "2018-08-23",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3646,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-23",
+      "structure_usable_template_mass": 3609
+    },
+    {
+      "date": "2018-08-24",
+      "day_type": "weekday",
+      "generation_track": "train",
+      "order_usable_template_mass": 3604,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-24",
+      "structure_usable_template_mass": 3567
+    },
+    {
+      "date": "2018-08-25",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2239,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-25",
+      "structure_usable_template_mass": 2216
+    },
+    {
+      "date": "2018-08-26",
+      "day_type": "weekend",
+      "generation_track": "train",
+      "order_usable_template_mass": 2132,
+      "pool": "GEN-TRAIN",
+      "station_code": "DSE5",
+      "station_day_id": "DSE5:2018-08-26",
+      "structure_usable_template_mass": 2110
+    }
+  ],
+  "support": {
+    "GEN-EVAL": {
+      "by_day_type": {
+        "weekday": {
+          "same_station_order_composite_stations_ge_100": 12,
+          "same_station_order_composite_stations_ge_1000": 10,
+          "same_station_order_composite_stations_ge_2000": 9,
+          "same_station_order_composite_stations_ge_500": 10,
+          "same_station_structure_composite_stations_ge_100": 12,
+          "same_station_structure_composite_stations_ge_1000": 10,
+          "same_station_structure_composite_stations_ge_2000": 9,
+          "same_station_structure_composite_stations_ge_500": 10,
+          "single_order_days_ge_100": 41,
+          "single_order_days_ge_1000": 31,
+          "single_order_days_ge_2000": 18,
+          "single_order_days_ge_500": 38,
+          "single_structure_days_ge_100": 41,
+          "single_structure_days_ge_1000": 31,
+          "single_structure_days_ge_2000": 18,
+          "single_structure_days_ge_500": 38,
+          "station_day_count": 41,
+          "usable_template_mass": 102848
+        },
+        "weekend": {
+          "same_station_order_composite_stations_ge_100": 10,
+          "same_station_order_composite_stations_ge_1000": 8,
+          "same_station_order_composite_stations_ge_2000": 5,
+          "same_station_order_composite_stations_ge_500": 9,
+          "same_station_structure_composite_stations_ge_100": 10,
+          "same_station_structure_composite_stations_ge_1000": 8,
+          "same_station_structure_composite_stations_ge_2000": 5,
+          "same_station_structure_composite_stations_ge_500": 9,
+          "single_order_days_ge_100": 16,
+          "single_order_days_ge_1000": 12,
+          "single_order_days_ge_2000": 6,
+          "single_order_days_ge_500": 14,
+          "single_structure_days_ge_100": 16,
+          "single_structure_days_ge_1000": 12,
+          "single_structure_days_ge_2000": 6,
+          "single_structure_days_ge_500": 14,
+          "station_day_count": 16,
+          "usable_template_mass": 31911
+        }
+      },
+      "station_count": 14,
+      "station_day_count": 57,
+      "support_mass_fraction": 0.15000038958538098,
+      "usable_template_mass": 134759
+    },
+    "GEN-TRAIN": {
+      "by_day_type": {
+        "weekday": {
+          "same_station_order_composite_stations_ge_100": 14,
+          "same_station_order_composite_stations_ge_1000": 14,
+          "same_station_order_composite_stations_ge_2000": 14,
+          "same_station_order_composite_stations_ge_500": 14,
+          "same_station_structure_composite_stations_ge_100": 14,
+          "same_station_structure_composite_stations_ge_1000": 14,
+          "same_station_structure_composite_stations_ge_2000": 14,
+          "same_station_structure_composite_stations_ge_500": 14,
+          "single_order_days_ge_100": 262,
+          "single_order_days_ge_1000": 178,
+          "single_order_days_ge_2000": 92,
+          "single_order_days_ge_500": 219,
+          "single_structure_days_ge_100": 262,
+          "single_structure_days_ge_1000": 176,
+          "single_structure_days_ge_2000": 91,
+          "single_structure_days_ge_500": 219,
+          "station_day_count": 263,
+          "usable_template_mass": 490370
+        },
+        "weekend": {
+          "same_station_order_composite_stations_ge_100": 14,
+          "same_station_order_composite_stations_ge_1000": 14,
+          "same_station_order_composite_stations_ge_2000": 13,
+          "same_station_order_composite_stations_ge_500": 14,
+          "same_station_structure_composite_stations_ge_100": 14,
+          "same_station_structure_composite_stations_ge_1000": 14,
+          "same_station_structure_composite_stations_ge_2000": 13,
+          "same_station_structure_composite_stations_ge_500": 14,
+          "single_order_days_ge_100": 95,
+          "single_order_days_ge_1000": 59,
+          "single_order_days_ge_2000": 22,
+          "single_order_days_ge_500": 82,
+          "single_structure_days_ge_100": 95,
+          "single_structure_days_ge_1000": 57,
+          "single_structure_days_ge_2000": 22,
+          "single_structure_days_ge_500": 82,
+          "station_day_count": 95,
+          "usable_template_mass": 138372
+        }
+      },
+      "station_count": 14,
+      "station_day_count": 358,
+      "support_mass_fraction": 0.6998534045866444,
+      "usable_template_mass": 628742
+    },
+    "METRIC-HOLDOUT": {
+      "by_day_type": {
+        "weekday": {
+          "same_station_order_composite_stations_ge_100": 3,
+          "same_station_order_composite_stations_ge_1000": 3,
+          "same_station_order_composite_stations_ge_2000": 3,
+          "same_station_order_composite_stations_ge_500": 3,
+          "same_station_structure_composite_stations_ge_100": 3,
+          "same_station_structure_composite_stations_ge_1000": 3,
+          "same_station_structure_composite_stations_ge_2000": 3,
+          "same_station_structure_composite_stations_ge_500": 3,
+          "single_order_days_ge_100": 72,
+          "single_order_days_ge_1000": 32,
+          "single_order_days_ge_2000": 17,
+          "single_order_days_ge_500": 40,
+          "single_structure_days_ge_100": 72,
+          "single_structure_days_ge_1000": 32,
+          "single_structure_days_ge_2000": 17,
+          "single_structure_days_ge_500": 40,
+          "station_day_count": 75,
+          "usable_template_mass": 92433
+        },
+        "weekend": {
+          "same_station_order_composite_stations_ge_100": 3,
+          "same_station_order_composite_stations_ge_1000": 3,
+          "same_station_order_composite_stations_ge_2000": 3,
+          "same_station_order_composite_stations_ge_500": 3,
+          "same_station_structure_composite_stations_ge_100": 3,
+          "same_station_structure_composite_stations_ge_1000": 3,
+          "same_station_structure_composite_stations_ge_2000": 3,
+          "same_station_structure_composite_stations_ge_500": 3,
+          "single_order_days_ge_100": 30,
+          "single_order_days_ge_1000": 14,
+          "single_order_days_ge_2000": 7,
+          "single_order_days_ge_500": 21,
+          "single_structure_days_ge_100": 30,
+          "single_structure_days_ge_1000": 14,
+          "single_structure_days_ge_2000": 7,
+          "single_structure_days_ge_500": 21,
+          "station_day_count": 31,
+          "usable_template_mass": 42457
+        }
+      },
+      "station_count": 3,
+      "station_day_count": 106,
+      "support_mass_fraction": 0.15014620582797467,
+      "usable_template_mass": 134890
+    }
+  },
+  "target_gen_eval_mass_by_day_type": {
+    "weekday": 102848,
+    "weekend": 31911
+  },
+  "target_support_mass_fraction": {
+    "GEN-EVAL": 0.15,
+    "GEN-TRAIN": 0.7,
+    "METRIC-HOLDOUT": 0.15
+  },
+  "track_to_pool": {
+    "test1_new_seed": "GEN-EVAL",
+    "test2_heldout_locations": "GEN-EVAL",
+    "test3_heldout_city": "GEN-EVAL",
+    "train": "GEN-TRAIN",
+    "unseen_scale_same_cities": "GEN-EVAL",
+    "validation": "GEN-EVAL"
+  }
+}

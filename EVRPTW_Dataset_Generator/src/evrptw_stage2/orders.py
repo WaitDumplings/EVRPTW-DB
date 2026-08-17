@@ -91,7 +91,9 @@ def _certificates_for_view(
         ),
         charging_power_kw=np.asarray(charging_power_kw, dtype=np.float32),
         battery_capacity_kwh=float(profile["energy"]["battery_capacity_kwh"]),
-        charging_efficiency=float(profile["charging"]["charging_efficiency"]),
+        charging_power_derating_factor=float(
+            profile["charging"]["charging_power_derating_factor"]
+        ),
     )
 
 
@@ -198,16 +200,38 @@ def match_amazon_order_templates(
             continue
         matched = templates.iloc[matching].reset_index(drop=True)
         matched.insert(0, "parent_customer_position", np.arange(customer_count, dtype=int))
+        def bias_summary(frame: pd.DataFrame) -> dict[str, Any]:
+            width = frame["tw_end_s"].to_numpy(dtype=float) - frame[
+                "tw_start_s"
+            ].to_numpy(dtype=float)
+            return {
+                "count": len(frame),
+                "tw_presence_rate": float(frame["tw_was_specified"].astype(bool).mean()),
+                "tw_width_s_mean": float(width.mean()),
+                "tw_width_s_p50": float(np.quantile(width, 0.50)),
+                "package_count_mean": float(frame["package_count"].mean()),
+                "package_count_p90": float(frame["package_count"].quantile(0.90)),
+                "demand_cm3_mean": float(frame["demand_cm3"].mean()),
+                "demand_cm3_p90": float(frame["demand_cm3"].quantile(0.90)),
+                "service_time_s_mean": float(frame["service_time_s"].mean()),
+                "service_time_s_p90": float(frame["service_time_s"].quantile(0.90)),
+            }
+
         return matched, {
             "policy": "amazon_stationday_covering_bipartite_matching_v1",
             "selected_order_source_mode": source["order_source_mode"],
             "selected_station_code": source["station_code"],
             "selected_station_day_ids": list(source["station_day_ids"]),
+            "generation_track": source.get("generation_track"),
             "source_attempt_count": source_rank + 1,
             "source_attempts": source_attempts,
             "customer_count": customer_count,
             "template_reuse": False,
             "hall_coverage_complete": True,
+            "matching_bias_audit": {
+                "eligible_pool": bias_summary(templates),
+                "matched_templates": bias_summary(matched),
+            },
         }
     raise ValueError(
         "ORDER_SOURCE_EXHAUSTED: no admissible single-day or same-station composite "
@@ -222,7 +246,7 @@ def _build_full_state_route_cache(
     running_time_energy_matrix_kwh: np.ndarray,
     charging_power_kw: np.ndarray,
     battery_capacity_kwh: float,
-    charging_efficiency: float,
+    charging_power_derating_factor: float,
 ) -> FullStateRouteCache:
     """Cache directed depot/CS travel under full-charge semantics.
 
@@ -246,7 +270,10 @@ def _build_full_state_route_cache(
         allowed = full_energy[:, destination] <= battery_capacity_kwh + 1e-9
         recharge_s = (
             full_energy[:, destination]
-            / (float(charging_power_kw[destination - 1]) * charging_efficiency)
+            / (
+                float(charging_power_kw[destination - 1])
+                * charging_power_derating_factor
+            )
             * 3600.0
         )
         transition_cost[allowed, destination] = (
@@ -278,160 +305,9 @@ def _build_full_state_route_cache(
     )
 
 
-def _truncated_normal(
-    rng: np.random.Generator,
-    *,
-    mean: float,
-    std: float,
-    low: float,
-    high: float,
-) -> float:
-    if std <= 0.0:
-        return float(np.clip(mean, low, high))
-    for _ in range(64):
-        value = float(rng.normal(mean, std))
-        if low <= value <= high:
-            return value
-    return float(np.clip(mean, low, high))
 
 
-def _sample_packages_and_volume(
-    customers: pd.DataFrame,
-    *,
-    day_type: str,
-    profile: Mapping[str, Any],
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    activation = profile["customer_activation"]
-    per_unit_probability = float(activation["per_unit_order_probability"][day_type])
-    units = pd.to_numeric(customers["residential_units"], errors="coerce").fillna(1)
-    units = units.clip(lower=1, upper=5000).to_numpy(dtype=np.int32)
-    ordering_units = rng.binomial(units, per_unit_probability).astype(np.int32)
-    zero = ordering_units == 0
-    while zero.any():
-        ordering_units[zero] = rng.binomial(units[zero], per_unit_probability)
-        zero = ordering_units == 0
 
-    package_cfg = profile["packages"]
-    extra_cfg = package_cfg["extra_packages_per_ordering_unit"]
-    mean_extra = float(extra_cfg["mean"])
-    dispersion = float(extra_cfg["dispersion"])
-    probability = dispersion / (dispersion + mean_extra)
-    extra = np.asarray(
-        [
-            rng.negative_binomial(dispersion * int(active_units), probability)
-            for active_units in ordering_units
-        ],
-        dtype=np.int32,
-    )
-    max_packages = int(package_cfg["max_packages_per_location"])
-    package_counts = np.clip(ordering_units + extra, 1, max_packages).astype(np.int32)
-
-    volume_cfg = package_cfg["per_package_volume_lognormal"]
-    median = float(volume_cfg["median_cm3"])
-    sigma = float(volume_cfg["sigma"])
-    maximum = float(volume_cfg["max_package_volume_cm3"])
-    demands = np.empty(len(customers), dtype=np.float32)
-    for index, count in enumerate(package_counts):
-        parcels = rng.lognormal(math_log(median), sigma, size=int(count))
-        demands[index] = float(np.clip(parcels, 1.0, maximum).sum())
-    return ordering_units, package_counts, demands
-
-
-def math_log(value: float) -> float:
-    if value <= 0.0:
-        raise ValueError("Lognormal median must be positive")
-    return float(np.log(value))
-
-
-def _sample_service_time(
-    demands_cm3: np.ndarray,
-    package_counts: np.ndarray,
-    *,
-    profile: Mapping[str, Any],
-    rng: np.random.Generator,
-) -> np.ndarray:
-    cfg = profile["service_time"]
-    deterministic = (
-        float(cfg["base_seconds"])
-        + float(cfg["beta_package_seconds"]) * package_counts.astype(float)
-        + float(cfg["beta_volume_seconds_per_cm3"]) * demands_cm3.astype(float)
-    )
-    sigma = float(cfg["lognormal_noise_sigma"])
-    noise = rng.lognormal(-0.5 * sigma**2, sigma, size=len(deterministic))
-    values = deterministic * noise
-    return np.clip(values, float(cfg["min_seconds"]), float(cfg["max_seconds"])).astype(
-        np.float32
-    )
-
-
-def _sample_time_windows(
-    *,
-    customer_count: int,
-    day_type: str,
-    operating_start_s: int,
-    operating_end_s: int,
-    profile: Mapping[str, Any],
-    rng: np.random.Generator,
-    presence_rate: float | None = None,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    cfg = profile["time_window"]
-    windows = np.column_stack(
-        [
-            np.full(customer_count, operating_start_s, dtype=np.float32),
-            np.full(customer_count, operating_end_s, dtype=np.float32),
-        ]
-    )
-    if presence_rate is None:
-        beta = cfg["presence_rate_beta"][day_type]
-        presence_rate = float(
-            rng.beta(float(beta["alpha"]), float(beta["beta"]))
-        )
-    rate = float(presence_rate)
-    chosen = np.flatnonzero(rng.random(customer_count) < rate)
-    if not len(chosen):
-        return windows, {
-            "sampled_presence_rate": rate,
-            "tight_window_count": 0,
-            "actual_tight_window_rate": 0.0,
-            "feasibility_clipping_applied": False,
-        }
-    strain_share = float(cfg["realistic_strain_share"][day_type])
-    labels = np.where(rng.random(len(chosen)) < strain_share, "strain", "loose")
-    for customer_index, label in zip(chosen, labels):
-        specification = cfg["profiles"][day_type][str(label)]
-        width_h = _truncated_normal(
-            rng,
-            mean=float(specification["width_mean_h"]),
-            std=float(specification["width_std_h"]),
-            low=float(specification["width_min_h"]),
-            high=float(specification["width_max_h"]),
-        )
-        center_h = float(
-            np.clip(
-                rng.normal(
-                    float(specification["center_mean_h"]),
-                    float(specification["center_std_h"]),
-                ),
-                operating_start_s / 3600.0,
-                operating_end_s / 3600.0,
-            )
-        )
-        start = center_h * 3600.0 - width_h * 1800.0
-        end = center_h * 3600.0 + width_h * 1800.0
-        # The operating horizon is the support of the time-window model.  Route
-        # feasibility is deliberately not used to move or shorten a sampled TW.
-        start = max(start, float(operating_start_s))
-        end = min(end, float(operating_end_s))
-        if end > start:
-            windows[customer_index] = (start, end)
-    tight = (windows[:, 0] > operating_start_s) | (windows[:, 1] < operating_end_s)
-    return windows, {
-        "sampled_presence_rate": rate,
-        "tight_window_count": int(tight.sum()),
-        "actual_tight_window_rate": float(tight.mean()),
-        "feasibility_clipping_applied": False,
-    }
 
 
 def _single_customer_certificates(
@@ -442,7 +318,7 @@ def _single_customer_certificates(
     specific_energy_consumption_kwh_per_km: float,
     charging_power_kw: np.ndarray,
     battery_capacity_kwh: float,
-    charging_efficiency: float,
+    charging_power_derating_factor: float,
 ) -> SingleCustomerCertificates:
     """Construct one-customer routes with optional full-charge CS visits.
 
@@ -470,8 +346,8 @@ def _single_customer_certificates(
         )
     if np.any(charging_power_kw <= 0.0):
         raise ValueError("All effective charging powers must be positive")
-    if not 0.0 < charging_efficiency <= 1.0:
-        raise ValueError("charging_efficiency must be in (0, 1]")
+    if not 0.0 < charging_power_derating_factor <= 1.0:
+        raise ValueError("charging_power_derating_factor must be in (0, 1]")
 
     customer_nodes = np.arange(1, 1 + customer_count, dtype=np.int32)
     charger_nodes = np.arange(1 + customer_count, terminal_count, dtype=np.int32)
@@ -481,7 +357,7 @@ def _single_customer_certificates(
         running_time_energy_matrix_kwh=running_time_energy_matrix_kwh,
         charging_power_kw=charging_power_kw,
         battery_capacity_kwh=battery_capacity_kwh,
-        charging_efficiency=charging_efficiency,
+        charging_power_derating_factor=charging_power_derating_factor,
     )
     full_nodes = cache.terminal_indices
 
@@ -549,7 +425,10 @@ def _single_customer_certificates(
             if allowed.any():
                 recharge_s = (
                     combined_energy[allowed]
-                    / (charging_power_kw[allowed].astype(float) * charging_efficiency)
+                    / (
+                        charging_power_kw[allowed].astype(float)
+                        * charging_power_derating_factor
+                    )
                     * 3600.0
                 )
                 via_cs = (
@@ -617,249 +496,6 @@ def _single_customer_certificates(
     )
 
 
-def build_view_attributes(
-    customer_rows: pd.DataFrame,
-    *,
-    day_type: str,
-    package_seed: int,
-    service_time_seed: int,
-    time_window_seed: int,
-    operating_start_s: int,
-    operating_end_s: int,
-    running_time_matrix_s: np.ndarray,
-    running_time_path_distance_matrix_km: np.ndarray,
-    charging_power_kw: np.ndarray,
-    profile: Mapping[str, Any],
-) -> ViewAttributes:
-    customer_count = len(customer_rows)
-    expected_terminal_count = int(running_time_matrix_s.shape[0])
-    if running_time_matrix_s.shape != (expected_terminal_count, expected_terminal_count):
-        raise ValueError("Running-time matrix must be square")
-    if running_time_path_distance_matrix_km.shape != running_time_matrix_s.shape:
-        raise ValueError("Running-time path-distance matrix shape mismatch")
-    if expected_terminal_count <= customer_count:
-        raise ValueError("View matrix must include one depot and its charging stations")
-
-    battery = float(profile["energy"]["battery_capacity_kwh"])
-    specific_energy = float(
-        profile["energy"]["specific_energy_consumption_kwh_per_km"]
-    )
-    charging_efficiency = float(profile["charging"]["charging_efficiency"])
-    certificates = _single_customer_certificates(
-        customer_count=customer_count,
-        running_time_matrix_s=running_time_matrix_s,
-        running_time_path_distance_matrix_km=running_time_path_distance_matrix_km,
-        specific_energy_consumption_kwh_per_km=specific_energy,
-        charging_power_kw=np.asarray(charging_power_kw, dtype=np.float32),
-        battery_capacity_kwh=battery,
-        charging_efficiency=charging_efficiency,
-    )
-    feasible_arrival_time = float(operating_start_s) + certificates.arrival_elapsed_s
-    route_energy_feasible = np.isfinite(certificates.arrival_elapsed_s) & np.isfinite(
-        certificates.return_duration_s
-    )
-    minimum_service = float(profile["service_time"]["min_seconds"])
-    structural_time_feasible = (
-        feasible_arrival_time
-        + minimum_service
-        + certificates.return_duration_s
-        <= float(operating_end_s) + 1e-6
-    )
-    if not (route_energy_feasible & structural_time_feasible).all():
-        raise ValueError(
-            "Selected customer locations fail the structural one-customer certificate: "
-            f"energy={int((~route_energy_feasible).sum())}, "
-            f"horizon={int((~structural_time_feasible).sum())}"
-        )
-
-    package_rng = np.random.default_rng(package_seed)
-    service_rng = np.random.default_rng(service_time_seed)
-    time_window_rng = np.random.default_rng(time_window_seed)
-    beta = profile["time_window"]["presence_rate_beta"][day_type]
-    time_window_presence_rate = float(
-        time_window_rng.beta(float(beta["alpha"]), float(beta["beta"]))
-    )
-    ordering_units = np.zeros(customer_count, dtype=np.int32)
-    package_counts = np.zeros(customer_count, dtype=np.int32)
-    demands = np.zeros(customer_count, dtype=np.float32)
-    service = np.zeros(customer_count, dtype=np.float32)
-    windows = np.zeros((customer_count, 2), dtype=np.float32)
-    attempts = np.zeros(customer_count, dtype=np.int16)
-    remaining = np.arange(customer_count, dtype=np.int32)
-    rejection_counts = {
-        "time_window": 0,
-        "operating_horizon": 0,
-        "cargo_capacity": 0,
-    }
-    rejected_order_draws = 0
-    cargo_capacity = float(profile["vehicle"]["cargo_capacity_cm3"])
-    maximum_attempts = int(profile["feasibility"]["max_order_resample_attempts"])
-    for _ in range(maximum_attempts):
-        if not len(remaining):
-            break
-        rows = customer_rows.iloc[remaining]
-        sampled_ordering_units, sampled_packages, sampled_demands = (
-            _sample_packages_and_volume(
-                rows,
-                day_type=day_type,
-                profile=profile,
-                rng=package_rng,
-            )
-        )
-        sampled_service = _sample_service_time(
-            sampled_demands,
-            sampled_packages,
-            profile=profile,
-            rng=service_rng,
-        )
-        sampled_windows, _ = _sample_time_windows(
-            customer_count=len(remaining),
-            day_type=day_type,
-            operating_start_s=operating_start_s,
-            operating_end_s=operating_end_s,
-            profile=profile,
-            rng=time_window_rng,
-            presence_rate=time_window_presence_rate,
-        )
-        ordering_units[remaining] = sampled_ordering_units
-        package_counts[remaining] = sampled_packages
-        demands[remaining] = sampled_demands
-        service[remaining] = sampled_service
-        windows[remaining] = sampled_windows
-        attempts[remaining] += 1
-
-        service_start = np.maximum(
-            feasible_arrival_time[remaining], sampled_windows[:, 0]
-        )
-        tw_ok = service_start <= sampled_windows[:, 1] + 1e-6
-        horizon_ok = (
-            service_start
-            + sampled_service
-            + certificates.return_duration_s[remaining]
-            <= float(operating_end_s) + 1e-6
-        )
-        capacity_ok = sampled_demands <= cargo_capacity + 1e-6
-        rejection_counts["time_window"] += int((~tw_ok).sum())
-        rejection_counts["operating_horizon"] += int((~horizon_ok).sum())
-        rejection_counts["cargo_capacity"] += int((~capacity_ok).sum())
-        accepted = tw_ok & horizon_ok & capacity_ok
-        rejected_order_draws += int((~accepted).sum())
-        remaining = remaining[~accepted]
-    if len(remaining):
-        raise ValueError(
-            "Order rejection sampling exhausted its configured attempt limit for "
-            f"{len(remaining)} customers; rejections={rejection_counts}"
-        )
-    arrival = np.maximum(feasible_arrival_time, windows[:, 0])
-    route_time_feasible = (
-        (arrival <= windows[:, 1] + 1e-6)
-        & (
-            arrival
-            + service
-            + certificates.return_duration_s
-            <= float(operating_end_s) + 1e-6
-        )
-    )
-    capacity_feasible = demands <= cargo_capacity + 1e-6
-    sufficient_feasible = route_time_feasible & route_energy_feasible & capacity_feasible
-    tight = (windows[:, 0] > operating_start_s) | (
-        windows[:, 1] < operating_end_s
-    )
-    time_window_report = {
-        "sampled_presence_rate": time_window_presence_rate,
-        "tight_window_count": int(tight.sum()),
-        "actual_tight_window_rate": float(tight.mean()),
-        "feasibility_clipping_applied": False,
-    }
-    cached_returns = certificates.full_cs_to_depot_time_s.astype(float)
-    finite_cached_returns = cached_returns[np.isfinite(cached_returns)]
-    report = {
-        "schema": "cle_evrptw_view_attribute_report_v2",
-        "day_type": day_type,
-        "customer_count": customer_count,
-        "package_count_mean": float(package_counts.mean()),
-        "package_count_p90": float(np.quantile(package_counts, 0.90)),
-        "ordering_unit_count_mean": float(ordering_units.mean()),
-        "demand_cm3_mean": float(demands.mean()),
-        "demand_cm3_p90": float(np.quantile(demands, 0.90)),
-        "service_time_s_mean": float(service.mean()),
-        "service_time_s_p90": float(np.quantile(service, 0.90)),
-        "time_windows": time_window_report,
-        "order_acceptance": {
-            "policy": "sample_then_validate_replace_order_v1",
-            "maximum_attempts_per_customer": maximum_attempts,
-            "customers_requiring_resample": int((attempts > 1).sum()),
-            "maximum_attempt_count": int(attempts.max()),
-            "total_rejected_order_draws": rejected_order_draws,
-            "rejection_reason_counts": rejection_counts,
-            "customer_location_replacement": False,
-            "family_retry_on_structural_location_failure": True,
-        },
-        "energy": {
-            "model_id": str(profile["energy"]["model_id"]),
-            "specific_energy_consumption_kwh_per_km": specific_energy,
-            "stored_energy_matrices": False,
-        },
-        "full_cs_to_depot_cache": {
-            "semantics": "full_departure_cs_to_depot_fastest_feasible_time_v2",
-            "charging_station_count": len(cached_returns),
-            "finite_return_count": len(finite_cached_returns),
-            "unreachable_return_count": int((~np.isfinite(cached_returns)).sum()),
-            "minimum_time_s": (
-                float(finite_cached_returns.min())
-                if len(finite_cached_returns)
-                else None
-            ),
-            "median_time_s": (
-                float(np.median(finite_cached_returns))
-                if len(finite_cached_returns)
-                else None
-            ),
-            "maximum_time_s": (
-                float(finite_cached_returns.max())
-                if len(finite_cached_returns)
-                else None
-            ),
-        },
-        "feasibility_gate": {
-            "policy": (
-                "unlimited_fleet_individual_service_with_optional_full_charge_"
-                "sufficient_condition_v1"
-            ),
-            "time_feasible_count": int(route_time_feasible.sum()),
-            "energy_feasible_count": int(route_energy_feasible.sum()),
-            "capacity_feasible_count": int(capacity_feasible.sum()),
-            "requires_charging_count": int(certificates.requires_charging.sum()),
-            "maximum_charging_visit_count": int(certificates.charging_visit_count.max()),
-            "minimum_customer_transition_energy_margin_kwh": float(
-                certificates.customer_transition_energy_margin_kwh.min()
-            ),
-            "passed": bool(sufficient_feasible.all()),
-        },
-    }
-    return ViewAttributes(
-        package_counts=package_counts,
-        demands_cm3=demands,
-        service_time_s=service,
-        time_windows_s=windows.astype(np.float32),
-        feasible_arrival_time_s=feasible_arrival_time.astype(np.float32),
-        feasible_return_duration_s=certificates.return_duration_s,
-        feasibility_requires_charging=certificates.requires_charging,
-        feasibility_charging_visit_count=certificates.charging_visit_count,
-        feasibility_inbound_full_state_terminal_index=(
-            certificates.inbound_full_state_terminal_index
-        ),
-        feasibility_first_post_customer_charger_terminal_index=(
-            certificates.first_post_customer_charger_terminal_index
-        ),
-        feasibility_energy_margin_kwh=(
-            certificates.customer_transition_energy_margin_kwh
-        ),
-        full_cs_to_depot_time_s=certificates.full_cs_to_depot_time_s,
-        order_sampling_attempts=attempts,
-        report=report,
-    )
-
 
 def build_view_attributes_from_amazon(
     customer_rows: pd.DataFrame,
@@ -914,6 +550,16 @@ def build_view_attributes_from_amazon(
     cached_returns = certificates.full_cs_to_depot_time_s.astype(float)
     finite_cached_returns = cached_returns[np.isfinite(cached_returns)]
     tight = (windows[:, 0] > operating_start_s) | (windows[:, 1] < operating_end_s)
+    certificate_cs = set(
+        certificates.inbound_full_state_terminal_index[
+            certificates.inbound_full_state_terminal_index > customer_count
+        ].astype(int)
+    ) | set(
+        certificates.first_post_customer_charger_terminal_index[
+            certificates.first_post_customer_charger_terminal_index > customer_count
+        ].astype(int)
+    )
+    soc_tolerance_kwh = 1e-6
     report = {
         "schema": "cle_evrptw_view_attribute_report_v3",
         "day_type": day_type,
@@ -965,6 +611,18 @@ def build_view_attributes_from_amazon(
                 certificates.customer_transition_energy_margin_kwh.min()
             ),
             "passed": True,
+        },
+        "charging_usage_diagnostics": {
+            "certificate_used_cs_count": len(certificate_cs),
+            "solution_cs_visit_count": None,
+            "binding_energy_count": int(
+                np.count_nonzero(
+                    certificates.customer_transition_energy_margin_kwh
+                    <= soc_tolerance_kwh
+                )
+            ),
+            "soc_tolerance_kwh": soc_tolerance_kwh,
+            "baseline_solver_run": False,
         },
     }
     return ViewAttributes(

@@ -1,0 +1,1523 @@
+{
+  "artifact_id": "amazon_stationday_stage2_v3",
+  "artifact_schema": "evrptw_amazon_stage2_artifacts_v3",
+  "metric_holdout_candidates": {
+    "candidate_search_window": [
+      0.145,
+      0.155
+    ],
+    "eligibility": "whole stations; both day types must have order and structure support at N=1000",
+    "mass_exact": [
+      {
+        "absolute_deviation_from_15pct": 1.836616796008217e-06,
+        "metro_codes": [
+          "DAU",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 2,
+        "station_codes": [
+          "DAU1",
+          "DLA4",
+          "DSE2",
+          "DSE4"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 45,
+            "order_days_ge_2000": 12,
+            "station_day_count": 95,
+            "structure_days_ge_1000": 44,
+            "structure_days_ge_2000": 12
+          },
+          "weekend": {
+            "order_days_ge_1000": 12,
+            "order_days_ge_2000": 2,
+            "station_day_count": 39,
+            "structure_days_ge_1000": 12,
+            "structure_days_ge_2000": 2
+          }
+        },
+        "support_mass_fraction": 0.149998163383204,
+        "usable_template_mass": 134757
+      },
+      {
+        "absolute_deviation_from_15pct": 1.9312303885493654e-05,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 3,
+        "station_codes": [
+          "DBO1",
+          "DCH3",
+          "DSE2",
+          "DSE4"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 40,
+            "order_days_ge_2000": 20,
+            "station_day_count": 92,
+            "structure_days_ge_1000": 40,
+            "structure_days_ge_2000": 20
+          },
+          "weekend": {
+            "order_days_ge_1000": 12,
+            "order_days_ge_2000": 3,
+            "station_day_count": 36,
+            "structure_days_ge_1000": 12,
+            "structure_days_ge_2000": 3
+          }
+        },
+        "support_mass_fraction": 0.1500193123038855,
+        "usable_template_mass": 134776
+      },
+      {
+        "absolute_deviation_from_15pct": 5.0479134363540235e-05,
+        "metro_codes": [
+          "DCH",
+          "DLA"
+        ],
+        "minimum_day_type_source_cus2000_support": 5,
+        "station_codes": [
+          "DCH1",
+          "DCH2",
+          "DLA3",
+          "DLA8"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 40,
+            "order_days_ge_2000": 11,
+            "station_day_count": 86,
+            "structure_days_ge_1000": 40,
+            "structure_days_ge_2000": 11
+          },
+          "weekend": {
+            "order_days_ge_1000": 21,
+            "order_days_ge_2000": 5,
+            "station_day_count": 30,
+            "structure_days_ge_1000": 20,
+            "structure_days_ge_2000": 5
+          }
+        },
+        "support_mass_fraction": 0.15005047913436353,
+        "usable_template_mass": 134804
+      },
+      {
+        "absolute_deviation_from_15pct": 5.4931538717550854e-05,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 2,
+        "station_codes": [
+          "DBO1",
+          "DCH1",
+          "DLA5",
+          "DSE2",
+          "DSE4"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 37,
+            "order_days_ge_2000": 15,
+            "station_day_count": 111,
+            "structure_days_ge_1000": 37,
+            "structure_days_ge_2000": 15
+          },
+          "weekend": {
+            "order_days_ge_1000": 13,
+            "order_days_ge_2000": 2,
+            "station_day_count": 42,
+            "structure_days_ge_1000": 12,
+            "structure_days_ge_2000": 2
+          }
+        },
+        "support_mass_fraction": 0.15005493153871755,
+        "usable_template_mass": 134808
+      },
+      {
+        "absolute_deviation_from_15pct": 6.383634742557209e-05,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 0,
+        "station_codes": [
+          "DBO2",
+          "DCH1",
+          "DLA3",
+          "DLA4",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 40,
+            "order_days_ge_2000": 6,
+            "station_day_count": 111,
+            "structure_days_ge_1000": 39,
+            "structure_days_ge_2000": 5
+          },
+          "weekend": {
+            "order_days_ge_1000": 17,
+            "order_days_ge_2000": 0,
+            "station_day_count": 42,
+            "structure_days_ge_1000": 15,
+            "structure_days_ge_2000": 0
+          }
+        },
+        "support_mass_fraction": 0.15006383634742557,
+        "usable_template_mass": 134816
+      },
+      {
+        "absolute_deviation_from_15pct": 9.166387463810377e-05,
+        "metro_codes": [
+          "DAU",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 6,
+        "station_codes": [
+          "DAU1",
+          "DLA5",
+          "DSE5"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 47,
+            "order_days_ge_2000": 19,
+            "station_day_count": 68,
+            "structure_days_ge_1000": 46,
+            "structure_days_ge_2000": 19
+          },
+          "weekend": {
+            "order_days_ge_1000": 13,
+            "order_days_ge_2000": 6,
+            "station_day_count": 26,
+            "structure_days_ge_1000": 13,
+            "structure_days_ge_2000": 6
+          }
+        },
+        "support_mass_fraction": 0.1500916638746381,
+        "usable_template_mass": 134841
+      },
+      {
+        "absolute_deviation_from_15pct": 0.00010758122020365635,
+        "metro_codes": [
+          "DAU",
+          "DCH",
+          "DLA"
+        ],
+        "minimum_day_type_source_cus2000_support": 1,
+        "station_codes": [
+          "DAU1",
+          "DCH1",
+          "DCH3",
+          "DLA3"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 41,
+            "order_days_ge_2000": 9,
+            "station_day_count": 86,
+            "structure_days_ge_1000": 40,
+            "structure_days_ge_2000": 9
+          },
+          "weekend": {
+            "order_days_ge_1000": 19,
+            "order_days_ge_2000": 1,
+            "station_day_count": 31,
+            "structure_days_ge_1000": 18,
+            "structure_days_ge_2000": 1
+          }
+        },
+        "support_mass_fraction": 0.14989241877979634,
+        "usable_template_mass": 134662
+      },
+      {
+        "absolute_deviation_from_15pct": 0.00011314672564619044,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 1,
+        "station_codes": [
+          "DBO1",
+          "DCH1",
+          "DCH4",
+          "DLA5",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 34,
+            "order_days_ge_2000": 19,
+            "station_day_count": 105,
+            "structure_days_ge_1000": 34,
+            "structure_days_ge_2000": 19
+          },
+          "weekend": {
+            "order_days_ge_1000": 11,
+            "order_days_ge_2000": 1,
+            "station_day_count": 37,
+            "structure_days_ge_1000": 10,
+            "structure_days_ge_2000": 1
+          }
+        },
+        "support_mass_fraction": 0.1498868532743538,
+        "usable_template_mass": 134657
+      },
+      {
+        "absolute_deviation_from_15pct": 0.00013095634306220516,
+        "metro_codes": [
+          "DAU",
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 0,
+        "station_codes": [
+          "DAU1",
+          "DBO2",
+          "DCH2",
+          "DLA5",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 50,
+            "order_days_ge_2000": 9,
+            "station_day_count": 110,
+            "structure_days_ge_1000": 48,
+            "structure_days_ge_2000": 8
+          },
+          "weekend": {
+            "order_days_ge_1000": 11,
+            "order_days_ge_2000": 0,
+            "station_day_count": 42,
+            "structure_days_ge_1000": 10,
+            "structure_days_ge_2000": 0
+          }
+        },
+        "support_mass_fraction": 0.1498690436569378,
+        "usable_template_mass": 134641
+      },
+      {
+        "absolute_deviation_from_15pct": 0.00013206944415070088,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA"
+        ],
+        "minimum_day_type_source_cus2000_support": 1,
+        "station_codes": [
+          "DBO1",
+          "DCH2",
+          "DCH3",
+          "DLA4",
+          "DLA5"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 46,
+            "order_days_ge_2000": 14,
+            "station_day_count": 102,
+            "structure_days_ge_1000": 46,
+            "structure_days_ge_2000": 14
+          },
+          "weekend": {
+            "order_days_ge_1000": 11,
+            "order_days_ge_2000": 1,
+            "station_day_count": 33,
+            "structure_days_ge_1000": 11,
+            "structure_days_ge_2000": 1
+          }
+        },
+        "support_mass_fraction": 0.1498679305558493,
+        "usable_template_mass": 134640
+      }
+    ],
+    "metro_diverse": [
+      {
+        "absolute_deviation_from_15pct": 0.0010848839759080298,
+        "metro_codes": [
+          "DAU",
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 5,
+        "station_codes": [
+          "DAU1",
+          "DBO1",
+          "DCH1",
+          "DLA8",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 39,
+            "order_days_ge_2000": 11,
+            "station_day_count": 106,
+            "structure_days_ge_1000": 38,
+            "structure_days_ge_2000": 11
+          },
+          "weekend": {
+            "order_days_ge_1000": 15,
+            "order_days_ge_2000": 5,
+            "station_day_count": 39,
+            "structure_days_ge_1000": 14,
+            "structure_days_ge_2000": 5
+          }
+        },
+        "support_mass_fraction": 0.14891511602409196,
+        "usable_template_mass": 133784
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0015824401624682238,
+        "metro_codes": [
+          "DAU",
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 5,
+        "station_codes": [
+          "DAU1",
+          "DBO1",
+          "DCH2",
+          "DLA8",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 43,
+            "order_days_ge_2000": 11,
+            "station_day_count": 107,
+            "structure_days_ge_1000": 42,
+            "structure_days_ge_2000": 11
+          },
+          "weekend": {
+            "order_days_ge_1000": 13,
+            "order_days_ge_2000": 5,
+            "station_day_count": 39,
+            "structure_days_ge_1000": 13,
+            "structure_days_ge_2000": 5
+          }
+        },
+        "support_mass_fraction": 0.14841755983753177,
+        "usable_template_mass": 133337
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0034813906194518796,
+        "metro_codes": [
+          "DAU",
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 1,
+        "station_codes": [
+          "DAU1",
+          "DBO1",
+          "DCH3",
+          "DLA3",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 38,
+            "order_days_ge_2000": 9,
+            "station_day_count": 108,
+            "structure_days_ge_1000": 37,
+            "structure_days_ge_2000": 9
+          },
+          "weekend": {
+            "order_days_ge_1000": 15,
+            "order_days_ge_2000": 1,
+            "station_day_count": 40,
+            "structure_days_ge_1000": 15,
+            "structure_days_ge_2000": 1
+          }
+        },
+        "support_mass_fraction": 0.14651860938054811,
+        "usable_template_mass": 131631
+      },
+      {
+        "absolute_deviation_from_15pct": 0.001089002449935511,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 6,
+        "station_codes": [
+          "DBO1",
+          "DCH2",
+          "DLA5",
+          "DSE5"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 43,
+            "order_days_ge_2000": 19,
+            "station_day_count": 86,
+            "structure_days_ge_1000": 43,
+            "structure_days_ge_2000": 19
+          },
+          "weekend": {
+            "order_days_ge_1000": 12,
+            "order_days_ge_2000": 6,
+            "station_day_count": 29,
+            "structure_days_ge_1000": 12,
+            "structure_days_ge_2000": 6
+          }
+        },
+        "support_mass_fraction": 0.1510890024499355,
+        "usable_template_mass": 135737
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0015865586364957052,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 6,
+        "station_codes": [
+          "DBO1",
+          "DCH1",
+          "DLA5",
+          "DSE5"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 39,
+            "order_days_ge_2000": 19,
+            "station_day_count": 85,
+            "structure_days_ge_1000": 39,
+            "structure_days_ge_2000": 19
+          },
+          "weekend": {
+            "order_days_ge_1000": 14,
+            "order_days_ge_2000": 6,
+            "station_day_count": 29,
+            "structure_days_ge_1000": 13,
+            "structure_days_ge_2000": 6
+          }
+        },
+        "support_mass_fraction": 0.1515865586364957,
+        "usable_template_mass": 136184
+      },
+      {
+        "absolute_deviation_from_15pct": 0.002527129056279498,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 6,
+        "station_codes": [
+          "DBO1",
+          "DCH2",
+          "DLA4",
+          "DSE5"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 43,
+            "order_days_ge_2000": 16,
+            "station_day_count": 87,
+            "structure_days_ge_1000": 43,
+            "structure_days_ge_2000": 16
+          },
+          "weekend": {
+            "order_days_ge_1000": 12,
+            "order_days_ge_2000": 6,
+            "station_day_count": 29,
+            "structure_days_ge_1000": 12,
+            "structure_days_ge_2000": 6
+          }
+        },
+        "support_mass_fraction": 0.1525271290562795,
+        "usable_template_mass": 137029
+      },
+      {
+        "absolute_deviation_from_15pct": 0.003024685242839692,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 6,
+        "station_codes": [
+          "DBO1",
+          "DCH1",
+          "DLA4",
+          "DSE5"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 39,
+            "order_days_ge_2000": 16,
+            "station_day_count": 86,
+            "structure_days_ge_1000": 39,
+            "structure_days_ge_2000": 16
+          },
+          "weekend": {
+            "order_days_ge_1000": 14,
+            "order_days_ge_2000": 6,
+            "station_day_count": 29,
+            "structure_days_ge_1000": 13,
+            "structure_days_ge_2000": 6
+          }
+        },
+        "support_mass_fraction": 0.1530246852428397,
+        "usable_template_mass": 137476
+      },
+      {
+        "absolute_deviation_from_15pct": 0.000489040963233156,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 5,
+        "station_codes": [
+          "DBO2",
+          "DCH2",
+          "DLA8",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 48,
+            "order_days_ge_2000": 16,
+            "station_day_count": 90,
+            "structure_days_ge_1000": 47,
+            "structure_days_ge_2000": 15
+          },
+          "weekend": {
+            "order_days_ge_1000": 14,
+            "order_days_ge_2000": 5,
+            "station_day_count": 35,
+            "structure_days_ge_1000": 13,
+            "structure_days_ge_2000": 5
+          }
+        },
+        "support_mass_fraction": 0.15048904096323315,
+        "usable_template_mass": 135198
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0006337441047383763,
+        "metro_codes": [
+          "DAU",
+          "DBO",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 5,
+        "station_codes": [
+          "DAU1",
+          "DBO1",
+          "DLA5",
+          "DLA8",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 45,
+            "order_days_ge_2000": 15,
+            "station_day_count": 105,
+            "structure_days_ge_1000": 44,
+            "structure_days_ge_2000": 15
+          },
+          "weekend": {
+            "order_days_ge_1000": 13,
+            "order_days_ge_2000": 5,
+            "station_day_count": 39,
+            "structure_days_ge_1000": 13,
+            "structure_days_ge_2000": 5
+          }
+        },
+        "support_mass_fraction": 0.15063374410473837,
+        "usable_template_mass": 135328
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0009865971497933501,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 5,
+        "station_codes": [
+          "DBO2",
+          "DCH1",
+          "DLA8",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 44,
+            "order_days_ge_2000": 16,
+            "station_day_count": 89,
+            "structure_days_ge_1000": 43,
+            "structure_days_ge_2000": 15
+          },
+          "weekend": {
+            "order_days_ge_1000": 16,
+            "order_days_ge_2000": 5,
+            "station_day_count": 35,
+            "structure_days_ge_1000": 14,
+            "structure_days_ge_2000": 5
+          }
+        },
+        "support_mass_fraction": 0.15098659714979334,
+        "usable_template_mass": 135645
+      }
+    ],
+    "ranking_notes": {
+      "mass_exact": "minimize absolute support-mass deviation from 0.15",
+      "metro_diverse": "require N=2000 support, then maximize represented station-prefix metros before N=2000 robustness",
+      "robust_cus2000": "maximize the minimum order/structure, weekday/weekend N=2000 day count"
+    },
+    "robust_cus2000": [
+      {
+        "absolute_deviation_from_15pct": 0.000711661180933465,
+        "metro_codes": [
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 11,
+        "station_codes": [
+          "DLA8",
+          "DSE5"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 45,
+            "order_days_ge_2000": 26,
+            "station_day_count": 48,
+            "structure_days_ge_1000": 45,
+            "structure_days_ge_2000": 26
+          },
+          "weekend": {
+            "order_days_ge_1000": 16,
+            "order_days_ge_2000": 11,
+            "station_day_count": 19,
+            "structure_days_ge_1000": 16,
+            "structure_days_ge_2000": 11
+          }
+        },
+        "support_mass_fraction": 0.15071166118093346,
+        "usable_template_mass": 135398
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0001462058279746714,
+        "metro_codes": [
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DCH2",
+          "DLA9",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 32,
+            "order_days_ge_2000": 17,
+            "station_day_count": 75,
+            "structure_days_ge_1000": 32,
+            "structure_days_ge_2000": 17
+          },
+          "weekend": {
+            "order_days_ge_1000": 14,
+            "order_days_ge_2000": 7,
+            "station_day_count": 31,
+            "structure_days_ge_1000": 14,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.15014620582797467,
+        "usable_template_mass": 134890
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0006437620145348932,
+        "metro_codes": [
+          "DCH",
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DCH1",
+          "DLA9",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 28,
+            "order_days_ge_2000": 17,
+            "station_day_count": 74,
+            "structure_days_ge_1000": 28,
+            "structure_days_ge_2000": 17
+          },
+          "weekend": {
+            "order_days_ge_1000": 16,
+            "order_days_ge_2000": 7,
+            "station_day_count": 31,
+            "structure_days_ge_1000": 15,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.1506437620145349,
+        "usable_template_mass": 135337
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0008199659168446616,
+        "metro_codes": [
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DLA8",
+          "DSE2",
+          "DSE4"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 43,
+            "order_days_ge_2000": 22,
+            "station_day_count": 74,
+            "structure_days_ge_1000": 43,
+            "structure_days_ge_2000": 22
+          },
+          "weekend": {
+            "order_days_ge_1000": 15,
+            "order_days_ge_2000": 7,
+            "station_day_count": 32,
+            "structure_days_ge_1000": 15,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.14918003408315533,
+        "usable_template_mass": 134022
+      },
+      {
+        "absolute_deviation_from_15pct": 0.001245949703414212,
+        "metro_codes": [
+          "DBO",
+          "DLA"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DBO1",
+          "DLA3",
+          "DLA9"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 32,
+            "order_days_ge_2000": 17,
+            "station_day_count": 66,
+            "structure_days_ge_1000": 32,
+            "structure_days_ge_2000": 17
+          },
+          "weekend": {
+            "order_days_ge_1000": 19,
+            "order_days_ge_2000": 7,
+            "station_day_count": 24,
+            "structure_days_ge_1000": 19,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.1512459497034142,
+        "usable_template_mass": 135878
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0014945051764766182,
+        "metro_codes": [
+          "DBO",
+          "DLA"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DBO1",
+          "DLA4",
+          "DLA9"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 35,
+            "order_days_ge_2000": 18,
+            "station_day_count": 65,
+            "structure_days_ge_1000": 35,
+            "structure_days_ge_2000": 18
+          },
+          "weekend": {
+            "order_days_ge_1000": 14,
+            "order_days_ge_2000": 7,
+            "station_day_count": 23,
+            "structure_days_ge_1000": 14,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.14850549482352338,
+        "usable_template_mass": 133416
+      },
+      {
+        "absolute_deviation_from_15pct": 0.001550939401663648,
+        "metro_codes": [
+          "DBO",
+          "DCH",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DBO1",
+          "DCH3",
+          "DSE5"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 42,
+            "order_days_ge_2000": 24,
+            "station_day_count": 66,
+            "structure_days_ge_1000": 42,
+            "structure_days_ge_2000": 24
+          },
+          "weekend": {
+            "order_days_ge_1000": 13,
+            "order_days_ge_2000": 7,
+            "station_day_count": 23,
+            "structure_days_ge_1000": 13,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.15155093940166364,
+        "usable_template_mass": 136152
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0023623900951812715,
+        "metro_codes": [
+          "DLA",
+          "DSE"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DLA5",
+          "DLA9",
+          "DSE2"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 34,
+            "order_days_ge_2000": 21,
+            "station_day_count": 73,
+            "structure_days_ge_1000": 34,
+            "structure_days_ge_2000": 21
+          },
+          "weekend": {
+            "order_days_ge_1000": 14,
+            "order_days_ge_2000": 7,
+            "station_day_count": 31,
+            "structure_days_ge_1000": 14,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.15236239009518127,
+        "usable_template_mass": 136881
+      },
+      {
+        "absolute_deviation_from_15pct": 0.002932631782820605,
+        "metro_codes": [
+          "DBO",
+          "DLA"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DBO1",
+          "DLA5",
+          "DLA9"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 35,
+            "order_days_ge_2000": 21,
+            "station_day_count": 64,
+            "structure_days_ge_1000": 35,
+            "structure_days_ge_2000": 21
+          },
+          "weekend": {
+            "order_days_ge_1000": 14,
+            "order_days_ge_2000": 7,
+            "station_day_count": 23,
+            "structure_days_ge_1000": 14,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.1470673682171794,
+        "usable_template_mass": 132124
+      },
+      {
+        "absolute_deviation_from_15pct": 0.0029868398058306433,
+        "metro_codes": [
+          "DAU",
+          "DBO",
+          "DLA"
+        ],
+        "minimum_day_type_source_cus2000_support": 7,
+        "station_codes": [
+          "DAU1",
+          "DBO1",
+          "DLA9"
+        ],
+        "support": {
+          "weekday": {
+            "order_days_ge_1000": 38,
+            "order_days_ge_2000": 17,
+            "station_day_count": 65,
+            "structure_days_ge_1000": 37,
+            "structure_days_ge_2000": 17
+          },
+          "weekend": {
+            "order_days_ge_1000": 15,
+            "order_days_ge_2000": 7,
+            "station_day_count": 24,
+            "structure_days_ge_1000": 15,
+            "structure_days_ge_2000": 7
+          }
+        },
+        "support_mass_fraction": 0.15298683980583064,
+        "usable_template_mass": 137442
+      }
+    ],
+    "target_support_mass_fraction": 0.15
+  },
+  "metro_definition": "first three characters of station_code; the five frozen Amazon station markets",
+  "schema": "evrptw_amazon_station_inventory_v1",
+  "source_scope": "almrrc2021-data-training/model_build_inputs_only",
+  "station_day_count": 521,
+  "stations": [
+    {
+      "metro_code": "DAU",
+      "station_code": "DAU1",
+      "station_day_counts": {
+        "weekday": 21,
+        "weekend": 8
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 13,
+          "order_days_ge_2000": 0,
+          "station_day_count": 21,
+          "structure_days_ge_1000": 12,
+          "structure_days_ge_2000": 0
+        },
+        "weekend": {
+          "order_days_ge_1000": 3,
+          "order_days_ge_2000": 0,
+          "station_day_count": 8,
+          "structure_days_ge_1000": 3,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 31060,
+      "usable_template_mass_by_day_type": {
+        "weekday": 22744,
+        "weekend": 8316
+      }
+    },
+    {
+      "metro_code": "DBO",
+      "station_code": "DBO1",
+      "station_day_counts": {
+        "weekday": 17,
+        "weekend": 4
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 1,
+          "order_days_ge_2000": 0,
+          "station_day_count": 17,
+          "structure_days_ge_1000": 1,
+          "structure_days_ge_2000": 0
+        },
+        "weekend": {
+          "order_days_ge_1000": 0,
+          "order_days_ge_2000": 0,
+          "station_day_count": 4,
+          "structure_days_ge_1000": 0,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 8205,
+      "usable_template_mass_by_day_type": {
+        "weekday": 7010,
+        "weekend": 1195
+      }
+    },
+    {
+      "metro_code": "DBO",
+      "station_code": "DBO2",
+      "station_day_counts": {
+        "weekday": 21,
+        "weekend": 8
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 19,
+          "order_days_ge_2000": 5,
+          "station_day_count": 21,
+          "structure_days_ge_1000": 18,
+          "structure_days_ge_2000": 4
+        },
+        "weekend": {
+          "order_days_ge_1000": 4,
+          "order_days_ge_2000": 0,
+          "station_day_count": 8,
+          "structure_days_ge_1000": 3,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 41126,
+      "usable_template_mass_by_day_type": {
+        "weekday": 33923,
+        "weekend": 7203
+      }
+    },
+    {
+      "metro_code": "DBO",
+      "station_code": "DBO3",
+      "station_day_counts": {
+        "weekday": 21,
+        "weekend": 8
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 20,
+          "order_days_ge_2000": 18,
+          "station_day_count": 21,
+          "structure_days_ge_1000": 20,
+          "structure_days_ge_2000": 18
+        },
+        "weekend": {
+          "order_days_ge_1000": 8,
+          "order_days_ge_2000": 5,
+          "station_day_count": 8,
+          "structure_days_ge_1000": 8,
+          "structure_days_ge_2000": 5
+        }
+      },
+      "usable_template_mass": 90345,
+      "usable_template_mass_by_day_type": {
+        "weekday": 72503,
+        "weekend": 17842
+      }
+    },
+    {
+      "metro_code": "DCH",
+      "station_code": "DCH1",
+      "station_day_counts": {
+        "weekday": 21,
+        "weekend": 7
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 4,
+          "order_days_ge_2000": 0,
+          "station_day_count": 21,
+          "structure_days_ge_1000": 4,
+          "structure_days_ge_2000": 0
+        },
+        "weekend": {
+          "order_days_ge_1000": 4,
+          "order_days_ge_2000": 0,
+          "station_day_count": 7,
+          "structure_days_ge_1000": 3,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 24198,
+      "usable_template_mass_by_day_type": {
+        "weekday": 16810,
+        "weekend": 7388
+      }
+    },
+    {
+      "metro_code": "DCH",
+      "station_code": "DCH2",
+      "station_day_counts": {
+        "weekday": 22,
+        "weekend": 7
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 8,
+          "order_days_ge_2000": 0,
+          "station_day_count": 22,
+          "structure_days_ge_1000": 8,
+          "structure_days_ge_2000": 0
+        },
+        "weekend": {
+          "order_days_ge_1000": 2,
+          "order_days_ge_2000": 0,
+          "station_day_count": 7,
+          "structure_days_ge_1000": 2,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 23751,
+      "usable_template_mass_by_day_type": {
+        "weekday": 17262,
+        "weekend": 6489
+      }
+    },
+    {
+      "metro_code": "DCH",
+      "station_code": "DCH3",
+      "station_day_counts": {
+        "weekday": 22,
+        "weekend": 8
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 17,
+          "order_days_ge_2000": 9,
+          "station_day_count": 22,
+          "structure_days_ge_1000": 17,
+          "structure_days_ge_2000": 9
+        },
+        "weekend": {
+          "order_days_ge_1000": 5,
+          "order_days_ge_2000": 1,
+          "station_day_count": 8,
+          "structure_days_ge_1000": 5,
+          "structure_days_ge_2000": 1
+        }
+      },
+      "usable_template_mass": 49908,
+      "usable_template_mass_by_day_type": {
+        "weekday": 40128,
+        "weekend": 9780
+      }
+    },
+    {
+      "metro_code": "DCH",
+      "station_code": "DCH4",
+      "station_day_counts": {
+        "weekday": 21,
+        "weekend": 7
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 19,
+          "order_days_ge_2000": 15,
+          "station_day_count": 21,
+          "structure_days_ge_1000": 19,
+          "structure_days_ge_2000": 15
+        },
+        "weekend": {
+          "order_days_ge_1000": 5,
+          "order_days_ge_2000": 1,
+          "station_day_count": 7,
+          "structure_days_ge_1000": 5,
+          "structure_days_ge_2000": 1
+        }
+      },
+      "usable_template_mass": 63550,
+      "usable_template_mass_by_day_type": {
+        "weekday": 55751,
+        "weekend": 7799
+      }
+    },
+    {
+      "metro_code": "DLA",
+      "station_code": "DLA3",
+      "station_day_counts": {
+        "weekday": 22,
+        "weekend": 8
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 7,
+          "order_days_ge_2000": 0,
+          "station_day_count": 22,
+          "structure_days_ge_1000": 7,
+          "structure_days_ge_2000": 0
+        },
+        "weekend": {
+          "order_days_ge_1000": 7,
+          "order_days_ge_2000": 0,
+          "station_day_count": 8,
+          "structure_days_ge_1000": 7,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 29496,
+      "usable_template_mass_by_day_type": {
+        "weekday": 18305,
+        "weekend": 11191
+      }
+    },
+    {
+      "metro_code": "DLA",
+      "station_code": "DLA4",
+      "station_day_counts": {
+        "weekday": 21,
+        "weekend": 7
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 10,
+          "order_days_ge_2000": 1,
+          "station_day_count": 21,
+          "structure_days_ge_1000": 10,
+          "structure_days_ge_2000": 1
+        },
+        "weekend": {
+          "order_days_ge_1000": 2,
+          "order_days_ge_2000": 0,
+          "station_day_count": 7,
+          "structure_days_ge_1000": 2,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 27034,
+      "usable_template_mass_by_day_type": {
+        "weekday": 21458,
+        "weekend": 5576
+      }
+    },
+    {
+      "metro_code": "DLA",
+      "station_code": "DLA5",
+      "station_day_counts": {
+        "weekday": 20,
+        "weekend": 7
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 10,
+          "order_days_ge_2000": 4,
+          "station_day_count": 20,
+          "structure_days_ge_1000": 10,
+          "structure_days_ge_2000": 4
+        },
+        "weekend": {
+          "order_days_ge_1000": 2,
+          "order_days_ge_2000": 0,
+          "station_day_count": 7,
+          "structure_days_ge_1000": 2,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 25742,
+      "usable_template_mass_by_day_type": {
+        "weekday": 21701,
+        "weekend": 4041
+      }
+    },
+    {
+      "metro_code": "DLA",
+      "station_code": "DLA7",
+      "station_day_counts": {
+        "weekday": 22,
+        "weekend": 8
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 22,
+          "order_days_ge_2000": 21,
+          "station_day_count": 22,
+          "structure_days_ge_1000": 22,
+          "structure_days_ge_2000": 21
+        },
+        "weekend": {
+          "order_days_ge_1000": 8,
+          "order_days_ge_2000": 8,
+          "station_day_count": 8,
+          "structure_days_ge_1000": 8,
+          "structure_days_ge_2000": 8
+        }
+      },
+      "usable_template_mass": 173738,
+      "usable_template_mass_by_day_type": {
+        "weekday": 135062,
+        "weekend": 38676
+      }
+    },
+    {
+      "metro_code": "DLA",
+      "station_code": "DLA8",
+      "station_day_counts": {
+        "weekday": 21,
+        "weekend": 8
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 21,
+          "order_days_ge_2000": 11,
+          "station_day_count": 21,
+          "structure_days_ge_1000": 21,
+          "structure_days_ge_2000": 11
+        },
+        "weekend": {
+          "order_days_ge_1000": 8,
+          "order_days_ge_2000": 5,
+          "station_day_count": 8,
+          "structure_days_ge_1000": 8,
+          "structure_days_ge_2000": 5
+        }
+      },
+      "usable_template_mass": 57359,
+      "usable_template_mass_by_day_type": {
+        "weekday": 41089,
+        "weekend": 16270
+      }
+    },
+    {
+      "metro_code": "DLA",
+      "station_code": "DLA9",
+      "station_day_counts": {
+        "weekday": 27,
+        "weekend": 12
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 24,
+          "order_days_ge_2000": 17,
+          "station_day_count": 27,
+          "structure_days_ge_1000": 24,
+          "structure_days_ge_2000": 17
+        },
+        "weekend": {
+          "order_days_ge_1000": 12,
+          "order_days_ge_2000": 7,
+          "station_day_count": 12,
+          "structure_days_ge_1000": 12,
+          "structure_days_ge_2000": 7
+        }
+      },
+      "usable_template_mass": 98177,
+      "usable_template_mass_by_day_type": {
+        "weekday": 66735,
+        "weekend": 31442
+      }
+    },
+    {
+      "metro_code": "DSE",
+      "station_code": "DSE2",
+      "station_day_counts": {
+        "weekday": 26,
+        "weekend": 12
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 0,
+          "order_days_ge_2000": 0,
+          "station_day_count": 26,
+          "structure_days_ge_1000": 0,
+          "structure_days_ge_2000": 0
+        },
+        "weekend": {
+          "order_days_ge_1000": 0,
+          "order_days_ge_2000": 0,
+          "station_day_count": 12,
+          "structure_days_ge_1000": 0,
+          "structure_days_ge_2000": 0
+        }
+      },
+      "usable_template_mass": 12962,
+      "usable_template_mass_by_day_type": {
+        "weekday": 8436,
+        "weekend": 4526
+      }
+    },
+    {
+      "metro_code": "DSE",
+      "station_code": "DSE4",
+      "station_day_counts": {
+        "weekday": 27,
+        "weekend": 12
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 22,
+          "order_days_ge_2000": 11,
+          "station_day_count": 27,
+          "structure_days_ge_1000": 22,
+          "structure_days_ge_2000": 11
+        },
+        "weekend": {
+          "order_days_ge_1000": 7,
+          "order_days_ge_2000": 2,
+          "station_day_count": 12,
+          "structure_days_ge_1000": 7,
+          "structure_days_ge_2000": 2
+        }
+      },
+      "usable_template_mass": 63701,
+      "usable_template_mass_by_day_type": {
+        "weekday": 48227,
+        "weekend": 15474
+      }
+    },
+    {
+      "metro_code": "DSE",
+      "station_code": "DSE5",
+      "station_day_counts": {
+        "weekday": 27,
+        "weekend": 11
+      },
+      "support": {
+        "weekday": {
+          "order_days_ge_1000": 24,
+          "order_days_ge_2000": 15,
+          "station_day_count": 27,
+          "structure_days_ge_1000": 24,
+          "structure_days_ge_2000": 15
+        },
+        "weekend": {
+          "order_days_ge_1000": 8,
+          "order_days_ge_2000": 6,
+          "station_day_count": 11,
+          "structure_days_ge_1000": 8,
+          "structure_days_ge_2000": 6
+        }
+      },
+      "usable_template_mass": 78039,
+      "usable_template_mass_by_day_type": {
+        "weekday": 58507,
+        "weekend": 19532
+      }
+    }
+  ],
+  "unique_metro_count": 5,
+  "unique_station_code_count": 17,
+  "usable_template_mass": 898391
+}

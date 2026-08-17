@@ -1,5 +1,8 @@
 # U.S. 11-city CLE and Stage-2 build report
 
+> **Legacy V1 only.** These outputs are not reused by Stage-2 V2.1 and do not
+> count as current pilot or release evidence.
+
 This report records the completed 2026-08-10 engineering build. It separates
 technical completion from scientific release eligibility.
 
@@ -27,7 +30,7 @@ All 11 CLEs completed and passed technical and portable-package verification:
 | Charging-site candidates | 5,286 |
 
 The paper-ready per-city tables are generated from the portable manifests under
-`EVRPTW_Dataset/CLE_v1/us_11city/appendix_tables/`. They include road
+`EVRPTW_Dataset/CLE_v2/us_11city/appendix_tables/`. They include road
 connectivity, service-location composition, charging/depot evidence, speed
 provenance, and release status.
 

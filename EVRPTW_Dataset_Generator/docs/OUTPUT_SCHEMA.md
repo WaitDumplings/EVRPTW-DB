@@ -40,7 +40,7 @@ EVRPTW_Dataset_Generator/work/us-11city-v1/
   cle_cohort_index.json
   cle_cohort_index.csv
 
-EVRPTW_Dataset/CLE_v1/us_11city/
+EVRPTW_Dataset/CLE_v2/us_11city/
   cle_index.json
   cle_index.csv
   appendix_tables/                    # paper-ready cohort tables
@@ -124,7 +124,8 @@ latent_service_location_id, geometry, service_location_type,
 residential_units, geometry_evidence_tier, physical_edge_id,
 directed_edge_refs, road_access_distance_m,
 road_access_distance_qa_flag, anchor_scc_id, reference_scc_id,
-protected_roundtrip_eligible, cle_candidate_eligible,
+protected_inbound_access_eligible, protected_outbound_access_eligible,
+protected_roundtrip_eligible, protected_roundtrip_status, cle_candidate_eligible,
 cle_default_instance_eligible, active_customer
 ```
 
@@ -135,6 +136,13 @@ Facility tables use the same SCC fields. Charger rows additionally retain
 coordinates, optional Census address anchors, optional exact-address OSM
 geometry, and the final resolved geometry. Source retention and default
 benchmark eligibility are separate flags.
+
+`protected_inbound_access_eligible` requires at least one referenced directed
+edge whose `u` endpoint is in the reference SCC; outbound eligibility applies
+the dual rule to `v`. The manifest must declare
+`connectivity_contract.id=directed_projection_roundtrip_v2`. Stage 2 rejects a
+CLE without that contract and applies an additional exact node/turn-topology
+preflight before territory construction and full terminal closure.
 
 ## Manifest semantics
 
@@ -165,7 +173,7 @@ The release root separates logical split indices from the deduplicated physical
 family store:
 
 ```text
-Instances_v1/us_11city/
+Instances_v2/us_11city/
   customer_splits/<city>/
     customer_split_manifest.parquet
     community_manifest.parquet
@@ -236,6 +244,13 @@ the two Parquet files preserve customer-level radial observations and
 region-level pairwise metrics. Family verification fails when they are absent,
 have the wrong parent-customer count, or report a failed hard gate.
 
+The family manifest's terminal-selection object uses
+`cle_evrptw_family_terminal_selection_v3`. Its
+`cle_evrptw_terminal_connectivity_quarantine_v1` section records customer and
+charger input/eligible/quarantined counts, depot-star reports, and deterministic
+bad-terminal ledgers with source ID, physical edge, projection offsets, and
+node/turn reachability reason codes.
+
 ### Slim release and deterministic matrix cache
 
 The four dense matrices are derived caches, not irreducible instance data.  A
@@ -243,7 +258,7 @@ The four dense matrices are derived caches, not irreducible instance data.  A
 above but omits every family `matrices/` directory.  It adds:
 
 ```text
-Instances_v1/us_11city/
+Instances_v2/us_11city/
   _reconstruction/
     reconstruction_contract.json
     reference_profile.json
@@ -264,7 +279,7 @@ Reconstruction uses, in order:
    `moves_road_type`, and the frozen profile;
 3. the complete `terminal_index.parquet` edge-access contract, especially
    `directed_projection_offsets` and `connector_length_m`; and
-4. the same distance-shortest and turn-aware running-time routing code used by
+4. the same distance-shortest and canonical zero-turn running-time routing code used by
    direct Stage-2 materialization.
 
 A simple graph-node ID is insufficient because a terminal can lie partway

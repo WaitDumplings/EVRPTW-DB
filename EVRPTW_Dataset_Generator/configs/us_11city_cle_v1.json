@@ -14,8 +14,8 @@
     "hpms_raw_root": "data/sources/hpms",
     "hpms_source_registry": "configs/us_11city_hpms_sources_v1.json"
   },
-  "work_root": "work/us-11city-v1",
-  "release_root": "../EVRPTW_Dataset/CLE_v1/us_11city",
+  "work_root": "work/us-11city-v2",
+  "release_root": "../EVRPTW_Dataset/CLE_v2/us_11city",
   "road_policy": {
     "network_type": "drive",
     "routing_buffer_ladder_km": [0, 1, 2, 5, 10, 20],

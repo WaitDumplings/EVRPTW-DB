@@ -6,10 +6,10 @@ GENERATOR_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPOSITORY_DIR="$(cd "$GENERATOR_DIR/.." && pwd)"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-CLE_ROOT="${CLE_ROOT:-$REPOSITORY_DIR/EVRPTW_Dataset/CLE_v1/us_11city}"
-SOURCE_INSTANCE_ROOT="${SOURCE_INSTANCE_ROOT:-$REPOSITORY_DIR/EVRPTW_Dataset/Instances_v1/us_11city}"
-SLIM_INSTANCE_ROOT="${SLIM_INSTANCE_ROOT:-$REPOSITORY_DIR/EVRPTW_Dataset/Instances_v1_slim/us_11city}"
-PROFILE_PATH="${PROFILE_PATH:-$GENERATOR_DIR/configs/us_reference_instance_profile_v1.json}"
+CLE_ROOT="${CLE_ROOT:-$REPOSITORY_DIR/EVRPTW_Dataset/CLE_v2/us_11city}"
+SOURCE_INSTANCE_ROOT="${SOURCE_INSTANCE_ROOT:-$REPOSITORY_DIR/EVRPTW_Dataset/Instances_v2/us_11city}"
+SLIM_INSTANCE_ROOT="${SLIM_INSTANCE_ROOT:-$REPOSITORY_DIR/EVRPTW_Dataset/Instances_v2_slim/us_11city}"
+PROFILE_PATH="${PROFILE_PATH:-$GENERATOR_DIR/configs/us_reference_instance_profile_v2.json}"
 
 if [[ ! -d "$SOURCE_INSTANCE_ROOT/materialized/families" ]]; then
   echo "Full Stage-2 instance tree is missing: $SOURCE_INSTANCE_ROOT" >&2

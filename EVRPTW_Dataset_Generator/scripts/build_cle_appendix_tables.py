@@ -303,7 +303,7 @@ def main() -> None:
     parser.add_argument(
         "--cle-root",
         type=Path,
-        default=Path("../EVRPTW_Dataset/CLE_v1/us_11city"),
+        default=Path("../EVRPTW_Dataset/CLE_v2/us_11city"),
     )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--replace", action="store_true")

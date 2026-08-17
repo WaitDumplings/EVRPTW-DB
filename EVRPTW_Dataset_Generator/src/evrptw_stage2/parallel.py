@@ -34,6 +34,35 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
 
 
+def classify_rejection(error: Exception) -> tuple[str, str]:
+    message = str(error)
+    prefix = message.split(":", 1)[0].strip()
+    if prefix and prefix.replace("_", "").isalnum() and prefix.upper() == prefix:
+        return prefix.lower(), message
+    return type(error).__name__.lower(), message
+
+
+def rejection_is_retryable(error: Exception) -> bool:
+    """Honor explicit contract failures while retrying stochastic rejections."""
+
+    return bool(getattr(error, "retryable", True))
+
+
+def remaining_attempt_numbers(
+    recorded_attempt_count: int,
+    max_attempts_per_family: int,
+    *,
+    retry_closed: bool = False,
+) -> range:
+    """Return the unspent attempt numbers under the lifetime family cap."""
+
+    if recorded_attempt_count < 0:
+        raise ValueError("recorded_attempt_count must be non-negative")
+    if max_attempts_per_family <= 0:
+        raise ValueError("max_attempts_per_family must be positive")
+    return range(0, 0) if retry_closed else range(recorded_attempt_count, max_attempts_per_family)
+
+
 def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
     """Materialize one single-city chunk while reusing its routing topology."""
 
@@ -47,7 +76,10 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
     output_root = Path(task["output_root"])
     customer_split_path = Path(task["customer_split_path"])
     community_adjacency_path = Path(task["community_adjacency_path"])
-    amazon_artifacts = load_amazon_stage2_artifacts(task["amazon_artifact_root"])
+    amazon_artifacts = load_amazon_stage2_artifacts(
+        task["amazon_artifact_root"],
+        cohort_split_path=task["amazon_cohort_split_path"],
+    )
     max_attempts = int(task["max_attempts_per_family"])
     topology_cache = {}
     adjacency_cache = {}
@@ -85,12 +117,19 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
         rejection_payload = (
             json.loads(rejection_path.read_text(encoding="utf-8"))
             if rejection_path.is_file()
-            else {"schema": "cle_evrptw_family_rejection_ledger_v1", "attempts": []}
+            else {"schema": "cle_evrptw_family_rejection_ledger_v2", "attempts": []}
         )
         first_attempt_number = len(rejection_payload["attempts"])
+        retry_closed = any(
+            attempt.get("retryable") is False
+            for attempt in rejection_payload["attempts"]
+        )
         completed = False
-        for offset in range(max_attempts):
-            attempt_number = first_attempt_number + offset
+        for attempt_number in remaining_attempt_numbers(
+            first_attempt_number,
+            max_attempts,
+            retry_closed=retry_closed,
+        ):
             attempt_family, attempt_views = materialization_attempt_inputs(
                 family,
                 views,
@@ -110,26 +149,39 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
                     output_root=output_root / "materialized",
                     routing_topology_cache=topology_cache,
                     community_adjacency_cache=adjacency_cache,
+                    code_provenance=task.get("code_provenance"),
                 )
             except Exception as error:  # noqa: BLE001 - persist every failed attempt.
+                reason_code, reason_detail = classify_rejection(error)
+                retryable = rejection_is_retryable(error)
                 rejection = {
                     "family_id": family_id,
                     "city_slug": city,
                     "attempt_number": attempt_number,
                     "attempt_seed": int(attempt_family["materialization_attempt_seed"]),
-                    "next_attempt_seed": derive_seed(
-                        int(family["family_seed"]),
-                        "materialization_attempt",
-                        attempt_number + 1,
+                    "next_attempt_seed": (
+                        derive_seed(
+                            int(family["family_seed"]),
+                            "materialization_attempt",
+                            attempt_number + 1,
+                        )
+                        if retryable
+                        else None
                     ),
                     "error_type": type(error).__name__,
-                    "reason": str(error),
+                    "reason_code": reason_code,
+                    "reason": reason_detail,
+                    "retryable": retryable,
+                    "retry_stopped_early": not retryable,
+                    "roster_fingerprint": getattr(error, "roster_fingerprint", None),
                     "elapsed_seconds": time.perf_counter() - started,
                 }
                 rejection_payload["family_id"] = family_id
                 rejection_payload["attempts"].append(rejection)
                 _write_json(rejection_path, rejection_payload)
                 result["rejected_attempts"].append(rejection)
+                if not retryable:
+                    break
                 continue
             elapsed = time.perf_counter() - started
             result["materialized"].append(
@@ -142,6 +194,7 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
                     ),
                     "matrix_total_bytes": int(manifest["matrix_total_bytes"]),
                     "materialization_seconds": elapsed,
+                    "stage_timings_seconds": manifest["stage_timings_seconds"],
                     "terminal_pair_throughput_per_second": (
                         int(manifest["terminal_count"]) ** 2 / elapsed
                     ),

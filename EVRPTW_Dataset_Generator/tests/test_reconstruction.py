@@ -19,7 +19,7 @@ from evrptw_stage2.reconstruction import (
     sha256_file,
 )
 
-PROFILE_PATH = Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v1.json"
+PROFILE_PATH = Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v2.json"
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -111,6 +111,9 @@ def _build_tiny_full_dataset(tmp_path: Path) -> tuple[Path, Path]:
             "latent_service_location_id": ["customer"],
             "cle_default_instance_eligible": [True],
             "customer_release_eligible": [False],
+            "protected_inbound_access_eligible": [True],
+            "protected_outbound_access_eligible": [True],
+            "protected_roundtrip_eligible": [True],
         }
     ).to_parquet(city_root / "service_locations" / "latent_locations.parquet", index=False)
     pd.DataFrame(
@@ -118,6 +121,9 @@ def _build_tiny_full_dataset(tmp_path: Path) -> tuple[Path, Path]:
             "candidate_id": ["depot"],
             "depot_candidate_eligible": [True],
             "depot_release_eligible": [False],
+            "protected_inbound_access_eligible": [True],
+            "protected_outbound_access_eligible": [True],
+            "protected_roundtrip_eligible": [True],
         }
     ).to_parquet(city_root / "infrastructure" / "depots.parquet", index=False)
     pd.DataFrame(
@@ -125,12 +131,16 @@ def _build_tiny_full_dataset(tmp_path: Path) -> tuple[Path, Path]:
             "charger_id": ["charger"],
             "charger_candidate_eligible": [True],
             "charger_release_eligible": [False],
+            "protected_inbound_access_eligible": [True],
+            "protected_outbound_access_eligible": [True],
+            "protected_roundtrip_eligible": [True],
         }
     ).to_parquet(city_root / "infrastructure" / "chargers.parquet", index=False)
     _write_json(
         city_root / "manifest.json",
         {
             "schema": "evrptw_city_logistics_environment_v1",
+            "connectivity_contract": {"id": "directed_projection_roundtrip_v2"},
             "city_slug": "tiny-city",
             "portable_package_verified": True,
             "release_eligible": False,
@@ -170,7 +180,7 @@ def _build_tiny_full_dataset(tmp_path: Path) -> tuple[Path, Path]:
     profile = load_reference_profile(PROFILE_PATH)
     matrix_files = {name: f"matrices/{name}.npy" for name in MATRIX_NAMES}
     family_manifest = {
-        "schema": "cle_evrptw_materialized_matrix_family_v2",
+        "schema": "cle_evrptw_materialized_matrix_family_v3",
         "family_id": "mf-tiny",
         "city_slug": "tiny-city",
         "day_type": "weekday",
@@ -191,7 +201,7 @@ def _build_tiny_full_dataset(tmp_path: Path) -> tuple[Path, Path]:
     _write_json(
         view_root / "view_manifest.json",
         {
-            "schema": "cle_evrptw_materialized_view_v3",
+            "schema": "cle_evrptw_materialized_view_v4",
             "view_id": "iv-tiny",
             "family_id": "mf-tiny",
             "scale_id": "cus1",
@@ -228,6 +238,8 @@ def test_slim_export_resolve_view_and_exact_restore(tmp_path: Path) -> None:
     )
     slim_family = slim / "materialized" / "families" / "mf-tiny"
     assert contract["family_count"] == 1
+    registry_contract = contract["reference_profile"]["charging_power_median_registry"]
+    assert (slim / registry_contract["relative_path"]).is_file()
     assert not (slim_family / "matrices").exists()
     assert resolve_family_dirs(slim, view_ids=["iv-tiny"]) == [slim_family.resolve()]
 

@@ -43,15 +43,15 @@ Stage 2 consumes:
 2. Census block-group polygons for the customer-pool split;
 3. Amazon Last Mile Routing Research Challenge 2021 `route_data.json`,
    `package_data.json`, and `travel_times.json` from `model_build_inputs`;
-4. `configs/cle_evrptw_stage2_v1.json`, which freezes benchmark sizes, splits,
+4. `configs/cle_evrptw_stage2_v2.json`, which freezes benchmark sizes, splits,
    and view relationships; and
-5. `configs/us_reference_instance_profile_v1.json`, which freezes the U.S.
+5. `configs/us_reference_instance_profile_v2.json`, which freezes the U.S.
    vehicle, charging, connector, and feasibility adapter.
 
 The production runner writes:
 
 ```text
-EVRPTW_Dataset/Instances_v1/us_11city/
+EVRPTW_Dataset/Instances_v2/us_11city/
   amazon_artifacts.json
   customer_splits/<city>/
     customer_split_manifest.parquet
@@ -245,6 +245,14 @@ territory must contain at least N candidates; otherwise the family attempt is
 rejected before spatial activation. No 40/50/.../100 km ladder or `1.5N`
 straight-line pool rule is used.
 
+Before the source-specific time and energy filters, Stage 2 audits the complete
+customer roster against both the directed node graph and the canonical
+zero-turn line graph in both depot directions. Unreachable terminals are
+written to a deterministic quarantine ledger and removed before territory
+construction. Stage 1 must declare
+`connectivity_contract.id=directed_projection_roundtrip_v2`; the reader rejects
+older anchor-only CLEs.
+
 ## 9. Step 6: spatial customer activation
 
 ### 9.1 Target quota table
@@ -309,6 +317,12 @@ The candidate pool contains real, compatible AFDC sites from the CLE; no
 synthetic station is inserted. Fixed counts by scale are part of the benchmark
 contract.
 
+The complete charger candidate roster first passes the same bidirectional
+node/turn-topology preflight. Quarantined chargers and reason codes are retained
+in the family manifest. Only the filtered roster enters the battery-feasible
+communicating-set and relevance-fill calculations, and the final selected
+terminal set must still pass the exact all-pair closure.
+
 Selection has two roles:
 
 1. a feasibility core would include stations required by the energy
@@ -325,12 +339,13 @@ The environment, not the dataset, controls repeated CS visits during a route.
 Effective charging power is:
 
 ```text
-p_effective(q) = min(p_reported_or_city_mode_median(q), vehicle_mode_cap).
+p_battery(q) = 0.90 * min(p_reported_or_national_mode_median(q), vehicle_mode_cap).
 ```
 
 The canonical adapter accepts compatible DC and Level-2 sites. Missing station
-power uses the city-by-mode median; all connectors and terminal access remain
-part of the directed matrices.
+power uses the frozen national connector-mode median and fails if that registry
+value is absent; all connectors and terminal access remain part of the directed
+matrices.
 
 ## 11. Static road state and matrices
 
@@ -338,7 +353,8 @@ Stage 1 stores weekday and weekend reference speed for every directed physical
 edge. Stage 2 chooses the column fixed by the family day type. The canonical
 profile does not invent a second uncalibrated edge-randomness multiplier.
 Directional asymmetry comes from OSM one-way topology, direction-applicable
-legal speed, different forward/reverse paths, and turn penalties.
+legal speed, and different forward/reverse paths. Canonical turn times are
+zero.
 
 Customer/depot/CS connectors are bidirectional and use the city/day physical-
 length-weighted median speed of delivery-access edges. The physical road itself
@@ -347,14 +363,15 @@ retains its original direction.
 The parent stores four `float32` matrices:
 
 1. shortest-distance path distance;
-2. turn-inclusive travel time on the shortest-distance path;
-3. exact turn-aware fastest travel time; and
+2. zero-turn travel time on the shortest-distance path;
+3. exact zero-turn fastest travel time; and
 4. physical distance of that fastest-time path.
 
-Right, left, straight, and U-turn classes are derived from edge geometry. No
-signal-delay model is included. Fastest-time routing uses an edge-state graph,
-so a turn penalty belongs to the actual incoming/outgoing edge pair rather than
-being added after shortest-path computation.
+The canonical edge-state graph assigns no temporal turn penalty. It forbids an
+immediate directed-edge reversal at a virtual access-connector split node and
+records that topological rule. The separately named 3/8/20-second geometry
+adapter is test-only and does not generate canonical matrices. No signal-delay
+model is included.
 
 ## 12. Order-template attachment
 
@@ -367,9 +384,11 @@ Amazon order template. A customer-template edge is admissible only when:
   the operating horizon.
 
 Maximum bipartite matching must cover all customers. If a source fails Hall
-coverage, the attempt is recorded and the next admissible single-day or same-
-station composite source is tried. Templates are not reused, and a time window
-is never shifted or widened to force feasibility. Every customer row stores
+coverage, the attempt is recorded and another admissible source ID is tried.
+Cus100/Cus500/Cus1000 may not change from `SINGLE_ORDER_DAY`; same-station
+composite sources are restricted to report-only Cus2000 scalability. Templates
+are not reused within a family, and a time window is never shifted or widened
+to force feasibility. Every customer row stores
 `order_template_id`, `order_station_day_id`, and `order_source_mode`. Child
 views inherit the corresponding parent templates.
 
@@ -393,8 +412,15 @@ energy(path) = h * path_distance.
 Full charging from state `b` at site `q` takes:
 
 ```text
-charge_time(q,b) = (battery_capacity - b) / (eta * p_effective(q)) * 3600.
+p_site(q) = AFDC reported power or frozen national connector-mode median
+p_battery(q) = 0.90 * min(p_site(q), vehicle mode cap)
+charge_time(q,b) = (battery_capacity - b) / p_battery(q) * 3600.
 ```
+
+The frozen medians are 6.5 kW for J1772 AC Level 2 and 200 kW for CCS DC
+fast charging. A missing registry value is a hard error; vehicle-cap fallback
+is forbidden. The 0.90 value is a benchmark derating factor, not an efficiency
+claim. See `docs/stage2_repair/CHARGING_POWER_DATA_CARD_V1.md`.
 
 For runtime feasibility checks, every view stores the fastest feasible time
 from each CS, departing full, to the depot. Reverse shortest-path computation
@@ -437,10 +463,12 @@ The generator records:
 - **M5 community concentration:** active-community count, largest-community
   share, and HHI, always shown beside the radial baseline.
 
-M1 is the primary comparative candidate. M2, M3, and M5 are report-only in the
-current pilot because cross-city topology and the obfuscated Amazon geometry do
-not justify freezing universal numeric thresholds before seeing the eleven-city
-results.
+V2.1 freezes D-5: for every primary Cus100/Cus500/Cus1000 stratum and every
+M2/M3 component, generated-to-holdout Q90 must not exceed real-to-real Q90;
+missing primary support also fails. Cus50 is a separate compatibility gate,
+while Cus2000 and composite strata are report-only. Station-block bootstrap
+confidence intervals are report-only and do not modify the frozen gate. M1,
+M4, and M5 retain the roles stated in the signed directive.
 
 ### 14.3 Reliability and selection-bias diagnostics
 

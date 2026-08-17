@@ -27,6 +27,7 @@ from shapely.strtree import STRtree
 from .util import sha256_file, write_json
 
 DEFAULT_NSI_API_URL = "https://nsi.sec.usace.army.mil/nsiapi/structures"
+NSI_MAX_FALLBACK_SPLIT_DEPTH = 4
 ORDINARY_RESIDENTIAL_PREFIXES = ("RES1", "RES2", "RES3")
 INSTITUTIONAL_RESIDENTIAL_CODES = {"RES4", "RES5", "RES6"}
 DELIVERY_ROAD_CLASSES = {
@@ -200,9 +201,10 @@ def _download_tile(
     retries: int,
 ) -> dict[str, Any]:
     destination = raw_dir / f"{tile_id}.geojsonseq.gz"
+    fallback_metadata_path = raw_dir / f"{tile_id}.download.json"
     request_sha256 = hashlib.sha256(_request_body(geometry)).hexdigest()
     if destination.exists() and destination.stat().st_size > 0:
-        return {
+        result = {
             "tile_id": tile_id,
             "path": str(destination),
             "cached": True,
@@ -210,6 +212,11 @@ def _download_tile(
             "response_sha256": sha256_file(destination),
             "compressed_bytes": destination.stat().st_size,
         }
+        if fallback_metadata_path.is_file():
+            result["fallback_split"] = json.loads(
+                fallback_metadata_path.read_text(encoding="utf-8")
+            )
+        return result
 
     raw_dir.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".part")
@@ -236,6 +243,8 @@ def _download_tile(
                         digest.update(chunk)
                         compressed.write(chunk)
             temporary.replace(destination)
+            if fallback_metadata_path.exists():
+                fallback_metadata_path.unlink()
             return {
                 "tile_id": tile_id,
                 "path": str(destination),
@@ -251,7 +260,190 @@ def _download_tile(
                 temporary.unlink()
             if attempt < retries:
                 time.sleep(min(2 ** (attempt - 1), 8))
+    status = getattr(last_error, "code", None)
+    if isinstance(status, int) and 500 <= status < 600:
+        return _download_tile_quadrant_fallback(
+            tile_id=tile_id,
+            geometry=geometry,
+            destination=destination,
+            temporary=temporary,
+            metadata_path=fallback_metadata_path,
+            api_url=api_url,
+            timeout_s=timeout_s,
+            retries=retries,
+            request_sha256=request_sha256,
+            trigger_http_status=status,
+        )
     raise RuntimeError(f"Failed NSI tile {tile_id} after {retries} attempts") from last_error
+
+
+def _download_tile_quadrant_fallback(
+    *,
+    tile_id: str,
+    geometry: Any,
+    destination: Path,
+    temporary: Path,
+    metadata_path: Path,
+    api_url: str,
+    timeout_s: int,
+    retries: int,
+    request_sha256: str,
+    trigger_http_status: int,
+) -> dict[str, Any]:
+    """Retry a persistent NSI 5xx as exact, recursively split bbox intersections."""
+
+    quadrants = _split_geometry_quadrants(geometry, tile_id=tile_id)
+    leaf_payloads: list[tuple[bytes, dict[str, Any]]] = []
+    for part_index, part in enumerate(quadrants):
+        leaf_payloads.extend(
+            _fetch_nsi_geometry_recursive(
+                tile_id=tile_id,
+                geometry=part,
+                part_path=(part_index,),
+                split_depth=1,
+                max_split_depth=NSI_MAX_FALLBACK_SPLIT_DEPTH,
+                api_url=api_url,
+                timeout_s=timeout_s,
+                retries=retries,
+            )
+        )
+
+    combined_digest = hashlib.sha256()
+    part_audit: list[dict[str, Any]] = []
+    try:
+        with gzip.open(temporary, "wb", compresslevel=6) as compressed:
+            for payload, audit in leaf_payloads:
+                combined_digest.update(payload)
+                compressed.write(payload)
+                part_audit.append(audit)
+        temporary.replace(destination)
+    except Exception:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+    fallback_split = {
+        "policy": "recursive_bbox_quadrants_after_persistent_5xx_v1",
+        "trigger_http_status": trigger_http_status,
+        "part_count": len(part_audit),
+        "max_allowed_split_depth": NSI_MAX_FALLBACK_SPLIT_DEPTH,
+        "max_split_depth_used": max(int(item["split_depth"]) for item in part_audit),
+        "parts": part_audit,
+    }
+    write_json(metadata_path, fallback_split)
+    return {
+        "tile_id": tile_id,
+        "path": str(destination),
+        "cached": False,
+        "request_sha256": request_sha256,
+        "response_payload_sha256": combined_digest.hexdigest(),
+        "response_sha256": sha256_file(destination),
+        "compressed_bytes": destination.stat().st_size,
+        "fallback_split": fallback_split,
+    }
+
+
+def _split_geometry_quadrants(geometry: Any, *, tile_id: str) -> list[Any]:
+    """Return deterministic nonempty intersections whose union is the input geometry."""
+
+    min_x, min_y, max_x, max_y = geometry.bounds
+    mid_x = (min_x + max_x) / 2.0
+    mid_y = (min_y + max_y) / 2.0
+    quadrants = [
+        geometry.intersection(bounds)
+        for bounds in (
+            box(min_x, min_y, mid_x, mid_y),
+            box(mid_x, min_y, max_x, mid_y),
+            box(min_x, mid_y, mid_x, max_y),
+            box(mid_x, mid_y, max_x, max_y),
+        )
+    ]
+    quadrants = [part for part in quadrants if not part.is_empty]
+    if len(quadrants) < 2:
+        raise RuntimeError(f"NSI tile {tile_id} cannot be split into nonempty quadrants")
+    return quadrants
+
+
+def _fetch_nsi_geometry_recursive(
+    *,
+    tile_id: str,
+    geometry: Any,
+    part_path: tuple[int, ...],
+    split_depth: int,
+    max_split_depth: int,
+    api_url: str,
+    timeout_s: int,
+    retries: int,
+) -> list[tuple[bytes, dict[str, Any]]]:
+    """Fetch one fallback part, recursively splitting only persistent HTTP 5xx."""
+
+    body = _request_body(geometry)
+    request_sha256 = hashlib.sha256(body).hexdigest()
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        request = urllib.request.Request(
+            f"{api_url}?fmt=fs",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json-seq, application/geo+json, application/json",
+                "User-Agent": "EVRPTW-DB-NSI-pilot/0.1 (research dataset construction)",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                status = getattr(response, "status", 200)
+                if status != 200:
+                    raise RuntimeError(
+                        f"NSI returned HTTP {status} for {tile_id} part {part_path}"
+                    )
+                payload = response.read()
+            return [
+                (
+                    payload,
+                    {
+                        "part_path": list(part_path),
+                        "split_depth": split_depth,
+                        "request_sha256": request_sha256,
+                        "response_payload_sha256": hashlib.sha256(payload).hexdigest(),
+                        "response_bytes": len(payload),
+                    },
+                )
+            ]
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            RuntimeError,
+        ) as error:
+            last_error = error
+            if attempt < retries:
+                time.sleep(min(2 ** (attempt - 1), 8))
+
+    status = getattr(last_error, "code", None)
+    if isinstance(status, int) and 500 <= status < 600 and split_depth < max_split_depth:
+        results: list[tuple[bytes, dict[str, Any]]] = []
+        for child_index, child in enumerate(
+            _split_geometry_quadrants(geometry, tile_id=tile_id)
+        ):
+            results.extend(
+                _fetch_nsi_geometry_recursive(
+                    tile_id=tile_id,
+                    geometry=child,
+                    part_path=(*part_path, child_index),
+                    split_depth=split_depth + 1,
+                    max_split_depth=max_split_depth,
+                    api_url=api_url,
+                    timeout_s=timeout_s,
+                    retries=retries,
+                )
+            )
+        return results
+    raise RuntimeError(
+        f"Failed NSI tile {tile_id} part {part_path} at split depth {split_depth} "
+        f"after {retries} attempts"
+    ) from last_error
 
 
 def _download_tiles(

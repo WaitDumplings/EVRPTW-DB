@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -334,8 +335,18 @@ def build_index(
         for item in preset["cities"]
     ]
     completed = [row for row in rows if row["verification_passed"]]
+    commit = os.environ.get("EVRPTW_CODE_COMMIT", "").lower()
+    branch = os.environ.get("EVRPTW_CODE_BRANCH", "")
+    if len(commit) != 40 or branch != "stage2-repair-candidate":
+        raise ValueError("CLE index requires clean candidate code provenance")
     payload = {
         "schema": schema,
+        "code_provenance": {
+            "schema": "evrptw_code_provenance_v1",
+            "code_commit": commit,
+            "code_branch": branch,
+            "working_tree_clean": True,
+        },
         "generated_utc": datetime.now(UTC).isoformat(),
         "preset": {
             "id": preset["preset_id"],
@@ -474,7 +485,7 @@ def main() -> None:
     elif configured_release_root is not None:
         release_root = profile_path_value(configured_release_root)
     else:
-        release_root = repo_root.parent / "EVRPTW_Dataset/CLE_v1/us_11city"
+        release_root = repo_root.parent / "EVRPTW_Dataset/CLE_v2/us_11city"
     if not release_root.is_absolute():
         release_root = repo_root / release_root
     hpms_edge_evidence_root = (
