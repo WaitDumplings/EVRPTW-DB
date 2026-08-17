@@ -68,28 +68,41 @@ def _load_families(plan_root: Path) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True).drop_duplicates("family_id")
 
 
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    missing = pd.isna(value)
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _stage1_customer_sets(
     cle: Any,
     *,
-    split_root: Path,
     block_group_path: Path,
 ) -> tuple[set[str], set[str], list[dict[str, Any]]]:
+    """Build the city-level pre-split Stage-1 customer audit universe.
+
+    Connectivity quarantine precedes customer splitting. Consequently every
+    source/geometry/road-anchor candidate enters the denominator, while every
+    directional quarantine is retained in the ledger with a null split pool.
+    """
+
     raw = gpd.read_parquet(cle.service_locations_path)
     base = raw.loc[
         raw["geometry_core_eligible"].fillna(False).astype(bool)
         & raw["physical_edge_id"].notna()
         & pd.to_numeric(raw["road_access_distance_m"], errors="coerce").notna()
     ].copy()
-    split = pd.read_parquet(
-        split_root / cle.city_slug / "customer_split_manifest.parquet"
-    )
-    train_ids = set(
-        split.loc[split["customer_pool"].eq("train"), "latent_service_location_id"]
-        .astype(str)
-    )
+    input_series = base["latent_service_location_id"].astype(str)
+    if input_series.duplicated().any():
+        raise ValueError(f"Duplicate pre-split customer IDs in {cle.city_slug}")
+    input_ids = set(input_series)
     bad = base.loc[~base["protected_roundtrip_eligible"].fillna(False).astype(bool)].copy()
     if bad.empty:
-        return train_ids, set(), []
+        return input_ids, set(), []
 
     points = bad.to_crs("EPSG:4326")
     if not set(points.geometry.geom_type.dropna().unique()) <= {"Point", "MultiPoint"}:
@@ -109,46 +122,68 @@ def _stage1_customer_sets(
         how="left",
         predicate="within",
     )
-    if joined.index.duplicated().any() or joined[geoid_field].isna().any():
+    if joined.index.duplicated().any():
         raise ValueError(
-            f"Cannot assign every Stage-1 quarantined customer in {cle.city_slug} "
-            "to exactly one block group"
+            f"Cannot assign each Stage-1 quarantined customer in {cle.city_slug} "
+            "to at most one block group"
         )
+    joined["census_block_group_geoid"] = joined[geoid_field].astype("string")
     joined["community_id"] = [
-        f"{cle.city_slug}:bg:{geoid}:scc:{scc}"
-        for geoid, scc in zip(joined[geoid_field].astype(str), joined["anchor_scc_id"].astype(str))
-    ]
-    communities = pd.read_parquet(split_root / cle.city_slug / "community_manifest.parquet")
-    pool = communities.set_index("community_id")["customer_pool"]
-    joined["customer_pool"] = joined["community_id"].map(pool)
-    if joined["customer_pool"].isna().any():
-        missing = joined.loc[
-            joined["customer_pool"].isna(), "latent_service_location_id"
-        ].astype(str).tolist()
-        raise ValueError(
-            "Stage-1 quarantined customers occupy communities absent from the frozen "
-            f"split; stop-and-review: {missing[:10]}"
+        (
+            f"{cle.city_slug}:bg:{geoid}:scc:{scc}"
+            if _optional_text(geoid) is not None and _optional_text(scc) is not None
+            else None
         )
-    bad_train = joined.loc[joined["customer_pool"].eq("train")].copy()
-    bad_ids = set(bad_train["latent_service_location_id"].astype(str))
+        for geoid, scc in zip(
+            joined["census_block_group_geoid"], joined["anchor_scc_id"], strict=True
+        )
+    ]
+    bad_ids = set(joined["latent_service_location_id"].astype(str))
     records = []
-    for row in bad_train.itertuples(index=False):
+    for row in joined.to_dict(orient="records"):
         reasons = []
-        if not bool(row.protected_inbound_access_eligible):
+        if not bool(row["protected_inbound_access_eligible"]):
             reasons.append("stage1_no_reference_scc_inbound_access")
-        if not bool(row.protected_outbound_access_eligible):
+        if not bool(row["protected_outbound_access_eligible"]):
             reasons.append("stage1_no_reference_scc_outbound_access")
         records.append(
             {
                 "city_slug": cle.city_slug,
                 "terminal_kind": "customer",
-                "source_id": str(row.latent_service_location_id),
+                "source_id": str(row["latent_service_location_id"]),
                 "audit_stage": "stage1_directional",
                 "reason_codes": reasons,
-                "physical_edge_id": str(row.physical_edge_id),
+                "physical_edge_id": str(row["physical_edge_id"]),
+                "anchor_scc_id": _optional_text(row.get("anchor_scc_id")),
+                "directed_edge_ref_count": row.get("directed_edge_ref_count"),
+                "directed_projection_offsets": _optional_text(
+                    row.get("directed_projection_offsets")
+                ),
+                "census_block_group_geoid": _optional_text(
+                    row.get("census_block_group_geoid")
+                ),
+                "community_id": _optional_text(row.get("community_id")),
+                "split_pool": None,
+                "split_assignment_status": "excluded_pre_split_connectivity",
+                "generation_eligible": False,
+                "stage1_inbound_access_eligible": bool(
+                    row["protected_inbound_access_eligible"]
+                ),
+                "stage1_outbound_access_eligible": bool(
+                    row["protected_outbound_access_eligible"]
+                ),
+                "stage2_node_outbound_reachable": None,
+                "stage2_node_return_reachable": None,
+                "stage2_turn_outbound_reachable": None,
+                "stage2_turn_return_reachable": None,
+                "depot_id": None,
             }
         )
-    return train_ids | bad_ids, bad_ids, records
+    if len(records) != len(bad_ids):
+        raise ValueError(
+            f"Stage-1 customer quarantine ledger is not one-row-per-ID in {cle.city_slug}"
+        )
+    return input_ids, bad_ids, records
 
 
 def _stage1_charger_sets(cle: Any) -> tuple[set[str], set[str], list[dict[str, Any]]]:
@@ -159,27 +194,266 @@ def _stage1_charger_sets(cle: Any) -> tuple[set[str], set[str], list[dict[str, A
         & raw["coordinate_candidate_eligible"].fillna(False).astype(bool)
     )
     base = raw.loc[base_mask].copy()
+    input_series = base["charger_id"].astype(str)
+    if input_series.duplicated().any():
+        raise ValueError(f"Duplicate pre-split charger IDs in {cle.city_slug}")
     bad = base.loc[~base["protected_roundtrip_eligible"].fillna(False).astype(bool)]
-    input_ids = set(base["charger_id"].astype(str))
+    input_ids = set(input_series)
     bad_ids = set(bad["charger_id"].astype(str))
     records = []
-    for row in bad.itertuples(index=False):
+    for row in bad.to_dict(orient="records"):
         reasons = []
-        if not bool(row.protected_inbound_access_eligible):
+        if not bool(row["protected_inbound_access_eligible"]):
             reasons.append("stage1_no_reference_scc_inbound_access")
-        if not bool(row.protected_outbound_access_eligible):
+        if not bool(row["protected_outbound_access_eligible"]):
             reasons.append("stage1_no_reference_scc_outbound_access")
         records.append(
             {
                 "city_slug": cle.city_slug,
                 "terminal_kind": "charging_station",
-                "source_id": str(row.charger_id),
+                "source_id": str(row["charger_id"]),
                 "audit_stage": "stage1_directional",
                 "reason_codes": reasons,
-                "physical_edge_id": str(row.physical_edge_id),
+                "physical_edge_id": str(row["physical_edge_id"]),
+                "anchor_scc_id": _optional_text(row.get("anchor_scc_id")),
+                "directed_edge_ref_count": row.get("directed_edge_ref_count"),
+                "directed_projection_offsets": _optional_text(
+                    row.get("directed_projection_offsets")
+                ),
+                "census_block_group_geoid": None,
+                "community_id": None,
+                "split_pool": None,
+                "split_assignment_status": "not_applicable_terminal_kind",
+                "generation_eligible": False,
+                "stage1_inbound_access_eligible": bool(
+                    row["protected_inbound_access_eligible"]
+                ),
+                "stage1_outbound_access_eligible": bool(
+                    row["protected_outbound_access_eligible"]
+                ),
+                "stage2_node_outbound_reachable": None,
+                "stage2_node_return_reachable": None,
+                "stage2_turn_outbound_reachable": None,
+                "stage2_turn_return_reachable": None,
+                "depot_id": None,
             }
         )
+    if len(records) != len(bad_ids):
+        raise ValueError(
+            f"Stage-1 charger quarantine ledger is not one-row-per-ID in {cle.city_slug}"
+        )
     return input_ids, bad_ids, records
+
+
+def _customer_split_contract(
+    eligible_customer_ids: set[str],
+    split: pd.DataFrame,
+    quarantined_customer_ids: set[str],
+) -> dict[str, Any]:
+    required = {"latent_service_location_id", "customer_pool"}
+    missing_columns = required - set(split.columns)
+    if missing_columns:
+        raise ValueError(f"Customer split lacks columns: {sorted(missing_columns)}")
+    split_ids = split["latent_service_location_id"].astype(str)
+    duplicate_ids = set(split_ids.loc[split_ids.duplicated(keep=False)])
+    split_id_set = set(split_ids)
+    invalid_pool_ids = set(
+        split_ids.loc[~split["customer_pool"].isin({"train", "heldout"})]
+    )
+    missing_eligible = eligible_customer_ids - split_id_set
+    unexpected_split = split_id_set - eligible_customer_ids
+    quarantine_overlap = quarantined_customer_ids & split_id_set
+    assertions = {
+        "every_generation_eligible_customer_has_exactly_one_train_or_heldout_pool": (
+            not duplicate_ids
+            and not invalid_pool_ids
+            and not missing_eligible
+            and not unexpected_split
+        ),
+        "every_connectivity_quarantined_customer_has_null_split_pool": (
+            not quarantine_overlap
+        ),
+        "no_connectivity_quarantined_customer_in_split_family_or_view_pool": (
+            not quarantine_overlap
+        ),
+        "leakage_never_drops_eligible_customer_for_missing_pool": (
+            not missing_eligible
+        ),
+    }
+    return {
+        "schema": "cle_evrptw_pre_split_customer_contract_v1",
+        "passed": all(assertions.values()),
+        "assertions": assertions,
+        "eligible_customer_count": len(eligible_customer_ids),
+        "split_customer_count": len(split_id_set),
+        "duplicate_split_customer_ids": sorted(duplicate_ids)[:10],
+        "invalid_pool_customer_ids": sorted(invalid_pool_ids)[:10],
+        "missing_eligible_customer_ids": sorted(missing_eligible)[:10],
+        "unexpected_split_customer_ids": sorted(unexpected_split)[:10],
+        "quarantined_customer_ids_in_split": sorted(quarantine_overlap)[:10],
+    }
+
+
+def _stage2_ledger_record(
+    item: dict[str, Any],
+    *,
+    city_slug: str,
+    depot_id: str,
+    split_lookup: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    source_id = str(item["source_id"])
+    reasons = set(map(str, item["reason_codes"]))
+    split_row = split_lookup.get(source_id, {})
+    is_customer = str(item["terminal_kind"]) == "customer"
+    return {
+        **item,
+        "city_slug": city_slug,
+        "source_id": source_id,
+        "audit_stage": "stage2_exact_preflight",
+        "reason_codes": sorted(reasons),
+        "census_block_group_geoid": (
+            _optional_text(split_row.get("census_block_group_geoid"))
+            if is_customer
+            else None
+        ),
+        "community_id": (
+            _optional_text(split_row.get("community_id")) if is_customer else None
+        ),
+        "split_pool": None,
+        "split_assignment_status": (
+            "excluded_pre_split_connectivity"
+            if is_customer
+            else "not_applicable_terminal_kind"
+        ),
+        "generation_eligible": False,
+        "stage1_inbound_access_eligible": None,
+        "stage1_outbound_access_eligible": None,
+        "stage2_node_outbound_reachable": (
+            "node_unreachable_from_depot" not in reasons
+        ),
+        "stage2_node_return_reachable": (
+            "node_cannot_return_to_depot" not in reasons
+        ),
+        "stage2_turn_outbound_reachable": (
+            "turn_unreachable_from_depot" not in reasons
+        ),
+        "stage2_turn_return_reachable": (
+            "turn_cannot_return_to_depot" not in reasons
+        ),
+        "depot_id": depot_id,
+    }
+
+
+def _aggregate_quarantine_ledger(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    boolean_fields = (
+        "stage1_inbound_access_eligible",
+        "stage1_outbound_access_eligible",
+        "stage2_node_outbound_reachable",
+        "stage2_node_return_reachable",
+        "stage2_turn_outbound_reachable",
+        "stage2_turn_return_reachable",
+    )
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for record in records:
+        key = (
+            str(record["city_slug"]),
+            str(record["terminal_kind"]),
+            str(record["source_id"]),
+        )
+        groups.setdefault(key, []).append(record)
+
+    result = []
+    for key, items in sorted(groups.items()):
+        first = dict(items[0])
+        first["audit_stage"] = "connectivity_union"
+        first["quarantine_stages"] = sorted(
+            {str(item["audit_stage"]) for item in items}
+        )
+        first["reason_codes"] = sorted(
+            {
+                str(reason)
+                for item in items
+                for reason in item.get("reason_codes", [])
+            }
+        )
+        first["depot_ids"] = sorted(
+            {
+                str(item["depot_id"])
+                for item in items
+                if _optional_text(item.get("depot_id")) is not None
+            }
+        )
+        first["depot_id"] = None
+        for field in boolean_fields:
+            values = [
+                bool(item[field])
+                for item in items
+                if item.get(field) is not None
+            ]
+            first[field] = all(values) if values else None
+        first["split_pool"] = None
+        first["generation_eligible"] = False
+        result.append(first)
+    return result
+
+
+def _quarantine_ledger_contract(
+    city_slug: str,
+    ledger: list[dict[str, Any]],
+    expected_customer_ids: set[str],
+    expected_missing_community_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    customers = [
+        item
+        for item in ledger
+        if item["city_slug"] == city_slug and item["terminal_kind"] == "customer"
+    ]
+    observed = [str(item["source_id"]) for item in customers]
+    observed_set = set(observed)
+    observed_missing_community_ids = {
+        str(item["source_id"])
+        for item in customers
+        if item.get("community_id") is None
+    }
+    expected_missing_community_ids = set(expected_missing_community_ids or set())
+    assertions = {
+        "every_quarantined_customer_appears_exactly_once_in_city_ledger": (
+            len(observed) == len(observed_set) and observed_set == expected_customer_ids
+        ),
+        "r2_numerator_includes_quarantined_customers_with_missing_community_ids": (
+            expected_missing_community_ids <= observed_set
+            and expected_missing_community_ids <= observed_missing_community_ids
+        ),
+        "every_quarantined_customer_has_null_split_pool": all(
+            item.get("split_pool") is None for item in customers
+        ),
+        "every_quarantined_customer_is_excluded_before_split": all(
+            item.get("split_assignment_status")
+            == "excluded_pre_split_connectivity"
+            and not bool(item.get("generation_eligible"))
+            for item in customers
+        ),
+    }
+    return {
+        "schema": "cle_evrptw_quarantine_ledger_contract_v1",
+        "passed": all(assertions.values()),
+        "assertions": assertions,
+        "expected_unique_customer_count": len(expected_customer_ids),
+        "observed_unique_customer_count": len(observed_set),
+        "expected_missing_community_customer_count": len(
+            expected_missing_community_ids
+        ),
+        "observed_missing_community_customer_count": len(
+            observed_missing_community_ids
+        ),
+        "missing_expected_communityless_customer_ids": sorted(
+            expected_missing_community_ids - observed_missing_community_ids
+        )[:10],
+        "missing_customer_ids": sorted(expected_customer_ids - observed_set)[:10],
+        "unexpected_customer_ids": sorted(observed_set - expected_customer_ids)[:10],
+    }
 
 
 def _reason_sets(ledger: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
@@ -225,24 +499,26 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
         )
         customer_input, stage1_customers, stage1_customer_ledger = _stage1_customer_sets(
             cle,
-            split_root=args.split_root,
             block_group_path=block_group_path,
         )
         charger_input, stage1_chargers, stage1_charger_ledger = _stage1_charger_sets(cle)
-        all_ledger.extend(stage1_customer_ledger)
-        all_ledger.extend(stage1_charger_ledger)
+        city_raw_ledger = stage1_customer_ledger + stage1_charger_ledger
 
         split = pd.read_parquet(
             args.split_root / str(city) / "customer_split_manifest.parquet"
         )
-        train_ids = set(
-            split.loc[split["customer_pool"].eq("train"), "latent_service_location_id"]
-            .astype(str)
+        customers = cle.read_service_locations().reset_index(drop=True)
+        eligible_customer_ids = set(
+            customers["latent_service_location_id"].astype(str)
         )
-        customers = cle.read_service_locations()
-        customers = customers.loc[
-            customers["latent_service_location_id"].astype(str).isin(train_ids)
-        ].reset_index(drop=True)
+        split_lookup = (
+            split.assign(
+                _source_id=split["latent_service_location_id"].astype(str)
+            )
+            .drop_duplicates("_source_id")
+            .set_index("_source_id")
+            .to_dict(orient="index")
+        )
         chargers = cle.read_chargers().reset_index(drop=True)
         depots = cle.read_depots().reset_index(drop=True)
         directed_speeds = pd.read_parquet(cle.speeds_path)
@@ -286,9 +562,23 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
                 terminal_kind="charging_station",
             )
             for item in bad_customers:
-                customer_ledger.append({**item, "city_slug": str(city), "depot_id": depot_id})
+                customer_ledger.append(
+                    _stage2_ledger_record(
+                        item,
+                        city_slug=str(city),
+                        depot_id=depot_id,
+                        split_lookup=split_lookup,
+                    )
+                )
             for item in bad_chargers:
-                charger_ledger.append({**item, "city_slug": str(city), "depot_id": depot_id})
+                charger_ledger.append(
+                    _stage2_ledger_record(
+                        item,
+                        city_slug=str(city),
+                        depot_id=depot_id,
+                        split_lookup={},
+                    )
+                )
             direct_energy = (
                 charger_star.connectivity_eligible[1:]
                 & (charger_star.outbound_distance_km[1:] * energy_coefficient <= battery + 1e-9)
@@ -306,12 +596,32 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                 }
             )
-        all_ledger.extend(
-            {**item, "audit_stage": "stage2_exact_preflight"}
-            for item in customer_ledger + charger_ledger
-        )
         customer_node, customer_turn = _reason_sets(customer_ledger)
         charger_node, charger_turn = _reason_sets(charger_ledger)
+        customer_union = stage1_customers | customer_node | customer_turn
+        charger_union = stage1_chargers | charger_node | charger_turn
+        city_raw_ledger.extend(customer_ledger + charger_ledger)
+        city_ledger = _aggregate_quarantine_ledger(city_raw_ledger)
+        all_ledger.extend(city_ledger)
+
+        expected_missing_community_ids = {
+            str(item["source_id"])
+            for item in city_raw_ledger
+            if item["terminal_kind"] == "customer"
+            and item.get("community_id") is None
+        }
+
+        split_contract = _customer_split_contract(
+            eligible_customer_ids,
+            split,
+            customer_union,
+        )
+        ledger_contract = _quarantine_ledger_contract(
+            str(city),
+            city_ledger,
+            customer_union,
+            expected_missing_community_ids,
+        )
         customer_rates = quarantine_rate_summary(
             customer_input,
             stage1_directional_ids=stage1_customers,
@@ -326,7 +636,7 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
             stage2_turn_ids=charger_turn,
             rate_limit=CHARGER_QUARANTINE_RATE_LIMIT,
         )
-        observed = stage1_customers | stage1_chargers | customer_node | customer_turn | charger_node | charger_turn
+        observed = customer_union | charger_union
         known = {
             terminal_id: {"quarantined": terminal_id in observed}
             for terminal_id in sorted(KNOWN_IDS.get(str(city), set()))
@@ -336,8 +646,21 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
                 "city_slug": str(city),
                 "audited_pilot_family_count": len(city_families),
                 "unique_selected_depot_count": len(selected_depots),
+                "customer_audit_universe": {
+                    "rule_id": "connectivity_quarantine_precedes_customer_split_v1",
+                    "denominator_stage": (
+                        "after non-connectivity source/geometry/road-anchor eligibility "
+                        "and before Stage-1/Stage-2 connectivity filtering"
+                    ),
+                    "pre_split_unique_customer_count": len(customer_input),
+                    "generation_eligible_unique_customer_count": len(
+                        eligible_customer_ids
+                    ),
+                },
                 "customer": customer_rates,
                 "charging_station": charger_rates,
+                "customer_split_contract": split_contract,
+                "quarantine_ledger_contract": ledger_contract,
                 "pf1": {
                     "schema": "cle_evrptw_pf1_exact_lower_bound_v1",
                     "rows": pf1_rows,
@@ -351,6 +674,8 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
     passed = all(
         city["customer"]["passed"]
         and city["charging_station"]["passed"]
+        and city["customer_split_contract"]["passed"]
+        and city["quarantine_ledger_contract"]["passed"]
         and city["pf1"]["passed"]
         and all(item["quarantined"] for item in city["known_terminal_audit"].values())
         for city in city_reports
@@ -361,18 +686,44 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
         "terminal_kind",
         "source_id",
         "audit_stage",
+        "quarantine_stages",
         "reason_codes",
         "physical_edge_id",
-        "depot_id",
+        "anchor_scc_id",
+        "directed_edge_ref_count",
+        "directed_projection_offsets",
+        "census_block_group_geoid",
+        "community_id",
+        "split_pool",
+        "split_assignment_status",
+        "generation_eligible",
+        "stage1_inbound_access_eligible",
+        "stage1_outbound_access_eligible",
+        "stage2_node_outbound_reachable",
+        "stage2_node_return_reachable",
+        "stage2_turn_outbound_reachable",
+        "stage2_turn_return_reachable",
+        "depot_ids",
     ]
     pd.DataFrame.from_records(all_ledger, columns=ledger_columns).to_parquet(
         ledger_path, index=False
     )
     report = {
-        "schema": "cle_evrptw_phase_c1_terminal_connectivity_audit_v1",
+        "schema": "cle_evrptw_phase_c1_terminal_connectivity_audit_v2",
         "code_provenance": code_provenance,
         "passed": passed,
-        "policy": "stop_and_review_on_rate_pf1_or_known_id_failure",
+        "rule_id": "connectivity_quarantine_precedes_customer_split_v1",
+        "policy": "stop_and_review_on_rate_split_ledger_pf1_or_known_id_failure",
+        "customer_split_semantics": {
+            "quarantined_split_pool": None,
+            "quarantined_split_assignment_status": (
+                "excluded_pre_split_connectivity"
+            ),
+            "quarantined_generation_eligible": False,
+            "eligible_split_universe": (
+                "connectivity-eligible customers only; complete-community 80/20"
+            ),
+        },
         "cities": city_reports,
         "ledger": str(ledger_path),
         "elapsed_seconds": time.perf_counter() - started,

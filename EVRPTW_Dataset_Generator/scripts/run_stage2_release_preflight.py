@@ -80,6 +80,10 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     c1 = json.loads(args.connectivity_audit.read_text(encoding="utf-8"))
+    if c1.get("schema") != "cle_evrptw_phase_c1_terminal_connectivity_audit_v2":
+        raise ValueError("C2 requires the C1 pre-split connectivity audit v2 schema")
+    if c1.get("rule_id") != "connectivity_quarantine_precedes_customer_split_v1":
+        raise ValueError("C2 requires the frozen C1-Q1 pre-split quarantine rule")
     if c1.get("code_provenance", {}).get("code_commit") != code_provenance["code_commit"]:
         raise ValueError("C1 report is not bound to the current clean candidate commit")
     plan_registry = json.loads(

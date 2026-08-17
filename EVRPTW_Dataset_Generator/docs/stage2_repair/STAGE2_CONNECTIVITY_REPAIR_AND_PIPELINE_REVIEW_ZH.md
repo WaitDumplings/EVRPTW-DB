@@ -13,10 +13,16 @@
 - **R-1**：固定 11 城 CLE 唯一根目录为
   `EVRPTW_Dataset/CLE_v2/us_11city`。`CLE_v1/us_11city` 只读保留，reader
   必须拒绝，不能 resume 或升级。
-- **R-2**：quarantine rate 按 `city × terminal_kind` 和 unique ID 计算；分母是
-  进入 directional audit 的 unique terminal IDs，分子是 Stage-1 directional、
-  Stage-2 node/turn 的 unique union。customer 上限 0.1%，charger 上限 1.0%；
-  超限是 stop-and-review，不得静默删除。该阈值只作 engineering bug detector。
+- **R-2 / C1-Q1**：固定规则
+  `connectivity_quarantine_precedes_customer_split_v1`。quarantine rate 按
+  `city × terminal_kind` 和 unique ID 计算；customer 分母是通过非连通性
+  source/geometry/road-anchor 条件、在 Stage-1/Stage-2 connectivity filtering 前的
+  全城市 pre-split universe，不依赖 train/heldout；分子是 Stage-1 directional、
+  Stage-2 node/turn 的 unique union。quarantined customer 保留完整 ledger，但
+  `split_pool=null`、`split_assignment_status=excluded_pre_split_connectivity`、
+  `generation_eligible=false`。customer 上限 0.1%，charger 上限 1.0%；超限是
+  stop-and-review，不得通过 split assignment 或静默删除降低 rate。该阈值只作
+  engineering bug detector。
 - **R-3**：LA smoke：terminal selection/total 分别满足 `<=3600/<=7200` 为 GREEN；
   `3600<terminal<=7200` 且 total `<=7200` 为 AMBER；其余 RED。GREEN/AMBER
   可进 pilot，AMBER 必须登记 exact-performance optimization。pilot 任一 family
@@ -607,7 +613,7 @@ rg -n 'directed_projection_roundtrip_v2' \
 ### Phase C0：只生成固定 140-family split/plan（不 materialize）
 
 ```bash
-PILOT_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v3
+PILOT_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v4
 INSTANCE_MODE=non_release_pilot WORKERS=1 FAMILIES_PER_WORKER_TASK=1 \
 PILOT_FAMILIES_PER_CITY=7 \
 INSTANCE_OUTPUT_ROOT="$PILOT_ROOT" \
@@ -620,12 +626,18 @@ INSTANCE_OUTPUT_ROOT="$PILOT_ROOT" \
 
 ### Phase C1：新 CLE 的 10 城 terminal connectivity/PF-1 audit
 
-审计范围：十个 train cities 的 train customer roster 和 candidate chargers；至少对
-Houston、Phoenix、Los Angeles 输出 known bad IDs 的新 eligibility、node/turn masks、
-edge refs。gate：
+审计范围：十个 train cities 的城市级 pre-split customer universe 和完整
+candidate charger roster；至少对 Houston、Phoenix、Los Angeles 输出 known bad IDs
+的新 eligibility、node/turn masks、edge refs。执行顺序固定为：非连通性
+source/geometry eligibility → Stage-1/Stage-2 connectivity audit → quarantine →
+仅对 connectivity-eligible customers 建 complete-community 80/20 split。gate：
 
 - Stage 1 endpoint traps 被 directional flag 隔离；
 - Stage 2 turn-only traps 被 canonical turn preflight 隔离；
+- 每个 quarantined customer 在 city ledger 恰好一行，包括 community 缺失者；
+- quarantined customer 的 split pool 必须为 null，且不得出现在 split/family/view；
+- 每个 generation-eligible customer 必须恰好属于 train/heldout 之一；
+- R2 customer denominator 是 connectivity filtering 前的城市级 unique universe；
 - depot 本身四个 reachability mask 都为 true；
 - 不存在 ledger/mask count mismatch。
 
@@ -644,9 +656,11 @@ PYTHONPATH=src /home/npg/miniconda3/envs/evrptw-cle/bin/python \
   --output "$PILOT_ROOT/reports/stage2_repair/connectivity_audit.json"
 ```
 
-输出必须逐城报告 Stage-1、Stage-2 node、Stage-2 turn 和 union unique-ID rate，
-Houston/Phoenix/LA known IDs，且 PF-1 每个审计 depot 的严格 lower-bound eligible CS
-不少于 50。
+输出 schema 固定为 `cle_evrptw_phase_c1_terminal_connectivity_audit_v2`，
+必须逐城报告 Stage-1、Stage-2 node、Stage-2 turn 和 union unique-ID rate、pre-split
+denominator、split/ledger assertions、Houston/Phoenix/LA known IDs，且 PF-1 每个审计
+depot 的严格 lower-bound eligible CS 不少于 50。C0 的 eligible split membership 必须
+与上一批准基线逐 ID 相同；不得 resume `pilot_v3`。
 
 ### Phase C2：Amazon H3/PF/leakage/5:2 preflight
 
@@ -698,7 +712,7 @@ Test2、Test3/Jacksonville、Test1、Cus2000 都不进入此 pilot。
 ```bash
 cd /data/Maojie/ICLR/EVRPTW-DB
 
-/usr/bin/time -v -o logs/generate_instances_pilot_v3.time \
+/usr/bin/time -v -o logs/generate_instances_pilot_v4.time \
   env PATH=/home/npg/miniconda3/envs/evrptw-cle/bin:/usr/local/bin:/usr/bin:/bin \
       PYTHON_BIN=/home/npg/miniconda3/envs/evrptw-cle/bin/python \
       INSTANCE_MODE=non_release_pilot \
@@ -713,7 +727,7 @@ cd /data/Maojie/ICLR/EVRPTW-DB
         --cities new-york los-angeles chicago houston phoenix philadelphia \
                  san-antonio san-diego dallas fort-worth \
         --tracks train validation \
-  > logs/generate_instances_pilot_v3.log 2>&1
+  > logs/generate_instances_pilot_v4.log 2>&1
 ```
 
 `WORKERS=12`、`FAMILIES_PER_WORKER_TASK=1`、`MAX_ATTEMPTS_PER_FAMILY=4` 是本次

@@ -361,7 +361,28 @@ def test_complete_community_split_is_deterministic_and_group_safe(tmp_path: Path
         output_dir=tmp_path / "split",
         split_seed=123,
     )
+    build_customer_split(
+        cle,
+        block_groups_path=blocks_path,
+        output_dir=tmp_path / "split-repeat",
+        split_seed=123,
+    )
     ledger = pd.read_parquet(tmp_path / "split" / "customer_split_manifest.parquet")
+    repeated = pd.read_parquet(
+        tmp_path / "split-repeat" / "customer_split_manifest.parquet"
+    )
+    membership_columns = [
+        "latent_service_location_id",
+        "community_id",
+        "customer_pool",
+        "training_ineligible",
+    ]
+    pd.testing.assert_frame_equal(
+        ledger[membership_columns].sort_values("latent_service_location_id").reset_index(drop=True),
+        repeated[membership_columns]
+        .sort_values("latent_service_location_id")
+        .reset_index(drop=True),
+    )
     assert report["eligible_location_count"] == 99
     assert ledger.groupby("community_id")["customer_pool"].nunique().max() == 1
     assert ledger.loc[ledger["customer_pool"].eq("heldout"), "training_ineligible"].all()

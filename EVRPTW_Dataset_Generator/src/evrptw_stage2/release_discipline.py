@@ -64,10 +64,12 @@ def quarantine_rate_summary(
         }
 
     return {
-        "schema": "cle_evrptw_unique_terminal_quarantine_rate_v1",
+        "schema": "cle_evrptw_unique_terminal_quarantine_rate_v2",
+        "rule_id": "connectivity_quarantine_precedes_customer_split_v1",
         "denominator_semantics": (
-            "unique terminal IDs entering directional connectivity audit; repeated "
-            "family/depot checks count once"
+            "city-level unique terminal IDs entering connectivity audit after "
+            "non-connectivity eligibility and before Stage-1/Stage-2 filtering; "
+            "independent of train/heldout; repeated family/depot checks count once"
         ),
         "audit_input_unique_terminal_count": len(inputs),
         "stage1_directional_quarantine": record(stage1),
