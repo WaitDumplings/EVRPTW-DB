@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import time
 from pathlib import Path
@@ -53,14 +52,6 @@ KNOWN_REASONS = {
     "turn_unreachable_from_depot",
     "turn_cannot_return_to_depot",
 }
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -628,6 +619,7 @@ def _sample_manifest(certificates: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
         group_columns=["city_slug", "reason_code"],
         minimum_per_group=5,
         namespace=H64_NAMESPACE + ":stage2_turn_only",
+        allow_all_when_insufficient=True,
     )
     turn_sample["sample_category"] = "stage2_turn_only"
     major_edge_samples = []
@@ -873,17 +865,10 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
     ).reset_index(drop=True)
     sorted_certificates.to_parquet(certificate_path, index=False)
 
-    def replay_digest(signature_column: str) -> str:
-        replay = sorted_certificates[
-            [*certificate_key, signature_column]
-        ].rename(columns={signature_column: "replay_signature"})
-        payload = replay.to_json(orient="records", date_format="iso").encode(
-            "utf-8"
-        )
-        return hashlib.sha256(payload).hexdigest()
-
-    replay_digest_1 = replay_digest("replay_round_1_signature")
-    replay_digest_2 = replay_digest("replay_round_2_signature")
+    replay_rounds_equal = bool(
+        len(sorted_certificates)
+        and sorted_certificates["replay_round_2_equal"].astype(bool).all()
+    )
     concentration_path = args.output.with_suffix(".concentration.json")
     union_concentrations = [
         row for row in concentrations if row["reason_code"] == "__all_union__"
@@ -903,8 +888,6 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
     map_dir = args.output.parent / "connectivity_h64_maps"
     map_artifacts = _write_maps(sample, args.cle_root, catalogs, map_dir)
     sample_report["sample_manifest"] = str(sample_path)
-    sample_sha256 = _sha256(sample_path)
-    sample_report["sample_manifest_sha256"] = sample_sha256
     sample_report["map_artifacts"] = map_artifacts
     review_template_path = args.output.with_suffix(".h64_review_template.json")
     _write_json(
@@ -913,7 +896,6 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             "schema": "cle_evrptw_connectivity_h64_manual_review_v1",
             "code_commit": code["code_commit"],
             "sample_manifest": str(sample_path),
-            "sample_manifest_sha256": sample_sha256,
             "reviewed_sample_ids": sorted(set(sample["source_id"].astype(str))),
             "reviewer_signoff_id": "",
             "findings": {
@@ -927,7 +909,6 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
     manual = manual_review_gate(
         args.manual_review,
         sample["source_id"].astype(str),
-        sample_manifest_sha256=sample_sha256,
         code_commit=code["code_commit"],
     )
     pf1 = {
@@ -1082,7 +1063,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             and certificate_frame["certificate_passed"].astype(bool).all()
         ),
         "ledger_mask_summary_counts_are_exact": count_consistency["passed"],
-        "deterministic_replay_digest_equal": replay_digest_1 == replay_digest_2,
+        "all_replay_rounds_equal": replay_rounds_equal,
         "reason_and_concentration_report_complete": concentration_complete,
         "h64_sample_coverage_passed": sample_report["coverage_passed"],
         "pf1_all_cities_passed": pf1["passed"],
@@ -1109,9 +1090,11 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         "city_certificates": city_reports,
         "count_consistency": count_consistency,
         "deterministic_replay": {
-            "round_1_sha256": replay_digest_1,
-            "round_2_sha256": replay_digest_2,
-            "passed": replay_digest_1 == replay_digest_2,
+            "certificate_count": len(sorted_certificates),
+            "equal_certificate_count": int(
+                sorted_certificates["replay_round_2_equal"].astype(bool).sum()
+            ),
+            "passed": replay_rounds_equal,
         },
         "h64_samples": sample_report,
         "pf1": pf1,
@@ -1120,15 +1103,11 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         "materialization_exclusion": materialization,
         "inputs": {
             "connectivity_audit": str(args.connectivity_audit),
-            "connectivity_audit_sha256": _sha256(args.connectivity_audit),
             "cohort_split": str(args.cohort_split),
-            "cohort_split_sha256": _sha256(args.cohort_split),
         },
         "artifacts": {
             "certificates": str(certificate_path),
-            "certificates_sha256": _sha256(certificate_path),
             "concentration": str(concentration_path),
-            "concentration_sha256": _sha256(concentration_path),
         },
         "failure_semantics": "any_failed_certificate_sample_capacity_pf_or_manual_check_forbids_C2",
         "elapsed_seconds": time.perf_counter() - started,

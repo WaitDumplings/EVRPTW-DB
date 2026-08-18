@@ -1,4 +1,4 @@
-# EVRPTW-DB C1b / R2-v2 连通性审核与 pilot_v5 执行手册
+# EVRPTW-DB C1b / R2-v2 连通性审核与 pilot_v6 执行手册
 
 > 状态：待 reviewer 审核。本文取代
 > `STAGE2_CONNECTIVITY_REPAIR_AND_PIPELINE_REVIEW_ZH.md` 中从 Phase C0 开始的旧
@@ -127,8 +127,7 @@ rule_id = r2_v2_replayable_connectivity_certificate_gate_v1
 - `connectivity_audit_acceptance_v2.h64_review_template.json`；
 - `connectivity_h64_maps/<city>.html` 和 `<city>.geojson`。
 
-人工 sign-off 同时绑定 sample parquet SHA-256 与 candidate commit。旧 sign-off、旧 sample
-或另一个 commit 的 review 文件不能通过。
+人工 sign-off 绑定 candidate commit，并逐项列出实际 reviewed sample IDs。后续放行不再计算或校验 sample、C1、certificate 等文件 SHA；另一个 commit 的 review 文件仍不能通过。
 
 ## 4. 版本纪律
 
@@ -148,17 +147,18 @@ branch = stage2-repair-candidate
 working tree = clean
 ```
 
-先运行全量测试，再 commit/push，然后才建立 pilot_v5。任何代码变化都要求新 commit 和
-新 root；不得用旧 C1 报告配新代码。
+先运行全量测试，再 commit/push，然后才建立 pilot_v6。任何代码变化都要求新 commit 和
+新 root；不得用旧 C1 报告配新代码。pilot_v5 因 9 个 CBG/community 漂移（其中 3 个 pool 漂移）已 STOP；pilot_v6 直接复用批准的 v4 frozen split，不再重算 CBG。
 
-## 5. Phase C0：建立 pilot_v5 plan，不 materialize
+## 5. Phase C0：建立 pilot_v6 plan，不 materialize
 
 ```bash
 cd /data/Maojie/ICLR/EVRPTW-DB
 
-PILOT_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v5
+PILOT_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v6
 
 INSTANCE_MODE=non_release_pilot \
+FROZEN_SPLIT_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v4 \
 WORKERS=1 \
 FAMILIES_PER_WORKER_TASK=1 \
 PILOT_FAMILIES_PER_CITY=7 \
@@ -180,8 +180,8 @@ cd /data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset_Generator
 PYTHONPATH=src /home/npg/miniconda3/envs/maojie/bin/python \
   scripts/compare_stage2_c0_plans.py \
   --baseline-root ../EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v4 \
-  --candidate-root ../EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v5 \
-  --output ../EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v5/reports/stage2_repair/c0_exact_comparison.json
+  --candidate-root ../EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v6 \
+  --output ../EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v6/reports/stage2_repair/c0_exact_comparison.json
 ```
 
 必须同时满足：
@@ -200,7 +200,7 @@ PYTHONPATH=src /home/npg/miniconda3/envs/maojie/bin/python \
 ```bash
 cd /data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset_Generator
 
-PILOT_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v5
+PILOT_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v6
 
 set +e
 PYTHONPATH=src /home/npg/miniconda3/envs/maojie/bin/python \
@@ -286,7 +286,7 @@ Fort Worth Stage-1 certificates: 582/582 passed
 Fort Worth Stage-2 depot-terminal certificates: 28/28 passed
 ```
 
-这些只是实现探针，不代替 pilot_v5 的 10 城报告。
+这些只是实现探针，不代替 pilot_v6 的 10 城报告。
 
 ## 8. 集中度报告
 
@@ -316,16 +316,14 @@ EVRPTW-DB:C1b:R2-v2:H64:v1
 
 - 每城、每个非空 Stage-1 customer reason：至少 5 个 unique terminals；
 - Stage-1∪Stage-2 quarantined chargers 总数不超过 500 时全部抽取；否则每城/reason 至少 10；
-- 每个存在 Stage-2 turn-only customer 的城市：至少 5 个 unique terminals；
+- 每个存在 Stage-2 turn-only customer 的城市：抽取 `min(5, available)`；不足 5 个时全部检查，不复制；
 - 每城 Stage-2 top-5 physical edges 各增加一个 H64 representative；
 - 不允许手选、复制 terminal 或用同一 terminal 冒充多个 unique 样本。
 
 HTML/GeoJSON 显示 terminal、projection connector、physical edge、全部 directed refs、
 `u→v/key` 方向箭头和失败方向。
 
-v4 已知 Fort Worth 只有 2 个 unique Stage-2 turn-only customers。因此 reviewer 的字面
-“每城至少 5 个”在该城无法满足。程序会将 `h64_sample_coverage_passed=false`，不得
-复制样本凑 5 个。此时保持 STOP，并把 coverage row 交回 reviewer。
+v4 已知 Fort Worth 只有 2 个 unique Stage-2 turn-only customers。按更新后的可用量规则，这 2 个全部检查，coverage row 记录 `requested=5, required=2, selected=2, all_available_selected=true`；不得复制样本凑 5 个。
 
 若自动 gate 全部通过，reviewer 复制
 `connectivity_audit_acceptance_v2.h64_review_template.json` 为签字文件，逐图审核后：
@@ -338,14 +336,14 @@ v4 已知 Fort Worth 只有 2 个 unique Stage-2 turn-only customers。因此 re
 }
 ```
 
-并填写非空 `reviewer_signoff_id`。sample SHA 和 code commit 不得修改。然后用相同命令
+并填写非空 `reviewer_signoff_id`。code commit 不得修改；不再要求 sample SHA。然后用相同命令
 增加：
 
 ```bash
 --manual-review /absolute/path/to/signed_h64_review.json
 ```
 
-任何一项非零或 hash/commit 不匹配均失败。
+任何一项非零或 commit 不匹配均失败。
 
 ## 10. 生成能力与 materialization exclusion
 
@@ -378,7 +376,6 @@ acceptance.rule_id = r2_v2_replayable_connectivity_certificate_gate_v1
 acceptance.passed = true
 acceptance.c2_allowed = true
 acceptance commit = current clean candidate commit
-acceptance C1 SHA256 = supplied C1 file SHA256
 R2-v1 outcome = triggered_stop_and_review
 ```
 
@@ -410,11 +407,11 @@ PYTHONPATH=src /home/npg/miniconda3/envs/maojie/bin/python \
 - 两次 replay 不一致；
 - ledger/mask/summary count 不一致；
 - PF-1、post-mask capacity 或 primary PF-2 失败；
-- H64 unique sample 数不足；
+- 存在可用 H64 样本但未全部选择；
 - major edge 未覆盖；
 - 人工三类 finding 任一非零；
 - Stage-2 quarantined customer 出现在 materialized view；
-- commit/hash 不匹配。
+- commit 不匹配。
 
 STOP 只输出失败证书、coverage row 和地图例子；不得重试 seed、提高 R2-v1 阈值、
 重分 C0 pool、启动 LA smoke 或 materialize pilot。

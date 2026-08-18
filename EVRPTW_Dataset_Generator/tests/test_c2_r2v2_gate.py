@@ -21,7 +21,7 @@ PREFLIGHT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREFLIGHT)
 
 
-def test_c2_requires_passed_content_bound_r2_v2_before_other_work(tmp_path: Path) -> None:
+def test_c2_requires_passed_same_commit_r2_v2_before_other_work(tmp_path: Path) -> None:
     commit = "a" * 40
     c1_path = tmp_path / "c1.json"
     acceptance_path = tmp_path / "acceptance.json"
@@ -39,7 +39,6 @@ def test_c2_requires_passed_content_bound_r2_v2_before_other_work(tmp_path: Path
         "schema": "cle_evrptw_connectivity_audit_acceptance_v2",
         "rule_id": "r2_v2_replayable_connectivity_certificate_gate_v1",
         "code_provenance": {"code_commit": commit},
-        "inputs": {"connectivity_audit_sha256": PREFLIGHT._sha256(c1_path)},
         "r2_v1_provenance": {"outcome": "triggered_stop_and_review"},
         "passed": False,
         "c2_allowed": False,

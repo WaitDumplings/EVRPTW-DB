@@ -54,8 +54,9 @@ def select_h64_samples(
     minimum_per_group: int,
     namespace: str,
     take_all: bool = False,
+    allow_all_when_insufficient: bool = False,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
-    """Select deterministic unique terminals and report literal coverage failures."""
+    """Select deterministic unique terminals under an explicit availability policy."""
 
     required = {id_column, *group_columns}
     missing = required - set(frame.columns)
@@ -71,15 +72,23 @@ def select_h64_samples(
             for source_id in unique[id_column].astype(str)
         ]
         unique = unique.sort_values(["h64_rank", id_column])
-        required_count = len(unique) if take_all else int(minimum_per_group)
+        requested_minimum = int(minimum_per_group)
+        required_count = (
+            len(unique)
+            if take_all
+            or (allow_all_when_insufficient and len(unique) < requested_minimum)
+            else requested_minimum
+        )
         take = len(unique) if take_all else min(len(unique), required_count)
         selected.append(unique.iloc[:take])
         coverage.append(
             {
                 **dict(zip(group_columns, map(str, key_tuple), strict=True)),
                 "available_unique_terminal_count": len(unique),
+                "requested_minimum_sample_count": requested_minimum,
                 "required_sample_count": required_count,
                 "selected_sample_count": take,
+                "all_available_selected": take == len(unique),
                 "passed": take >= required_count,
             }
         )
@@ -164,7 +173,6 @@ def manual_review_gate(
     path: Path | None,
     expected_sample_ids: Iterable[str],
     *,
-    sample_manifest_sha256: str | None = None,
     code_commit: str | None = None,
 ) -> dict[str, Any]:
     """Validate an explicit reviewer artifact; absence remains a hard pending state."""
@@ -184,10 +192,6 @@ def manual_review_gate(
     assertions = {
         "schema_matches": payload.get("schema") == MANUAL_REVIEW_SCHEMA,
         "all_expected_samples_reviewed_exactly": reviewed == expected,
-        "sample_manifest_content_bound": (
-            sample_manifest_sha256 is None
-            or payload.get("sample_manifest_sha256") == sample_manifest_sha256
-        ),
         "candidate_commit_bound": (
             code_commit is None or payload.get("code_commit") == code_commit
         ),

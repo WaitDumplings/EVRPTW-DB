@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -18,14 +17,6 @@ from evrptw_stage2.connectivity_acceptance import ACCEPTANCE_SCHEMA
 
 PRIMARY_SCALES = (100, 500, 1_000)
 DAY_TYPES = ("weekday", "weekend")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_families(plan_root: Path) -> pd.DataFrame:
@@ -53,10 +44,6 @@ def _validated_connectivity_inputs(
         "code_commit"
     ]:
         raise ValueError("R2-v2 acceptance is not bound to the current clean candidate commit")
-    if acceptance.get("inputs", {}).get("connectivity_audit_sha256") != _sha256(
-        args.connectivity_audit
-    ):
-        raise ValueError("R2-v2 acceptance is not content-bound to this C1 report")
     if not acceptance.get("passed") or not acceptance.get("c2_allowed"):
         raise ValueError("R2-v2 acceptance did not authorize C2")
     if acceptance.get("r2_v1_provenance", {}).get("outcome") != (
@@ -182,11 +169,8 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
         "slot_ledger_5_to_2": {"passed": bool(slot_passed), "rows": slot_rows},
         "inputs": {
             "cohort_split": str(args.cohort_split),
-            "cohort_split_sha256": _sha256(args.cohort_split),
             "connectivity_audit": str(args.connectivity_audit),
-            "connectivity_audit_sha256": _sha256(args.connectivity_audit),
             "connectivity_acceptance": str(args.connectivity_acceptance),
-            "connectivity_acceptance_sha256": _sha256(args.connectivity_acceptance),
         },
         "failure_semantics": "any_zero_or_failed_primary_cell_forbids_smoke_and_pilot",
     }

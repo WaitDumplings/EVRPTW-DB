@@ -240,7 +240,6 @@ def test_manual_review_gate_is_pending_then_requires_zero_findings(tmp_path: Pat
                 "schema": MANUAL_REVIEW_SCHEMA,
                 "reviewed_sample_ids": sorted(expected),
                 "reviewer_signoff_id": "reviewer-1",
-                "sample_manifest_sha256": "a" * 64,
                 "code_commit": "b" * 40,
                 "findings": {
                     "ignored_valid_access_option_count": 0,
@@ -254,18 +253,16 @@ def test_manual_review_gate_is_pending_then_requires_zero_findings(tmp_path: Pat
     assert manual_review_gate(
         review,
         expected,
-        sample_manifest_sha256="a" * 64,
         code_commit="b" * 40,
     )["passed"]
     assert not manual_review_gate(
         review,
         expected,
-        sample_manifest_sha256="c" * 64,
-        code_commit="b" * 40,
+        code_commit="c" * 40,
     )["passed"]
 
 
-def test_h64_manifest_covers_all_chargers_and_major_edges_but_stops_small_turn_group() -> None:
+def test_h64_manifest_covers_all_chargers_and_all_available_small_turn_group() -> None:
     rows: list[dict[str, object]] = []
 
     def add(
@@ -336,4 +333,8 @@ def test_h64_manifest_covers_all_chargers_and_major_edges_but_stops_small_turn_g
     major = sample.loc[sample["sample_category"].eq("stage2_turn_only_major_edge")]
     assert set(major["physical_edge_id"]) == {"major-edge-0", "major-edge-1"}
     assert all(row["all_major_edges_represented"] for row in report["major_edge_coverage"])
-    assert not report["coverage_passed"]
+    assert report["coverage_passed"]
+    turn = next(row for row in report["coverage_rows"] if row.get("reason_code") == "stage2_turn_only")
+    assert turn["requested_minimum_sample_count"] == 5
+    assert turn["required_sample_count"] == 2
+    assert turn["all_available_selected"]

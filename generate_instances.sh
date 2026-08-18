@@ -83,6 +83,9 @@ if [[ "$INSTANCE_METHOD" == "stage2" && ! -f "$AMAZON_ARTIFACT_ROOT/manifest.jso
 fi
 
 extra_args=("$@")
+if [[ -n "${FROZEN_SPLIT_ROOT:-}" ]]; then
+  extra_args+=(--frozen-split-root "${FROZEN_SPLIT_ROOT:-}")
+fi
 if [[ -n "$RUN_DISCIPLINE" ]]; then
   extra_args+=(--run-discipline "$RUN_DISCIPLINE")
 fi

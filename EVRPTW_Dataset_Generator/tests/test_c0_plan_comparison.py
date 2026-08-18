@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +13,12 @@ SPEC = importlib.util.spec_from_file_location("compare_c0", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 COMPARE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(COMPARE)
+RUNNER_SPEC = importlib.util.spec_from_file_location(
+    "stage2_runner", ROOT / "scripts" / "build_stage2_instances.py"
+)
+assert RUNNER_SPEC is not None and RUNNER_SPEC.loader is not None
+RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(RUNNER)
 
 
 def _write_plan(root: Path, *, mutate_view: bool = False) -> None:
@@ -70,3 +77,27 @@ def test_c0_exact_comparison_accepts_exact_and_rejects_changed_view(tmp_path: Pa
     assert all(accepted["fixed_counts"].values())
     assert not rejected["passed"]
     assert not rejected["view_registry"]["passed"]
+
+
+def test_reuse_frozen_customer_split_copies_approved_artifacts(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    source = baseline / "customer_splits" / "city"
+    source.mkdir(parents=True)
+    report = {"schema": "cle_evrptw_customer_split_report_v1", "city_slug": "city"}
+    (source / "customer_split_report.json").write_text(
+        json.dumps(report), encoding="utf-8"
+    )
+    payloads = {
+        "customer_split_manifest.parquet": b"split",
+        "community_manifest.parquet": b"communities",
+        "community_adjacency.parquet": b"adjacency",
+    }
+    for name, payload in payloads.items():
+        (source / name).write_bytes(payload)
+
+    output = tmp_path / "candidate"
+    reused = RUNNER._reuse_frozen_customer_split(baseline, output, "city")
+    assert reused["frozen_split_reused"] is True
+    assert reused["frozen_split_source"] == str(source.resolve())
+    for name, payload in payloads.items():
+        assert (output / "customer_splits" / "city" / name).read_bytes() == payload

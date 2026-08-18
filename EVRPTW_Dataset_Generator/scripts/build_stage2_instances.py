@@ -9,6 +9,7 @@ import math
 import multiprocessing as mp
 import os
 import resource
+import shutil
 import sys
 import time
 from collections.abc import Iterator
@@ -61,6 +62,11 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--block-group-preset", type=Path, required=True)
     parser.add_argument("--block-group-source-dir", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--frozen-split-root",
+        type=Path,
+        help="Reuse approved customer_splits from this dataset root instead of recomputing CBGs.",
+    )
     parser.add_argument("--amazon-artifact-root", type=Path, required=True)
     parser.add_argument(
         "--mode",
@@ -130,6 +136,47 @@ def _run_report_path(args: argparse.Namespace) -> Path:
     return args.output_root / (
         f"stage2_run_report.shard-{int(args.shard_index):03d}-of-{int(args.shard_count):03d}.json"
     )
+
+
+def _reuse_frozen_customer_split(
+    frozen_root: Path,
+    output_root: Path,
+    city: str,
+) -> dict[str, Any]:
+    source_base = (
+        frozen_root / "customer_splits"
+        if (frozen_root / "customer_splits").is_dir()
+        else frozen_root
+    )
+    source = source_base / city
+    destination = output_root / "customer_splits" / city
+    required = (
+        "customer_split_report.json",
+        "customer_split_manifest.parquet",
+        "community_manifest.parquet",
+        "community_adjacency.parquet",
+    )
+    missing = [name for name in required if not (source / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Frozen split is incomplete for {city}: missing {missing} under {source}"
+        )
+    if not destination.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, destination)
+    destination_missing = [
+        name for name in required if not (destination / name).is_file()
+    ]
+    if destination_missing:
+        raise ValueError(
+            f"Reused split destination is incomplete for {city}: {destination_missing}"
+        )
+    report = json.loads(
+        (destination / "customer_split_report.json").read_text(encoding="utf-8")
+    )
+    report["frozen_split_reused"] = True
+    report["frozen_split_source"] = str(source.resolve())
+    return report
 
 
 def _load_plan(plan_root: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
@@ -386,29 +433,37 @@ def main() -> None:
         cle = load_portable_cle(args.cle_root, city, mode=args.mode)
         run_report["preflight"].append(cle.eligibility_summary())
         if "splits" in args.stages:
-            state = source_preset["city_to_state"][city]
-            state_fips = source_preset["states"][state]
-            vintage = int(source_preset["vintage"])
-            block_groups = args.block_group_source_dir / f"tl_{vintage}_{state_fips}_bg.zip"
-            split_dir = args.output_root / "customer_splits" / city
-            report_path = split_dir / "customer_split_report.json"
-            adjacency_path = split_dir / "community_adjacency.parquet"
-            if report_path.is_file() and adjacency_path.is_file():
-                report = json.loads(report_path.read_text(encoding="utf-8"))
-            elif report_path.exists() or adjacency_path.exists():
-                raise ValueError(
-                    f"Incomplete or stale customer split under {split_dir}; "
-                    "remove that generated split directory and rebuild it"
+            if args.frozen_split_root is not None:
+                report = _reuse_frozen_customer_split(
+                    args.frozen_split_root, args.output_root, city
                 )
             else:
-                report = build_customer_split(
-                    cle,
-                    block_groups_path=block_groups,
-                    output_dir=split_dir,
-                    split_seed=config.master_seed,
-                    heldout_fraction=config.heldout_community_fraction,
-                    partition_version=config.community_partition_version,
+                state = source_preset["city_to_state"][city]
+                state_fips = source_preset["states"][state]
+                vintage = int(source_preset["vintage"])
+                block_groups = (
+                    args.block_group_source_dir
+                    / f"tl_{vintage}_{state_fips}_bg.zip"
                 )
+                split_dir = args.output_root / "customer_splits" / city
+                report_path = split_dir / "customer_split_report.json"
+                adjacency_path = split_dir / "community_adjacency.parquet"
+                if report_path.is_file() and adjacency_path.is_file():
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                elif report_path.exists() or adjacency_path.exists():
+                    raise ValueError(
+                        f"Incomplete or stale customer split under {split_dir}; "
+                        "remove that generated split directory and rebuild it"
+                    )
+                else:
+                    report = build_customer_split(
+                        cle,
+                        block_groups_path=block_groups,
+                        output_dir=split_dir,
+                        split_seed=config.master_seed,
+                        heldout_fraction=config.heldout_community_fraction,
+                        partition_version=config.community_partition_version,
+                    )
             run_report["splits"][city] = report
         del cle
     gc.collect()
