@@ -677,13 +677,45 @@ def _assign_customers(
     regions: dict[str, set[str]],
     *,
     seed: int,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> pd.DataFrame:
+    def begin(stage: str, **details: Any) -> tuple[float, float]:
+        if progress_callback is not None:
+            progress_callback(stage, {"status": "started", **details})
+        return time.perf_counter(), time.process_time()
+
+    def finish(
+        stage: str,
+        started: tuple[float, float],
+        *,
+        status: str = "completed",
+        **details: Any,
+    ) -> None:
+        rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if progress_callback is not None:
+            progress_callback(
+                stage,
+                {
+                    "status": status,
+                    "wall_seconds": time.perf_counter() - started[0],
+                    "cpu_seconds": time.process_time() - started[1],
+                    "peak_rss_bytes": rss if sys.platform == "darwin" else rss * 1024,
+                    **details,
+                },
+            )
+
+    stage_started = begin(
+        "global_assignment.graph_build",
+        quota_cell_count=len(quotas),
+        territory_count=len(customers),
+    )
     graph = nx.DiGraph()
     total = int(quotas["quota"].sum())
     graph.add_node("source", demand=-total)
     graph.add_node("sink", demand=total)
     customer_lookup = customers.set_index("latent_service_location_id", drop=False)
-    for row in quotas.itertuples(index=False):
+    candidate_edge_count = 0
+    for cell_index, row in enumerate(quotas.itertuples(index=False)):
         cell = f"cell:{row.region_id}:{int(row.radial_decile)}"
         graph.add_node(cell, demand=0)
         graph.add_edge("source", cell, capacity=int(row.quota), weight=0)
@@ -704,13 +736,48 @@ def _assign_customers(
                 float(candidate.residential_units),
             )
             graph.add_edge(cell, node, capacity=1, weight=round(priority * 1e9))
+            candidate_edge_count += 1
+        if progress_callback is not None and (
+            cell_index == 0 or (cell_index + 1) % 10 == 0 or cell_index + 1 == len(quotas)
+        ):
+            progress_callback(
+                "global_assignment.graph_build.progress",
+                {
+                    "status": "progress",
+                    "completed_quota_cells": int(cell_index + 1),
+                    "quota_cell_count": len(quotas),
+                    "candidate_edge_count": int(candidate_edge_count),
+                    "graph_node_count": graph.number_of_nodes(),
+                },
+            )
+    finish(
+        "global_assignment.graph_build",
+        stage_started,
+        graph_node_count=graph.number_of_nodes(),
+        graph_edge_count=graph.number_of_edges(),
+        candidate_edge_count=candidate_edge_count,
+    )
+    stage_started = begin(
+        "global_assignment.min_cost_flow",
+        graph_node_count=graph.number_of_nodes(),
+        graph_edge_count=graph.number_of_edges(),
+        required_flow=total,
+    )
     try:
         flow = nx.min_cost_flow(graph)
     except nx.NetworkXUnfeasible as error:
+        finish(
+            "global_assignment.min_cost_flow",
+            stage_started,
+            status="failed",
+            error_code="GLOBAL_CUSTOMER_ASSIGNMENT_INFEASIBLE",
+        )
         raise SpatialActivationError(
             "GLOBAL_CUSTOMER_ASSIGNMENT_INFEASIBLE",
             "overlapping regions cannot satisfy all quotas with globally unique locations",
         ) from error
+    finish("global_assignment.min_cost_flow", stage_started)
+    stage_started = begin("global_assignment.result_extract")
     records: list[dict[str, Any]] = []
     quota_lookup = quotas.set_index(["region_id", "radial_decile"])
     for row in quotas.itertuples(index=False):
@@ -744,6 +811,11 @@ def _assign_customers(
     for key, target in quota_lookup["quota"].items():
         if int(actual.get(key, 0)) != int(target):
             raise AssertionError(f"Activation quota mismatch for {key}")
+    finish(
+        "global_assignment.result_extract",
+        stage_started,
+        assignment_count=len(assignment),
+    )
     return assignment
 
 
@@ -754,6 +826,7 @@ def _assign_with_competition_expansion(
     graph: nx.DiGraph,
     *,
     seed: int,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> tuple[pd.DataFrame, int]:
     """Expand regions when overlapping reservations block global assignment."""
 
@@ -768,7 +841,16 @@ def _assign_with_competition_expansion(
     )
     while True:
         try:
-            return _assign_customers(customers, quotas, regions, seed=seed), expansions
+            return (
+                _assign_customers(
+                    customers,
+                    quotas,
+                    regions,
+                    seed=seed,
+                    progress_callback=progress_callback,
+                ),
+                expansions,
+            )
         except SpatialActivationError as error:
             if error.code != "GLOBAL_CUSTOMER_ASSIGNMENT_INFEASIBLE":
                 raise
@@ -1199,6 +1281,7 @@ def activate_spatial_customers(
                 regions,
                 graph,
                 seed=attempt_seed,
+                progress_callback=progress_callback,
             )
             finish(
                 "global_customer_assignment",

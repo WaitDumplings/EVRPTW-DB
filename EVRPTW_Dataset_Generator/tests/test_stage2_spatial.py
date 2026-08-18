@@ -206,6 +206,11 @@ def test_spatial_activation_is_exact_unique_and_quota_safe() -> None:
         "selected_customer_join",
         "radial_baseline",
     } <= completed
+    assert {
+        "global_assignment.graph_build",
+        "global_assignment.min_cost_flow",
+        "global_assignment.result_extract",
+    } <= completed
     assert result.metadata["performance_profile"]
     assert all(
         event["wall_seconds"] >= 0.0
