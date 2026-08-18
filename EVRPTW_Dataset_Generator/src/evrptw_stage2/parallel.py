@@ -70,10 +70,31 @@ def classify_rejection(error: Exception) -> tuple[str, str]:
     return type(error).__name__.lower(), message
 
 
+def worker_error_is_fatal(error: Exception) -> bool:
+    """Treat programming/runtime faults as fatal, never as seed rejections."""
+
+    return isinstance(
+        error,
+        (
+            AssertionError,
+            AttributeError,
+            ImportError,
+            IndexError,
+            KeyError,
+            MemoryError,
+            NameError,
+            OSError,
+            TypeError,
+        ),
+    )
+
+
 def rejection_is_retryable(error: Exception) -> bool:
     """Honor explicit contract failures while retrying stochastic rejections."""
 
-    return bool(getattr(error, "retryable", True))
+    return not worker_error_is_fatal(error) and bool(
+        getattr(error, "retryable", True)
+    )
 
 
 def remaining_attempt_numbers(
@@ -220,6 +241,8 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
                     progress_callback=progress,
                 )
             except Exception as error:  # noqa: BLE001 - persist every failed attempt.
+                if worker_error_is_fatal(error):
+                    raise
                 reason_code, reason_detail = classify_rejection(error)
                 retryable = rejection_is_retryable(error)
                 rejection = {

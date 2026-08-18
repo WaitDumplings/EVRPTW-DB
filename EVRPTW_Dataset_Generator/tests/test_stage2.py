@@ -13,8 +13,15 @@ from shapely.geometry import Point, Polygon
 from evrptw_stage2.artifacts import load_materialized_view, verify_materialized_family
 from evrptw_stage2.community import build_customer_split
 from evrptw_stage2.config import load_stage2_config
-from evrptw_stage2.materialize import view_parent_terminal_indices
-from evrptw_stage2.parallel import rejection_is_retryable, remaining_attempt_numbers
+from evrptw_stage2.materialize import (
+    _make_progress_emitter,
+    view_parent_terminal_indices,
+)
+from evrptw_stage2.parallel import (
+    rejection_is_retryable,
+    remaining_attempt_numbers,
+    worker_error_is_fatal,
+)
 from evrptw_stage2.planning import build_generation_plan, materialization_attempt_inputs
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.reader import CLEEligibilityError, load_portable_cle
@@ -470,6 +477,27 @@ def test_terminal_connectivity_contract_failure_is_not_retryable() -> None:
     )
     assert rejection_is_retryable(error) is False
     assert rejection_is_retryable(ValueError("stochastic rejection")) is True
+    assert worker_error_is_fatal(ValueError("stochastic rejection")) is False
+    assert worker_error_is_fatal(TypeError("programming fault")) is True
+    assert rejection_is_retryable(TypeError("programming fault")) is False
+
+
+def test_nested_progress_detail_named_stage_does_not_collide() -> None:
+    observed: list[tuple[str, dict[str, object]]] = []
+    progress = _make_progress_emitter(
+        lambda event_name, details: observed.append((event_name, dict(details)))
+    )
+    progress(
+        "terminal_selection.customer_preflight",
+        stage="customer_preflight",
+        status="completed",
+    )
+    assert observed == [
+        (
+            "terminal_selection.customer_preflight",
+            {"stage": "customer_preflight", "status": "completed"},
+        )
+    ]
 
 
 def test_pilot_generation_plan_can_target_one_city() -> None:

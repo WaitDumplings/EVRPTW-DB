@@ -41,6 +41,18 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
 
 
+def _make_progress_emitter(
+    callback: Callable[[str, Mapping[str, Any]], None] | None,
+) -> Callable[..., None]:
+    """Forward nested profile details without reserving their field names."""
+
+    def progress(event_name: str, **details: Any) -> None:
+        if callback is not None:
+            callback(event_name, details)
+
+    return progress
+
+
 def _cle_reference(cle: PortableCLE) -> dict[str, Any]:
     manifest_path = cle.root / "manifest.json"
     return {
@@ -212,10 +224,7 @@ def materialize_family(
     materialization_started = time.perf_counter()
     stage_timings: dict[str, float] = {}
     performance_profile: list[dict[str, Any]] = []
-
-    def progress(stage: str, **details: Any) -> None:
-        if progress_callback is not None:
-            progress_callback(stage, details)
+    progress = _make_progress_emitter(progress_callback)
 
     def finish_profile(
         stage: str,

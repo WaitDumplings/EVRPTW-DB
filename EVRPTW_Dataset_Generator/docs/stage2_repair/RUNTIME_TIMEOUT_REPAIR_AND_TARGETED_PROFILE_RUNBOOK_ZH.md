@@ -23,6 +23,14 @@ EVRPTW_Dataset/Instances_v2/us_10city_trainval_pilot_v6/
 
 旧 run 的已完成、rejection 和 timing 都不能作为新 pilot 的 acceptance 输入。
 
+首次 instrumentation smoke root
+`stage2_targeted_chicago_runtime_v2_c888a77` 也已废弃：nested progress event 的
+`stage` 字段与旧 callback 参数同名，4 个 attempt 均在约 12 秒触发 TypeError，未生成
+materialized family，且退出后无 orphan。该结果只证明接线缺陷，不是 Chicago 性能或
+可行性证据。修复后 progress emitter 允许 nested detail 使用 `stage` 字段；TypeError、
+AttributeError、AssertionError 等 programming/runtime faults 直接升级为 worker fatal 和
+全局 hard STOP，不再记作随机 rejection 或消耗后续 seed attempts。
+
 ## 2. 冻结运行时合同
 
 ```text
@@ -158,7 +166,7 @@ zero-turn edge-state running-time closure；profiling 没有加入 Haversine、p
 11. worker 退出后残留 grandchild 被判 hard failure 并清除；
 12. contract ID 与 stop policy 冻结。
 
-当前验证结果：12/12 runtime tests passed；完整 generator suite 173/173 passed。
+当前验证结果：12/12 runtime tests passed；完整 generator suite 174/174 passed。
 
 ## 7. 定点运行前纪律
 
