@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import math
+import resource
+import sys
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -218,6 +222,7 @@ def _choose_region_seeds(
     graph: nx.DiGraph,
     *,
     seed: int,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     capacity = (
         customers.groupby(["community_id", "radial_decile"], observed=True)
@@ -238,7 +243,17 @@ def _choose_region_seeds(
     selected: dict[str, str] = {}
     distance_cache: dict[str, dict[str, float]] = {}
     fallback_events: list[dict[str, Any]] = []
-    for region in order:
+    for region_index, region in enumerate(order):
+        if progress_callback is not None:
+            progress_callback(
+                "region_seed_selection.progress",
+                {
+                    "status": "progress",
+                    "region_index": int(region_index),
+                    "region_count": int(len(order)),
+                    "selected_seed_count": int(len(selected)),
+                },
+            )
         target = _seed_decile(quotas.loc[quotas["region_id"].eq(region)])
         candidates: list[str] = []
         chosen_decile = target
@@ -283,6 +298,16 @@ def _choose_region_seeds(
                 ),
             )
         selected[region] = chosen
+        if progress_callback is not None:
+            progress_callback(
+                "region_seed_selection.progress",
+                {
+                    "status": "progress",
+                    "region_index": int(region_index + 1),
+                    "region_count": int(len(order)),
+                    "selected_seed_count": int(len(selected)),
+                },
+            )
         if chosen_decile != target:
             fallback_events.append(
                 {
@@ -350,6 +375,7 @@ def _grow_regions(
     seeds: dict[str, str],
     *,
     seed: int,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> tuple[dict[str, set[str]], int]:
     regions = {region: {community} for region, community in seeds.items()}
     growth_steps = 0
@@ -361,10 +387,29 @@ def _grow_regions(
             stable_u64(seed, "region_growth_order", region),
         ),
     )
+    growth_pass = 0
+    last_reported_growth = -1
     while growth_steps < maximum_steps:
         changed = False
         all_satisfied = True
-        for region in order:
+        for region_index, region in enumerate(order):
+            if (
+                progress_callback is not None
+                and growth_steps != last_reported_growth
+                and (growth_steps < 5 or growth_steps % 100 == 0)
+            ):
+                progress_callback(
+                    "region_growth.progress",
+                    {
+                        "status": "progress",
+                        "growth_pass": int(growth_pass),
+                        "growth_steps": int(growth_steps),
+                        "maximum_steps": int(maximum_steps),
+                        "region_index": int(region_index),
+                        "region_count": int(len(order)),
+                    },
+                )
+                last_reported_growth = growth_steps
             unmet = _region_unmet_cells(region, regions[region], quotas, customers)
             if not unmet:
                 continue
@@ -391,6 +436,7 @@ def _grow_regions(
             regions[region].add(chosen)
             growth_steps += 1
             changed = True
+        growth_pass += 1
         if all_satisfied:
             return regions, growth_steps
         if not changed:
@@ -787,8 +833,36 @@ def activate_spatial_customers(
     customer_count: int,
     seed: int,
     region_redraw_cap: int = 3,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> SpatialActivationResult:
     """Activate one exact parent set using the frozen Step-6 proposal."""
+
+    performance_profile: list[dict[str, Any]] = []
+
+    def begin(stage: str, **details: Any) -> tuple[float, float]:
+        if progress_callback is not None:
+            progress_callback(stage, {"status": "started", **details})
+        return time.perf_counter(), time.process_time()
+
+    def finish(
+        stage: str,
+        started: tuple[float, float],
+        *,
+        status: str = "completed",
+        **details: Any,
+    ) -> None:
+        rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        event = {
+            "stage": stage,
+            "status": status,
+            "wall_seconds": time.perf_counter() - started[0],
+            "cpu_seconds": time.process_time() - started[1],
+            "peak_rss_bytes": rss if sys.platform == "darwin" else rss * 1024,
+            **details,
+        }
+        performance_profile.append(event)
+        if progress_callback is not None:
+            progress_callback(stage, event)
 
     required = {
         "latent_service_location_id",
@@ -807,10 +881,17 @@ def activate_spatial_customers(
         )
     if customers["latent_service_location_id"].duplicated().any():
         raise ValueError("Spatial customer pool contains duplicate IDs")
+    stage_started = begin("quota_matrix", territory_count=len(customers))
     quotas, quota_metadata, target_times = _quota_matrix(
         structure_targets,
         customer_count=customer_count,
         seed=seed,
+    )
+    finish(
+        "quota_matrix",
+        stage_started,
+        quota_cell_count=len(quotas),
+        region_count=int(quotas["region_id"].nunique()),
     )
     target_columns = quota_metadata["radial_decile_targets"]
     available_columns = (
@@ -831,7 +912,18 @@ def activate_spatial_customers(
     if not community_adjacency.empty:
         community_ids |= set(community_adjacency["source_community_id"].astype(str))
         community_ids |= set(community_adjacency["target_community_id"].astype(str))
+    stage_started = begin(
+        "community_graph",
+        adjacency_row_count=len(community_adjacency),
+        community_id_count=len(community_ids),
+    )
     graph = _community_graph(community_adjacency, community_ids)
+    finish(
+        "community_graph",
+        stage_started,
+        graph_node_count=graph.number_of_nodes(),
+        graph_edge_count=graph.number_of_edges(),
+    )
     if graph.number_of_edges() == 0 and len(community_ids) > 1:
         raise SpatialActivationError(
             "COMMUNITY_ADJACENCY_EMPTY",
@@ -847,11 +939,47 @@ def activate_spatial_customers(
     for attempt in range(region_redraw_cap + 1):
         attempt_seed = int(stable_u64(seed, "region_redraw", attempt) % (2**63 - 1))
         try:
+            stage_started = begin(
+                "region_seed_selection",
+                redraw_attempt=attempt,
+                region_count=int(quotas["region_id"].nunique()),
+            )
             seeds, fallback_events = _choose_region_seeds(
-                customers, quotas, graph, seed=attempt_seed
+                customers,
+                quotas,
+                graph,
+                seed=attempt_seed,
+                progress_callback=progress_callback,
+            )
+            finish(
+                "region_seed_selection",
+                stage_started,
+                redraw_attempt=attempt,
+                selected_seed_count=len(seeds),
+            )
+            stage_started = begin(
+                "region_growth",
+                redraw_attempt=attempt,
+                graph_node_count=graph.number_of_nodes(),
             )
             regions, growth_steps = _grow_regions(
-                customers, quotas, graph, seeds, seed=attempt_seed
+                customers,
+                quotas,
+                graph,
+                seeds,
+                seed=attempt_seed,
+                progress_callback=progress_callback,
+            )
+            finish(
+                "region_growth",
+                stage_started,
+                redraw_attempt=attempt,
+                growth_steps=growth_steps,
+            )
+            stage_started = begin(
+                "global_customer_assignment",
+                redraw_attempt=attempt,
+                region_count=len(regions),
             )
             assignment, competition_expansions = _assign_with_competition_expansion(
                 customers,
@@ -860,9 +988,23 @@ def activate_spatial_customers(
                 graph,
                 seed=attempt_seed,
             )
+            finish(
+                "global_customer_assignment",
+                stage_started,
+                redraw_attempt=attempt,
+                assignment_count=len(assignment),
+                competition_expansions=competition_expansions,
+            )
             used_attempt = attempt
             break
         except SpatialActivationError as error:
+            finish(
+                "region_redraw_attempt",
+                stage_started,
+                status="failed",
+                redraw_attempt=attempt,
+                error_code=error.code,
+            )
             last_error = error
     if assignment is None:
         raise SpatialActivationError(
@@ -870,12 +1012,15 @@ def activate_spatial_customers(
             f"all {region_redraw_cap + 1} region attempts failed; last={last_error}",
             {"last_error_code": last_error.code if last_error else None},
         )
+    stage_started = begin("nested_customer_order", assignment_count=len(assignment))
     ordered_assignment, tree_metadata = nested_customer_order(
         assignment,
         customer_count=customer_count,
         seed=seed,
         community_graph=graph,
     )
+    finish("nested_customer_order", stage_started, ordered_count=len(ordered_assignment))
+    stage_started = begin("selected_customer_join")
     customer_lookup = customers.set_index("latent_service_location_id", drop=False)
     selected = customer_lookup.loc[
         ordered_assignment["latent_service_location_id"].astype(str)
@@ -893,11 +1038,14 @@ def activate_spatial_customers(
         how="left",
         validate="one_to_one",
     )
+    finish("selected_customer_join", stage_started, selected_count=len(selected))
+    stage_started = begin("radial_baseline")
     radial_baseline = _radial_baseline(
         customers,
         target_columns,
         seed=int(stable_u64(seed, "radial_baseline") % (2**63 - 1)),
     )
+    finish("radial_baseline", stage_started, baseline_count=len(radial_baseline))
     region_sizes = (
         ordered_assignment.groupby("sampling_cluster_id", sort=True)
         .size()
@@ -927,6 +1075,7 @@ def activate_spatial_customers(
         "global_customer_uniqueness": True,
         "view_tree": tree_metadata,
         "radial_baseline_count": len(radial_baseline),
+        "performance_profile": performance_profile,
     }
     return SpatialActivationResult(
         customers=selected,

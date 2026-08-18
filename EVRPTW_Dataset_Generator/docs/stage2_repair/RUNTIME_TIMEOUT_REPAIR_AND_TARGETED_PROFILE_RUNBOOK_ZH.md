@@ -1,6 +1,7 @@
 # Stage-2 超时修复与定点性能诊断运行手册
 
-> 状态：运行时修复已实现并通过测试；Chicago、Dallas、LA 定点运行尚未执行。
+> 状态：运行时修复已实现并通过测试；Chicago 已完成一次有效的早停定位，
+> Dallas、LA 尚未执行。新的 140-family pilot 仍未获准。
 > 本文只申请定点诊断，不申请新的 140-family pilot，更不申请 7,500-family full run。
 
 ## 1. 旧 pilot 的处置
@@ -30,6 +31,18 @@ materialized family，且退出后无 orphan。该结果只证明接线缺陷，
 可行性证据。修复后 progress emitter 允许 nested detail 使用 `stage` 字段；TypeError、
 AttributeError、AssertionError 等 programming/runtime faults 直接升级为 worker fatal 和
 全局 hard STOP，不再记作随机 rejection 或消耗后续 seed attempts。
+
+第二次 Chicago 定点 root
+`stage2_targeted_chicago_runtime_v2_f09702a` 使用已推送 commit `f09702a`，成功进入真实
+算法。customer preflight 在 45.064 秒完成（split pool 308,383；连通性 eligible
+308,380；最终 territory 308,379），随后进入 `customer_spatial_activation`。运行至
+1,243.117 秒时仍未离开该大阶段。结合旧 run 同一个 family 的 terminal selection
+耗时 9,066.872 秒，继续等待没有新的定位价值，因此只向该 supervisor 精确发送 SIGTERM。
+
+此次早停由运行时合同正确收口：ledger 的 `reason_code=runner_signal`、
+`retryable=false`、`remaining_process_group_count=0`，SIGTERM 后无需 SIGKILL；正式
+materialized 目录中没有该 family，partial 只保留在 `.inflight`。这不是 timeout、不是
+rejection，也不是 acceptance pass，只是证明瓶颈位于 spatial activation 内部。
 
 ## 2. 冻结运行时合同
 
@@ -149,6 +162,18 @@ heartbeat 保存全部阶段；成功 family manifest 保存 selection/matrix pr
 zero-turn edge-state running-time closure；profiling 没有加入 Haversine、prefix、lossy prefilter
 或静默 skip。
 
+为区分 spatial activation 内部热点，新增的只读探针还会保存：
+
+- quota matrix 的 cell/region 数；
+- community graph 的 node/edge 数；
+- region seed selection 的 region 进度；
+- region growth 的 pass、growth step 和上界；
+- global unique-customer min-cost-flow；
+- nested order、selected join 和 radial baseline。
+
+这些探针只观察既有调用路径，不改变 seed、quota、排序键、region graph、候选集合、
+min-cost-flow 或最终选择。下一次 Chicago 运行仍是诊断，不得据此启动 140-family pilot。
+
 ## 6. 测试证据
 
 `tests/test_runtime_supervisor.py` 使用真实 subprocess/process group 和 2 秒级 timeout，覆盖：
@@ -166,7 +191,10 @@ zero-turn edge-state running-time closure；profiling 没有加入 Haversine、p
 11. worker 退出后残留 grandchild 被判 hard failure 并清除；
 12. contract ID 与 stop policy 冻结。
 
-当前验证结果：12/12 runtime tests passed；完整 generator suite 174/174 passed。
+`f09702a` 基线和当前细粒度 spatial probe 变更均通过完整 generator suite：174/174；
+其中 12/12 runtime supervisor integration tests 通过。probe 还包含 callback 开关前后
+customers、assignment、radial baseline 与非计时 metadata 逐项相同的回归检查。变更仍须
+clean commit 并 push，才能用于新的定点 root。
 
 ## 7. 定点运行前纪律
 
@@ -244,6 +272,11 @@ performance profile fields complete
 或直接重跑。只允许基于证据采用 exact 优化：batched many-to-many Dijkstra、source/target
 去重、city×depot×day exact cache、turn/depot-star cache、严格 lower-bound exact pruning、
 避免重复构建相同 line graph、只读图共享或 mmap。
+
+当前 Chicago 证据把热点范围移到了 reviewer 列表未明确覆盖的 spatial activation。
+因此细粒度探针定位后，如果需要修改 region seed/growth/min-cost-flow 的实现，必须先把
+原函数、输入规模、迭代进度、wall/CPU/RSS 和“输出逐项等价”的优化方案提交 reviewer；
+未获批准前只允许继续采样，不实施 spatial 方法优化。
 
 只有 Chicago < 7,200 s、Dallas < 7,200 s、LA smoke passed、verifier passed、无 orphan、
 代码再次 clean commit 并 push 后，才可以把新 140-family pilot 提交 reviewer。新 pilot 必须

@@ -650,6 +650,15 @@ def select_family_terminals_v2(
         customer_count=customer_count,
         seed=int(family["customer_superset_seed"]),
         region_redraw_cap=int(spatial_cfg.get("region_redraw_cap", 3)),
+        progress_callback=(
+            (
+                lambda substage, details: progress_callback(
+                    f"customer_spatial_activation.{substage}", details
+                )
+            )
+            if progress_callback is not None
+            else None
+        ),
     )
     selected_customers = activation.customers.reset_index(drop=True)
     finish(

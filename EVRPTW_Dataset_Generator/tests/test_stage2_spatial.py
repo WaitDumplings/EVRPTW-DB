@@ -171,6 +171,7 @@ def test_spatial_activation_is_exact_unique_and_quota_safe() -> None:
             for index in range(12)
         ]
     )
+    progress_events: list[tuple[str, dict[str, object]]] = []
     result = activate_spatial_customers(
         customers,
         adjacency,
@@ -178,12 +179,53 @@ def test_spatial_activation_is_exact_unique_and_quota_safe() -> None:
         customer_count=12,
         seed=123,
         region_redraw_cap=1,
+        progress_callback=lambda stage, details: progress_events.append(
+            (stage, dict(details))
+        ),
     )
     assert len(result.customers) == 12
     assert not result.customers["latent_service_location_id"].duplicated().any()
     assert result.metadata["quota"]["row_margins_exact"]
     assert result.metadata["quota"]["column_margins_exact"]
     assert result.metadata["global_customer_uniqueness"]
+    completed = {
+        stage
+        for stage, details in progress_events
+        if details.get("status") == "completed"
+    }
+    assert {
+        "quota_matrix",
+        "community_graph",
+        "region_seed_selection",
+        "region_growth",
+        "global_customer_assignment",
+        "nested_customer_order",
+        "selected_customer_join",
+        "radial_baseline",
+    } <= completed
+    assert result.metadata["performance_profile"]
+    assert all(
+        event["wall_seconds"] >= 0.0
+        and event["cpu_seconds"] >= 0.0
+        and event["peak_rss_bytes"] > 0
+        for event in result.metadata["performance_profile"]
+    )
+    without_callback = activate_spatial_customers(
+        customers,
+        adjacency,
+        structure,
+        customer_count=12,
+        seed=123,
+        region_redraw_cap=1,
+    )
+    pd.testing.assert_frame_equal(result.customers, without_callback.customers)
+    pd.testing.assert_frame_equal(result.assignment, without_callback.assignment)
+    pd.testing.assert_frame_equal(result.radial_baseline, without_callback.radial_baseline)
+    profiled_metadata = dict(result.metadata)
+    unprofiled_metadata = dict(without_callback.metadata)
+    profiled_metadata.pop("performance_profile")
+    unprofiled_metadata.pop("performance_profile")
+    assert profiled_metadata == unprofiled_metadata
 
 
 def test_nested_order_encodes_exact_cus1000_tree() -> None:
