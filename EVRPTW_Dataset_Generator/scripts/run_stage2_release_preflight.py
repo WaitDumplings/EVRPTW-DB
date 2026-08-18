@@ -13,6 +13,7 @@ import pandas as pd
 
 from build_amazon_cohort_split import build_split
 from evrptw_stage2.provenance import resolve_git_provenance
+from evrptw_stage2.connectivity_acceptance import ACCEPTANCE_SCHEMA
 
 
 PRIMARY_SCALES = (100, 500, 1_000)
@@ -32,6 +33,40 @@ def _load_families(plan_root: Path) -> pd.DataFrame:
     if not parts:
         raise FileNotFoundError(f"No family plan under {plan_root}")
     return pd.concat(parts, ignore_index=True).drop_duplicates("family_id")
+def _validated_connectivity_inputs(
+    args: argparse.Namespace,
+    code_provenance: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    c1 = json.loads(args.connectivity_audit.read_text(encoding="utf-8"))
+    if c1.get("schema") != "cle_evrptw_phase_c1_terminal_connectivity_audit_v3":
+        raise ValueError("C2 requires the layered C1 connectivity audit v3 schema")
+    if c1.get("rule_id") != "layered_stage1_pre_split_stage2_family_mask_v1":
+        raise ValueError("C2 requires the frozen layered Stage-1/Stage-2 quarantine rule")
+    if c1.get("code_provenance", {}).get("code_commit") != code_provenance["code_commit"]:
+        raise ValueError("C1 report is not bound to the current clean candidate commit")
+    acceptance = json.loads(args.connectivity_acceptance.read_text(encoding="utf-8"))
+    if acceptance.get("schema") != ACCEPTANCE_SCHEMA:
+        raise ValueError("C2 requires connectivity_audit_acceptance_v2")
+    if acceptance.get("rule_id") != "r2_v2_replayable_connectivity_certificate_gate_v1":
+        raise ValueError("C2 requires the frozen R2-v2 certificate rule")
+    if acceptance.get("code_provenance", {}).get("code_commit") != code_provenance[
+        "code_commit"
+    ]:
+        raise ValueError("R2-v2 acceptance is not bound to the current clean candidate commit")
+    if acceptance.get("inputs", {}).get("connectivity_audit_sha256") != _sha256(
+        args.connectivity_audit
+    ):
+        raise ValueError("R2-v2 acceptance is not content-bound to this C1 report")
+    if not acceptance.get("passed") or not acceptance.get("c2_allowed"):
+        raise ValueError("R2-v2 acceptance did not authorize C2")
+    if acceptance.get("r2_v1_provenance", {}).get("outcome") != (
+        "triggered_stop_and_review"
+    ):
+        raise ValueError("R2-v1 triggered_stop_and_review provenance was not preserved")
+    return c1, acceptance
+
+
+
 
 
 def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
@@ -40,6 +75,7 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
         require_clean=True,
         require_branch="stage2-repair-candidate",
     )
+    c1, acceptance = _validated_connectivity_inputs(args, code_provenance)
     frozen = json.loads(args.cohort_split.read_text(encoding="utf-8"))
     rebuilt = build_split(args.amazon_artifact_root, seed=int(frozen["frozen_seed"]))
     h3 = {
@@ -79,13 +115,6 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
         and not bool(eval_allocation.get("exact_template_reuse_between_evaluation_tracks", True))
     )
 
-    c1 = json.loads(args.connectivity_audit.read_text(encoding="utf-8"))
-    if c1.get("schema") != "cle_evrptw_phase_c1_terminal_connectivity_audit_v2":
-        raise ValueError("C2 requires the C1 pre-split connectivity audit v2 schema")
-    if c1.get("rule_id") != "connectivity_quarantine_precedes_customer_split_v1":
-        raise ValueError("C2 requires the frozen C1-Q1 pre-split quarantine rule")
-    if c1.get("code_provenance", {}).get("code_commit") != code_provenance["code_commit"]:
-        raise ValueError("C1 report is not bound to the current clean candidate commit")
     plan_registry = json.loads(
         (args.plan_root / "split_registry.json").read_text(encoding="utf-8")
     )
@@ -104,7 +133,7 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
         }
         for city in c1["cities"]
     ]
-    pf1_passed = bool(c1.get("passed")) and all(row["passed"] for row in pf1_rows)
+    pf1_passed = bool(acceptance["pf1"]["passed"]) and all(row["passed"] for row in pf1_rows)
 
     families = _load_families(args.plan_root)
     slot_rows = []
@@ -131,7 +160,14 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
         and families["city_slug"].nunique() == 10
     )
 
-    passed = h3["passed"] and leakage_passed and pf1_passed and pf2_passed and slot_passed
+    passed = (
+        bool(acceptance["passed"])
+        and h3["passed"]
+        and leakage_passed
+        and pf1_passed
+        and pf2_passed
+        and slot_passed
+    )
     return {
         "schema": "cle_evrptw_phase_c2_release_preflight_v1",
         "code_provenance": code_provenance,
@@ -149,6 +185,8 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
             "cohort_split_sha256": _sha256(args.cohort_split),
             "connectivity_audit": str(args.connectivity_audit),
             "connectivity_audit_sha256": _sha256(args.connectivity_audit),
+            "connectivity_acceptance": str(args.connectivity_acceptance),
+            "connectivity_acceptance_sha256": _sha256(args.connectivity_acceptance),
         },
         "failure_semantics": "any_zero_or_failed_primary_cell_forbids_smoke_and_pilot",
     }
@@ -159,6 +197,7 @@ def main() -> None:
     parser.add_argument("--amazon-artifact-root", type=Path, required=True)
     parser.add_argument("--cohort-split", type=Path, required=True)
     parser.add_argument("--connectivity-audit", type=Path, required=True)
+    parser.add_argument("--connectivity-acceptance", type=Path, required=True)
     parser.add_argument("--plan-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

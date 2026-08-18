@@ -27,6 +27,7 @@ def build_pilot_acceptance_report(
     phase1_report_path: str | Path,
     q90_report_path: str | Path,
     connectivity_audit_path: str | Path,
+    connectivity_acceptance_path: str | Path,
     release_preflight_path: str | Path,
     la_smoke_report_path: str | Path,
     charging_sensitivity_path: str | Path,
@@ -38,6 +39,7 @@ def build_pilot_acceptance_report(
         "phase1_report": Path(phase1_report_path),
         "q90_report": Path(q90_report_path),
         "connectivity_audit": Path(connectivity_audit_path),
+        "connectivity_acceptance": Path(connectivity_acceptance_path),
         "release_preflight": Path(release_preflight_path),
         "la_smoke_report": Path(la_smoke_report_path),
         "charging_sensitivity": Path(charging_sensitivity_path),
@@ -46,6 +48,7 @@ def build_pilot_acceptance_report(
     phase1 = _read(paths["phase1_report"])
     q90 = _read(paths["q90_report"])
     connectivity = _read(paths["connectivity_audit"])
+    connectivity_acceptance = _read(paths["connectivity_acceptance"])
     preflight = _read(paths["release_preflight"])
     smoke_run = _read(paths["la_smoke_report"])
     smoke = smoke_run.get("run_discipline", {})
@@ -53,7 +56,14 @@ def build_pilot_acceptance_report(
     code_commit = str(run.get("code_provenance", {}).get("code_commit", ""))
     evidence_commits = [
         str(payload.get("code_provenance", {}).get("code_commit", ""))
-        for payload in (connectivity, preflight, smoke_run, q90, sensitivity)
+        for payload in (
+            connectivity,
+            connectivity_acceptance,
+            preflight,
+            smoke_run,
+            q90,
+            sensitivity,
+        )
     ]
     successful = [
         item
@@ -75,7 +85,23 @@ def build_pilot_acceptance_report(
         "runner_passed": run.get("passed") is True,
         "phase1_all_hard_gates_passed": phase1.get("all_hard_gates_passed") is True,
         "q90_release_calibrated": q90.get("release_calibrated") is True,
-        "connectivity_c1_passed": connectivity.get("passed") is True,
+        "connectivity_c1_structural_contract_passed": (
+            connectivity.get("schema")
+            == "cle_evrptw_phase_c1_terminal_connectivity_audit_v3"
+            and connectivity.get("structural_contract_passed") is True
+            and connectivity.get("r2_v1", {}).get("outcome")
+            == "triggered_stop_and_review"
+        ),
+        "connectivity_r2_v2_passed": (
+            connectivity_acceptance.get("schema")
+            == "cle_evrptw_connectivity_audit_acceptance_v2"
+            and connectivity_acceptance.get("passed") is True
+            and connectivity_acceptance.get("c2_allowed") is True
+            and connectivity_acceptance.get("inputs", {}).get(
+                "connectivity_audit_sha256"
+            )
+            == sha256_file(paths["connectivity_audit"])
+        ),
         "amazon_h3_pf_c2_passed": preflight.get("passed") is True,
         "la_smoke_green_or_amber": (
             smoke.get("status") in {"GREEN", "AMBER"}

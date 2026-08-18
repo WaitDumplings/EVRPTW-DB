@@ -18,6 +18,7 @@ def main() -> None:
     parser.add_argument("--connectivity-audit", type=Path, required=True)
     parser.add_argument("--release-preflight", type=Path, required=True)
     parser.add_argument("--la-smoke-report", type=Path, required=True)
+    parser.add_argument("--connectivity-acceptance", type=Path, required=True)
     parser.add_argument("--charging-sensitivity", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -29,6 +30,7 @@ def main() -> None:
         release_preflight_path=args.release_preflight,
         la_smoke_report_path=args.la_smoke_report,
         charging_sensitivity_path=args.charging_sensitivity,
+        connectivity_acceptance_path=args.connectivity_acceptance,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

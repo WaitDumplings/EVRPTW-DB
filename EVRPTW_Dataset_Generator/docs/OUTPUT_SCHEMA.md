@@ -246,10 +246,17 @@ have the wrong parent-customer count, or report a failed hard gate.
 
 The family manifest's terminal-selection object uses
 `cle_evrptw_family_terminal_selection_v3`. Its
-`cle_evrptw_terminal_connectivity_quarantine_v1` section records customer and
+`cle_evrptw_terminal_connectivity_quarantine_v2` section records customer and
 charger input/eligible/quarantined counts, depot-star reports, and deterministic
 bad-terminal ledgers with source ID, physical edge, projection offsets, and
 node/turn reachability reason codes.
+A Stage-2-only quarantined customer keeps its frozen C0 `train`/`heldout`
+assignment but receives `family_connectivity_eligible=false`. The mask is
+applied before territory capacity, spatial activation, customer sampling, and
+materialization. If the fixed pool then contains fewer than N customers,
+selection raises a non-retryable fixed-roster failure; changing the family seed
+cannot bypass the mask.
+
 
 ### Slim release and deterministic matrix cache
 

@@ -157,6 +157,7 @@ def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) ->
     connectivity_path = tmp_path / "connectivity.json"
     preflight_path = tmp_path / "preflight.json"
     smoke_path = tmp_path / "smoke.json"
+    connectivity_acceptance_path = tmp_path / "connectivity_acceptance.json"
     sensitivity_path = tmp_path / "sensitivity.json"
     _write_json(
         run_path,
@@ -177,7 +178,28 @@ def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) ->
     _write_json(phase1_path, {"all_hard_gates_passed": True})
     provenance = {"code_commit": "a" * 40}
     _write_json(q90_path, {"release_calibrated": True, "code_provenance": provenance})
-    _write_json(connectivity_path, {"passed": True, "code_provenance": provenance})
+    _write_json(
+        connectivity_path,
+        {
+            "schema": "cle_evrptw_phase_c1_terminal_connectivity_audit_v3",
+            "passed": False,
+            "structural_contract_passed": True,
+            "r2_v1": {"outcome": "triggered_stop_and_review"},
+            "code_provenance": provenance,
+        },
+    )
+    _write_json(
+        connectivity_acceptance_path,
+        {
+            "schema": "cle_evrptw_connectivity_audit_acceptance_v2",
+            "passed": True,
+            "c2_allowed": True,
+            "inputs": {
+                "connectivity_audit_sha256": sha256_file(connectivity_path)
+            },
+            "code_provenance": provenance,
+        },
+    )
     _write_json(preflight_path, {"passed": True, "code_provenance": provenance})
     _write_json(
         smoke_path,
@@ -200,6 +222,7 @@ def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) ->
         phase1_report_path=phase1_path,
         q90_report_path=q90_path,
         connectivity_audit_path=connectivity_path,
+        connectivity_acceptance_path=connectivity_acceptance_path,
         release_preflight_path=preflight_path,
         la_smoke_report_path=smoke_path,
         charging_sensitivity_path=sensitivity_path,

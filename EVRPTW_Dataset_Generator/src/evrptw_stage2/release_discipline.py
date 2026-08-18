@@ -39,7 +39,7 @@ def quarantine_rate_summary(
     stage2_turn_ids: Iterable[object],
     rate_limit: float,
 ) -> dict[str, Any]:
-    """Apply the unique-ID union denominator required by R-2."""
+    """Record the superseded R2-v1 fixed-rate stop-and-review diagnostic."""
 
     inputs = set(map(str, audit_input_ids))
     if not inputs:
@@ -63,9 +63,10 @@ def quarantine_rate_summary(
             "rate": len(values) / len(inputs),
         }
 
+    fixed_rate_passed = len(union) / len(inputs) <= float(rate_limit) + 1e-15
     return {
-        "schema": "cle_evrptw_unique_terminal_quarantine_rate_v2",
-        "rule_id": "connectivity_quarantine_precedes_customer_split_v1",
+        "schema": "cle_evrptw_unique_terminal_quarantine_rate_v3",
+        "rule_id": "r2_v1_fixed_rate_stop_review_v1",
         "denominator_semantics": (
             "city-level unique terminal IDs entering connectivity audit after "
             "non-connectivity eligibility and before Stage-1/Stage-2 filtering; "
@@ -77,9 +78,21 @@ def quarantine_rate_summary(
         "stage2_turn_quarantine": record(stage2_turn),
         "stage1_or_stage2_union_quarantine": record(union),
         "rate_limit": float(rate_limit),
-        "passed": len(union) / len(inputs) <= float(rate_limit) + 1e-15,
-        "failure_semantics": "stop_and_review_not_silent_deletion",
-        "scientific_threshold_role": "engineering_bug_detector_only",
+        "passed": fixed_rate_passed,
+        "fixed_rate_gate_passed": fixed_rate_passed,
+        "outcome": (
+            "within_original_stop_review_trigger"
+            if fixed_rate_passed
+            else "triggered_stop_and_review"
+        ),
+        "active_acceptance_rule": False,
+        "superseded_by": "r2_v2_replayable_connectivity_certificate_gate_v1",
+        "supersession_rationale": (
+            "the fixed rate was an engineering anomaly trigger, not a scientific "
+            "truth criterion; its observed failure remains immutable provenance"
+        ),
+        "failure_semantics": "preserve_triggered_stop_and_review_not_silent_deletion",
+        "scientific_threshold_role": "mandatory_report_only_engineering_diagnostic",
     }
 
 

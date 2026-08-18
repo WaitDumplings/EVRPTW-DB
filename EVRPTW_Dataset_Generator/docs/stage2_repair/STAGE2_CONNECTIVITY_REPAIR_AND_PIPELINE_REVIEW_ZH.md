@@ -1,4 +1,9 @@
-# EVRPTW-DB V2 连通性修复与生成 Pipeline（唯一权威 Runbook）
+# EVRPTW-DB V2 连通性修复与生成 Pipeline（历史 R-1～R-6 Runbook）
+
+> **Superseded notice (2026-08-17)：** 本文从 Phase C0 开始的 C1-v2、R2-v1
+> active gate、C2 和后续执行说明已被
+> `C1B_R2V2_REVIEW_AND_RUNBOOK_ZH.md` 取代。不得按本文旧说明启动 C2、LA smoke
+> 或 pilot。CLE_v2/R-1 的历史说明仍可作为背景证据。
 
 > 状态：**R-1～R-6 已签字；只允许执行到 140-family pilot**  
 > 日期：2026-08-17  

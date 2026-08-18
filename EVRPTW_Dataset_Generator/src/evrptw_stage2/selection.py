@@ -796,7 +796,7 @@ def select_family_terminals_v2(
         "selected_depot_evidence_tier": str(depot["evidence_tier"]),
         "depot_selection": depot_metadata,
         "terminal_connectivity": {
-            "schema": "cle_evrptw_terminal_connectivity_quarantine_v1",
+            "schema": "cle_evrptw_terminal_connectivity_quarantine_v2",
             "policy": "depot_bidirectional_node_and_canonical_turn_topology_v1",
             "customer_input_count": split_pool_count,
             "customer_eligible_count": int(customer_connectivity_mask.sum()),
@@ -808,7 +808,17 @@ def select_family_terminals_v2(
             "charger_quarantined_count": len(charger_connectivity_quarantine),
             "charger_quarantine_ledger": charger_connectivity_quarantine,
             "charger_depot_star": charger_star.report,
+            "customer_split_semantics": (
+                "retain frozen C0 train/heldout assignment; apply only a "
+                "family/depot connectivity eligibility mask"
+            ),
             "applied_before_territory_and_full_terminal_closure": True,
+            "applied_before_family_activation_territory_capacity_customer_sampling_and_materialization": (
+                True
+            ),
+            "post_mask_capacity_failure_semantics": (
+                "nonretryable fixed-roster failure; changing family seed cannot bypass"
+            ),
         },
         "territory": {
             "policy": "amazon_per_source_q99_directed_network_time_and_direct_energy_screen_v2",
