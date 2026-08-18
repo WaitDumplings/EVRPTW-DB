@@ -139,7 +139,7 @@ def nonretryable_signature(rejection: Mapping[str, Any]) -> tuple[str, str, str]
 
 @dataclass
 class PilotStopController:
-    """Stop new submissions, then drain already in-flight family tasks."""
+    """Stop new submissions and enforce the bounded in-flight grace contract."""
 
     planned_family_count: int
     started_monotonic: float
@@ -231,6 +231,7 @@ class PilotStopController:
             "projection_first_check_s": PILOT_FIRST_PROJECTION_S,
             "projection_interval_s": PILOT_PROJECTION_INTERVAL_S,
             "projected_total_limit_s": PILOT_PROJECTED_WALL_LIMIT_S,
-            "stop_semantics": "stop_new_submissions_then_drain_in_flight_no_family_deletion",
+            "runtime_contract_id": "family_process_timeout_and_abort_v2",
+            "stop_semantics": "cancel_queued_then_abort_remaining_inflight_after_60s_grace",
         }
 

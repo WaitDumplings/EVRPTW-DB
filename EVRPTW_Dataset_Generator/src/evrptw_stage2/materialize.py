@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import resource
+import sys
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -196,6 +198,7 @@ def materialize_family(
     routing_topology_cache: dict[str, PhysicalRoadNetwork] | None = None,
     community_adjacency_cache: dict[str, pd.DataFrame] | None = None,
     code_provenance: Mapping[str, Any] | None = None,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     family_id = str(family["family_id"])
     if views.empty:
@@ -208,7 +211,31 @@ def materialize_family(
     final_dir.parent.mkdir(parents=True, exist_ok=True)
     materialization_started = time.perf_counter()
     stage_timings: dict[str, float] = {}
+    performance_profile: list[dict[str, Any]] = []
 
+    def progress(stage: str, **details: Any) -> None:
+        if progress_callback is not None:
+            progress_callback(stage, details)
+
+    def finish_profile(
+        stage: str,
+        wall_started: float,
+        cpu_started: float,
+        **details: Any,
+    ) -> None:
+        rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        event = {
+            "stage": stage,
+            "status": "completed",
+            "wall_seconds": time.perf_counter() - wall_started,
+            "cpu_seconds": time.process_time() - cpu_started,
+            "peak_rss_bytes": rss if sys.platform == "darwin" else rss * 1024,
+            **details,
+        }
+        performance_profile.append(event)
+        progress(f"{stage}.completed", **event)
+
+    progress("road_state")
     stage_started = time.perf_counter()
     directed_speeds = pd.read_parquet(cle.speeds_path)
     road_state, road_state_report = build_family_road_state(
@@ -218,6 +245,7 @@ def materialize_family(
         profile=profile,
     )
     stage_timings["road_state"] = time.perf_counter() - stage_started
+    progress("routing_topology")
     stage_started = time.perf_counter()
     cached_network = (
         routing_topology_cache.get(cle.city_slug) if routing_topology_cache is not None else None
@@ -229,7 +257,9 @@ def materialize_family(
     else:
         network = cached_network.with_road_state(road_state, profile)
     stage_timings["routing_topology"] = time.perf_counter() - stage_started
+    progress("terminal_selection")
     stage_started = time.perf_counter()
+    stage_cpu_started = time.process_time()
     terminal_index, selection_report, radial_baseline = select_family_terminals_v2(
         cle,
         family=family,
@@ -239,11 +269,30 @@ def materialize_family(
         network=network,
         amazon=amazon_artifacts,
         community_adjacency_cache=community_adjacency_cache,
+        progress_callback=(
+            lambda stage, details: progress(f"terminal_selection.{stage}", **details)
+        ),
     )
     stage_timings["terminal_selection"] = time.perf_counter() - stage_started
+    finish_profile(
+        "terminal_selection",
+        stage_started,
+        stage_cpu_started,
+        terminal_count=len(terminal_index),
+        nested_profile=selection_report["performance_profile"],
+    )
+    progress("parent_matrix_closure", terminal_count=len(terminal_index))
     stage_started = time.perf_counter()
+    stage_cpu_started = time.process_time()
     matrices = network.route_terminals(terminal_index)
     stage_timings["parent_matrix_closure"] = time.perf_counter() - stage_started
+    finish_profile(
+        "matrix_construction",
+        stage_started,
+        stage_cpu_started,
+        terminal_count=len(terminal_index),
+        routing_workload=matrices.report,
+    )
     matrix_payload = _matrix_payload(matrices)
     parent_customer_count = int(family["parent_customer_count"])
     parent_charger_rows = terminal_index.loc[
@@ -266,6 +315,7 @@ def materialize_family(
         raise ValueError(
             "PF2_ORDER_UNSUPPORTED: no single-day or same-station composite order source"
         )
+    progress("order_matching", source_candidate_count=len(order_source_candidates))
     stage_started = time.perf_counter()
     matched_templates, order_source_report = match_amazon_order_templates(
         customer_count=parent_customer_count,
@@ -333,6 +383,7 @@ def materialize_family(
         matrix_dir = temp_dir / "matrices"
         matrix_dir.mkdir()
         terminal_index.to_parquet(temp_dir / "terminal_index.parquet", index=False)
+        progress("parent_metrics")
         stage_started = time.perf_counter()
         phase1_metrics, phase1_observations, phase1_region_pairs = (
             build_phase1_family_metrics(
@@ -360,6 +411,7 @@ def materialize_family(
             temp_dir / "phase1_region_pair_metrics.parquet", index=False
         )
         stage_timings["parent_metrics"] = time.perf_counter() - stage_started
+        progress("view_materialization", view_count=len(views))
         stage_started = time.perf_counter()
         matrix_files: dict[str, str] = {}
         for name, array in matrix_payload.items():
@@ -556,6 +608,7 @@ def materialize_family(
             "non_release_pilot": cle.non_release_pilot,
             "materialization_status": "complete",
             "stage_timings_seconds": stage_timings,
+            "performance_profile": performance_profile,
             "phase1_metrics": "phase1_metrics.json",
             "phase1_observations": "phase1_observations.parquet",
             "phase1_region_pair_metrics": "phase1_region_pair_metrics.parquet",
@@ -566,5 +619,7 @@ def materialize_family(
             },
         }
         _write_json(temp_dir / "family_manifest.json", manifest)
+        progress("atomic_publish")
         os.replace(temp_dir, final_dir)
+    progress("complete")
     return manifest

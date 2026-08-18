@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GENERATOR_DIR="$ROOT_DIR/EVRPTW_Dataset_Generator"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 WORKERS="${WORKERS:-12}"
-FAMILIES_PER_WORKER_TASK="${FAMILIES_PER_WORKER_TASK:-25}"
+FAMILIES_PER_WORKER_TASK="${FAMILIES_PER_WORKER_TASK:-1}"
 INSTANCE_MODE="${INSTANCE_MODE:-research}"
 INSTANCE_METHOD="${INSTANCE_METHOD:-stage2}"
 CLE_ROOT="${CLE_ROOT:-$ROOT_DIR/EVRPTW_Dataset/CLE_v2/us_11city}"
@@ -14,6 +14,10 @@ AMAZON_MODEL_BUILD_INPUTS="${AMAZON_MODEL_BUILD_INPUTS:-$GENERATOR_DIR/data/sour
 AMAZON_ARTIFACT_ROOT="${AMAZON_ARTIFACT_ROOT:-$ROOT_DIR/EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3}"
 MAX_ATTEMPTS_PER_FAMILY="${MAX_ATTEMPTS_PER_FAMILY:-4}"
 RUN_DISCIPLINE="${RUN_DISCIPLINE:-}"
+FAMILY_WALL_TIMEOUT_S="${FAMILY_WALL_TIMEOUT_S:-7200}"
+TERMINATION_GRACE_S="${TERMINATION_GRACE_S:-60}"
+RUNNER_EXIT_SLACK_S="${RUNNER_EXIT_SLACK_S:-30}"
+STOP_POLICY="${STOP_POLICY:-abort_all_inflight_after_grace}"
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "Python executable not found: $PYTHON_BIN" >&2
@@ -115,6 +119,10 @@ if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
     --workers "$WORKERS" \
     --families-per-worker-task "$FAMILIES_PER_WORKER_TASK" \
     --max-attempts-per-family "$MAX_ATTEMPTS_PER_FAMILY" \
+    --family-wall-timeout-s "$FAMILY_WALL_TIMEOUT_S" \
+    --termination-grace-s "$TERMINATION_GRACE_S" \
+    --runner-exit-slack-s "$RUNNER_EXIT_SLACK_S" \
+    --stop-policy "$STOP_POLICY" \
     "${extra_args[@]}"
 else
   INSTANCE_ROOT="$INSTANCE_OUTPUT_ROOT" \

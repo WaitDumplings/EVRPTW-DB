@@ -3,6 +3,13 @@
 > Timing numbers from the 2026-08-10 build are Legacy V1 measurements. V2.1
 > keeps the execution techniques but requires new pilot timing evidence.
 
+> Runtime update (2026-08-18): materialization now freezes one independently
+> killable process group per family attempt, `families-per-worker-task=1`, and a
+> 7,200 s monotonic hard timeout. The older chunked-materialization and full-run
+> commands in Sections 3-6 are historical measurements and are not approved for
+> execution. Use
+> [stage2_repair/RUNTIME_TIMEOUT_REPAIR_AND_TARGETED_PROFILE_RUNBOOK_ZH.md](stage2_repair/RUNTIME_TIMEOUT_REPAIR_AND_TARGETED_PROFILE_RUNBOOK_ZH.md).
+
 This document describes how the reference generator materializes the frozen
 Stage-2 family plan efficiently without changing its routing or instance
 semantics. The benchmark contract remains in

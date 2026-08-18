@@ -23,19 +23,10 @@ from evrptw_stage2.amazon import load_amazon_stage2_artifacts
 from evrptw_stage2.artifacts import verify_materialized_family
 from evrptw_stage2.community import build_customer_split
 from evrptw_stage2.config import load_stage2_config
-from evrptw_stage2.materialize import materialize_family
 from evrptw_stage2.metrics import aggregate_phase1_metrics
-from evrptw_stage2.parallel import (
-    classify_rejection,
-    materialize_family_chunk,
-    rejection_is_retryable,
-    remaining_attempt_numbers,
-    verify_family_path,
-)
+from evrptw_stage2.parallel import verify_family_path
 from evrptw_stage2.planning import (
     build_generation_plan,
-    derive_seed,
-    materialization_attempt_inputs,
     write_generation_plan,
 )
 from evrptw_stage2.profile import load_reference_profile
@@ -45,6 +36,7 @@ from evrptw_stage2.release_discipline import (
     PilotStopController,
     classify_la_smoke,
 )
+from evrptw_stage2.subprocess_parallel import run_supervised_materialization
 
 STAGES = ("preflight", "splits", "plan", "materialize", "verify", "metrics")
 
@@ -75,7 +67,7 @@ def make_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--run-discipline",
-        choices=("la_smoke", "pilot"),
+        choices=("la_smoke", "targeted_profile", "pilot"),
         help="Required materialization stop discipline for non-release runs.",
     )
     parser.add_argument("--cities", nargs="+")
@@ -85,6 +77,29 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-families", type=int)
     parser.add_argument("--family-ids", nargs="+")
     parser.add_argument("--max-attempts-per-family", type=int, default=4)
+    parser.add_argument(
+        "--family-wall-timeout-s",
+        type=float,
+        default=7200.0,
+        help="Monotonic wall deadline for each independently killable family attempt.",
+    )
+    parser.add_argument(
+        "--termination-grace-s",
+        type=float,
+        default=60.0,
+        help="Grace after a hard stop before process-group escalation.",
+    )
+    parser.add_argument(
+        "--runner-exit-slack-s",
+        type=float,
+        default=30.0,
+        help="Final SIGKILL/reap budget after the global in-flight grace.",
+    )
+    parser.add_argument(
+        "--stop-policy",
+        choices=("abort_all_inflight_after_grace",),
+        default="abort_all_inflight_after_grace",
+    )
     parser.add_argument(
         "--full-run-approved",
         action="store_true",
@@ -99,8 +114,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--families-per-worker-task",
         type=int,
-        default=25,
-        help="Single-city families handled by one worker task with topology reuse.",
+        default=1,
+        help="Frozen at one: every family must own an independently killable session.",
     )
     parser.add_argument(
         "--allow-memory-oversubscription",
@@ -335,8 +350,18 @@ def main() -> None:
         raise ValueError("--max-attempts-per-family must be positive")
     if args.workers <= 0:
         raise ValueError("--workers must be positive")
-    if args.families_per_worker_task <= 0:
-        raise ValueError("--families-per-worker-task must be positive")
+    if "materialize" in args.stages and args.families_per_worker_task != 1:
+        raise ValueError(
+            "family_process_timeout_and_abort_v2 requires "
+            "--families-per-worker-task=1"
+        )
+    for name in (
+        "family_wall_timeout_s",
+        "termination_grace_s",
+        "runner_exit_slack_s",
+    ):
+        if float(getattr(args, name)) <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be positive")
     if args.shard_count <= 0:
         raise ValueError("--shard-count must be positive")
     if not 0 <= args.shard_index < args.shard_count:
@@ -393,7 +418,8 @@ def main() -> None:
         raise ValueError("Official generation cannot use pilot family counts")
     if "materialize" in args.stages and non_release and args.run_discipline is None:
         raise ValueError(
-            "Non-release materialization requires --run-discipline la_smoke or pilot"
+            "Non-release materialization requires --run-discipline "
+            "la_smoke, targeted_profile, or pilot"
         )
     args.output_root.mkdir(parents=True, exist_ok=True)
     run_report: dict[str, Any] = {
@@ -418,6 +444,9 @@ def main() -> None:
         "execution": {
             "workers": int(args.workers),
             "families_per_worker_task": int(args.families_per_worker_task),
+            "materialization_process_model": "subprocess_start_new_session_per_family_attempt",
+            "materialization_runtime_contract_id": "family_process_timeout_and_abort_v2",
+            "verification_multiprocessing_start_method": "spawn" if args.workers > 1 else None,
             "multiprocessing_start_method": "spawn" if args.workers > 1 else None,
             "physical_memory_bytes": physical_memory_bytes,
             "conservative_worker_limit": safe_worker_limit,
@@ -524,6 +553,17 @@ def main() -> None:
                 "la_smoke requires Los Angeles, exactly one selected family, "
                 "workers=1, families-per-worker-task=1, and max-attempts=4"
             )
+    if "materialize" in args.stages and args.run_discipline == "targeted_profile":
+        if (
+            args.workers != 1
+            or args.families_per_worker_task != 1
+            or args.max_attempts_per_family != 4
+            or len(selected_families) != 1
+        ):
+            raise ValueError(
+                "targeted_profile requires exactly one selected family, workers=1, "
+                "families-per-worker-task=1, and max-attempts=4"
+            )
     if "materialize" in args.stages and args.run_discipline == "pilot":
         expected_cities = set(config.train_cities)
         if (
@@ -542,180 +582,46 @@ def main() -> None:
             planned_family_count=len(selected_families),
             started_monotonic=run_started,
         )
-    if "materialize" in args.stages and args.workers > 1:
-        tasks = _build_materialization_tasks(
-            selected_families,
-            views,
-            args=args,
-        )
+    supervised_materialization = "materialize" in args.stages
+    if supervised_materialization:
+        tasks = _build_materialization_tasks(selected_families, views, args=args)
         run_report["execution"]["materialization_task_count"] = len(tasks)
-        context = mp.get_context("spawn")
-        with ProcessPoolExecutor(
-            max_workers=args.workers,
-            mp_context=context,
-        ) as executor:
-            for _, chunk_result in _run_bounded_process_tasks(
-                executor,
-                materialize_family_chunk,
-                tasks,
-                max_in_flight=args.workers,
-                supervisor=pilot_supervisor,
-            ):
-                run_report["materialized"].extend(chunk_result["materialized"])
-                run_report["rejected_attempts"].extend(chunk_result["rejected_attempts"])
-                run_report["unresolved_family_ids"].extend(chunk_result["unresolved_family_ids"])
+        supervised = run_supervised_materialization(
+            tasks,
+            workers=args.workers,
+            max_attempts_per_family=args.max_attempts_per_family,
+            family_wall_timeout_s=args.family_wall_timeout_s,
+            termination_grace_s=args.termination_grace_s,
+            runner_exit_slack_s=args.runner_exit_slack_s,
+            pilot_controller=pilot_supervisor,
+            python_executable=sys.executable,
+            working_directory=Path(__file__).resolve().parents[1],
+        )
+        run_report["runtime_contract"] = supervised["runtime_contract"]
+        run_report["runtime_run_id"] = supervised["run_id"]
+        run_report["materialized"].extend(supervised["materialized"])
+        run_report["rejected_attempts"].extend(supervised["rejected_attempts"])
+        run_report["timed_out_attempts"] = supervised["timed_out_attempts"]
+        run_report["aborted_attempts"] = supervised["aborted_attempts"]
+        run_report["unresolved_family_ids"].extend(
+            supervised["unresolved_family_ids"]
+        )
+        run_report["not_started_family_ids"] = supervised["not_started_family_ids"]
+        run_report["hard_stop_triggered"] = bool(
+            supervised["runtime_contract"]["hard_stop_triggered"]
+        )
+        generation_stopped = run_report["hard_stop_triggered"]
         if pilot_supervisor is not None:
             run_report["run_discipline"] = pilot_supervisor.report()
-            generation_stopped = pilot_supervisor.stopped
-            if generation_stopped:
-                completed_ids = {
-                    str(item["family_id"]) for item in run_report["materialized"]
-                } | set(map(str, run_report["unresolved_family_ids"]))
-                run_report["not_started_family_ids"] = sorted(
-                    set(selected_families["family_id"].astype(str)) - completed_ids
-                )
+            generation_stopped = generation_stopped or pilot_supervisor.stopped
         run_report["materialized"].sort(key=lambda item: str(item["family_id"]))
         run_report["rejected_attempts"].sort(
             key=lambda item: (str(item["family_id"]), int(item["attempt_number"]))
         )
-        run_report["unresolved_family_ids"] = sorted(set(run_report["unresolved_family_ids"]))
-
-    if "materialize" in args.stages and args.workers == 1:
-        routing_topology_cache = {}
-        community_adjacency_cache = {}
-        cached_city: str | None = None
-        active_cle = None
-        for _, family_row in selected_families.iterrows():
-            family = family_row.to_dict()
-            family_id = str(family["family_id"])
-            family_dir = args.output_root / "materialized" / "families" / family_id
-            if family_dir.is_dir():
-                verification_started = time.perf_counter()
-                verification = verify_materialized_family(family_dir)
-                verification_seconds = time.perf_counter() - verification_started
-                if not verification["passed"]:
-                    raise ValueError(f"Existing family {family_id} failed verification")
-                run_report["materialized"].append(
-                    {
-                        "family_id": family_id,
-                        "status": "reused_verified",
-                        "verification_seconds": verification_seconds,
-                        "matrix_total_bytes": int(verification["matrix_total_bytes"]),
-                        "process_peak_rss_bytes_after": _process_peak_rss_bytes(),
-                    }
-                )
-                continue
-            city = str(family["city_slug"])
-            if cached_city != city:
-                routing_topology_cache.clear()
-                community_adjacency_cache.clear()
-                cached_city = city
-                active_cle = load_portable_cle(args.cle_root, city, mode=args.mode)
-            if active_cle is None:
-                raise RuntimeError(f"CLE was not loaded for {city}")
-            family_views = views.loc[views["family_id"].astype(str).eq(family_id)]
-            rejection_path = args.output_root / "rejections" / f"{family_id}.json"
-            rejection_payload = (
-                json.loads(rejection_path.read_text(encoding="utf-8"))
-                if rejection_path.is_file()
-                else {"schema": "cle_evrptw_family_rejection_ledger_v2", "attempts": []}
-            )
-            first_attempt_number = len(rejection_payload["attempts"])
-            retry_closed = any(
-                attempt.get("retryable") is False
-                for attempt in rejection_payload["attempts"]
-            )
-            materialized = False
-            for attempt_number in remaining_attempt_numbers(
-                first_attempt_number,
-                args.max_attempts_per_family,
-                retry_closed=retry_closed,
-            ):
-                attempt_family, attempt_views = materialization_attempt_inputs(
-                    family,
-                    family_views,
-                    attempt_number=attempt_number,
-                )
-                materialization_started = time.perf_counter()
-                try:
-                    manifest = materialize_family(
-                        active_cle,
-                        config=config,
-                        profile=profile,
-                        family=attempt_family,
-                        views=attempt_views,
-                        customer_split_path=(
-                            args.output_root
-                            / "customer_splits"
-                            / city
-                            / "customer_split_manifest.parquet"
-                        ),
-                        community_adjacency_path=(
-                            args.output_root
-                            / "customer_splits"
-                            / city
-                            / "community_adjacency.parquet"
-                        ),
-                        amazon_artifacts=amazon_artifacts,
-                        output_root=args.output_root / "materialized",
-                        routing_topology_cache=routing_topology_cache,
-                        community_adjacency_cache=community_adjacency_cache,
-                        code_provenance=code_provenance,
-                    )
-                except Exception as error:  # noqa: BLE001 - persist every failed attempt.
-                    reason_code, reason_detail = classify_rejection(error)
-                    retryable = rejection_is_retryable(error)
-                    rejection = {
-                        "family_id": family_id,
-                        "city_slug": city,
-                        "attempt_number": attempt_number,
-                        "attempt_seed": int(attempt_family["materialization_attempt_seed"]),
-                        "next_attempt_seed": (
-                            derive_seed(
-                                int(family["family_seed"]),
-                                "materialization_attempt",
-                                attempt_number + 1,
-                            )
-                            if retryable
-                            else None
-                        ),
-                        "error_type": type(error).__name__,
-                        "reason_code": reason_code,
-                        "reason": reason_detail,
-                        "retryable": retryable,
-                        "retry_stopped_early": not retryable,
-                        "roster_fingerprint": getattr(error, "roster_fingerprint", None),
-                        "elapsed_seconds": time.perf_counter() - materialization_started,
-                    }
-                    rejection_payload["family_id"] = family_id
-                    rejection_payload["attempts"].append(rejection)
-                    _write_json(rejection_path, rejection_payload)
-                    run_report["rejected_attempts"].append(rejection)
-                    if not retryable:
-                        break
-                    continue
-                materialization_seconds = time.perf_counter() - materialization_started
-                run_report["materialized"].append(
-                    {
-                        "family_id": family_id,
-                        "status": "materialized",
-                        "materialization_attempt_number": attempt_number,
-                        "materialization_attempt_seed": int(
-                            attempt_family["materialization_attempt_seed"]
-                        ),
-                        "matrix_total_bytes": manifest["matrix_total_bytes"],
-                        "materialization_seconds": materialization_seconds,
-                        "stage_timings_seconds": manifest["stage_timings_seconds"],
-                        "terminal_pair_throughput_per_second": (
-                            int(manifest["terminal_count"]) ** 2 / materialization_seconds
-                        ),
-                        "process_peak_rss_bytes_after": _process_peak_rss_bytes(),
-                    }
-                )
-                materialized = True
-                break
-            if not materialized:
-                run_report["unresolved_family_ids"].append(family_id)
+        run_report["unresolved_family_ids"] = sorted(
+            set(run_report["unresolved_family_ids"])
+        )
+        run_report["unresolved_count"] = len(run_report["unresolved_family_ids"])
 
     if "materialize" in args.stages and args.run_discipline == "la_smoke":
         successful = [

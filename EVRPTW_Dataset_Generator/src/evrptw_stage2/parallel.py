@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import resource
 import sys
 import time
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,32 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
+    )
+
+
+def _write_heartbeat(
+    path: Path | None,
+    *,
+    family_id: str,
+    attempt_number: int,
+    stage: str,
+    details: Mapping[str, Any] | None = None,
+) -> None:
+    if path is None:
+        return
+    _write_json(
+        path,
+        {
+            "schema": "cle_evrptw_family_heartbeat_v1",
+            "family_id": family_id,
+            "attempt_number": int(attempt_number),
+            "pid": os.getpid(),
+            "pgid": os.getpgrp(),
+            "stage": stage,
+            "details": dict(details or {}),
+            "monotonic_seconds": time.monotonic(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
 
@@ -66,6 +94,16 @@ def remaining_attempt_numbers(
 def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
     """Materialize one single-city chunk while reusing its routing topology."""
 
+    heartbeat_path = (
+        Path(str(task["heartbeat_path"])) if task.get("heartbeat_path") else None
+    )
+    heartbeat_family = str(task["families"][0]["family"]["family_id"])
+    _write_heartbeat(
+        heartbeat_path,
+        family_id=heartbeat_family,
+        attempt_number=int(task.get("process_attempt_number", 0)),
+        stage="worker_start",
+    )
     config = load_stage2_config(task["config_path"])
     profile = load_reference_profile(
         task["profile_path"],
@@ -81,6 +119,12 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
         cohort_split_path=task["amazon_cohort_split_path"],
     )
     max_attempts = int(task["max_attempts_per_family"])
+    final_materialized_root = Path(
+        task.get("final_materialized_root", output_root / "materialized")
+    )
+    work_materialized_root = Path(
+        task.get("materialized_output_root", final_materialized_root)
+    )
     topology_cache = {}
     adjacency_cache = {}
     result: dict[str, Any] = {
@@ -95,7 +139,7 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
         family = dict(item["family"])
         family_id = str(family["family_id"])
         views = pd.DataFrame(item["views"])
-        family_dir = output_root / "materialized" / "families" / family_id
+        family_dir = final_materialized_root / "families" / family_id
         if family_dir.is_dir():
             verification_started = time.perf_counter()
             verification = verify_materialized_family(family_dir)
@@ -130,6 +174,29 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
             max_attempts,
             retry_closed=retry_closed,
         ):
+            progress_events: list[dict[str, Any]] = []
+            _write_heartbeat(
+                heartbeat_path,
+                family_id=family_id,
+                attempt_number=attempt_number,
+                stage="attempt_start",
+                details={"city_slug": city},
+            )
+
+            def progress(stage: str, details: Mapping[str, Any]) -> None:
+                event = {"stage": stage, **dict(details)}
+                progress_events.append(event)
+                _write_heartbeat(
+                    heartbeat_path,
+                    family_id=family_id,
+                    attempt_number=attempt_number,
+                    stage=stage,
+                    details={
+                        "current_event": event,
+                        "events": progress_events,
+                    },
+                )
+
             attempt_family, attempt_views = materialization_attempt_inputs(
                 family,
                 views,
@@ -146,10 +213,11 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
                     customer_split_path=customer_split_path,
                     community_adjacency_path=community_adjacency_path,
                     amazon_artifacts=amazon_artifacts,
-                    output_root=output_root / "materialized",
+                    output_root=work_materialized_root,
                     routing_topology_cache=topology_cache,
                     community_adjacency_cache=adjacency_cache,
                     code_provenance=task.get("code_provenance"),
+                    progress_callback=progress,
                 )
             except Exception as error:  # noqa: BLE001 - persist every failed attempt.
                 reason_code, reason_detail = classify_rejection(error)
@@ -206,6 +274,13 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
         if not completed:
             result["unresolved_family_ids"].append(family_id)
 
+    _write_heartbeat(
+        heartbeat_path,
+        family_id=heartbeat_family,
+        attempt_number=max(0, max_attempts - 1),
+        stage="worker_complete",
+        details={"unresolved_count": len(result["unresolved_family_ids"])},
+    )
     result["worker_peak_rss_bytes"] = _process_peak_rss_bytes()
     return result
 

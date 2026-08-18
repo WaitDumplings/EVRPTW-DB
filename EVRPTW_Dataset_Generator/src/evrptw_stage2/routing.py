@@ -1217,6 +1217,22 @@ class PhysicalRoadNetwork:
         if not np.array_equal(terminal_index["terminal_index"].to_numpy(dtype=int), expected):
             raise ValueError("terminal_index rows must be ordered contiguously from zero")
         terminals = tuple(self._parse_access(row) for _, row in terminal_index.iterrows())
+        distance_source_nodes = {
+            option.outbound_node for terminal in terminals for option in terminal.options
+        }
+        distance_target_nodes = {
+            option.inbound_node for terminal in terminals for option in terminal.options
+        }
+        running_time_source_edges = {
+            option.edge_index for terminal in terminals for option in terminal.options
+        }
+        running_time_target_edges = {
+            incoming_edge
+            for terminal in terminals
+            for option in terminal.options
+            for incoming_edge in option.inbound_arrival_edges
+        }
+        terminal_access_option_count = sum(len(terminal.options) for terminal in terminals)
         distance = self._route_distance(terminals)
         running_time = self._route_running_time(terminals)
         arrays = (*distance[:2], *running_time[:2])
@@ -1248,6 +1264,17 @@ class PhysicalRoadNetwork:
         report = {
             "schema": "cle_evrptw_family_routing_report_v2",
             "terminal_count": len(terminals),
+            "terminal_access_option_count": int(terminal_access_option_count),
+            "distance_dijkstra_unique_source_count": len(distance_source_nodes),
+            "distance_dijkstra_unique_target_count": len(distance_target_nodes),
+            "distance_dijkstra_batch_size": 24,
+            "distance_dijkstra_batch_count": (len(distance_source_nodes) + 23) // 24,
+            "running_time_dijkstra_unique_source_count": len(running_time_source_edges),
+            "running_time_dijkstra_unique_target_count": len(running_time_target_edges),
+            "running_time_dijkstra_batch_size": 12,
+            "running_time_dijkstra_batch_count": (
+                len(running_time_source_edges) + 11
+            ) // 12,
             "physical_graph_node_count": len(self.node_ids),
             "directed_edge_count": self.edge_count,
             "turn_aware_transition_count": int(self._turn_aware_adjacency.nnz),

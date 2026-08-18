@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import resource
+import sys
+import time
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
@@ -484,9 +487,36 @@ def select_family_terminals_v2(
     network: PhysicalRoadNetwork,
     amazon: AmazonStage2Artifacts,
     community_adjacency_cache: dict[str, pd.DataFrame] | None = None,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
     """Select a depot, one Amazon-structured customer parent and relevant CSs."""
 
+    performance_profile: list[dict[str, Any]] = []
+
+    def begin(stage: str, **details: Any) -> tuple[float, float]:
+        if progress_callback is not None:
+            progress_callback(stage, {"status": "started", **details})
+        return time.perf_counter(), time.process_time()
+
+    def finish(
+        stage: str,
+        started: tuple[float, float],
+        **details: Any,
+    ) -> None:
+        rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        event = {
+            "stage": stage,
+            "status": "completed",
+            "wall_seconds": time.perf_counter() - started[0],
+            "cpu_seconds": time.process_time() - started[1],
+            "peak_rss_bytes": rss if sys.platform == "darwin" else rss * 1024,
+            **details,
+        }
+        performance_profile.append(event)
+        if progress_callback is not None:
+            progress_callback(stage, event)
+
+    stage_started = begin("structure_and_depot_preflight")
     family_seed = int(family["family_seed"])
     customer_count = int(family["parent_customer_count"])
     charger_count = int(family["parent_charging_station_count"])
@@ -509,7 +539,11 @@ def select_family_terminals_v2(
         seed=int(family["depot_seed"]),
         track=depot_track,
     )
+    finish(
+        "structure_and_depot_preflight", stage_started, depot_count=len(depots)
+    )
 
+    stage_started = begin("customer_preflight")
     customers = cle.read_service_locations().copy()
     split = pd.read_parquet(customer_split_path)
     split_columns = [
@@ -582,6 +616,14 @@ def select_family_terminals_v2(
             f"split={split_pool_count}, time_envelope={len(before_energy)}, "
             f"direct_energy={len(territory)}, N={customer_count}"
         )
+    finish(
+        "customer_preflight",
+        stage_started,
+        split_pool_count=split_pool_count,
+        connectivity_eligible_count=len(customers),
+        territory_count=len(territory),
+    )
+    stage_started = begin("customer_spatial_activation", territory_count=len(territory))
     amazon_nn = pd.to_numeric(
         structure_targets.get("amazon_route_nearest_neighbor_time_s"), errors="coerce"
     ).dropna()
@@ -610,7 +652,14 @@ def select_family_terminals_v2(
         region_redraw_cap=int(spatial_cfg.get("region_redraw_cap", 3)),
     )
     selected_customers = activation.customers.reset_index(drop=True)
+    finish(
+        "customer_spatial_activation",
+        stage_started,
+        selected_customer_count=len(selected_customers),
+        adjacency_row_count=len(adjacency),
+    )
 
+    stage_started = begin("charger_preflight")
     chargers = cle.read_chargers().reset_index(drop=True)
     charger_candidate_roster_count = len(chargers)
     charger_roster_fingerprint = roster_fingerprint(
@@ -637,8 +686,24 @@ def select_family_terminals_v2(
             f"quarantining {len(charger_connectivity_quarantine)}; K={charger_count}",
             roster_fingerprint=charger_roster_fingerprint,
         )
+    finish(
+        "charger_preflight",
+        stage_started,
+        charger_input_count=charger_candidate_roster_count,
+        charger_connectivity_eligible_count=len(chargers),
+    )
+    stage_started = begin(
+        "charger_roster_batched_dijkstra",
+        terminal_count=1 + len(selected_customers) + len(chargers),
+    )
     roster_terminals = _charger_roster_terminal_index(depot, selected_customers, chargers)
     roster_matrices = network.route_terminals(roster_terminals)
+    finish(
+        "charger_roster_batched_dijkstra",
+        stage_started,
+        routing_workload=roster_matrices.report,
+    )
+    stage_started = begin("energy_closure_and_charger_selection")
     customer_indices = np.arange(1, 1 + customer_count, dtype=np.int32)
     charger_indices = np.arange(
         1 + customer_count,
@@ -704,7 +769,14 @@ def select_family_terminals_v2(
         selected_customers,
         selected_chargers,
     )
+    finish(
+        "energy_closure_and_charger_selection",
+        stage_started,
+        energy_eligible_charger_count=len(eligible_positions),
+        selected_charger_count=len(selected_chargers),
+    )
 
+    stage_started = begin("terminal_index_construction")
     records = [
         {
             **_common_terminal_record(
@@ -783,6 +855,10 @@ def select_family_terminals_v2(
             }
         )
     terminal_index = pd.DataFrame.from_records(records)
+    finish(
+        "terminal_index_construction", stage_started,
+        terminal_count=len(terminal_index),
+    )
     metadata = {
         "schema": "cle_evrptw_family_terminal_selection_v3",
         "family_id": str(family["family_id"]),
@@ -861,6 +937,7 @@ def select_family_terminals_v2(
         },
         "charger_active_customer_coverage_diagnostic": charger_active_customer_diagnostic,
         "charging_power_resolution": power_metadata,
+        "performance_profile": performance_profile,
         "non_release_pilot": cle.non_release_pilot,
     }
     baseline_columns = [
