@@ -20,6 +20,8 @@ from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.rounding import controlled_matrix_round
 from evrptw_stage2.spatial_activation import (
     SpatialActivationError,
+    _assign_with_competition_expansion,
+    _assign_with_competition_expansion_reference,
     _grow_regions,
     _grow_regions_reference,
     activate_spatial_customers,
@@ -208,6 +210,7 @@ def test_spatial_activation_is_exact_unique_and_quota_safe() -> None:
     } <= completed
     assert {
         "global_assignment.graph_build",
+        "global_assignment.feasibility",
         "global_assignment.min_cost_flow",
         "global_assignment.result_extract",
     } <= completed
@@ -412,6 +415,110 @@ def test_exact_growth_cache_matches_reference_for_transit_ties_and_failure() -> 
         "error",
         "REGION_GROWTH_EXHAUSTED",
         {"unmet_region_deciles": {"r0": [1]}, "growth_steps": 0},
+    )
+
+
+def _competition_outcome(
+    implementation: object,
+    customers: pd.DataFrame,
+    quotas: pd.DataFrame,
+    graph: object,
+    regions: dict[str, set[str]],
+) -> tuple[object, ...]:
+    trace: list[dict[str, object]] = []
+    mutable_regions = {region: set(members) for region, members in regions.items()}
+    try:
+        assignment, expansions = implementation(  # type: ignore[operator]
+            customers,
+            quotas,
+            mutable_regions,
+            graph,
+            seed=991,
+            decision_trace=trace,
+        )
+    except SpatialActivationError as error:
+        return "error", error.code, error.diagnostics, trace, mutable_regions
+    ordered = assignment.sort_values(
+        ["sampling_cluster_id", "activation_decile", "latent_service_location_id"],
+        kind="stable",
+    ).reset_index(drop=True)
+    return "ok", ordered.to_dict("records"), expansions, trace, mutable_regions
+
+
+def test_exact_competition_cache_matches_reference_and_infeasible_boundary() -> None:
+    import networkx as nx
+
+    customers = pd.DataFrame(
+        [
+            {
+                "latent_service_location_id": f"loc-{community}",
+                "community_id": community,
+                "residential_units": index + 1,
+                "radial_decile": 0,
+                "depot_running_time_s": 100.0 + index,
+            }
+            for index, community in enumerate(["shared", "left", "right"])
+        ]
+    )
+    quotas = pd.DataFrame(
+        [
+            {
+                "region_id": region,
+                "structure_route_id": f"route-{region}",
+                "radial_decile": 0,
+                "quota": 1,
+            }
+            for region in ["r0", "r1"]
+        ]
+    )
+    graph = nx.DiGraph()
+    graph.add_weighted_edges_from(
+        [
+            ("shared", "left", 1.0),
+            ("right", "shared", 1.0),
+        ],
+        weight="weight",
+    )
+    regions = {"r0": {"shared"}, "r1": {"shared"}}
+    optimized = _competition_outcome(
+        _assign_with_competition_expansion,
+        customers,
+        quotas,
+        graph,
+        regions,
+    )
+    reference = _competition_outcome(
+        _assign_with_competition_expansion_reference,
+        customers,
+        quotas,
+        graph,
+        regions,
+    )
+    assert optimized == reference
+    assert optimized[0] == "ok"
+    assert optimized[2] > 0
+
+    disconnected = nx.DiGraph()
+    disconnected.add_node("shared")
+    optimized_error = _competition_outcome(
+        _assign_with_competition_expansion,
+        customers.iloc[:1],
+        quotas,
+        disconnected,
+        regions,
+    )
+    reference_error = _competition_outcome(
+        _assign_with_competition_expansion_reference,
+        customers.iloc[:1],
+        quotas,
+        disconnected,
+        regions,
+    )
+    assert optimized_error == reference_error
+    assert optimized_error[:3] == (
+        "error",
+        "GLOBAL_ASSIGNMENT_EXPANSION_EXHAUSTED",
+        {},
     )
 
 

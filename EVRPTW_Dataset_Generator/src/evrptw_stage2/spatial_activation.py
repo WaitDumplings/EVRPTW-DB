@@ -758,6 +758,40 @@ def _assign_customers(
         candidate_edge_count=candidate_edge_count,
     )
     stage_started = begin(
+        "global_assignment.feasibility",
+        graph_node_count=graph.number_of_nodes(),
+        graph_edge_count=graph.number_of_edges(),
+        required_flow=total,
+    )
+    feasible_flow = int(
+        nx.maximum_flow_value(
+            graph,
+            "source",
+            "sink",
+            capacity="capacity",
+            flow_func=nx.algorithms.flow.shortest_augmenting_path,
+        )
+    )
+    if feasible_flow != total:
+        finish(
+            "global_assignment.feasibility",
+            stage_started,
+            status="failed",
+            feasible_flow=feasible_flow,
+            required_flow=total,
+            error_code="GLOBAL_CUSTOMER_ASSIGNMENT_INFEASIBLE",
+        )
+        raise SpatialActivationError(
+            "GLOBAL_CUSTOMER_ASSIGNMENT_INFEASIBLE",
+            "overlapping regions cannot satisfy all quotas with globally unique locations",
+        )
+    finish(
+        "global_assignment.feasibility",
+        stage_started,
+        feasible_flow=feasible_flow,
+        required_flow=total,
+    )
+    stage_started = begin(
         "global_assignment.min_cost_flow",
         graph_node_count=graph.number_of_nodes(),
         graph_edge_count=graph.number_of_edges(),
@@ -819,7 +853,7 @@ def _assign_customers(
     return assignment
 
 
-def _assign_with_competition_expansion(
+def _assign_with_competition_expansion_reference(
     customers: pd.DataFrame,
     quotas: pd.DataFrame,
     regions: dict[str, set[str]],
@@ -827,8 +861,9 @@ def _assign_with_competition_expansion(
     *,
     seed: int,
     progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
+    decision_trace: list[dict[str, Any]] | None = None,
 ) -> tuple[pd.DataFrame, int]:
-    """Expand regions when overlapping reservations block global assignment."""
+    """Original competition expansion retained for differential tests."""
 
     expansions = 0
     maximum_expansions = max(1, len(graph) * len(regions))
@@ -883,6 +918,23 @@ def _assign_with_competition_expansion(
                     seed,
                 ),
             )
+            if decision_trace is not None:
+                decision_trace.append(
+                    {
+                        "expansion_step": int(expansions),
+                        "region_id": region,
+                        "chosen_community_id": chosen,
+                        "selection_key": _neighbor_score(
+                            region,
+                            chosen,
+                            regions,
+                            target_deciles,
+                            customers,
+                            graph,
+                            seed,
+                        ),
+                    }
+                )
             regions[region].add(chosen)
             expansions += 1
             changed = True
@@ -891,6 +943,140 @@ def _assign_with_competition_expansion(
                 "GLOBAL_ASSIGNMENT_EXPANSION_EXHAUSTED",
                 "all regions cover their reachable graph but assignment is infeasible",
             )
+
+
+def _assign_with_competition_expansion(
+    customers: pd.DataFrame,
+    quotas: pd.DataFrame,
+    regions: dict[str, set[str]],
+    graph: nx.DiGraph,
+    *,
+    seed: int,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
+    decision_trace: list[dict[str, Any]] | None = None,
+) -> tuple[pd.DataFrame, int]:
+    """Expand competition regions with exact incremental graph-local caches."""
+
+    _, community_support, region_quota, region_total = _growth_capacity_tables(
+        customers, quotas
+    )
+    incident_minimums = _incident_crossing_minimums(graph)
+    frontiers: dict[str, set[str]] = {}
+    crossing_minimums: dict[str, dict[str, float]] = {}
+    for region, members in regions.items():
+        frontier: set[str] = set()
+        crossing: dict[str, float] = {}
+        for member in members:
+            for candidate, weight in incident_minimums.get(member, {}).items():
+                if candidate in members:
+                    continue
+                frontier.add(candidate)
+                crossing[candidate] = min(crossing.get(candidate, math.inf), weight)
+        frontiers[region] = frontier
+        crossing_minimums[region] = crossing
+
+    expansions = 0
+    expansion_round = 0
+    maximum_expansions = max(1, len(graph) * len(regions))
+    order = sorted(
+        regions,
+        key=lambda region: (
+            -int(region_total[region]),
+            stable_u64(seed, "competition_expansion_order", region),
+        ),
+    )
+    while True:
+        if progress_callback is not None:
+            progress_callback(
+                "global_assignment.competition_round",
+                {
+                    "status": "started",
+                    "competition_round": int(expansion_round),
+                    "competition_expansions": int(expansions),
+                },
+            )
+
+        def attempt_progress(stage: str, details: Mapping[str, Any]) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    stage,
+                    {
+                        **dict(details),
+                        "competition_round": int(expansion_round),
+                        "competition_expansions": int(expansions),
+                    },
+                )
+
+        try:
+            assignment = _assign_customers(
+                customers,
+                quotas,
+                regions,
+                seed=seed,
+                progress_callback=attempt_progress,
+            )
+            if progress_callback is not None:
+                progress_callback(
+                    "global_assignment.competition_round",
+                    {
+                        "status": "completed",
+                        "competition_round": int(expansion_round),
+                        "competition_expansions": int(expansions),
+                    },
+                )
+            return assignment, expansions
+        except SpatialActivationError as error:
+            if error.code != "GLOBAL_CUSTOMER_ASSIGNMENT_INFEASIBLE":
+                raise
+        if expansions >= maximum_expansions:
+            raise SpatialActivationError(
+                "GLOBAL_ASSIGNMENT_EXPANSION_EXHAUSTED",
+                "global assignment remained infeasible after graph-wide expansion",
+            )
+        changed = False
+        for region in order:
+            target_deciles = set(region_quota[region])
+            neighbors = frontiers[region]
+            if not neighbors:
+                continue
+
+            def selection_key(candidate: str) -> tuple[int, float, int, str]:
+                return (
+                    0 if community_support.get(candidate, set()) & target_deciles else 1,
+                    crossing_minimums[region].get(candidate, math.inf),
+                    stable_u64(seed, "region_growth", region, candidate),
+                    candidate,
+                )
+
+            chosen = min(neighbors, key=selection_key)
+            if decision_trace is not None:
+                decision_trace.append(
+                    {
+                        "expansion_step": int(expansions),
+                        "region_id": region,
+                        "chosen_community_id": chosen,
+                        "selection_key": selection_key(chosen),
+                    }
+                )
+            regions[region].add(chosen)
+            neighbors.discard(chosen)
+            crossing_minimums[region].pop(chosen, None)
+            for candidate, weight in incident_minimums.get(chosen, {}).items():
+                if candidate in regions[region]:
+                    continue
+                neighbors.add(candidate)
+                crossing_minimums[region][candidate] = min(
+                    crossing_minimums[region].get(candidate, math.inf),
+                    weight,
+                )
+            expansions += 1
+            changed = True
+        if not changed:
+            raise SpatialActivationError(
+                "GLOBAL_ASSIGNMENT_EXPANSION_EXHAUSTED",
+                "all regions cover their reachable graph but assignment is infeasible",
+            )
+        expansion_round += 1
 
 
 
