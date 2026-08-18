@@ -5,18 +5,20 @@
 
 ## 1. 当前结论与 STOP
 
-Chicago 和 Dallas 两个已知慢 family 都在同一个函数中表现出稳定的单核 CPU 热点：
+Chicago、Dallas 两个已知慢 family，以及 Los Angeles 最大 charger-roster smoke，都在
+同一个函数中表现出稳定的单核 CPU 热点：
 
 ```text
 activate_spatial_customers -> _grow_regions
 ```
 
-两次运行均未进入 global customer min-cost-flow、charger preflight、charger selection 或
+三次运行均未进入 global customer min-cost-flow、charger preflight、charger selection 或
 terminal matrix。因此当前慢点不是车辆参数、charger roster、terminal matrix 或 batched
-Dijkstra。新的 140-family pilot 继续保持禁止状态。
+Dijkstra。LA smoke 被上游热点遮挡，不能记为 smoke passed。新的 140-family pilot 继续
+保持禁止状态。
 
-这两次都是人工早停的 diagnostic-only run：`reason_code=runner_signal`，不是 timeout、
-不是 rejection、不是 acceptance pass。两次均满足：
+这三次都是人工早停的 diagnostic-only run：`reason_code=runner_signal`，不是 timeout、
+不是 rejection、不是 acceptance pass。三次均满足：
 
 ```text
 materialized families = 0
@@ -27,8 +29,9 @@ retry = false
 
 ## 2. 代码与运行绑定
 
-诊断代码：branch `stage2-repair-candidate`，commit `01ff67a`。该提交已推送，完整 generator
-suite 174/174 通过，其中 runtime supervisor integration tests 12/12 通过。
+诊断代码：branch `stage2-repair-candidate`。Chicago/Dallas 绑定已推送 commit `01ff67a`；
+LA 绑定只增加审核文档、执行源码相同的已推送 commit `6e291fa`。完整 generator suite
+174/174 通过，其中 runtime supervisor integration tests 12/12 通过。
 
 输入纪律：
 
@@ -45,26 +48,26 @@ suite 174/174 通过，其中 runtime supervisor integration tests 12/12 通过�
 
 ## 3. 实测证据
 
-| 指标 | Chicago | Dallas |
-|---|---:|---:|
-| family ID | `mf_75f0c9cfc1b6c358fc60c916` | `mf_68a04e303dc43462b506b7c0` |
-| track/day/scale | train/weekend/cus1000 | validation/weekend/cus1000 |
-| diagnostic elapsed | 170.017 s | 118.012 s |
-| customer preflight | 45.373 s | 28.137 s |
-| customer preflight CPU | 45.356 s | 28.135 s |
-| eligible territory rows | 308,379 | 163,647 |
-| quota matrix | 0.055 s | 0.099 s |
-| quota cells / regions | 51 / 14 | 89 / 25 |
-| community graph | 0.047 s | 0.021 s |
-| graph nodes / edges | 2,643 / 11,744 | 1,189 / 4,179 |
-| region seed selection | 1.419 s | 1.397 s |
-| region seed CPU | 1.407 s | 1.387 s |
-| observed peak RSS | 4,043,087,872 B | 3,036,614,656 B |
-| last observed growth progress | step 300, pass 40 | step 400, pass 47 |
-| frozen growth upper bound | 37,002 | 29,725 |
-| measured increment | 100→300 in 75.671 s | 200→400 in 37.319 s |
-| increment throughput | about 2.64 step/s | about 5.36 step/s |
-| worker CPU | about 100% of one core | about 100% of one core |
+| 指标 | Chicago | Dallas | Los Angeles |
+|---|---:|---:|---:|
+| family ID | `mf_75f0c9cfc1b6c358fc60c916` | `mf_68a04e303dc43462b506b7c0` | `mf_3392e476dea1c527fccb9cc5` |
+| track/day/scale | train/weekend/cus1000 | validation/weekend/cus1000 | train/weekday/cus1000 |
+| diagnostic elapsed | 170.017 s | 118.012 s | 196.020 s |
+| customer preflight | 45.373 s | 28.137 s | 81.182 s |
+| customer preflight CPU | 45.356 s | 28.135 s | 81.167 s |
+| eligible territory rows | 308,379 | 163,647 | 381,604 |
+| quota matrix | 0.055 s | 0.099 s | 0.073 s |
+| quota cells / regions | 51 / 14 | 89 / 25 | 68 / 17 |
+| community graph | 0.047 s | 0.021 s | 0.056 s |
+| graph nodes / edges | 2,643 / 11,744 | 1,189 / 4,179 | 3,112 / 13,282 |
+| region seed selection | 1.419 s | 1.397 s | 2.151 s |
+| region seed CPU | 1.407 s | 1.387 s | 2.135 s |
+| observed peak RSS | 4,043,087,872 B | 3,036,614,656 B | 5,505,241,088 B |
+| last observed growth progress | step 300, pass 40 | step 400, pass 47 | step 300, pass 27 |
+| frozen growth upper bound | 37,002 | 29,725 | 52,904 |
+| measured increment | 100→300 in 75.671 s | 200→400 in 37.319 s | 100→300 in 72.847 s |
+| increment throughput | about 2.64 step/s | about 5.36 step/s | about 2.75 step/s |
+| worker CPU | about 100% of one core | about 100% of one core | about 100% of one core |
 
 Chicago root：
 
@@ -78,6 +81,13 @@ Dallas root：
 ```text
 EVRPTW_Dataset/Instances_v2/
   stage2_targeted_dallas_spatial_probe_v3_01ff67a
+```
+
+Los Angeles root：
+
+```text
+EVRPTW_Dataset/Instances_v2/
+  stage2_targeted_la_smoke_v3_6e291fa
 ```
 
 吞吐只用于定位复杂度，不能用 `upper_bound / throughput` 当作准确完成时间；region 可能在
@@ -98,8 +108,8 @@ customers["community_id"].isin(communities)
 groupby("radial_decile").size()
 ```
 
-Chicago 的扫描对象是 308,379 行，Dallas 是 163,647 行。该函数在每个 pass 的每个 region
-调用一次，失败报告阶段还会再次调用。
+Chicago 的扫描对象是 308,379 行，Dallas 是 163,647 行，LA 是 381,604 行。该函数在
+每个 pass 的每个 region 调用一次，失败报告阶段还会再次调用。
 
 ### 4.2 每个 frontier candidate 再次做 equality 全表扫描
 

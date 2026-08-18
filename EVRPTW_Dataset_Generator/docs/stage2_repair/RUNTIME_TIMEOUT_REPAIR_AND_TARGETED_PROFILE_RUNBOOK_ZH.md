@@ -1,7 +1,8 @@
 # Stage-2 超时修复与定点性能诊断运行手册
 
-> 状态：运行时修复已实现并通过测试；Chicago、Dallas 已完成有效的细粒度早停定位，
-> LA 尚未执行。新的 140-family pilot 仍未获准。
+> 状态：运行时修复已实现并通过测试；Chicago、Dallas 已完成有效的细粒度早停定位；
+> LA smoke 也已执行，但被同一个上游 spatial growth 热点阻塞，尚未进入 charger 路径，
+> 因而不算 smoke passed。新的 140-family pilot 仍未获准。
 > 本文只申请定点诊断，不申请新的 140-family pilot，更不申请 7,500-family full run。
 
 ## 1. 旧 pilot 的处置
@@ -278,9 +279,9 @@ performance profile fields complete
 原函数、输入规模、迭代进度、wall/CPU/RSS 和“输出逐项等价”的优化方案提交 reviewer；
 未获批准前只允许继续采样，不实施 spatial 方法优化。
 
-细粒度 probe 随后确认 Chicago 与 Dallas 均卡在 `_grow_regions`，不是 region seed
-Dijkstra 或 min-cost-flow。完整数据、根因、exact family-local capacity/frontier/crossing
-cache 方案和等价性测试要求见：
+细粒度 probe 随后确认 Chicago、Dallas 和 LA 均卡在 `_grow_regions`，不是 region seed
+Dijkstra 或 min-cost-flow；LA 因此尚不能评价最大 charger roster。完整数据、根因、exact
+family-local capacity/frontier/crossing cache 方案和等价性测试要求见：
 
 ```text
 docs/stage2_repair/SPATIAL_GROWTH_EXACT_CACHE_REVIEW_ZH.md
