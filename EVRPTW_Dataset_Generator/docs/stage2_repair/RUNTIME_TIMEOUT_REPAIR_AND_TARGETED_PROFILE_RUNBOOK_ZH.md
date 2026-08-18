@@ -1,7 +1,7 @@
 # Stage-2 超时修复与定点性能诊断运行手册
 
-> 状态：运行时修复已实现并通过测试；Chicago 已完成一次有效的早停定位，
-> Dallas、LA 尚未执行。新的 140-family pilot 仍未获准。
+> 状态：运行时修复已实现并通过测试；Chicago、Dallas 已完成有效的细粒度早停定位，
+> LA 尚未执行。新的 140-family pilot 仍未获准。
 > 本文只申请定点诊断，不申请新的 140-family pilot，更不申请 7,500-family full run。
 
 ## 1. 旧 pilot 的处置
@@ -277,6 +277,16 @@ performance profile fields complete
 因此细粒度探针定位后，如果需要修改 region seed/growth/min-cost-flow 的实现，必须先把
 原函数、输入规模、迭代进度、wall/CPU/RSS 和“输出逐项等价”的优化方案提交 reviewer；
 未获批准前只允许继续采样，不实施 spatial 方法优化。
+
+细粒度 probe 随后确认 Chicago 与 Dallas 均卡在 `_grow_regions`，不是 region seed
+Dijkstra 或 min-cost-flow。完整数据、根因、exact family-local capacity/frontier/crossing
+cache 方案和等价性测试要求见：
+
+```text
+docs/stage2_repair/SPATIAL_GROWTH_EXACT_CACHE_REVIEW_ZH.md
+```
+
+该方案仍在等待 reviewer 对三类 exact cache 分项签字；签字前不得实现，也不得重跑 pilot。
 
 只有 Chicago < 7,200 s、Dallas < 7,200 s、LA smoke passed、verifier passed、无 orphan、
 代码再次 clean commit 并 push 后，才可以把新 140-family pilot 提交 reviewer。新 pilot 必须
