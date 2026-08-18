@@ -368,7 +368,7 @@ def _neighbor_score(
     )
 
 
-def _grow_regions(
+def _grow_regions_reference(
     customers: pd.DataFrame,
     quotas: pd.DataFrame,
     graph: nx.DiGraph,
@@ -376,7 +376,10 @@ def _grow_regions(
     *,
     seed: int,
     progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
+    decision_trace: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, set[str]], int]:
+    """Original DataFrame-scan implementation retained for differential tests."""
+
     regions = {region: {community} for region, community in seeds.items()}
     growth_steps = 0
     maximum_steps = max(1, len(graph) * len(regions))
@@ -433,6 +436,25 @@ def _grow_regions(
                     seed,
                 ),
             )
+            if decision_trace is not None:
+                decision_trace.append(
+                    {
+                        "growth_pass": int(growth_pass),
+                        "growth_step": int(growth_steps),
+                        "region_id": region,
+                        "unmet_deciles": sorted(unmet),
+                        "chosen_community_id": chosen,
+                        "selection_key": _neighbor_score(
+                            region,
+                            chosen,
+                            regions,
+                            unmet,
+                            customers,
+                            graph,
+                            seed,
+                        ),
+                    }
+                )
             regions[region].add(chosen)
             growth_steps += 1
             changed = True
@@ -444,6 +466,196 @@ def _grow_regions(
     deficits = {
         region: sorted(_region_unmet_cells(region, communities, quotas, customers))
         for region, communities in regions.items()
+    }
+    deficits = {key: value for key, value in deficits.items() if value}
+    raise SpatialActivationError(
+        "REGION_GROWTH_EXHAUSTED",
+        "community graph was exhausted before all region-decile capacities were met",
+        {"unmet_region_deciles": deficits, "growth_steps": growth_steps},
+    )
+
+
+def _growth_capacity_tables(
+    customers: pd.DataFrame,
+    quotas: pd.DataFrame,
+) -> tuple[
+    dict[Any, dict[int, int]],
+    dict[Any, set[int]],
+    dict[str, dict[int, int]],
+    dict[str, int],
+]:
+    """Build exact family-local sufficient statistics with one customer groupby."""
+
+    community_capacity: dict[Any, dict[int, int]] = {}
+    community_support: dict[Any, set[int]] = {}
+    grouped = customers.groupby(
+        ["community_id", "radial_decile"], observed=True, sort=False
+    ).size()
+    for (community, decile), count in grouped.items():
+        decile_id = int(decile)
+        community_capacity.setdefault(community, {})[decile_id] = int(count)
+        community_support.setdefault(community, set()).add(decile_id)
+
+    region_quota: dict[str, dict[int, int]] = {}
+    region_total: dict[str, int] = {}
+    for row in quotas.itertuples(index=False):
+        region = str(row.region_id)
+        region_quota.setdefault(region, {})[int(row.radial_decile)] = int(row.quota)
+        region_total[region] = region_total.get(region, 0) + int(row.quota)
+    return community_capacity, community_support, region_quota, region_total
+
+
+def _incident_crossing_minimums(graph: nx.DiGraph) -> dict[str, dict[str, float]]:
+    """Return the exact minimum directed crossing weight for each adjacent pair."""
+
+    result: dict[str, dict[str, float]] = {str(node): {} for node in graph.nodes}
+    for source_raw, target_raw, data in graph.edges(data=True):
+        source = str(source_raw)
+        target = str(target_raw)
+        if source == target:
+            continue
+        weight = float(data["weight"])
+        previous = result[source].get(target, math.inf)
+        reverse_previous = result[target].get(source, math.inf)
+        pair_minimum = min(weight, previous, reverse_previous)
+        result[source][target] = pair_minimum
+        result[target][source] = pair_minimum
+    return result
+
+
+def _grow_regions(
+    customers: pd.DataFrame,
+    quotas: pd.DataFrame,
+    graph: nx.DiGraph,
+    seeds: dict[str, str],
+    *,
+    seed: int,
+    progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
+    decision_trace: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, set[str]], int]:
+    """Grow regions with exact incremental capacity, frontier and crossing caches."""
+
+    (
+        community_capacity,
+        community_support,
+        region_quota,
+        region_total,
+    ) = _growth_capacity_tables(customers, quotas)
+    incident_minimums = _incident_crossing_minimums(graph)
+    regions = {region: {community} for region, community in seeds.items()}
+    region_capacity: dict[str, dict[int, int]] = {}
+    frontiers: dict[str, set[str]] = {}
+    crossing_minimums: dict[str, dict[str, float]] = {}
+    for region, members in regions.items():
+        capacity: dict[int, int] = {}
+        frontier: set[str] = set()
+        crossing: dict[str, float] = {}
+        for member in members:
+            for decile, count in community_capacity.get(member, {}).items():
+                capacity[decile] = capacity.get(decile, 0) + count
+            for candidate, weight in incident_minimums.get(member, {}).items():
+                if candidate in members:
+                    continue
+                frontier.add(candidate)
+                crossing[candidate] = min(crossing.get(candidate, math.inf), weight)
+        region_capacity[region] = capacity
+        frontiers[region] = frontier
+        crossing_minimums[region] = crossing
+
+    growth_steps = 0
+    maximum_steps = max(1, len(graph) * len(regions))
+    order = sorted(
+        regions,
+        key=lambda region: (
+            -int(region_total[region]),
+            stable_u64(seed, "region_growth_order", region),
+        ),
+    )
+    growth_pass = 0
+    last_reported_growth = -1
+    while growth_steps < maximum_steps:
+        changed = False
+        all_satisfied = True
+        for region_index, region in enumerate(order):
+            if (
+                progress_callback is not None
+                and growth_steps != last_reported_growth
+                and (growth_steps < 5 or growth_steps % 100 == 0)
+            ):
+                progress_callback(
+                    "region_growth.progress",
+                    {
+                        "status": "progress",
+                        "growth_pass": int(growth_pass),
+                        "growth_steps": int(growth_steps),
+                        "maximum_steps": int(maximum_steps),
+                        "region_index": int(region_index),
+                        "region_count": int(len(order)),
+                    },
+                )
+                last_reported_growth = growth_steps
+            unmet = {
+                decile
+                for decile, quota in region_quota[region].items()
+                if int(region_capacity[region].get(decile, 0)) < quota
+            }
+            if not unmet:
+                continue
+            all_satisfied = False
+            neighbors = frontiers[region]
+            if not neighbors:
+                continue
+
+            def selection_key(candidate: str) -> tuple[int, float, int, str]:
+                return (
+                    0 if community_support.get(candidate, set()) & unmet else 1,
+                    crossing_minimums[region].get(candidate, math.inf),
+                    stable_u64(seed, "region_growth", region, candidate),
+                    candidate,
+                )
+
+            chosen = min(neighbors, key=selection_key)
+            chosen_key = selection_key(chosen)
+            if decision_trace is not None:
+                decision_trace.append(
+                    {
+                        "growth_pass": int(growth_pass),
+                        "growth_step": int(growth_steps),
+                        "region_id": region,
+                        "unmet_deciles": sorted(unmet),
+                        "chosen_community_id": chosen,
+                        "selection_key": chosen_key,
+                    }
+                )
+            regions[region].add(chosen)
+            for decile, count in community_capacity.get(chosen, {}).items():
+                region_capacity[region][decile] = (
+                    region_capacity[region].get(decile, 0) + count
+                )
+            neighbors.discard(chosen)
+            crossing_minimums[region].pop(chosen, None)
+            for candidate, weight in incident_minimums.get(chosen, {}).items():
+                if candidate in regions[region]:
+                    continue
+                neighbors.add(candidate)
+                crossing_minimums[region][candidate] = min(
+                    crossing_minimums[region].get(candidate, math.inf),
+                    weight,
+                )
+            growth_steps += 1
+            changed = True
+        growth_pass += 1
+        if all_satisfied:
+            return regions, growth_steps
+        if not changed:
+            break
+    deficits = {
+        region: sorted(
+            decile
+            for decile, quota in region_quota[region].items()
+            if int(region_capacity[region].get(decile, 0)) < quota
+        )
+        for region in regions
     }
     deficits = {key: value for key, value in deficits.items() if value}
     raise SpatialActivationError(

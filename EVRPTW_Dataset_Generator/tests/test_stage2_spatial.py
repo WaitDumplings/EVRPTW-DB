@@ -19,6 +19,9 @@ from evrptw_stage2.orders import (
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.rounding import controlled_matrix_round
 from evrptw_stage2.spatial_activation import (
+    SpatialActivationError,
+    _grow_regions,
+    _grow_regions_reference,
     activate_spatial_customers,
     nested_customer_order,
 )
@@ -247,6 +250,164 @@ def test_nested_order_encodes_exact_cus1000_tree() -> None:
     assert report["cus500_nodes"] == 2
     assert report["cus100_nodes"] == 10
     assert report["cus50_nodes"] == 20
+
+
+def _growth_outcome(
+    implementation: object,
+    customers: pd.DataFrame,
+    quotas: pd.DataFrame,
+    graph: object,
+    seeds: dict[str, str],
+    *,
+    seed: int,
+) -> tuple[object, ...]:
+    trace: list[dict[str, object]] = []
+    progress: list[tuple[str, dict[str, object]]] = []
+    try:
+        regions, steps = implementation(  # type: ignore[operator]
+            customers,
+            quotas,
+            graph,
+            seeds,
+            seed=seed,
+            decision_trace=trace,
+            progress_callback=lambda stage, details: progress.append(
+                (stage, dict(details))
+            ),
+        )
+    except SpatialActivationError as error:
+        return "error", error.code, error.diagnostics, trace, progress
+    return "ok", regions, steps, trace, progress
+
+
+@pytest.mark.parametrize("scenario_seed", range(30))
+def test_exact_growth_cache_matches_reference_on_random_directed_graphs(
+    scenario_seed: int,
+) -> None:
+    import networkx as nx
+
+    rng = np.random.default_rng(scenario_seed)
+    communities = [f"c{index}" for index in range(9)]
+    graph = nx.DiGraph()
+    graph.add_nodes_from(communities)
+    for index, source in enumerate(communities):
+        target = communities[(index + 1) % len(communities)]
+        graph.add_edge(source, target, weight=float(rng.integers(1, 5)))
+        if bool(rng.integers(2)):
+            graph.add_edge(target, source, weight=float(rng.integers(1, 5)))
+    for _ in range(12):
+        source, target = rng.choice(communities, size=2, replace=False)
+        graph.add_edge(str(source), str(target), weight=float(rng.integers(1, 5)))
+
+    records: list[dict[str, object]] = []
+    decile_totals = {decile: 0 for decile in range(4)}
+    for community in communities[:-1]:
+        for decile in range(4):
+            count = int(rng.integers(4))
+            decile_totals[decile] += count
+            records.extend(
+                {"community_id": community, "radial_decile": decile}
+                for _ in range(count)
+            )
+    for decile, total in decile_totals.items():
+        if total == 0:
+            records.append({"community_id": communities[0], "radial_decile": decile})
+            decile_totals[decile] = 1
+    customers = pd.DataFrame.from_records(records)
+    quotas = pd.DataFrame.from_records(
+        [
+            {
+                "region_id": region,
+                "radial_decile": decile,
+                "quota": max(1, decile_totals[decile] // divisor),
+            }
+            for region, divisor in (("r0", 2), ("r1", 3))
+            for decile in range(4)
+        ]
+    )
+    seeds = {"r0": communities[0], "r1": communities[4]}
+    reference = _growth_outcome(
+        _grow_regions_reference,
+        customers,
+        quotas,
+        graph,
+        seeds,
+        seed=scenario_seed,
+    )
+    optimized = _growth_outcome(
+        _grow_regions,
+        customers,
+        quotas,
+        graph,
+        seeds,
+        seed=scenario_seed,
+    )
+    assert optimized == reference
+
+
+def test_exact_growth_cache_matches_reference_for_transit_ties_and_failure() -> None:
+    import networkx as nx
+
+    graph = nx.DiGraph()
+    graph.add_weighted_edges_from(
+        [
+            ("seed", "transit-a", 2.0),
+            ("seed", "transit-b", 2.0),
+            ("transit-a", "customer", 1.0),
+            ("customer", "transit-b", 1.0),
+        ],
+        weight="weight",
+    )
+    customers = pd.DataFrame(
+        [
+            {"community_id": "seed", "radial_decile": 0},
+            {"community_id": "customer", "radial_decile": 1},
+        ]
+    )
+    quotas = pd.DataFrame(
+        [{"region_id": "r0", "radial_decile": 1, "quota": 1}]
+    )
+    seeds = {"r0": "seed"}
+    assert _growth_outcome(
+        _grow_regions,
+        customers,
+        quotas,
+        graph,
+        seeds,
+        seed=77,
+    ) == _growth_outcome(
+        _grow_regions_reference,
+        customers,
+        quotas,
+        graph,
+        seeds,
+        seed=77,
+    )
+
+    disconnected = nx.DiGraph()
+    disconnected.add_nodes_from(["seed", "customer"])
+    optimized_error = _growth_outcome(
+        _grow_regions,
+        customers,
+        quotas,
+        disconnected,
+        seeds,
+        seed=77,
+    )
+    reference_error = _growth_outcome(
+        _grow_regions_reference,
+        customers,
+        quotas,
+        disconnected,
+        seeds,
+        seed=77,
+    )
+    assert optimized_error == reference_error
+    assert optimized_error[:3] == (
+        "error",
+        "REGION_GROWTH_EXHAUSTED",
+        {"unmet_region_deciles": {"r0": [1]}, "growth_steps": 0},
+    )
 
 
 def test_amazon_covering_matching_and_inherited_attributes() -> None:

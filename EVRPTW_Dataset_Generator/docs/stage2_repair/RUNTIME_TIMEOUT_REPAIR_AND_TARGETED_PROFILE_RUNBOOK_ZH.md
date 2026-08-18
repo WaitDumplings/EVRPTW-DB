@@ -1,8 +1,7 @@
 # Stage-2 超时修复与定点性能诊断运行手册
 
-> 状态：运行时修复已实现并通过测试；Chicago、Dallas 已完成有效的细粒度早停定位；
-> LA smoke 也已执行，但被同一个上游 spatial growth 热点阻塞，尚未进入 charger 路径，
-> 因而不算 smoke passed。新的 140-family pilot 仍未获准。
+> 状态：运行时修复和 spatial growth 三项 exact cache 已实现；完整 suite 205/205 通过。
+> 优化后的 Chicago、Dallas、LA 完整定点运行尚未执行。新的 140-family pilot 仍未获准。
 > 本文只申请定点诊断，不申请新的 140-family pilot，更不申请 7,500-family full run。
 
 ## 1. 旧 pilot 的处置
@@ -192,7 +191,7 @@ min-cost-flow 或最终选择。下一次 Chicago 运行仍是诊断，不得据
 11. worker 退出后残留 grandchild 被判 hard failure 并清除；
 12. contract ID 与 stop policy 冻结。
 
-`f09702a` 基线和当前细粒度 spatial probe 变更均通过完整 generator suite：174/174；
+`f09702a` 基线和细粒度 spatial probe 变更均通过完整 generator suite：174/174；
 其中 12/12 runtime supervisor integration tests 通过。probe 还包含 callback 开关前后
 customers、assignment、radial baseline 与非计时 metadata 逐项相同的回归检查。变更仍须
 clean commit 并 push，才能用于新的定点 root。
@@ -287,7 +286,9 @@ family-local capacity/frontier/crossing cache 方案和等价性测试要求见�
 docs/stage2_repair/SPATIAL_GROWTH_EXACT_CACHE_REVIEW_ZH.md
 ```
 
-该方案仍在等待 reviewer 对三类 exact cache 分项签字；签字前不得实现，也不得重跑 pilot。
+用户随后授权开始实施。三类 exact cache 均已完成，原始实现保留为 test-only reference，
+30 组随机 directed graph 和全部指定边界条件的 per-step differential trace 一致；当前完整
+suite 为 205/205 passed。下一步只允许从全新 root 完整运行三个 target，仍不得启动 pilot。
 
 只有 Chicago < 7,200 s、Dallas < 7,200 s、LA smoke passed、verifier passed、无 orphan、
 代码再次 clean commit 并 push 后，才可以把新 140-family pilot 提交 reviewer。新 pilot 必须

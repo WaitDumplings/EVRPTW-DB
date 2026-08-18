@@ -1,6 +1,7 @@
 # Stage-2 Spatial Growth 精确缓存优化审核申请
 
-> 性质：只提交诊断证据和待批准方案，不申请立即修改方法，不申请 140-family pilot，
+> 状态：三项 exact cache 已获用户执行授权并实现；205/205 generator tests 通过。
+> Chicago、Dallas、LA 的优化后完整定点运行尚未执行。本文件不申请 140-family pilot，
 > 不申请 7,500-family full run。
 
 ## 1. 当前结论与 STOP
@@ -31,7 +32,7 @@ retry = false
 
 诊断代码：branch `stage2-repair-candidate`。Chicago/Dallas 绑定已推送 commit `01ff67a`；
 LA 绑定只增加审核文档、执行源码相同的已推送 commit `6e291fa`。完整 generator suite
-174/174 通过，其中 runtime supervisor integration tests 12/12 通过。
+优化前基线 174/174 通过，其中 runtime supervisor integration tests 12/12 通过。
 
 输入纪律：
 
@@ -218,17 +219,23 @@ growth step 计数全部不变。
 9. 再运行 LA 最大 charger-roster smoke；
 10. 三个 target 全通过后，才重新申请 140-family pilot。
 
-## 8. 请求 reviewer 明确签字的问题
+## 8. 执行授权与当前实现
 
-请只回答以下放行项：
+用户在收到本审核申请后以“开始”授权按本文方案实施。code agent 按最严格口径执行：
 
 ```text
-ALLOW exact family-local community×decile capacity cache: YES / NO
-ALLOW exact incremental region frontier cache:           YES / NO
-ALLOW exact incremental crossing-min cache:               YES / NO
-REQUIRE per-step differential trace equality:             YES / NO
-ALLOW implementation before another full target run:      YES / NO
+exact family-local community×decile capacity cache: implemented
+exact incremental region frontier cache:           implemented
+exact incremental crossing-min cache:               implemented
+per-step differential trace equality:               required and passed
+new 140-family pilot:                               still prohibited
 ```
 
-在得到明确 YES 前，code agent 不修改 `_grow_regions` 的选择实现，也不启动新的 140-family
-pilot。
+原始 DataFrame-scan 实现保留为 test-only reference。新增 30 组随机 directed graph differential
+tests，以及 zero-customer transit、单向 edge、tie crossing weight、empty frontier 和失败
+diagnostics 测试。optimized/reference 的每一步 chosen community、selection tuple、regions、
+growth_steps、progress events 和 error diagnostics 逐项相同。
+
+当前完整 generator suite 为 205/205 passed。下一放行点仍是 clean commit/push 后，从全新
+root 完整跑完 Chicago、Dallas 和 LA；只有三者 `<7200 s`、verifier passed、零 orphan，
+才能重新申请 140-family pilot。
