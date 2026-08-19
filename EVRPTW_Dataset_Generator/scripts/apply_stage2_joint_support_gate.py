@@ -292,7 +292,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         customer_split_path=str(
                             args.customer_split_root
                             / city
-                            / "customer_split.parquet"
+                            / "customer_split_manifest.parquet"
                         ),
                         community_adjacency_path=str(
                             args.customer_split_root
