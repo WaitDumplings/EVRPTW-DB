@@ -55,11 +55,11 @@ def _terminate_all(
         handle.close()
 
 
-def _valid_completed_city_report(
+def _valid_completed_task_report(
     report_path: Path,
     *,
     city: str,
-    expected_count: int,
+    expected_family_ids: tuple[str, ...],
     code_commit: str,
 ) -> bool:
     if not report_path.is_file():
@@ -69,14 +69,45 @@ def _valid_completed_city_report(
     except (OSError, ValueError):
         return False
     rows = report.get("families", [])
+    observed_ids = tuple(sorted(str(row.get("family_id")) for row in rows))
     return bool(
         report.get("schema") == c3.C3_SCHEMA
         and report.get("passed") is True
         and report.get("status") == "passed_report_only"
         and report.get("code_provenance", {}).get("code_commit") == code_commit
-        and len(rows) == expected_count
+        and observed_ids == tuple(sorted(expected_family_ids))
         and all(str(row.get("city_slug")) == city and row.get("selected") for row in rows)
     )
+
+
+def _build_tasks(
+    families: pd.DataFrame,
+    *,
+    families_per_task: int,
+) -> list[dict[str, Any]]:
+    tasks_by_city: dict[str, list[dict[str, Any]]] = {}
+    for city, city_rows in families.groupby("city_slug", sort=True):
+        ids = sorted(city_rows["family_id"].astype(str))
+        city_tasks: list[dict[str, Any]] = []
+        for start in range(0, len(ids), families_per_task):
+            family_ids = tuple(ids[start : start + families_per_task])
+            city_tasks.append(
+                {
+                    "task_id": f"{city}.part-{start // families_per_task:04d}",
+                    "city": str(city),
+                    "family_ids": family_ids,
+                }
+            )
+        tasks_by_city[str(city)] = city_tasks
+    # Round-robin keeps every city represented in the initial worker wave and
+    # lets the global queue absorb city-level runtime skew.
+    tasks = []
+    maximum_parts = max(map(len, tasks_by_city.values()), default=0)
+    for part_index in range(maximum_parts):
+        for city in sorted(tasks_by_city):
+            if part_index < len(tasks_by_city[city]):
+                tasks.append(tasks_by_city[city][part_index])
+    return tasks
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -121,31 +152,42 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     city_counts = {
         city: int(families["city_slug"].astype(str).eq(city).sum()) for city in cities
     }
-    work_root = args.output.parent / "c3_city_reports"
+    tasks = _build_tasks(families, families_per_task=args.families_per_task)
+    task_by_id = {str(task["task_id"]): task for task in tasks}
+    work_root = args.output.parent / "c3_task_reports"
     work_root.mkdir(parents=True, exist_ok=True)
-    pending: deque[str] = deque()
+    pending: deque[dict[str, Any]] = deque()
     completed: set[str] = set()
-    for city in cities:
-        report_path = work_root / f"{city}.json"
-        if _valid_completed_city_report(
+    for task in tasks:
+        task_id = str(task["task_id"])
+        report_path = work_root / f"{task_id}.json"
+        if _valid_completed_task_report(
             report_path,
-            city=city,
-            expected_count=city_counts[city],
+            city=str(task["city"]),
+            expected_family_ids=tuple(task["family_ids"]),
             code_commit=str(provenance["code_commit"]),
         ):
-            completed.add(city)
+            completed.add(task_id)
         else:
-            pending.append(city)
+            pending.append(task)
 
     running: dict[str, tuple[subprocess.Popen[str], Any]] = {}
-    last_counts = {city: 0 for city in cities}
-    last_change = {city: time.monotonic() for city in cities}
+    last_counts = {
+        str(task["task_id"]): (
+            len(task["family_ids"])
+            if str(task["task_id"]) in completed
+            else 0
+        )
+        for task in tasks
+    }
+    last_change = {str(task["task_id"]): time.monotonic() for task in tasks}
     worker_script = Path(__file__).with_name("apply_stage2_joint_support_gate.py")
 
-    def start_city(city: str) -> None:
-        output = work_root / f"{city}.json"
-        progress = work_root / f"{city}.progress.json"
-        log_path = work_root / f"{city}.log"
+    def start_task(task: dict[str, Any]) -> None:
+        task_id = str(task["task_id"])
+        output = work_root / f"{task_id}.json"
+        progress = work_root / f"{task_id}.progress.json"
+        log_path = work_root / f"{task_id}.log"
         handle = log_path.open("w", encoding="utf-8")
         command = [
             sys.executable,
@@ -159,7 +201,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "--output", str(output),
             "--mode", "official",
             "--official-cle-contract", args.official_cle_contract,
-            "--cities", city,
+            "--cities", str(task["city"]),
+            "--family-ids", *map(str, task["family_ids"]),
             "--targeted-gate",
             "--report-only",
             "--progress-output", str(progress),
@@ -172,65 +215,88 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             start_new_session=True,
             cwd=Path(__file__).resolve().parents[1],
         )
-        running[city] = (process, handle)
-        last_change[city] = time.monotonic()
+        running[task_id] = (process, handle)
+        last_change[task_id] = time.monotonic()
 
     try:
         while pending or running:
             while pending and len(running) < args.workers:
-                start_city(pending.popleft())
+                start_task(pending.popleft())
             time.sleep(1.0)
-            for city, (process, handle) in list(running.items()):
-                progress_path = work_root / f"{city}.progress.json"
+            for task_id, (process, handle) in list(running.items()):
+                task = task_by_id[task_id]
+                progress_path = work_root / f"{task_id}.progress.json"
                 if progress_path.is_file():
                     try:
                         count = int(_read_json(progress_path).get("completed", 0))
                     except (OSError, ValueError):
-                        count = last_counts[city]
-                    if count > last_counts[city]:
-                        last_counts[city] = count
-                        last_change[city] = time.monotonic()
+                        count = last_counts[task_id]
+                    if count > last_counts[task_id]:
+                        last_counts[task_id] = count
+                        last_change[task_id] = time.monotonic()
                 if (
                     process.poll() is None
-                    and time.monotonic() - last_change[city]
+                    and time.monotonic() - last_change[task_id]
                     >= args.family_wall_timeout_s
                 ):
                     raise TimeoutError(
-                        f"C3 city worker {city} made no family progress for "
+                        f"C3 task {task_id} made no family progress for "
                         f"{args.family_wall_timeout_s} seconds"
                     )
                 return_code = process.poll()
                 if return_code is None:
                     continue
                 handle.close()
-                del running[city]
+                del running[task_id]
                 if return_code != 0:
                     raise RuntimeError(
-                        f"C3 city worker failed: city={city}, exit={return_code}, "
+                        f"C3 task failed: task={task_id}, exit={return_code}, "
                         + "log="
-                        + str(work_root / f"{city}.log")
+                        + str(work_root / f"{task_id}.log")
                     )
-                report_path = work_root / f"{city}.json"
-                if not _valid_completed_city_report(
+                report_path = work_root / f"{task_id}.json"
+                if not _valid_completed_task_report(
                     report_path,
-                    city=city,
-                    expected_count=city_counts[city],
+                    city=str(task["city"]),
+                    expected_family_ids=tuple(task["family_ids"]),
                     code_commit=str(provenance["code_commit"]),
                 ):
-                    raise RuntimeError(f"C3 city report failed validation: {report_path}")
-                completed.add(city)
-                last_counts[city] = city_counts[city]
+                    raise RuntimeError(f"C3 task report failed validation: {report_path}")
+                completed.add(task_id)
+                last_counts[task_id] = len(task["family_ids"])
+            city_completed_counts = {
+                city: int(
+                    sum(
+                        last_counts[str(task["task_id"])]
+                        for task in tasks
+                        if str(task["city"]) == city
+                    )
+                )
+                for city in cities
+            }
+            active_cities = sorted(
+                {str(task_by_id[task_id]["city"]) for task_id in running}
+            )
+            completed_cities = sorted(
+                city
+                for city in cities
+                if city_completed_counts[city] == city_counts[city]
+            )
             c3._atomic_json(
                 args.progress_output,
                 {
                     "schema": "cle_evrptw_c3_parallel_progress_v1",
                     "planned": int(len(families)),
                     "completed": int(sum(last_counts.values())),
-                    "completed_cities": sorted(completed),
-                    "active_cities": sorted(running),
-                    "pending_cities": list(pending),
+                    "completed_cities": completed_cities,
+                    "active_cities": active_cities,
+                    "pending_task_count": len(pending),
+                    "active_task_ids": sorted(running),
+                    "completed_task_count": len(completed),
+                    "task_count": len(tasks),
+                    "families_per_task": int(args.families_per_task),
                     "city_counts": city_counts,
-                    "city_completed_counts": last_counts,
+                    "city_completed_counts": city_completed_counts,
                     "updated_monotonic_s": time.monotonic(),
                 },
             )
@@ -239,15 +305,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise
 
     updates: dict[str, dict[str, Any]] = {}
-    city_summaries: list[dict[str, Any]] = []
     family_summaries: list[dict[str, Any]] = []
-    for city in cities:
-        city_report = _read_json(work_root / f"{city}.json")
-        reason_counts: Counter[str] = Counter()
-        for family in city_report["families"]:
+    city_reason_counts = {city: Counter() for city in cities}
+    city_task_reports = {city: [] for city in cities}
+    for task in tasks:
+        task_id = str(task["task_id"])
+        city = str(task["city"])
+        task_report_path = work_root / f"{task_id}.json"
+        task_report = _read_json(task_report_path)
+        city_task_reports[city].append(str(task_report_path.resolve()))
+        for family in task_report["families"]:
             family_id = str(family["family_id"])
             selected = dict(family["selected"])
-            reason_counts.update(family.get("rejected_pair_reason_counts", {}))
+            city_reason_counts[city].update(
+                family.get("rejected_pair_reason_counts", {})
+            )
             updates[family_id] = {
                 "joint_support_contract_id": JOINT_SUPPORT_CONTRACT_ID,
                 "candidate_depot_count": int(family["candidate_depot_count"]),
@@ -287,14 +359,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "attempted_pair_count": len(family.get("attempted_pairs", [])),
                 }
             )
-        city_summaries.append(
-            {
-                "city_slug": city,
-                "family_count": city_counts[city],
-                "rejected_pair_reason_counts": dict(sorted(reason_counts.items())),
-                "report": str((work_root / f"{city}.json").resolve()),
-            }
-        )
+    city_summaries = [
+        {
+            "city_slug": city,
+            "family_count": city_counts[city],
+            "task_count": len(city_task_reports[city]),
+            "rejected_pair_reason_counts": dict(
+                sorted(city_reason_counts[city].items())
+            ),
+            "task_reports": city_task_reports[city],
+        }
+        for city in cities
+    ]
     planned_ids = set(families["family_id"].astype(str))
     if set(updates) != planned_ids:
         raise RuntimeError("Parallel C3 update IDs do not equal full family plan IDs")
@@ -306,6 +382,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "covered_family_count": len(updates),
         "city_count": len(cities),
         "workers": int(args.workers),
+        "families_per_task": int(args.families_per_task),
+        "task_count": len(tasks),
         "family_wall_timeout_s": float(args.family_wall_timeout_s),
         "official_cle_contract": args.official_cle_contract,
         "benchmark_positioning": (
@@ -345,6 +423,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--progress-output", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=11)
+    parser.add_argument("--families-per-task", type=int, default=25)
     parser.add_argument("--family-wall-timeout-s", type=float, default=7200.0)
     parser.add_argument("--termination-grace-s", type=float, default=60.0)
     parser.add_argument(
@@ -355,6 +434,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.workers < 1:
         raise ValueError("--workers must be positive")
+    if args.families_per_task < 1:
+        raise ValueError("--families-per-task must be positive")
     report = run(args)
     print(
         "Parallel C3: "

@@ -625,17 +625,12 @@ def _frozen_or_default_depot(
     }
 
 
-def _prepare_customer_territory(
+def prepare_customer_split_roster(
     cle: PortableCLE,
-    *,
-    family: Mapping[str, Any],
-    depot: pd.Series,
-    structure_metadata: Mapping[str, Any],
     customer_split_path: str,
-    profile: Mapping[str, Any],
-    network: PhysicalRoadNetwork,
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    customer_count = int(family["parent_customer_count"])
+) -> pd.DataFrame:
+    """Load and join the immutable city customer/split roster once per worker."""
+
     customers = cle.read_service_locations().copy()
     split = pd.read_parquet(customer_split_path)
     split_columns = [
@@ -647,11 +642,33 @@ def _prepare_customer_territory(
     missing = set(split_columns) - set(split.columns)
     if missing:
         raise ValueError(f"Customer split ledger is missing columns: {sorted(missing)}")
-    customers = customers.merge(
+    return customers.merge(
         split[split_columns],
         on="latent_service_location_id",
         how="inner",
         validate="one_to_one",
+    ).reset_index(drop=True)
+
+
+def _prepare_customer_territory(
+    cle: PortableCLE,
+    *,
+    family: Mapping[str, Any],
+    depot: pd.Series,
+    structure_metadata: Mapping[str, Any],
+    customer_split_path: str,
+    profile: Mapping[str, Any],
+    network: PhysicalRoadNetwork,
+    customer_split_roster: pd.DataFrame | None = None,
+    depot_star_cache: (
+        dict[tuple[str, str], tuple[pd.DataFrame, dict[str, Any]]] | None
+    ) = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    customer_count = int(family["parent_customer_count"])
+    customers = (
+        prepare_customer_split_roster(cle, customer_split_path)
+        if customer_split_roster is None
+        else customer_split_roster.copy()
     )
     requested_pool = str(family["customer_pool"])
     if requested_pool in {"train", "heldout"}:
@@ -659,30 +676,48 @@ def _prepare_customer_territory(
     elif requested_pool != "all_release_eligible":
         raise ValueError(f"Unsupported customer pool: {requested_pool!r}")
     customers = customers.reset_index(drop=True)
-    split_pool_count = len(customers)
-    customer_roster_fingerprint = roster_fingerprint(
-        customers["latent_service_location_id"],
-        depot_id=depot["candidate_id"],
-        terminal_kind="customer",
-    )
-    star = network.route_depot_star(_star_terminal_index(depot, customers))
-    connectivity_mask, quarantine = _connectivity_quarantine(
-        customers,
-        star,
-        id_column="latent_service_location_id",
-        terminal_kind="customer",
-    )
-    customers["depot_running_time_s"] = star.outbound_time_s[1:]
-    customers["depot_return_time_s"] = star.inbound_time_s[1:]
-    customers["depot_outbound_distance_km"] = star.outbound_distance_km[1:]
-    customers["depot_return_distance_km"] = star.inbound_distance_km[1:]
-    customers = customers.loc[connectivity_mask].reset_index(drop=True)
+    cache_key = (str(depot["candidate_id"]), requested_pool)
+    cached = depot_star_cache.get(cache_key) if depot_star_cache is not None else None
+    if cached is None:
+        split_pool_count = len(customers)
+        customer_roster_fingerprint = roster_fingerprint(
+            customers["latent_service_location_id"],
+            depot_id=depot["candidate_id"],
+            terminal_kind="customer",
+        )
+        star = network.route_depot_star(_star_terminal_index(depot, customers))
+        connectivity_mask, quarantine = _connectivity_quarantine(
+            customers,
+            star,
+            id_column="latent_service_location_id",
+            terminal_kind="customer",
+        )
+        customers["depot_running_time_s"] = star.outbound_time_s[1:]
+        customers["depot_return_time_s"] = star.inbound_time_s[1:]
+        customers["depot_outbound_distance_km"] = star.outbound_distance_km[1:]
+        customers["depot_return_distance_km"] = star.inbound_distance_km[1:]
+        customers = customers.loc[connectivity_mask].reset_index(drop=True)
+        base_report = {
+            "requested_pool": requested_pool,
+            "split_pool_count": split_pool_count,
+            "connectivity_eligible_count": len(customers),
+            "connectivity_quarantine_count": len(quarantine),
+            "connectivity_quarantine_ledger": quarantine,
+            "depot_star_report": star.report,
+            "customer_roster_fingerprint": customer_roster_fingerprint,
+        }
+        if depot_star_cache is not None:
+            depot_star_cache[cache_key] = (customers.copy(), dict(base_report))
+    else:
+        customers, base_report = cached
+        customers = customers.copy()
+        base_report = dict(base_report)
     if len(customers) < customer_count:
         raise TerminalConnectivityError(
             "NONRETRYABLE_TERMINAL_CONNECTIVITY: customer roster has "
             f"{len(customers)} bidirectionally node/turn-reachable candidates after "
-            f"quarantining {len(quarantine)}; N={customer_count}",
-            roster_fingerprint=customer_roster_fingerprint,
+            f"quarantining {base_report['connectivity_quarantine_count']}; N={customer_count}",
+            roster_fingerprint=str(base_report["customer_roster_fingerprint"]),
         )
     t_env = float(structure_metadata["source_t_env_s"])
     before_energy = customers.loc[customers["depot_running_time_s"].le(t_env)].copy()
@@ -703,17 +738,11 @@ def _prepare_customer_territory(
         raise SpatialActivationError(
             "TERRITORY_TOO_SMALL",
             f"structure_source_ids={structure_metadata['structure_source_ids']}, "
-            f"split={split_pool_count}, time_envelope={len(before_energy)}, "
+            f"split={base_report['split_pool_count']}, time_envelope={len(before_energy)}, "
             f"direct_energy={len(territory)}, N={customer_count}",
         )
     return territory, {
-        "requested_pool": requested_pool,
-        "split_pool_count": split_pool_count,
-        "connectivity_eligible_count": len(customers),
-        "connectivity_quarantine_count": len(quarantine),
-        "connectivity_quarantine_ledger": quarantine,
-        "depot_star_report": star.report,
-        "customer_roster_fingerprint": customer_roster_fingerprint,
+        **base_report,
         "time_envelope_count": len(before_energy),
         "territory_count": len(territory),
     }
@@ -731,6 +760,11 @@ def assess_joint_spatial_support_pair(
     network: PhysicalRoadNetwork,
     amazon: AmazonStage2Artifacts,
     community_adjacency_cache: dict[str, pd.DataFrame] | None = None,
+    customer_split_roster: pd.DataFrame | None = None,
+    depots: pd.DataFrame | None = None,
+    depot_star_cache: (
+        dict[tuple[str, str], tuple[pd.DataFrame, dict[str, Any]]] | None
+    ) = None,
 ) -> dict[str, Any]:
     """Run C3-A and C3-B for one frozen depot x source candidate pair."""
 
@@ -750,7 +784,7 @@ def assess_joint_spatial_support_pair(
     )
     spatial_cfg = profile.get("stage2_spatial", {})
     depot, _ = _frozen_or_default_depot(
-        cle.read_depots().reset_index(drop=True),
+        cle.read_depots().reset_index(drop=True) if depots is None else depots,
         family=frozen_family,
         depot_track=str(spatial_cfg.get("depot_track", "practical")),
     )
@@ -762,6 +796,8 @@ def assess_joint_spatial_support_pair(
         customer_split_path=customer_split_path,
         profile=profile,
         network=network,
+        customer_split_roster=customer_split_roster,
+        depot_star_cache=depot_star_cache,
     )
     _, quota_metadata, _ = radial_decile_support_contract(
         territory,

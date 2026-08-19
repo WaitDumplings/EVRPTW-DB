@@ -26,14 +26,109 @@ from evrptw_stage2.planning import build_generation_plan, materialization_attemp
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.reader import CLEEligibilityError, load_portable_cle
 from evrptw_stage2.road_state import build_family_road_state
-from evrptw_stage2.routing import PhysicalRoadNetwork, TerminalConnectivityError
+from evrptw_stage2.routing import (
+    DepotTerminalStar,
+    PhysicalRoadNetwork,
+    TerminalConnectivityError,
+)
 from evrptw_stage2.selection import (
     JointSupportConsistencyError,
+    _prepare_customer_territory,
     _select_depot_group,
     depot_candidate_order,
 )
 
 CONFIG_PATH = Path(__file__).parents[1] / "configs" / "cle_evrptw_stage2_v2.json"
+
+
+def test_c3_depot_star_cache_is_scoped_to_one_family_and_depot() -> None:
+    customers = pd.DataFrame(
+        {
+            "latent_service_location_id": ["c1", "c2"],
+            "customer_pool": ["train", "train"],
+            "community_id": ["g1", "g1"],
+            "road_connectivity_subgroup": ["s1", "s1"],
+            "location_lon": [0.1, 0.2],
+            "location_lat": [0.1, 0.2],
+            "physical_edge_id": ["e1", "e1"],
+            "directed_projection_offsets": ["[]", "[]"],
+            "connector_length_m": [0.0, 0.0],
+            "road_projection_node_id": ["n1", "n1"],
+            "service_access_node_id": ["n1", "n1"],
+            "anchor_scc_id": ["scc", "scc"],
+        }
+    )
+    depot = pd.Series(
+        {
+            "candidate_id": "d1",
+            "longitude": 0.0,
+            "latitude": 0.0,
+            "physical_edge_id": "e1",
+            "directed_projection_offsets": "[]",
+            "connector_length_m": 0.0,
+            "road_projection_node_id": "n1",
+            "facility_access_node_id": "n1",
+            "anchor_scc_id": "scc",
+        }
+    )
+
+    class Network:
+        calls = 0
+
+        def route_depot_star(self, terminal_index: pd.DataFrame) -> DepotTerminalStar:
+            self.calls += 1
+            count = len(terminal_index)
+            reachable = np.ones(count, dtype=bool)
+            return DepotTerminalStar(
+                outbound_time_s=np.asarray([0.0, 10.0, 20.0]),
+                inbound_time_s=np.asarray([0.0, 11.0, 21.0]),
+                outbound_distance_km=np.asarray([0.0, 1.0, 2.0]),
+                inbound_distance_km=np.asarray([0.0, 1.1, 2.1]),
+                node_outbound_reachable=reachable,
+                node_return_reachable=reachable,
+                turn_outbound_reachable=reachable,
+                turn_return_reachable=reachable,
+                report={"terminal_count": count},
+            )
+
+    network = Network()
+    cache: dict = {}
+    family = {"parent_customer_count": 1, "customer_pool": "train"}
+    profile = {
+        "energy": {
+            "specific_energy_consumption_kwh_per_km": 1.0,
+            "battery_capacity_kwh": 100.0,
+        }
+    }
+    metadata = {
+        "source_t_env_s": 100.0,
+        "source_radial_decile_edges_s": list(range(11)),
+        "structure_source_ids": ["source"],
+    }
+    first, _ = _prepare_customer_territory(
+        object(),
+        family=family,
+        depot=depot,
+        structure_metadata=metadata,
+        customer_split_path="unused",
+        profile=profile,
+        network=network,
+        customer_split_roster=customers,
+        depot_star_cache=cache,
+    )
+    second, _ = _prepare_customer_territory(
+        object(),
+        family=family,
+        depot=depot,
+        structure_metadata=metadata,
+        customer_split_path="unused",
+        profile=profile,
+        network=network,
+        customer_split_roster=customers,
+        depot_star_cache=cache,
+    )
+    assert network.calls == 1
+    pd.testing.assert_frame_equal(first, second)
 
 
 def _write_fake_cle(root: Path, *, release_eligible: bool = False) -> Path:

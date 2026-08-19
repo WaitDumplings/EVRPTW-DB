@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +29,84 @@ C3_SPEC = importlib.util.spec_from_file_location(
 assert C3_SPEC is not None and C3_SPEC.loader is not None
 C3 = importlib.util.module_from_spec(C3_SPEC)
 C3_SPEC.loader.exec_module(C3)
+sys.modules.setdefault("apply_stage2_joint_support_gate", C3)
+PARALLEL_C3_SPEC = importlib.util.spec_from_file_location(
+    "stage2_parallel_c3",
+    ROOT / "scripts" / "apply_stage2_joint_support_gate_parallel.py",
+)
+assert PARALLEL_C3_SPEC is not None and PARALLEL_C3_SPEC.loader is not None
+PARALLEL_C3 = importlib.util.module_from_spec(PARALLEL_C3_SPEC)
+PARALLEL_C3_SPEC.loader.exec_module(PARALLEL_C3)
+
+
+def test_parallel_c3_tasks_are_deterministic_disjoint_and_complete() -> None:
+    families = pd.DataFrame(
+        {
+            "family_id": ["b3", "a2", "b1", "a1", "b2", "a3", "a4"],
+            "city_slug": ["b", "a", "b", "a", "b", "a", "a"],
+        }
+    )
+    first = PARALLEL_C3._build_tasks(families, families_per_task=2)
+    second = PARALLEL_C3._build_tasks(
+        families.sample(frac=1.0, random_state=7),
+        families_per_task=2,
+    )
+    assert first == second
+    ids = [family_id for task in first for family_id in task["family_ids"]]
+    assert sorted(ids) == ["a1", "a2", "a3", "a4", "b1", "b2", "b3"]
+    assert len(ids) == len(set(ids)) == len(families)
+    assert [task["task_id"] for task in first] == [
+        "a.part-0000",
+        "b.part-0000",
+        "a.part-0001",
+        "b.part-0001",
+    ]
+
+
+def test_parallel_c3_resume_requires_exact_task_ids_and_commit(tmp_path: Path) -> None:
+    report_path = tmp_path / "task.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema": C3.C3_SCHEMA,
+                "status": "passed_report_only",
+                "passed": True,
+                "code_provenance": {"code_commit": "commit-a"},
+                "families": [
+                    {"family_id": "f2", "city_slug": "city-a", "selected": {}},
+                    {"family_id": "f1", "city_slug": "city-a", "selected": {"x": 1}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert not PARALLEL_C3._valid_completed_task_report(
+        report_path,
+        city="city-a",
+        expected_family_ids=("f1", "f2"),
+        code_commit="commit-a",
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["families"][0]["selected"] = {"x": 2}
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert PARALLEL_C3._valid_completed_task_report(
+        report_path,
+        city="city-a",
+        expected_family_ids=("f1", "f2"),
+        code_commit="commit-a",
+    )
+    assert not PARALLEL_C3._valid_completed_task_report(
+        report_path,
+        city="city-a",
+        expected_family_ids=("f1", "f3"),
+        code_commit="commit-a",
+    )
+    assert not PARALLEL_C3._valid_completed_task_report(
+        report_path,
+        city="city-a",
+        expected_family_ids=("f1", "f2"),
+        code_commit="commit-b",
+    )
 
 
 def test_supervisor_plan_envelope_normalizes_arrow_numpy_values() -> None:

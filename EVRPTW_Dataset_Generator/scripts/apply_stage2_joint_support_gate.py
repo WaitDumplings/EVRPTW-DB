@@ -25,6 +25,7 @@ from evrptw_stage2.selection import (
     JOINT_SUPPORT_CONTRACT_ID,
     assess_joint_spatial_support_pair,
     depot_candidate_order,
+    prepare_customer_split_roster,
 )
 from evrptw_stage2.spatial_activation import SpatialActivationError
 
@@ -276,19 +277,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     updates: dict[str, dict[str, Any]] = {}
     family_reports: list[dict[str, Any]] = []
     topology_cache: dict[str, PhysicalRoadNetwork] = {}
-    adjacency_cache: dict[str, pd.DataFrame] = {}
+    cle_cache: dict[str, Any] = {}
+    speeds_cache: dict[str, pd.DataFrame] = {}
+    depots_cache: dict[str, pd.DataFrame] = {}
+    customer_roster_cache: dict[str, pd.DataFrame] = {}
 
     for family_row in families.to_dict("records"):
         family_id = str(family_row["family_id"])
         city = str(family_row["city_slug"])
         family_started = time.perf_counter()
-        cle = load_portable_cle(
-            args.cle_root,
-            city,
-            mode=args.mode,
-            official_cle_contract=args.official_cle_contract,
-        )
-        speeds = pd.read_parquet(cle.speeds_path)
+        cle = cle_cache.get(city)
+        if cle is None:
+            cle = load_portable_cle(
+                args.cle_root,
+                city,
+                mode=args.mode,
+                official_cle_contract=args.official_cle_contract,
+            )
+            cle_cache[city] = cle
+            speeds_cache[city] = pd.read_parquet(cle.speeds_path)
+            depots_cache[city] = cle.read_depots().reset_index(drop=True)
+            customer_roster_cache[city] = prepare_customer_split_roster(
+                cle,
+                str(
+                    args.customer_split_root
+                    / city
+                    / "customer_split_manifest.parquet"
+                ),
+            )
+        speeds = speeds_cache[city]
         road_state, _ = build_family_road_state(
             speeds,
             day_type=str(family_row["day_type"]),
@@ -306,7 +323,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             profile.get("stage2_spatial", {}).get("depot_track", "practical")
         )
         depot_candidates, _ = depot_candidate_order(
-            cle.read_depots().reset_index(drop=True),
+            depots_cache[city],
             seed=int(family_row["depot_seed"]),
             track=depot_track,
         )
@@ -325,6 +342,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         aggregate_pass_count = 0
         exact_pass_count = 0
         selected: dict[str, Any] | None = None
+        # Road-state weights change for every family. Cache only within this
+        # family so adjacency and depot-star results never cross road states.
+        family_adjacency_cache: dict[str, pd.DataFrame] = {}
+        depot_star_cache: dict[
+            tuple[str, str], tuple[pd.DataFrame, dict[str, Any]]
+        ] = {}
 
         for depot_rank, depot in enumerate(depot_candidates):
             for source_rank, source in enumerate(source_candidates):
@@ -349,7 +372,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         profile=profile,
                         network=network,
                         amazon=amazon,
-                        community_adjacency_cache=adjacency_cache,
+                        community_adjacency_cache=family_adjacency_cache,
+                        customer_split_roster=customer_roster_cache[city],
+                        depots=depots_cache[city],
+                        depot_star_cache=depot_star_cache,
                     )
                 except Exception as error:
                     code, detail = _reason(error)

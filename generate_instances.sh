@@ -141,6 +141,7 @@ if [[ "$INSTANCE_METHOD" == "stage2" && "$INSTANCE_MODE" == "official" ]]; then
     --output "$INSTANCE_OUTPUT_ROOT/reports/stage2_repair/c3_joint_support_full.json" \
     --progress-output "$INSTANCE_OUTPUT_ROOT/stage2_c3_progress.json" \
     --workers "${C3_WORKERS:-$WORKERS}" \
+    --families-per-task "${C3_FAMILIES_PER_TASK:-25}" \
     --family-wall-timeout-s "$FAMILY_WALL_TIMEOUT_S" \
     --termination-grace-s "$TERMINATION_GRACE_S" \
     --official-cle-contract "$OFFICIAL_CLE_CONTRACT"
