@@ -265,6 +265,11 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
                     "retryable": retryable,
                     "retry_stopped_early": not retryable,
                     "roster_fingerprint": getattr(error, "roster_fingerprint", None),
+                    "capacity_contract_fingerprint": getattr(
+                        error,
+                        "capacity_contract_fingerprint",
+                        family.get("capacity_contract_fingerprint"),
+                    ),
                     "elapsed_seconds": time.perf_counter() - started,
                 }
                 rejection_payload["family_id"] = family_id

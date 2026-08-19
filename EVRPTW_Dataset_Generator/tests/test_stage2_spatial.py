@@ -26,6 +26,7 @@ from evrptw_stage2.spatial_activation import (
     _grow_regions_reference,
     activate_spatial_customers,
     nested_customer_order,
+    radial_decile_support_contract,
 )
 
 PROFILE = Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v2.json"
@@ -112,6 +113,22 @@ def test_amazon_preprocessor_builds_station_day_artifacts(tmp_path: Path) -> Non
     )
     assert len(targets) >= 1
     assert source["structure_source_mode"] == "SINGLE_STRUCTURE_DAY"
+    candidates = artifacts.structure_source_candidates(
+        day_type="weekday",
+        customer_count=1,
+        seed=3,
+        pool="GEN-TRAIN",
+    )
+    assert candidates[0]["structure_source_ids"] == source["structure_source_ids"]
+    forced_targets, forced_source = artifacts.structure_source(
+        day_type="weekday",
+        customer_count=1,
+        seed=3,
+        pool="GEN-TRAIN",
+        selected_source_ids=candidates[0]["structure_source_ids"],
+    )
+    assert forced_source["structure_source_ids"] == source["structure_source_ids"]
+    assert set(forced_targets["template_id"]) == set(targets["template_id"])
 
 
 def test_controlled_rounding_preserves_both_margins() -> None:
@@ -127,6 +144,54 @@ def test_controlled_rounding_preserves_both_margins() -> None:
     )
     np.testing.assert_array_equal(result.sum(axis=1), [3, 3])
     np.testing.assert_array_equal(result.sum(axis=0), [2, 4])
+
+
+def test_c3a_uses_canonical_quota_and_reports_exact_decile_capacity() -> None:
+    structure = pd.DataFrame(
+        [
+            {
+                "template_id": f"t{index}",
+                "route_id": "r0",
+                "radial_decile": index % 2,
+                "station_to_stop_time_s": float(index + 1),
+            }
+            for index in range(10)
+        ]
+    )
+    customers = pd.DataFrame(
+        {
+            "radial_decile": [0] * 6 + [1] * 5,
+        }
+    )
+    _, metadata, _ = radial_decile_support_contract(
+        customers,
+        structure,
+        customer_count=10,
+        seed=11,
+    )
+    assert metadata["required_decile_counts"] == [5, 5, 0, 0, 0, 0, 0, 0, 0, 0]
+    assert metadata["available_decile_counts"] == [6, 5, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    with pytest.raises(SpatialActivationError) as captured:
+        radial_decile_support_contract(
+            pd.DataFrame({"radial_decile": [0] * 6 + [1] * 4}),
+            structure,
+            customer_count=10,
+            seed=11,
+        )
+    assert captured.value.code == "SPATIAL_QUOTA_UNSUPPORTED"
+    assert captured.value.diagnostics["required_decile_counts"] == [
+        5,
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
 
 
 def test_spatial_activation_is_exact_unique_and_quota_safe() -> None:
@@ -188,10 +253,22 @@ def test_spatial_activation_is_exact_unique_and_quota_safe() -> None:
             (stage, dict(details))
         ),
     )
+    _, c3a_metadata, _ = radial_decile_support_contract(
+        customers,
+        structure,
+        customer_count=12,
+        seed=123,
+    )
     assert len(result.customers) == 12
     assert not result.customers["latent_service_location_id"].duplicated().any()
     assert result.metadata["quota"]["row_margins_exact"]
     assert result.metadata["quota"]["column_margins_exact"]
+    assert result.metadata["quota"]["required_decile_counts"] == c3a_metadata[
+        "required_decile_counts"
+    ]
+    assert result.metadata["quota"]["available_decile_counts"] == c3a_metadata[
+        "available_decile_counts"
+    ]
     assert result.metadata["global_customer_uniqueness"]
     completed = {
         stage

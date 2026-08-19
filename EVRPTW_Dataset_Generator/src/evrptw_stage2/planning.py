@@ -51,6 +51,20 @@ def materialization_attempt_inputs(
             "vehicle_seed": derive_seed(attempt_seed, "vehicle"),
         }
     )
+    if family.get("joint_support_contract_id"):
+        # C3 fixes the spatial-capacity tuple in planning. A materialization
+        # retry may vary downstream order/charger/vehicle randomness, but it
+        # must not silently search a new depot, structure source, territory,
+        # or activation contract.
+        for key in (
+            "depot_seed",
+            "customer_superset_seed",
+            "road_state_seed",
+            "selected_depot_id",
+            "selected_structure_source_id",
+            "capacity_contract_fingerprint",
+        ):
+            result_family[key] = family[key]
     result_views = views.copy()
     for index, row in result_views.iterrows():
         view_seed = derive_seed(

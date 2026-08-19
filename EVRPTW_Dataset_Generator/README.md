@@ -150,8 +150,12 @@ semantics cannot be mixed silently.
 
 The first command generates all eleven CLEs and writes them only below
 `EVRPTW_Dataset/CLE_v2/us_11city/`. Stage-2 is currently authorized only through
-the C1/C2 gates, Los Angeles smoke, and 140-family non-release pilot. Before
-generation it converts the
+the C1/C2/C3 gates, three replacement-family targets, and a fresh 140-family
+non-release pilot. C3 must freeze a feasible depot × Amazon structure-source
+pair in every selected family before materialization; the runner rejects plans
+without that contract. See
+docs/stage2_repair/C3_JOINT_SUPPORT_REPAIR_RUNBOOK_ZH.md. Before generation it
+converts the
 three Amazon model-build JSON files into a compact, reusable artifact layer.
 Both runners are resumable. The full
 completed corpus uses about 154.79 GiB for the four parent matrices alone. A

@@ -463,7 +463,78 @@ class AmazonStage2Artifacts:
         pool: str,
         track_id: str | None = None,
         allow_composite: bool = False,
+        selected_source_ids: list[str] | tuple[str, ...] | None = None,
     ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        candidates = self.structure_source_candidates(
+            day_type=day_type,
+            customer_count=customer_count,
+            seed=seed,
+            pool=pool,
+            track_id=track_id,
+            allow_composite=allow_composite,
+        )
+        if selected_source_ids is None:
+            source_days = list(candidates[0]["structure_source_ids"])
+            mode = str(candidates[0]["structure_source_mode"])
+        else:
+            requested = tuple(map(str, selected_source_ids))
+            selected = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if tuple(map(str, candidate["structure_source_ids"])) == requested
+                ),
+                None,
+            )
+            if selected is None:
+                raise ValueError(
+                    "FROZEN_STRUCTURE_SOURCE_UNAVAILABLE: "
+                    f"requested={list(requested)}, day_type={day_type}, N={customer_count}"
+                )
+            source_days = list(selected["structure_source_ids"])
+            mode = str(selected["structure_source_mode"])
+        routes = self.structure_routes.loc[
+            self.structure_routes["station_day_id"].isin(source_days)
+        ].copy()
+        targets = self.templates.loc[self.templates["station_day_id"].isin(source_days)].copy()
+        source_times = targets["station_to_stop_time_s"].to_numpy(dtype=float)
+        source_t_env = float(_quantile(source_times, np.asarray([0.99]))[0])
+        within = targets["station_to_stop_time_s"].le(source_t_env).to_numpy(dtype=bool)
+        envelope_times = source_times[within]
+        source_edges = _quantile(envelope_times, np.linspace(0.0, 1.0, 11))
+        source_edges[0] = 0.0
+        source_edges[-1] = source_t_env
+        targets["within_spatial_envelope"] = within
+        targets["radial_decile"] = -1
+        targets.loc[within, "radial_decile"] = _assign_deciles(
+            envelope_times, source_edges
+        )
+        targets["radial_decile"] = targets["radial_decile"].astype(np.int8)
+        targets = targets.loc[targets["within_spatial_envelope"]].copy()
+        return targets, {
+            "structure_source_mode": mode,
+            "structure_source_ids": sorted(source_days),
+            "structure_source_dates": sorted(source_days),
+            "source_pool": pool,
+            "generation_track": track_id,
+            "structure_source_route_count": len(routes),
+            "structure_source_stop_count": len(targets),
+            "source_t_env_s": source_t_env,
+            "source_radial_decile_edges_s": source_edges.tolist(),
+        }
+
+    def structure_source_candidates(
+        self,
+        *,
+        day_type: str,
+        customer_count: int,
+        seed: int,
+        pool: str,
+        track_id: str | None = None,
+        allow_composite: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return every legal structure source in its frozen seeded order."""
+
         days = self.station_days.loc[
             self.station_days["day_type"].eq(day_type)
             & self.station_days["station_day_id"].map(self.station_day_pool).eq(pool)
@@ -492,9 +563,17 @@ class AmazonStage2Artifacts:
                 _stable_rank(seed, "single_structure_day", value)
                 for value in singles["station_day_id"]
             ]
-            selected_day = str(singles.sort_values(["_rank", "station_day_id"]).iloc[0]["station_day_id"])
-            source_days = [selected_day]
-            mode = "SINGLE_STRUCTURE_DAY"
+            ordered = singles.sort_values(["_rank", "station_day_id"], kind="stable")
+            return [
+                {
+                    "structure_source_mode": "SINGLE_STRUCTURE_DAY",
+                    "structure_source_ids": [str(value)],
+                    "seeded_rank": int(rank),
+                }
+                for value, rank in zip(
+                    ordered["station_day_id"], ordered["_rank"], strict=True
+                )
+            ]
         elif allow_composite:
             candidates: list[tuple[int, int, str, list[str]]] = []
             for station_code, group in days.groupby("station_code", sort=True):
@@ -529,42 +608,20 @@ class AmazonStage2Artifacts:
                 raise ValueError(
                     f"PF-2S unsupported for day_type={day_type}, N={customer_count}"
                 )
-            _, _, _, source_days = min(candidates, key=lambda item: (item[0], item[1], item[2]))
-            mode = "SAME_STATION_STRUCTURE_COMPOSITE"
+            ordered_candidates = sorted(candidates, key=lambda item: (item[0], item[1], item[2]))
+            return [
+                {
+                    "structure_source_mode": "SAME_STATION_STRUCTURE_COMPOSITE",
+                    "structure_source_ids": list(source_days),
+                    "seeded_rank": int(rank),
+                }
+                for _, rank, _, source_days in ordered_candidates
+            ]
         else:
             raise ValueError(
                 f"PRIMARY_SINGLE_STRUCTURE_DAY_UNSUPPORTED: pool={pool}, "
                 f"day_type={day_type}, N={customer_count}"
             )
-        routes = self.structure_routes.loc[
-            self.structure_routes["station_day_id"].isin(source_days)
-        ].copy()
-        targets = self.templates.loc[self.templates["station_day_id"].isin(source_days)].copy()
-        source_times = targets["station_to_stop_time_s"].to_numpy(dtype=float)
-        source_t_env = float(_quantile(source_times, np.asarray([0.99]))[0])
-        within = targets["station_to_stop_time_s"].le(source_t_env).to_numpy(dtype=bool)
-        envelope_times = source_times[within]
-        source_edges = _quantile(envelope_times, np.linspace(0.0, 1.0, 11))
-        source_edges[0] = 0.0
-        source_edges[-1] = source_t_env
-        targets["within_spatial_envelope"] = within
-        targets["radial_decile"] = -1
-        targets.loc[within, "radial_decile"] = _assign_deciles(
-            envelope_times, source_edges
-        )
-        targets["radial_decile"] = targets["radial_decile"].astype(np.int8)
-        targets = targets.loc[targets["within_spatial_envelope"]].copy()
-        return targets, {
-            "structure_source_mode": mode,
-            "structure_source_ids": sorted(source_days),
-            "structure_source_dates": sorted(source_days),
-            "source_pool": pool,
-            "generation_track": track_id,
-            "structure_source_route_count": len(routes),
-            "structure_source_stop_count": len(targets),
-            "source_t_env_s": source_t_env,
-            "source_radial_decile_edges_s": source_edges.tolist(),
-        }
 
     def order_sources(
         self,

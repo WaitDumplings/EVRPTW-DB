@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import resource
 import sys
 import time
@@ -16,7 +18,30 @@ from .planning import derive_seed
 from .reader import PortableCLE
 from .release_discipline import roster_fingerprint
 from .routing import DepotTerminalStar, PhysicalRoadNetwork, TerminalConnectivityError
-from .spatial_activation import activate_spatial_customers
+from .spatial_activation import (
+    SpatialActivationError,
+    activate_spatial_customers,
+    radial_decile_support_contract,
+)
+
+
+JOINT_SUPPORT_CONTRACT_ID = "c3_joint_spatial_support_v1"
+
+
+class JointSupportConsistencyError(RuntimeError):
+    """A C3-approved capacity contract did not replay during materialization."""
+
+    retryable = False
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        capacity_contract_fingerprint: str,
+    ) -> None:
+        super().__init__(f"C3_ACTIVATION_CONSISTENCY_BUG: {message}")
+        self.capacity_contract_fingerprint = capacity_contract_fingerprint
+        self.roster_fingerprint = capacity_contract_fingerprint
 
 
 def sample_day_type(profile: Mapping[str, Any], family_seed: int) -> str:
@@ -319,13 +344,13 @@ def _common_terminal_record(
 
 
 
-def _select_depot_group(
+def depot_candidate_order(
     depots: pd.DataFrame,
     *,
     seed: int,
     track: str,
-) -> tuple[pd.Series, dict[str, Any]]:
-    """Select one physical-facility group, then its canonical access point."""
+) -> tuple[list[pd.Series], dict[str, Any]]:
+    """Return canonical access points with the legacy choice ranked first."""
 
     if track not in {"strict", "practical"}:
         raise ValueError("depot_track must be strict or practical")
@@ -345,28 +370,63 @@ def _select_depot_group(
     else:
         frame["facility_group_id"] = frame["facility_group_id"].astype(str)
         grouping_source = "cle_physical_facility_group"
-    group_ids = sorted(frame["facility_group_id"].unique())
+    group_ids = sorted(map(str, frame["facility_group_id"].unique()))
     rng = np.random.default_rng(seed)
-    group_id = str(group_ids[int(rng.integers(len(group_ids)))])
-    group = frame.loc[frame["facility_group_id"].eq(group_id)].copy()
-    tier_a = group.loc[group["strict_depot_candidate_eligible"].astype(bool)].copy()
-    access_pool = tier_a if not tier_a.empty else group
-    access_pool["_rank"] = [
-        derive_seed(seed, "depot_access_point", candidate_id)
-        for candidate_id in access_pool["candidate_id"].astype(str)
-    ]
-    depot = access_pool.sort_values(["_rank", "candidate_id"], kind="stable").iloc[0]
-    return depot, {
+    legacy_group_id = str(group_ids[int(rng.integers(len(group_ids)))])
+    remaining = sorted(
+        (value for value in group_ids if value != legacy_group_id),
+        key=lambda value: (
+            derive_seed(seed, "depot_group_candidate", value),
+            value,
+        ),
+    )
+    ordered_groups = [legacy_group_id, *remaining]
+    result: list[pd.Series] = []
+    group_details: dict[str, dict[str, Any]] = {}
+    for group_id in ordered_groups:
+        group = frame.loc[frame["facility_group_id"].eq(group_id)].copy()
+        tier_a = group.loc[group["strict_depot_candidate_eligible"].astype(bool)].copy()
+        access_pool = tier_a if not tier_a.empty else group
+        access_pool["_rank"] = [
+            derive_seed(seed, "depot_access_point", candidate_id)
+            for candidate_id in access_pool["candidate_id"].astype(str)
+        ]
+        result.append(
+            access_pool.sort_values(["_rank", "candidate_id"], kind="stable").iloc[0]
+        )
+        group_details[group_id] = {
+            "selected_group_candidate_count": len(group),
+            "selected_group_tier_a_count": len(tier_a),
+            "selected_access_tier_a_preferred": bool(len(tier_a)),
+        }
+    return result, {
         "policy": "uniform_physical_group_then_tier_a_preferred_access_v1",
         "track": track,
         "grouping_source": grouping_source,
         "eligible_group_count": len(group_ids),
-        "selected_facility_group_id": group_id,
-        "selected_group_candidate_count": len(group),
-        "selected_group_tier_a_count": len(tier_a),
-        "selected_access_tier_a_preferred": bool(len(tier_a)),
+        "legacy_first_facility_group_id": legacy_group_id,
+        "candidate_group_order": ordered_groups,
+        "group_details": group_details,
         "area_used_as_hard_gate": False,
         "area_used_as_sampling_weight": False,
+    }
+
+
+def _select_depot_group(
+    depots: pd.DataFrame,
+    *,
+    seed: int,
+    track: str,
+) -> tuple[pd.Series, dict[str, Any]]:
+    """Select the first candidate under the frozen legacy-compatible rank."""
+
+    ordered, metadata = depot_candidate_order(depots, seed=seed, track=track)
+    depot = ordered[0]
+    group_id = str(depot.get("facility_group_id", depot["candidate_id"]))
+    return depot, {
+        **metadata,
+        "selected_facility_group_id": group_id,
+        **metadata["group_details"][group_id],
     }
 
 
@@ -477,6 +537,285 @@ def _road_time_adjacency(
     return result
 
 
+def encode_structure_source_id(source_ids: list[str] | tuple[str, ...]) -> str:
+    values = list(map(str, source_ids))
+    return values[0] if len(values) == 1 else json.dumps(values, separators=(",", ":"))
+
+
+def decode_structure_source_id(value: Any) -> list[str]:
+    text = str(value)
+    if text.startswith("["):
+        parsed = json.loads(text)
+        if not isinstance(parsed, list) or not parsed:
+            raise ValueError("Frozen structure source list is empty or malformed")
+        return list(map(str, parsed))
+    return [text]
+
+
+def capacity_contract_fingerprint(
+    *,
+    family: Mapping[str, Any],
+    selected_depot_id: str,
+    selected_structure_source_ids: list[str] | tuple[str, ...],
+    required_decile_counts: list[int] | tuple[int, ...],
+    available_decile_counts: list[int] | tuple[int, ...],
+) -> str:
+    payload = {
+        "contract_id": JOINT_SUPPORT_CONTRACT_ID,
+        "family_id": str(family["family_id"]),
+        "city_slug": str(family["city_slug"]),
+        "track_id": str(family["track_id"]),
+        "day_type": str(family["day_type"]),
+        "customer_pool": str(family["customer_pool"]),
+        "parent_customer_count": int(family["parent_customer_count"]),
+        "depot_seed": int(family["depot_seed"]),
+        "customer_superset_seed": int(family["customer_superset_seed"]),
+        "road_state_seed": int(family["road_state_seed"]),
+        "selected_depot_id": str(selected_depot_id),
+        "selected_structure_source_ids": sorted(
+            map(str, selected_structure_source_ids)
+        ),
+        "required_decile_counts": list(map(int, required_decile_counts)),
+        "available_decile_counts": list(map(int, available_decile_counts)),
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return "ccf_" + hashlib.blake2b(encoded, digest_size=16).hexdigest()
+
+
+def _frozen_or_default_depot(
+    depots: pd.DataFrame,
+    *,
+    family: Mapping[str, Any],
+    depot_track: str,
+) -> tuple[pd.Series, dict[str, Any]]:
+    ordered, metadata = depot_candidate_order(
+        depots,
+        seed=int(family["depot_seed"]),
+        track=depot_track,
+    )
+    selected_id = family.get("selected_depot_id")
+    if selected_id is None or (
+        isinstance(selected_id, float) and np.isnan(selected_id)
+    ):
+        depot = ordered[0]
+    else:
+        selected_text = str(selected_id)
+        depot = next(
+            (
+                candidate
+                for candidate in ordered
+                if str(candidate["candidate_id"]) == selected_text
+            ),
+            None,
+        )
+        if depot is None:
+            raise JointSupportConsistencyError(
+                f"frozen depot {selected_text!r} is no longer eligible",
+                capacity_contract_fingerprint=str(
+                    family.get("capacity_contract_fingerprint") or "missing"
+                ),
+            )
+    group_id = str(depot.get("facility_group_id", depot["candidate_id"]))
+    return depot, {
+        **metadata,
+        "selected_facility_group_id": group_id,
+        **metadata["group_details"][group_id],
+    }
+
+
+def _prepare_customer_territory(
+    cle: PortableCLE,
+    *,
+    family: Mapping[str, Any],
+    depot: pd.Series,
+    structure_metadata: Mapping[str, Any],
+    customer_split_path: str,
+    profile: Mapping[str, Any],
+    network: PhysicalRoadNetwork,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    customer_count = int(family["parent_customer_count"])
+    customers = cle.read_service_locations().copy()
+    split = pd.read_parquet(customer_split_path)
+    split_columns = [
+        "latent_service_location_id",
+        "community_id",
+        "customer_pool",
+        "road_connectivity_subgroup",
+    ]
+    missing = set(split_columns) - set(split.columns)
+    if missing:
+        raise ValueError(f"Customer split ledger is missing columns: {sorted(missing)}")
+    customers = customers.merge(
+        split[split_columns],
+        on="latent_service_location_id",
+        how="inner",
+        validate="one_to_one",
+    )
+    requested_pool = str(family["customer_pool"])
+    if requested_pool in {"train", "heldout"}:
+        customers = customers.loc[customers["customer_pool"].eq(requested_pool)].copy()
+    elif requested_pool != "all_release_eligible":
+        raise ValueError(f"Unsupported customer pool: {requested_pool!r}")
+    customers = customers.reset_index(drop=True)
+    split_pool_count = len(customers)
+    customer_roster_fingerprint = roster_fingerprint(
+        customers["latent_service_location_id"],
+        depot_id=depot["candidate_id"],
+        terminal_kind="customer",
+    )
+    star = network.route_depot_star(_star_terminal_index(depot, customers))
+    connectivity_mask, quarantine = _connectivity_quarantine(
+        customers,
+        star,
+        id_column="latent_service_location_id",
+        terminal_kind="customer",
+    )
+    customers["depot_running_time_s"] = star.outbound_time_s[1:]
+    customers["depot_return_time_s"] = star.inbound_time_s[1:]
+    customers["depot_outbound_distance_km"] = star.outbound_distance_km[1:]
+    customers["depot_return_distance_km"] = star.inbound_distance_km[1:]
+    customers = customers.loc[connectivity_mask].reset_index(drop=True)
+    if len(customers) < customer_count:
+        raise TerminalConnectivityError(
+            "NONRETRYABLE_TERMINAL_CONNECTIVITY: customer roster has "
+            f"{len(customers)} bidirectionally node/turn-reachable candidates after "
+            f"quarantining {len(quarantine)}; N={customer_count}",
+            roster_fingerprint=customer_roster_fingerprint,
+        )
+    t_env = float(structure_metadata["source_t_env_s"])
+    before_energy = customers.loc[customers["depot_running_time_s"].le(t_env)].copy()
+    specific_energy = float(profile["energy"]["specific_energy_consumption_kwh_per_km"])
+    battery = float(profile["energy"]["battery_capacity_kwh"])
+    roundtrip_energy = (
+        before_energy["depot_outbound_distance_km"]
+        + before_energy["depot_return_distance_km"]
+    ) * specific_energy
+    territory = before_energy.loc[roundtrip_energy.le(battery + 1e-9)].copy()
+    territory["direct_roundtrip_energy_kwh"] = roundtrip_energy.loc[territory.index]
+    territory["radial_decile"] = np.searchsorted(
+        np.asarray(structure_metadata["source_radial_decile_edges_s"], dtype=float)[1:-1],
+        territory["depot_running_time_s"].to_numpy(dtype=float),
+        side="right",
+    ).astype(np.int8)
+    if len(territory) < customer_count:
+        raise SpatialActivationError(
+            "TERRITORY_TOO_SMALL",
+            f"structure_source_ids={structure_metadata['structure_source_ids']}, "
+            f"split={split_pool_count}, time_envelope={len(before_energy)}, "
+            f"direct_energy={len(territory)}, N={customer_count}",
+        )
+    return territory, {
+        "requested_pool": requested_pool,
+        "split_pool_count": split_pool_count,
+        "connectivity_eligible_count": len(customers),
+        "connectivity_quarantine_count": len(quarantine),
+        "connectivity_quarantine_ledger": quarantine,
+        "depot_star_report": star.report,
+        "customer_roster_fingerprint": customer_roster_fingerprint,
+        "time_envelope_count": len(before_energy),
+        "territory_count": len(territory),
+    }
+
+
+def assess_joint_spatial_support_pair(
+    cle: PortableCLE,
+    *,
+    family: Mapping[str, Any],
+    selected_depot_id: str,
+    selected_structure_source_ids: list[str] | tuple[str, ...],
+    customer_split_path: str,
+    community_adjacency_path: str,
+    profile: Mapping[str, Any],
+    network: PhysicalRoadNetwork,
+    amazon: AmazonStage2Artifacts,
+    community_adjacency_cache: dict[str, pd.DataFrame] | None = None,
+) -> dict[str, Any]:
+    """Run C3-A and C3-B for one frozen depot x source candidate pair."""
+
+    frozen_family = {
+        **dict(family),
+        "selected_depot_id": str(selected_depot_id),
+    }
+    source_pool = amazon.pool_for_track(str(family["track_id"]))
+    structure_targets, structure_metadata = amazon.structure_source(
+        day_type=str(family["day_type"]),
+        customer_count=int(family["parent_customer_count"]),
+        seed=int(family["customer_superset_seed"]),
+        pool=source_pool,
+        track_id=str(family["track_id"]),
+        allow_composite=str(family["parent_scale_id"]) == "cus2000",
+        selected_source_ids=list(selected_structure_source_ids),
+    )
+    spatial_cfg = profile.get("stage2_spatial", {})
+    depot, _ = _frozen_or_default_depot(
+        cle.read_depots().reset_index(drop=True),
+        family=frozen_family,
+        depot_track=str(spatial_cfg.get("depot_track", "practical")),
+    )
+    territory, territory_report = _prepare_customer_territory(
+        cle,
+        family=family,
+        depot=depot,
+        structure_metadata=structure_metadata,
+        customer_split_path=customer_split_path,
+        profile=profile,
+        network=network,
+    )
+    _, quota_metadata, _ = radial_decile_support_contract(
+        territory,
+        structure_targets,
+        customer_count=int(family["parent_customer_count"]),
+        seed=int(family["customer_superset_seed"]),
+    )
+    adjacency_cache_key = f"{cle.city_slug}:{family['day_type']}"
+    adjacency = (
+        community_adjacency_cache.get(adjacency_cache_key)
+        if community_adjacency_cache is not None
+        else None
+    )
+    if adjacency is None:
+        adjacency = _road_time_adjacency(
+            pd.read_parquet(community_adjacency_path), network
+        )
+        if community_adjacency_cache is not None:
+            community_adjacency_cache[adjacency_cache_key] = adjacency
+    activation = activate_spatial_customers(
+        territory,
+        adjacency,
+        structure_targets,
+        customer_count=int(family["parent_customer_count"]),
+        seed=int(family["customer_superset_seed"]),
+        region_redraw_cap=int(spatial_cfg.get("region_redraw_cap", 3)),
+    )
+    required = list(map(int, quota_metadata["required_decile_counts"]))
+    available = list(map(int, quota_metadata["available_decile_counts"]))
+    fingerprint = capacity_contract_fingerprint(
+        family=family,
+        selected_depot_id=str(depot["candidate_id"]),
+        selected_structure_source_ids=list(selected_structure_source_ids),
+        required_decile_counts=required,
+        available_decile_counts=available,
+    )
+    return {
+        "joint_support_contract_id": JOINT_SUPPORT_CONTRACT_ID,
+        "aggregate_gate_passed": True,
+        "exact_gate_passed": True,
+        "selected_depot_id": str(depot["candidate_id"]),
+        "selected_structure_source_id": encode_structure_source_id(
+            selected_structure_source_ids
+        ),
+        "required_decile_counts": required,
+        "available_decile_counts": available,
+        "capacity_contract_fingerprint": fingerprint,
+        "territory": territory_report,
+        "activation_region_attempts_used": int(
+            activation.metadata["region_attempts_used"]
+        ),
+    }
+
+
 def select_family_terminals_v2(
     cle: PortableCLE,
     *,
@@ -523,6 +862,13 @@ def select_family_terminals_v2(
     day_type = str(family.get("day_type") or sample_day_type(profile, family_seed))
     source_pool = amazon.pool_for_track(str(family["track_id"]))
     allow_composite = str(family["parent_scale_id"]) == "cus2000"
+    frozen_source_value = family.get("selected_structure_source_id")
+    frozen_source_ids = (
+        None
+        if frozen_source_value is None
+        or (isinstance(frozen_source_value, float) and np.isnan(frozen_source_value))
+        else decode_structure_source_id(frozen_source_value)
+    )
     structure_targets, structure_metadata = amazon.structure_source(
         day_type=day_type,
         customer_count=customer_count,
@@ -530,97 +876,35 @@ def select_family_terminals_v2(
         pool=source_pool,
         track_id=str(family["track_id"]),
         allow_composite=allow_composite,
+        selected_source_ids=frozen_source_ids,
     )
     spatial_cfg = profile.get("stage2_spatial", {})
     depot_track = str(spatial_cfg.get("depot_track", "practical"))
     depots = cle.read_depots().reset_index(drop=True)
-    depot, depot_metadata = _select_depot_group(
+    depot, depot_metadata = _frozen_or_default_depot(
         depots,
-        seed=int(family["depot_seed"]),
-        track=depot_track,
+        family=family,
+        depot_track=depot_track,
     )
     finish(
         "structure_and_depot_preflight", stage_started, depot_count=len(depots)
     )
 
     stage_started = begin("customer_preflight")
-    customers = cle.read_service_locations().copy()
-    split = pd.read_parquet(customer_split_path)
-    split_columns = [
-        "latent_service_location_id",
-        "community_id",
-        "customer_pool",
-        "road_connectivity_subgroup",
-    ]
-    missing = set(split_columns) - set(split.columns)
-    if missing:
-        raise ValueError(f"Customer split ledger is missing columns: {sorted(missing)}")
-    customers = customers.merge(
-        split[split_columns],
-        on="latent_service_location_id",
-        how="inner",
-        validate="one_to_one",
+    territory, territory_report = _prepare_customer_territory(
+        cle,
+        family=family,
+        depot=depot,
+        structure_metadata=structure_metadata,
+        customer_split_path=customer_split_path,
+        profile=profile,
+        network=network,
     )
-    requested_pool = str(family["customer_pool"])
-    if requested_pool in {"train", "heldout"}:
-        customers = customers.loc[customers["customer_pool"].eq(requested_pool)].copy()
-    elif requested_pool != "all_release_eligible":
-        raise ValueError(f"Unsupported customer pool: {requested_pool!r}")
-    customers = customers.reset_index(drop=True)
-    split_pool_count = len(customers)
-    customer_roster_fingerprint = roster_fingerprint(
-        customers["latent_service_location_id"],
-        depot_id=depot["candidate_id"],
-        terminal_kind="customer",
-    )
-    star = network.route_depot_star(_star_terminal_index(depot, customers))
-    customer_connectivity_mask, customer_connectivity_quarantine = (
-        _connectivity_quarantine(
-            customers,
-            star,
-            id_column="latent_service_location_id",
-            terminal_kind="customer",
-        )
-    )
-    customers["depot_running_time_s"] = star.outbound_time_s[1:]
-    customers["depot_return_time_s"] = star.inbound_time_s[1:]
-    customers["depot_outbound_distance_km"] = star.outbound_distance_km[1:]
-    customers["depot_return_distance_km"] = star.inbound_distance_km[1:]
-    customers = customers.loc[customer_connectivity_mask].reset_index(drop=True)
-    if len(customers) < customer_count:
-        raise TerminalConnectivityError(
-            "NONRETRYABLE_TERMINAL_CONNECTIVITY: customer roster has "
-            f"{len(customers)} bidirectionally node/turn-reachable candidates after "
-            f"quarantining {len(customer_connectivity_quarantine)}; N={customer_count}",
-            roster_fingerprint=customer_roster_fingerprint,
-        )
-    t_env = float(structure_metadata["source_t_env_s"])
-    before_energy = customers.loc[customers["depot_running_time_s"].le(t_env)].copy()
-    specific_energy = float(profile["energy"]["specific_energy_consumption_kwh_per_km"])
-    battery = float(profile["energy"]["battery_capacity_kwh"])
-    roundtrip_energy = (
-        before_energy["depot_outbound_distance_km"]
-        + before_energy["depot_return_distance_km"]
-    ) * specific_energy
-    territory = before_energy.loc[roundtrip_energy.le(battery + 1e-9)].copy()
-    territory["direct_roundtrip_energy_kwh"] = roundtrip_energy.loc[territory.index]
-    territory["radial_decile"] = np.searchsorted(
-        np.asarray(structure_metadata["source_radial_decile_edges_s"], dtype=float)[1:-1],
-        territory["depot_running_time_s"].to_numpy(dtype=float),
-        side="right",
-    ).astype(np.int8)
-    if len(territory) < customer_count:
-        raise ValueError(
-            "TERRITORY_TOO_SMALL: "
-            f"structure_source_ids={structure_metadata['structure_source_ids']}, "
-            f"split={split_pool_count}, time_envelope={len(before_energy)}, "
-            f"direct_energy={len(territory)}, N={customer_count}"
-        )
     finish(
         "customer_preflight",
         stage_started,
-        split_pool_count=split_pool_count,
-        connectivity_eligible_count=len(customers),
+        split_pool_count=territory_report["split_pool_count"],
+        connectivity_eligible_count=territory_report["connectivity_eligible_count"],
         territory_count=len(territory),
     )
     stage_started = begin("customer_spatial_activation", territory_count=len(territory))
@@ -643,23 +927,57 @@ def select_family_terminals_v2(
         )
         if community_adjacency_cache is not None:
             community_adjacency_cache[adjacency_cache_key] = adjacency
-    activation = activate_spatial_customers(
-        territory,
-        adjacency,
-        structure_targets,
-        customer_count=customer_count,
-        seed=int(family["customer_superset_seed"]),
-        region_redraw_cap=int(spatial_cfg.get("region_redraw_cap", 3)),
-        progress_callback=(
-            (
-                lambda substage, details: progress_callback(
-                    f"customer_spatial_activation.{substage}", details
-                )
-            )
-            if progress_callback is not None
-            else None
-        ),
+    planned_fingerprint_raw = family.get("capacity_contract_fingerprint")
+    planned_fingerprint = (
+        None
+        if planned_fingerprint_raw is None
+        or (
+            isinstance(planned_fingerprint_raw, float)
+            and np.isnan(planned_fingerprint_raw)
+        )
+        else str(planned_fingerprint_raw)
     )
+    try:
+        activation = activate_spatial_customers(
+            territory,
+            adjacency,
+            structure_targets,
+            customer_count=customer_count,
+            seed=int(family["customer_superset_seed"]),
+            region_redraw_cap=int(spatial_cfg.get("region_redraw_cap", 3)),
+            progress_callback=(
+                (
+                    lambda substage, details: progress_callback(
+                        f"customer_spatial_activation.{substage}", details
+                    )
+                )
+                if progress_callback is not None
+                else None
+            ),
+        )
+    except SpatialActivationError as error:
+        if planned_fingerprint is not None:
+            raise JointSupportConsistencyError(
+                f"approved pair failed exact activation with {error.code}",
+                capacity_contract_fingerprint=planned_fingerprint,
+            ) from error
+        raise
+    quota_report = activation.metadata["quota"]
+    replay_fingerprint = capacity_contract_fingerprint(
+        family=family,
+        selected_depot_id=str(depot["candidate_id"]),
+        selected_structure_source_ids=list(
+            structure_metadata["structure_source_ids"]
+        ),
+        required_decile_counts=list(quota_report["required_decile_counts"]),
+        available_decile_counts=list(quota_report["available_decile_counts"]),
+    )
+    if planned_fingerprint is not None and replay_fingerprint != planned_fingerprint:
+        raise JointSupportConsistencyError(
+            "approved pair replayed with a different capacity contract "
+            f"(planned={planned_fingerprint}, actual={replay_fingerprint})",
+            capacity_contract_fingerprint=replay_fingerprint,
+        )
     selected_customers = activation.customers.reset_index(drop=True)
     finish(
         "customer_spatial_activation",
@@ -874,7 +1192,7 @@ def select_family_terminals_v2(
         "city_slug": cle.city_slug,
         "day_type": day_type,
         "day_type_source": "preallocated_family_slot",
-        "customer_pool": requested_pool,
+        "customer_pool": territory_report["requested_pool"],
         "parent_customer_count": customer_count,
         "parent_charging_station_count": charger_count,
         "selected_depot_id": str(depot["candidate_id"]),
@@ -883,11 +1201,15 @@ def select_family_terminals_v2(
         "terminal_connectivity": {
             "schema": "cle_evrptw_terminal_connectivity_quarantine_v2",
             "policy": "depot_bidirectional_node_and_canonical_turn_topology_v1",
-            "customer_input_count": split_pool_count,
-            "customer_eligible_count": int(customer_connectivity_mask.sum()),
-            "customer_quarantined_count": len(customer_connectivity_quarantine),
-            "customer_quarantine_ledger": customer_connectivity_quarantine,
-            "customer_depot_star": star.report,
+            "customer_input_count": territory_report["split_pool_count"],
+            "customer_eligible_count": territory_report["connectivity_eligible_count"],
+            "customer_quarantined_count": territory_report[
+                "connectivity_quarantine_count"
+            ],
+            "customer_quarantine_ledger": territory_report[
+                "connectivity_quarantine_ledger"
+            ],
+            "customer_depot_star": territory_report["depot_star_report"],
             "charger_input_count": charger_candidate_roster_count,
             "charger_eligible_count": int(charger_connectivity_mask.sum()),
             "charger_quarantined_count": len(charger_connectivity_quarantine),
@@ -907,23 +1229,36 @@ def select_family_terminals_v2(
         },
         "territory": {
             "policy": "amazon_per_source_q99_directed_network_time_and_direct_energy_screen_v2",
-            "source_t_env_s": t_env,
+            "source_t_env_s": float(structure_metadata["source_t_env_s"]),
             "source_radial_decile_edges_s": structure_metadata[
                 "source_radial_decile_edges_s"
             ],
-            "split_legal_pool_count": split_pool_count,
-            "time_envelope_pool_count": len(before_energy),
+            "split_legal_pool_count": territory_report["split_pool_count"],
+            "time_envelope_pool_count": territory_report["time_envelope_count"],
             "energy_screen_pool_count": len(territory),
-            "energy_screen_removed_count": len(before_energy) - len(territory),
+            "energy_screen_removed_count": territory_report["time_envelope_count"]
+            - len(territory),
             "energy_screen_removed_share": (
-                (len(before_energy) - len(territory)) / len(before_energy)
-                if len(before_energy)
+                (
+                    territory_report["time_envelope_count"] - len(territory)
+                )
+                / territory_report["time_envelope_count"]
+                if territory_report["time_envelope_count"]
                 else 0.0
             ),
             "energy_screen_semantics": "direct_depot_customer_depot_sufficient_condition",
             "pool_floor": 1.0,
             "territory_reserve_ratio": len(territory) / customer_count,
-            "depot_star": star.report,
+            "depot_star": territory_report["depot_star_report"],
+        },
+        "joint_spatial_support": {
+            "joint_support_contract_id": JOINT_SUPPORT_CONTRACT_ID,
+            "capacity_contract_fingerprint": replay_fingerprint,
+            "planned_capacity_contract_fingerprint": planned_fingerprint,
+            "replay_matches_plan": (
+                planned_fingerprint is None
+                or replay_fingerprint == planned_fingerprint
+            ),
         },
         "amazon_structure_source": structure_metadata,
         "amazon_spatial_reference": {

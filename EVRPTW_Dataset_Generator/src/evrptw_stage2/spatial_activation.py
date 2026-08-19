@@ -39,6 +39,55 @@ class SpatialActivationResult:
     metadata: dict[str, Any]
 
 
+def radial_decile_support_contract(
+    customers: pd.DataFrame,
+    structure_targets: pd.DataFrame,
+    *,
+    customer_count: int,
+    seed: int,
+) -> tuple[pd.DataFrame, dict[str, Any], np.ndarray]:
+    """Run C3-A with the exact quota construction used by activation."""
+
+    quotas, quota_metadata, target_times = _quota_matrix(
+        structure_targets,
+        customer_count=customer_count,
+        seed=seed,
+    )
+    required_counts = [
+        int(value) for value in quota_metadata["radial_decile_targets"]
+    ]
+    available = (
+        customers.groupby("radial_decile", observed=True)
+        .size()
+        .reindex(range(10), fill_value=0)
+    )
+    available_counts = [int(available.iloc[index]) for index in range(10)]
+    quota_metadata = {
+        **quota_metadata,
+        "required_decile_counts": required_counts,
+        "available_decile_counts": available_counts,
+    }
+    unsupported = {
+        decile: {
+            "available": available_counts[decile],
+            "target": required_counts[decile],
+        }
+        for decile in range(10)
+        if available_counts[decile] < required_counts[decile]
+    }
+    if unsupported:
+        raise SpatialActivationError(
+            "SPATIAL_QUOTA_UNSUPPORTED",
+            "territory lacks customer capacity in one or more radial deciles",
+            {
+                "decile_deficits": unsupported,
+                "required_decile_counts": required_counts,
+                "available_decile_counts": available_counts,
+            },
+        )
+    return quotas, quota_metadata, target_times
+
+
 def _quota_matrix(
     structure_targets: pd.DataFrame,
     *,
@@ -1517,7 +1566,8 @@ def activate_spatial_customers(
     if customers["latent_service_location_id"].duplicated().any():
         raise ValueError("Spatial customer pool contains duplicate IDs")
     stage_started = begin("quota_matrix", territory_count=len(customers))
-    quotas, quota_metadata, target_times = _quota_matrix(
+    quotas, quota_metadata, target_times = radial_decile_support_contract(
+        customers,
         structure_targets,
         customer_count=customer_count,
         seed=seed,
@@ -1529,20 +1579,6 @@ def activate_spatial_customers(
         region_count=int(quotas["region_id"].nunique()),
     )
     target_columns = quota_metadata["radial_decile_targets"]
-    available_columns = (
-        customers.groupby("radial_decile", observed=True).size().reindex(range(10), fill_value=0)
-    )
-    unsupported = {
-        decile: {"available": int(available_columns.iloc[decile]), "target": int(target)}
-        for decile, target in enumerate(target_columns)
-        if int(available_columns.iloc[decile]) < int(target)
-    }
-    if unsupported:
-        raise SpatialActivationError(
-            "SPATIAL_QUOTA_UNSUPPORTED",
-            "territory lacks customer capacity in one or more radial deciles",
-            {"decile_deficits": unsupported},
-        )
     community_ids = set(customers["community_id"].astype(str))
     if not community_adjacency.empty:
         community_ids |= set(community_adjacency["source_community_id"].astype(str))

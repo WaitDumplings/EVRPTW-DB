@@ -19,6 +19,102 @@ RUNNER_SPEC = importlib.util.spec_from_file_location(
 assert RUNNER_SPEC is not None and RUNNER_SPEC.loader is not None
 RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(RUNNER)
+C3_SPEC = importlib.util.spec_from_file_location(
+    "stage2_c3", ROOT / "scripts" / "apply_stage2_joint_support_gate.py"
+)
+assert C3_SPEC is not None and C3_SPEC.loader is not None
+C3 = importlib.util.module_from_spec(C3_SPEC)
+C3_SPEC.loader.exec_module(C3)
+
+
+def test_verifier_exception_writes_terminal_failed_state(tmp_path: Path) -> None:
+    report = {
+        "status": "verifying",
+        "passed": None,
+        "last_completed_stage": "materialization",
+        "planned_family_ids": ["f2", "f1"],
+        "materialized": [{"family_id": "f1"}, {"family_id": "f2"}],
+        "verified": [{"family_id": "f1", "passed": True}],
+        "unresolved_family_ids": ["f2"],
+    }
+    error = RuntimeError("synthetic verifier exception")
+    RUNNER._mark_run_report_failed(
+        report,
+        error,
+        last_completed_stage="verification",
+    )
+    path = tmp_path / "stage2_run_report.json"
+    RUNNER._write_json(path, report)
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "failed"
+    assert persisted["passed"] is False
+    assert persisted["planned_family_ids"] == ["f1", "f2"]
+    assert persisted["materialized_family_ids"] == ["f1", "f2"]
+    assert persisted["verified_family_ids"] == ["f1"]
+    assert persisted["unresolved_family_ids"] == ["f2"]
+    assert persisted["exception"] == {
+        "type": "RuntimeError",
+        "message": "synthetic verifier exception",
+    }
+    assert persisted["last_completed_stage"] == "verification"
+    assert not list(tmp_path.glob(".stage2_run_report.json.*.tmp"))
+
+
+def test_c3_plan_update_persists_required_contract_fields_atomically(
+    tmp_path: Path,
+) -> None:
+    plan_root = tmp_path / "generation_plan"
+    family_path = plan_root / "core" / "train" / "family_index.parquet"
+    family_path.parent.mkdir(parents=True)
+    original = pd.DataFrame(
+        {
+            "family_id": ["f1", "f2"],
+            "family_cohort_id": ["core/train", "core/train"],
+        }
+    )
+    original.to_parquet(family_path, index=False)
+    registry_path = plan_root / "split_registry.json"
+    registry_path.write_text(
+        json.dumps({"schema": "cle_evrptw_generation_plan_v3"}),
+        encoding="utf-8",
+    )
+    updates = {
+        "f1": {
+            "joint_support_contract_id": "c3_joint_spatial_support_v1",
+            "candidate_depot_count": 3,
+            "candidate_structure_source_count": 4,
+            "joint_pair_count": 12,
+            "aggregate_gate_pass_count": 2,
+            "exact_gate_pass_count": 1,
+            "selected_depot_id": "d1",
+            "selected_structure_source_id": "s1",
+            "required_decile_counts": [1] * 10,
+            "available_decile_counts": [2] * 10,
+            "capacity_contract_fingerprint": "ccf-1",
+            "rejected_pair_reason_counts": '{"SPATIAL_QUOTA_UNSUPPORTED":1}',
+        }
+    }
+    report_path = tmp_path / "c3.json"
+    C3._apply_updates(
+        plan_root,
+        [(family_path, original)],
+        updates,
+        c3_report=report_path,
+        code_provenance={"code_commit": "a" * 40},
+        full_plan=False,
+    )
+    persisted = pd.read_parquet(family_path)
+    row = persisted.loc[persisted["family_id"].eq("f1")].iloc[0]
+    assert row["selected_depot_id"] == "d1"
+    assert list(row["required_decile_counts"]) == [1] * 10
+    assert row["capacity_contract_fingerprint"] == "ccf-1"
+    untouched = persisted.loc[persisted["family_id"].eq("f2")].iloc[0]
+    assert pd.isna(untouched["selected_depot_id"])
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert registry["joint_spatial_support"]["status"] == (
+        "passed_targeted_gate_only"
+    )
+    assert not list(family_path.parent.glob(".family_index.parquet.*.parquet"))
 
 
 def _write_plan(root: Path, *, mutate_view: bool = False) -> None:

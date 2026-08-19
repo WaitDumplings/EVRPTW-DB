@@ -11,6 +11,7 @@ import os
 import resource
 import shutil
 import sys
+import tempfile
 import time
 from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
@@ -39,6 +40,8 @@ from evrptw_stage2.release_discipline import (
 from evrptw_stage2.subprocess_parallel import run_supervised_materialization
 
 STAGES = ("preflight", "splits", "plan", "materialize", "verify", "metrics")
+_ACTIVE_RUN_REPORT: dict[str, Any] | None = None
+_ACTIVE_RUN_REPORT_PATH: Path | None = None
 
 
 def _process_peak_rss_bytes() -> int:
@@ -139,10 +142,80 @@ def make_parser() -> argparse.ArgumentParser:
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _mark_run_report_failed(
+    report: dict[str, Any],
+    error: BaseException,
+    *,
+    last_completed_stage: str | None = None,
+) -> dict[str, Any]:
+    """Persistable terminal state for verifier and other uncaught exceptions."""
+
+    materialized_ids = sorted(
+        {
+            str(item["family_id"])
+            for item in report.get("materialized", [])
+            if item.get("family_id") is not None
+        }
+    )
+    verified_ids = sorted(
+        {
+            str(item["family_id"])
+            for item in report.get("verified", [])
+            if item.get("family_id") is not None and item.get("passed") is True
+        }
+    )
+    report.update(
+        {
+            "status": "failed",
+            "passed": False,
+            "planned_family_ids": sorted(
+                map(str, report.get("planned_family_ids", []))
+            ),
+            "materialized_family_ids": materialized_ids,
+            "verified_family_ids": verified_ids,
+            "unresolved_family_ids": sorted(
+                map(str, report.get("unresolved_family_ids", []))
+            ),
+            "exception": {
+                "type": type(error).__name__,
+                "message": str(error),
+            },
+            "last_completed_stage": (
+                last_completed_stage
+                or str(report.get("last_completed_stage", "unknown"))
+            ),
+        }
+    )
+    return report
+
+
+def _uncaught_run_report_hook(
+    error_type: type[BaseException],
+    error: BaseException,
+    traceback: Any,
+) -> None:
+    if _ACTIVE_RUN_REPORT is not None and _ACTIVE_RUN_REPORT_PATH is not None:
+        _mark_run_report_failed(_ACTIVE_RUN_REPORT, error)
+        _write_json(_ACTIVE_RUN_REPORT_PATH, _ACTIVE_RUN_REPORT)
+    sys.__excepthook__(error_type, error, traceback)
 
 
 def _run_report_path(args: argparse.Namespace) -> Path:
@@ -337,6 +410,8 @@ def _run_bounded_process_tasks(
 
 
 def main() -> None:
+    global _ACTIVE_RUN_REPORT, _ACTIVE_RUN_REPORT_PATH
+
     run_started = time.perf_counter()
     args = make_parser().parse_args()
     repo_root = Path(__file__).resolve().parents[2]
@@ -424,6 +499,9 @@ def main() -> None:
     args.output_root.mkdir(parents=True, exist_ok=True)
     run_report: dict[str, Any] = {
         "schema": "cle_evrptw_stage2_run_report_v2",
+        "status": "planned",
+        "passed": None,
+        "last_completed_stage": "runner_initialization",
         "mode": args.mode,
         "code_provenance": code_provenance,
         "cities": list(cities),
@@ -456,6 +534,10 @@ def main() -> None:
             "shard_index": int(args.shard_index),
         },
     }
+    _ACTIVE_RUN_REPORT = run_report
+    _ACTIVE_RUN_REPORT_PATH = _run_report_path(args)
+    sys.excepthook = _uncaught_run_report_hook
+    _write_json(_ACTIVE_RUN_REPORT_PATH, run_report)
 
     source_preset = json.loads(args.block_group_preset.read_text(encoding="utf-8"))
     for city in cities:
@@ -511,7 +593,9 @@ def main() -> None:
         registry["code_provenance"] = code_provenance
         write_generation_plan(plan_root, families, views, registry)
     if not needs_plan:
-        run_report["passed"] = True
+        run_report["status"] = "planned"
+        run_report["passed"] = None
+        run_report["last_completed_stage"] = "c0_preflight_and_splits"
         _write_json(_run_report_path(args), run_report)
         print(json.dumps(run_report, indent=2, sort_keys=True, ensure_ascii=False))
         return
@@ -523,6 +607,10 @@ def main() -> None:
             "output root and rebuild the plan"
         )
     run_report["generation_plan"] = registry
+    run_report["planned_family_ids"] = sorted(families["family_id"].astype(str))
+    run_report["planned_count"] = len(run_report["planned_family_ids"])
+    run_report["last_completed_stage"] = "c0_plan"
+    _write_json(_run_report_path(args), run_report)
 
     selected_families = families.sort_values(["city_slug", "family_id"])
     if args.family_ids:
@@ -538,7 +626,48 @@ def main() -> None:
     selected_families = selected_families.iloc[int(args.shard_index) :: int(args.shard_count)]
     if args.max_families is not None:
         selected_families = selected_families.iloc[: int(args.max_families)]
+    run_report["planned_family_ids"] = sorted(
+        selected_families["family_id"].astype(str)
+    )
+    run_report["planned_count"] = len(run_report["planned_family_ids"])
     run_report["execution"]["selected_family_count"] = len(selected_families)
+    if "materialize" in args.stages:
+        required_c3_columns = {
+            "joint_support_contract_id",
+            "selected_depot_id",
+            "selected_structure_source_id",
+            "capacity_contract_fingerprint",
+        }
+        missing_c3_columns = sorted(
+            required_c3_columns - set(selected_families.columns)
+        )
+        if missing_c3_columns:
+            raise ValueError(
+                "C3 joint spatial-support planning must pass before materialization; "
+                f"missing plan fields: {missing_c3_columns}"
+            )
+        incomplete_c3 = selected_families.loc[
+            selected_families[list(required_c3_columns)].isna().any(axis=1)
+        ]
+        if not incomplete_c3.empty:
+            raise ValueError(
+                "C3 joint spatial-support planning is incomplete for selected families: "
+                + repr(sorted(incomplete_c3["family_id"].astype(str).tolist()))
+            )
+        c3_registry = registry.get("joint_spatial_support", {})
+        if args.run_discipline == "pilot" and c3_registry.get("status") != (
+            "passed_full_plan"
+        ):
+            raise ValueError(
+                "The 140-family pilot requires a passed_full_plan C3 registry"
+            )
+    if not ({"materialize", "verify", "metrics"} & set(args.stages)):
+        run_report["status"] = "planned"
+        run_report["passed"] = None
+        run_report["last_completed_stage"] = "c0_plan"
+        _write_json(_run_report_path(args), run_report)
+        print(json.dumps(run_report, indent=2, sort_keys=True, ensure_ascii=False))
+        return
     generation_stopped = False
     pilot_supervisor: PilotStopController | None = None
     if "materialize" in args.stages and args.run_discipline == "la_smoke":
@@ -584,6 +713,10 @@ def main() -> None:
         )
     supervised_materialization = "materialize" in args.stages
     if supervised_materialization:
+        run_report["status"] = "materializing"
+        run_report["passed"] = None
+        run_report["last_completed_stage"] = "materialization_preflight"
+        _write_json(_run_report_path(args), run_report)
         tasks = _build_materialization_tasks(selected_families, views, args=args)
         run_report["execution"]["materialization_task_count"] = len(tasks)
         supervised = run_supervised_materialization(
@@ -622,6 +755,15 @@ def main() -> None:
             set(run_report["unresolved_family_ids"])
         )
         run_report["unresolved_count"] = len(run_report["unresolved_family_ids"])
+        run_report["materialized_family_ids"] = sorted(
+            {
+                str(item["family_id"])
+                for item in run_report["materialized"]
+                if item.get("family_id") is not None
+            }
+        )
+        run_report["last_completed_stage"] = "materialization"
+        _write_json(_run_report_path(args), run_report)
 
     if "materialize" in args.stages and args.run_discipline == "la_smoke":
         successful = [
@@ -649,6 +791,11 @@ def main() -> None:
             }
         run_report["run_discipline"] = smoke
         generation_stopped = not bool(smoke["pilot_allowed"])
+
+    if "verify" in args.stages and not generation_stopped:
+        run_report["status"] = "verifying"
+        run_report["passed"] = None
+        _write_json(_run_report_path(args), run_report)
 
     if "verify" in args.stages and args.workers > 1 and not generation_stopped:
         existing: list[tuple[str, Path]] = []
@@ -685,6 +832,13 @@ def main() -> None:
         run_report["verified"].sort(key=lambda item: str(item["family_id"]))
         failed = [item["family_id"] for item in run_report["verified"] if not item["passed"]]
         if failed:
+            run_report["last_completed_stage"] = "verification"
+            _mark_run_report_failed(
+                run_report,
+                ValueError(f"Materialized families failed verification: {failed}"),
+                last_completed_stage="verification",
+            )
+            _write_json(_run_report_path(args), run_report)
             raise ValueError(f"Materialized families failed verification: {failed}")
 
     if "verify" in args.stages and args.workers == 1 and not generation_stopped:
@@ -706,10 +860,30 @@ def main() -> None:
             verification["verification_seconds"] = time.perf_counter() - verification_started
             run_report["verified"].append(verification)
             if not verification["passed"]:
+                run_report["last_completed_stage"] = "verification"
+                _mark_run_report_failed(
+                    run_report,
+                    ValueError(
+                        f"Materialized family {family_id} failed verification"
+                    ),
+                    last_completed_stage="verification",
+                )
+                _write_json(_run_report_path(args), run_report)
                 raise ValueError(f"Materialized family {family_id} failed verification")
 
     run_report["passed"] = not generation_stopped and not run_report["unresolved_family_ids"] and all(
         bool(item["passed"]) for item in run_report["verified"]
+    )
+    run_report["status"] = "passed" if run_report["passed"] else "failed"
+    run_report["verified_family_ids"] = sorted(
+        {
+            str(item["family_id"])
+            for item in run_report["verified"]
+            if item.get("family_id") is not None and item.get("passed") is True
+        }
+    )
+    run_report["last_completed_stage"] = (
+        "verification" if "verify" in args.stages else "materialization"
     )
     if "metrics" in args.stages and not generation_stopped:
         if int(args.shard_count) != 1:

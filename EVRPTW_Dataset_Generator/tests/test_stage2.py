@@ -27,6 +27,11 @@ from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.reader import CLEEligibilityError, load_portable_cle
 from evrptw_stage2.road_state import build_family_road_state
 from evrptw_stage2.routing import PhysicalRoadNetwork, TerminalConnectivityError
+from evrptw_stage2.selection import (
+    JointSupportConsistencyError,
+    _select_depot_group,
+    depot_candidate_order,
+)
 
 CONFIG_PATH = Path(__file__).parents[1] / "configs" / "cle_evrptw_stage2_v2.json"
 
@@ -461,6 +466,67 @@ def test_materialization_attempt_seeds_are_deterministic_and_isolated() -> None:
     assert one_views_a.iloc[0]["view_seed"] != zero_views.iloc[0]["view_seed"]
 
 
+def test_c3_retry_preserves_the_joint_spatial_capacity_tuple() -> None:
+    family = {
+        "family_seed": 123,
+        "depot_seed": 1,
+        "customer_superset_seed": 2,
+        "charger_seed": 3,
+        "road_state_seed": 4,
+        "vehicle_seed": 5,
+        "joint_support_contract_id": "c3_joint_spatial_support_v1",
+        "selected_depot_id": "depot-a",
+        "selected_structure_source_id": "station-day-a",
+        "capacity_contract_fingerprint": "ccf-test",
+    }
+    views = pd.DataFrame(
+        {
+            "scale_id": ["cus1000"],
+            "branch_index": [0],
+            "view_seed": [6],
+        }
+    )
+    attempt, _ = materialization_attempt_inputs(
+        family,
+        views,
+        attempt_number=2,
+    )
+    assert attempt["family_seed"] != family["family_seed"]
+    assert attempt["charger_seed"] != family["charger_seed"]
+    for key in (
+        "depot_seed",
+        "customer_superset_seed",
+        "road_state_seed",
+        "selected_depot_id",
+        "selected_structure_source_id",
+        "capacity_contract_fingerprint",
+    ):
+        assert attempt[key] == family[key]
+
+
+def test_c3_depot_candidate_order_preserves_the_legacy_first_choice() -> None:
+    depots = pd.DataFrame(
+        {
+            "candidate_id": ["a1", "a2", "b1", "c1"],
+            "facility_group_id": ["a", "a", "b", "c"],
+            "strict_depot_candidate_eligible": [True, False, True, True],
+            "optional_depot_candidate_eligible": [False, True, False, False],
+        }
+    )
+    legacy, _ = _select_depot_group(depots, seed=871, track="practical")
+    ordered, metadata = depot_candidate_order(
+        depots,
+        seed=871,
+        track="practical",
+    )
+    assert str(ordered[0]["candidate_id"]) == str(legacy["candidate_id"])
+    assert len(ordered) == 3
+    assert len({str(row["facility_group_id"]) for row in ordered}) == 3
+    assert metadata["legacy_first_facility_group_id"] == str(
+        legacy["facility_group_id"]
+    )
+
+
 def test_resume_keeps_max_attempts_as_a_lifetime_family_cap() -> None:
     assert list(remaining_attempt_numbers(0, 4)) == [0, 1, 2, 3]
     assert list(remaining_attempt_numbers(2, 4)) == [2, 3]
@@ -480,6 +546,12 @@ def test_terminal_connectivity_contract_failure_is_not_retryable() -> None:
     assert worker_error_is_fatal(ValueError("stochastic rejection")) is False
     assert worker_error_is_fatal(TypeError("programming fault")) is True
     assert rejection_is_retryable(TypeError("programming fault")) is False
+    c3_error = JointSupportConsistencyError(
+        "synthetic replay mismatch",
+        capacity_contract_fingerprint="ccf-test",
+    )
+    assert rejection_is_retryable(c3_error) is False
+    assert c3_error.roster_fingerprint == "ccf-test"
 
 
 def test_nested_progress_detail_named_stage_does_not_collide() -> None:
