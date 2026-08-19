@@ -1,0 +1,47 @@
+{
+  "schema": "stage2_acceptance_v3_construct_valid_config",
+  "acceptance_id": "stage2_acceptance_v3_construct_valid",
+  "status": "frozen_before_test2_jacksonville_or_full_corpus",
+  "statistical_scope": "existing_140_family_non_release_pilot",
+  "benchmark_definition": "real_geography_public_infrastructure_operations_calibrated_semi_synthetic_evrptw",
+  "required_counts": {
+    "parent_families": 140,
+    "materialized_views": 2590,
+    "city_track_strata": 20,
+    "weekday_per_city_track": 5,
+    "weekend_per_city_track": 2
+  },
+  "canonical_route_count": "number_of_distinct_source_routes_with_positive_customer_quota",
+  "hard_gate_scope": [
+    "correctness",
+    "split_and_leakage",
+    "counts_and_5_to_2",
+    "terminal_eligibility",
+    "exact_amazon_attribute_inheritance",
+    "quota_route_and_source_provenance_consistency",
+    "finite_directed_matrices",
+    "ev_time_capacity_feasibility",
+    "nested_view_consistency",
+    "planned_materialized_verified_equality",
+    "no_timeout_rejection_unresolved_or_process_residue"
+  ],
+  "report_only_diagnostics": [
+    "M1_amazon_radial_w1",
+    "M2_nearest_neighbor_road_time",
+    "M3_pairwise_road_time",
+    "M5_community_concentration",
+    "package_count_marginals",
+    "demand_service_time_window_marginals",
+    "family_matching_bias_v2",
+    "cross_city_differences",
+    "historical_q90_v1",
+    "charging_sensitivity"
+  ],
+  "prohibited_actions": [
+    "regenerate_existing_140_families",
+    "modify_existing_family_artifacts",
+    "change_historical_thresholds",
+    "use_report_only_diagnostic_to_change_passed",
+    "hash_evidence_files"
+  ]
+}

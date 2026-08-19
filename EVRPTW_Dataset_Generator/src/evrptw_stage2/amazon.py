@@ -517,7 +517,9 @@ class AmazonStage2Artifacts:
             "structure_source_dates": sorted(source_days),
             "source_pool": pool,
             "generation_track": track_id,
-            "structure_source_route_count": len(routes),
+            # This is the number of routes available in the frozen source day(s),
+            # not the number that receives a positive quota after scaling to N.
+            "source_route_count_available": len(routes),
             "structure_source_stop_count": len(targets),
             "source_t_env_s": source_t_env,
             "source_radial_decile_edges_s": source_edges.tolist(),

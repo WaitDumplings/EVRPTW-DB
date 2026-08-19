@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import resource
@@ -58,7 +57,9 @@ def _cle_reference(cle: PortableCLE) -> dict[str, Any]:
     return {
         "contract_root": "EVRPTW_Dataset/CLE_v2/us_11city",
         "city_relative_path": str(Path("cities") / cle.city_slug),
-        "city_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "city_manifest_schema": str(cle.manifest.get("schema", "")),
+        "city_manifest_size_bytes": int(manifest_path.stat().st_size),
+        "content_digest_validation_performed": False,
         "connectivity_contract_id": str(
             cle.manifest.get("connectivity_contract", {}).get("id", "")
         ),

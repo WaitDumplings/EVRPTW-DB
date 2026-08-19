@@ -12,7 +12,6 @@ from evrptw_stage2.promotion import (
     PILOT_REPORT_SCHEMA,
     build_pilot_acceptance_report,
     promote_reference_profile,
-    sha256_file,
 )
 from evrptw_stage2.provenance import RevisionDisciplineError, resolve_git_provenance
 from evrptw_stage2.reader import PortableCLE
@@ -275,10 +274,6 @@ def test_pilot_report_and_profile_promotion_require_all_gates(
         },
     )
 
-    def reject_hashing(_path: str | Path) -> str:
-        raise AssertionError("pilot acceptance must not hash evidence files")
-
-    monkeypatch.setattr("evrptw_stage2.promotion.sha256_file", reject_hashing)
     arguments = {
         "run_report_path": run_path,
         "phase1_report_path": phase1_path,
@@ -315,9 +310,24 @@ def test_pilot_report_and_profile_promotion_require_all_gates(
         load_reference_profile(profile_path, official=True)
     promoted = promote_reference_profile(
         profile,
-        pilot_report=report,
-        pilot_report_sha256="b" * 64,
-        acceptance_config_sha256="c" * 64,
+        construct_acceptance_report={
+            "schema": "stage2_acceptance_v3_construct_valid",
+            "passed": True,
+            "family_artifacts_modified": False,
+            "hash_validation_performed": False,
+            "code_provenance": {"code_commit": acceptance_commit},
+        },
+        ev_activity_report={
+            "schema": "stage2_primary_view_ev_activity_audit_v1",
+            "passed": True,
+            "degenerate_all_zero_stop_triggered": False,
+            "hash_validation_performed": False,
+            "code_provenance": {"code_commit": acceptance_commit},
+        },
+        acceptance_config={
+            "schema": "stage2_acceptance_v3_construct_valid_config",
+            "acceptance_id": "stage2_acceptance_v3_construct_valid",
+        },
         advisor_signoff_id="advisor-approval-1",
     )
     registry = ROOT / "configs" / profile["charging"]["national_mode_median_registry"]
@@ -330,9 +340,22 @@ def test_pilot_report_and_profile_promotion_require_all_gates(
     with pytest.raises(ValueError, match="advisor sign-off"):
         promote_reference_profile(
             profile,
-            pilot_report=report,
-            pilot_report_sha256=sha256_file(run_path),
-            acceptance_config_sha256="c" * 64,
+            construct_acceptance_report={
+                "schema": "stage2_acceptance_v3_construct_valid",
+                "passed": True,
+                "family_artifacts_modified": False,
+                "hash_validation_performed": False,
+            },
+            ev_activity_report={
+                "schema": "stage2_primary_view_ev_activity_audit_v1",
+                "passed": True,
+                "degenerate_all_zero_stop_triggered": False,
+                "hash_validation_performed": False,
+            },
+            acceptance_config={
+                "schema": "stage2_acceptance_v3_construct_valid_config",
+                "acceptance_id": "stage2_acceptance_v3_construct_valid",
+            },
             advisor_signoff_id="",
         )
 
@@ -361,4 +384,6 @@ def test_instance_manifest_cle_reference_is_v2_and_content_bound(tmp_path: Path)
     reference = _cle_reference(cle)
     assert reference["contract_root"] == "EVRPTW_Dataset/CLE_v2/us_11city"
     assert reference["city_relative_path"] == "cities/x"
-    assert len(reference["city_manifest_sha256"]) == 64
+    assert reference["city_manifest_schema"] == ""
+    assert reference["city_manifest_size_bytes"] > 0
+    assert reference["content_digest_validation_performed"] is False

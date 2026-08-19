@@ -7,13 +7,14 @@ import argparse
 import json
 from pathlib import Path
 
-from evrptw_stage2.promotion import promote_reference_profile, sha256_file
+from evrptw_stage2.promotion import promote_reference_profile
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate-profile", type=Path, required=True)
-    parser.add_argument("--pilot-report", type=Path, required=True)
+    parser.add_argument("--construct-acceptance", type=Path, required=True)
+    parser.add_argument("--ev-activity-report", type=Path, required=True)
     parser.add_argument("--acceptance-config", type=Path, required=True)
     parser.add_argument("--advisor-signoff-id", required=True)
     parser.add_argument("--output-profile", type=Path, required=True)
@@ -21,12 +22,14 @@ def main() -> None:
     if args.output_profile.exists():
         raise FileExistsError(f"Refusing to overwrite profile: {args.output_profile}")
     profile = json.loads(args.candidate_profile.read_text(encoding="utf-8"))
-    pilot = json.loads(args.pilot_report.read_text(encoding="utf-8"))
+    acceptance = json.loads(args.construct_acceptance.read_text(encoding="utf-8"))
+    ev_activity = json.loads(args.ev_activity_report.read_text(encoding="utf-8"))
+    acceptance_config = json.loads(args.acceptance_config.read_text(encoding="utf-8"))
     promoted = promote_reference_profile(
         profile,
-        pilot_report=pilot,
-        pilot_report_sha256=sha256_file(args.pilot_report),
-        acceptance_config_sha256=sha256_file(args.acceptance_config),
+        construct_acceptance_report=acceptance,
+        ev_activity_report=ev_activity,
+        acceptance_config=acceptance_config,
         advisor_signoff_id=args.advisor_signoff_id,
     )
     args.output_profile.parent.mkdir(parents=True, exist_ok=True)

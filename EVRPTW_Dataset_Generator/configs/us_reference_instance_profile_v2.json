@@ -80,7 +80,7 @@
       "dc_fast": 200.0
     },
     "national_mode_median_registry": "us_national_charging_power_medians_v1.json",
-    "national_mode_median_registry_sha256": "4a181a8440839602679be5f8d8c823b5d6f5fc5ff3b7211768c87d2fa0c87f57",
+    "national_mode_median_registry_schema": "evrptw_national_charging_power_medians_v1",
     "port_capacity_model": "infinite_ports"
   },
   "source_contract": {

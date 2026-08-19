@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -30,17 +29,15 @@ def load_reference_profile(path: str | Path, *, official: bool = False) -> dict[
         raise ValueError(f"Stage-2 profile v2 rejects deleted V1 keys: {deleted}")
     if official:
         promotion = payload.get("acceptance_promotion", {})
-        report_hash = str(promotion.get("pilot_report_sha256", "")).lower()
-        acceptance_hash = str(promotion.get("acceptance_config_sha256", "")).lower()
         if (
             payload.get("profile_status") != "release_calibrated"
             or not bool(payload.get("official_generation_eligible", False))
-            or promotion.get("schema") != "evrptw_profile_acceptance_promotion_v1"
-            or not str(promotion.get("pilot_report_id", ""))
-            or len(report_hash) != 64
-            or any(character not in "0123456789abcdef" for character in report_hash)
-            or len(acceptance_hash) != 64
-            or any(character not in "0123456789abcdef" for character in acceptance_hash)
+            or promotion.get("schema") != "evrptw_profile_acceptance_promotion_v2_no_hash"
+            or promotion.get("construct_acceptance_schema")
+            != "stage2_acceptance_v3_construct_valid"
+            or promotion.get("ev_activity_audit_schema")
+            != "stage2_primary_view_ev_activity_audit_v1"
+            or promotion.get("hash_validation_performed") is not False
             or not str(promotion.get("advisor_signoff_id", ""))
         ):
             raise ValueError(
@@ -75,18 +72,14 @@ def load_reference_profile(path: str | Path, *, official: bool = False) -> dict[
     ):
         raise ValueError("V2 requires positive frozen AC L2 and DC-fast national medians")
     registry_name = charging.get("national_mode_median_registry")
-    registry_sha256 = charging.get("national_mode_median_registry_sha256")
-    if not registry_name or not registry_sha256:
-        raise ValueError("V2 charging-power median registry and SHA256 are required")
+    registry_schema = charging.get("national_mode_median_registry_schema")
+    if not registry_name or registry_schema != "evrptw_national_charging_power_medians_v1":
+        raise ValueError("V2 charging-power median registry name and schema are required")
     registry_path = profile_path.parent / str(registry_name)
     if not registry_path.is_file():
         raise ValueError(f"Charging-power median registry is missing: {registry_path}")
-    registry_bytes = registry_path.read_bytes()
-    actual_sha256 = hashlib.sha256(registry_bytes).hexdigest()
-    if actual_sha256 != str(registry_sha256):
-        raise ValueError("Charging-power median registry SHA256 mismatch")
-    registry = json.loads(registry_bytes)
-    if registry.get("schema") != "evrptw_national_charging_power_medians_v1":
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    if registry.get("schema") != registry_schema:
         raise ValueError("Unsupported charging-power median registry schema")
     registry_medians = registry.get("national_mode_medians_kw", {})
     if {key: float(value) for key, value in medians.items()} != {

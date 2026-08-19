@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -10,11 +9,7 @@ from typing import Any, Mapping
 
 
 PILOT_REPORT_SCHEMA = "cle_evrptw_stage2_pilot_acceptance_report_v3"
-PROMOTION_SCHEMA = "evrptw_profile_acceptance_promotion_v1"
-
-
-def sha256_file(path: str | Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+PROMOTION_SCHEMA = "evrptw_profile_acceptance_promotion_v2_no_hash"
 
 
 def _read(path: str | Path) -> dict[str, Any]:
@@ -252,37 +247,49 @@ def build_pilot_acceptance_report(
 def promote_reference_profile(
     profile: Mapping[str, Any],
     *,
-    pilot_report: Mapping[str, Any],
-    pilot_report_sha256: str,
-    acceptance_config_sha256: str,
+    construct_acceptance_report: Mapping[str, Any],
+    ev_activity_report: Mapping[str, Any],
+    acceptance_config: Mapping[str, Any],
     advisor_signoff_id: str,
 ) -> dict[str, Any]:
-    """Return a promoted copy; the caller must commit it before official generation."""
+    """Return a no-hash promoted copy after both Stage-2 v3 pilot gates pass."""
 
     if profile.get("profile_status") != "candidate_calibration":
         raise ValueError("Only candidate_calibration profiles can be promoted")
     if bool(profile.get("official_generation_eligible", False)):
         raise ValueError("Candidate profile is already marked official")
-    if pilot_report.get("schema") != PILOT_REPORT_SCHEMA or pilot_report.get("passed") is not True:
-        raise ValueError("Profile promotion requires a complete passing 140-family pilot report")
+    if (
+        construct_acceptance_report.get("schema")
+        != "stage2_acceptance_v3_construct_valid"
+        or construct_acceptance_report.get("passed") is not True
+        or construct_acceptance_report.get("family_artifacts_modified") is not False
+        or construct_acceptance_report.get("hash_validation_performed") is not False
+    ):
+        raise ValueError("Profile promotion requires passing construct-valid acceptance v3")
+    if (
+        ev_activity_report.get("schema")
+        != "stage2_primary_view_ev_activity_audit_v1"
+        or ev_activity_report.get("passed") is not True
+        or ev_activity_report.get("degenerate_all_zero_stop_triggered") is not False
+        or ev_activity_report.get("hash_validation_performed") is not False
+    ):
+        raise ValueError("Profile promotion requires a non-degenerate passing EV activity audit")
+    if acceptance_config.get("schema") != "stage2_acceptance_v3_construct_valid_config":
+        raise ValueError("Profile promotion requires the frozen acceptance v3 config")
     if not str(advisor_signoff_id).strip():
         raise ValueError("Profile promotion requires an explicit advisor sign-off ID")
-    for label, value in (
-        ("pilot_report_sha256", pilot_report_sha256),
-        ("acceptance_config_sha256", acceptance_config_sha256),
-    ):
-        digest = str(value).lower()
-        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-            raise ValueError(f"{label} must be a SHA256 digest")
     promoted = deepcopy(dict(profile))
     promoted["profile_status"] = "release_calibrated"
     promoted["official_generation_eligible"] = True
     promoted["acceptance_promotion"] = {
         "schema": PROMOTION_SCHEMA,
-        "pilot_report_id": str(pilot_report["pilot_report_id"]),
-        "pilot_report_sha256": str(pilot_report_sha256).lower(),
-        "acceptance_config_sha256": str(acceptance_config_sha256).lower(),
+        "construct_acceptance_schema": str(construct_acceptance_report["schema"]),
+        "construct_acceptance_code_commit": _code_commit(construct_acceptance_report),
+        "ev_activity_audit_schema": str(ev_activity_report["schema"]),
+        "ev_activity_code_commit": _code_commit(ev_activity_report),
+        "acceptance_config_id": str(acceptance_config["acceptance_id"]),
         "advisor_signoff_id": str(advisor_signoff_id).strip(),
+        "hash_validation_performed": False,
         "required_next_step": "commit_and_push_clean_acceptance_revision_before_full_run",
     }
     return promoted

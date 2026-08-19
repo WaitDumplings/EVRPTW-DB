@@ -979,6 +979,25 @@ def select_family_terminals_v2(
             capacity_contract_fingerprint=replay_fingerprint,
         )
     selected_customers = activation.customers.reset_index(drop=True)
+    route_quota_used = {
+        str(route_id): int(count)
+        for route_id, count in sorted(
+            selected_customers["structure_route_id"]
+            .astype(str)
+            .value_counts()
+            .items()
+        )
+    }
+    if (
+        any(count <= 0 for count in route_quota_used.values())
+        or sum(route_quota_used.values()) != customer_count
+    ):
+        raise RuntimeError("positive source-route quotas do not sum to customer_count")
+    structure_metadata["route_count_used"] = len(route_quota_used)
+    structure_metadata["route_quota_used"] = route_quota_used
+    structure_metadata["route_count_used_semantics"] = (
+        "number_of_distinct_source_routes_with_positive_customer_quota"
+    )
     finish(
         "customer_spatial_activation",
         stage_started,
