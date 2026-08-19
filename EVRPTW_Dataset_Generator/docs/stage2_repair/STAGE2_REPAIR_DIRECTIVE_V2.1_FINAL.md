@@ -4,6 +4,11 @@ Status: frozen implementation contract
 Branch: `stage2-repair-candidate`  
 Supersedes: every Stage-2 repair recommendation or directive before V2.1
 
+D-1--D-4 and D-6 remain frozen. D-5 alone is superseded by
+[`D5_CONSTRUCT_VALIDITY_REVISION_V2_ZH.md`](D5_CONSTRUCT_VALIDITY_REVISION_V2_ZH.md)
+after the historical Q90 v1 0/24 failure triggered a construct-validity review.
+The old threshold and failure evidence remain unchanged.
+
 This is the only normative Stage-2 repair document in the repository. Gate
 failures require changes to generation; acceptance thresholds must not be
 relaxed after observing pilot results.

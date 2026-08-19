@@ -15,7 +15,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-report", type=Path, required=True)
     parser.add_argument("--phase1-report", type=Path, required=True)
-    parser.add_argument("--q90-report", type=Path, required=True)
+    parser.add_argument("--operational-transfer", type=Path, required=True)
+    parser.add_argument("--spatial-diagnostic", type=Path, required=True)
+    parser.add_argument("--historical-q90-v1", type=Path, required=True)
     parser.add_argument("--connectivity-audit", type=Path, required=True)
     parser.add_argument("--release-preflight", type=Path, required=True)
     parser.add_argument("--la-smoke-report", type=Path, required=True)
@@ -31,7 +33,9 @@ def main() -> None:
     report = build_pilot_acceptance_report(
         run_report_path=args.run_report,
         phase1_report_path=args.phase1_report,
-        q90_report_path=args.q90_report,
+        operational_transfer_report_path=args.operational_transfer,
+        spatial_diagnostic_path=args.spatial_diagnostic,
+        historical_q90_report_path=args.historical_q90_v1,
         connectivity_audit_path=args.connectivity_audit,
         release_preflight_path=args.release_preflight,
         la_smoke_report_path=args.la_smoke_report,

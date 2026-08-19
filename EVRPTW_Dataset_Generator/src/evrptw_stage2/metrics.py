@@ -761,9 +761,15 @@ def aggregate_phase1_metrics(output_root: str | Path) -> dict[str, Any]:
         },
         "gating_policy": {
             "hard_correctness_gates": True,
-            "m1_report_only": True,
-            "m2_m3_release_gate": "reports/stage2_repair/q90_gate.json",
-            "m4_m5_report_only": True,
+            "m1_operational_transfer_gate": (
+                "reports/stage2_repair/amazon_operational_transfer_acceptance_v2.json"
+            ),
+            "m2_m3_report_only": (
+                "reports/stage2_repair/cross_city_spatial_diagnostic_v1.json"
+            ),
+            "m4_operational_structure_gate": True,
+            "m5_report_only": True,
+            "historical_q90_v1_fail_retained": True,
             "numeric_thresholds_frozen": True,
         },
     }

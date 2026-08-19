@@ -159,7 +159,9 @@ def test_pilot_report_and_profile_promotion_require_all_gates(
     ]
     run_path = tmp_path / "run.json"
     phase1_path = tmp_path / "phase1.json"
-    q90_path = tmp_path / "q90.json"
+    operational_path = tmp_path / "operational.json"
+    spatial_path = tmp_path / "spatial.json"
+    q90_path = tmp_path / "q90_v1.json"
     connectivity_path = tmp_path / "connectivity.json"
     preflight_path = tmp_path / "preflight.json"
     smoke_path = tmp_path / "smoke.json"
@@ -193,9 +195,34 @@ def test_pilot_report_and_profile_promotion_require_all_gates(
     )
     _write_json(phase1_path, {"all_hard_gates_passed": True})
     _write_json(
+        operational_path,
+        {
+            "schema": "amazon_operational_transfer_acceptance_v2",
+            "passed": True,
+            "family_artifacts_modified": False,
+            "hash_validation_performed": False,
+            "code_provenance": {"code_commit": acceptance_commit},
+        },
+    )
+    _write_json(
+        spatial_path,
+        {
+            "schema": "cross_city_spatial_diagnostic_v1",
+            "status": "complete_report_only",
+            "hard_gate": False,
+            "contributes_to_operational_acceptance": False,
+            "construct_validity_review": {
+                "triggered_by_q90_v1_failure": True,
+                "threshold_changed": False,
+            },
+            "code_provenance": {"code_commit": acceptance_commit},
+        },
+    )
+    _write_json(
         q90_path,
         {
-            "release_calibrated": True,
+            "schema": "evrptw_station_block_q90_gate_v1",
+            "release_calibrated": False,
             "code_provenance": {"code_commit": post_commit},
         },
     )
@@ -255,7 +282,9 @@ def test_pilot_report_and_profile_promotion_require_all_gates(
     arguments = {
         "run_report_path": run_path,
         "phase1_report_path": phase1_path,
-        "q90_report_path": q90_path,
+        "operational_transfer_report_path": operational_path,
+        "spatial_diagnostic_path": spatial_path,
+        "historical_q90_report_path": q90_path,
         "connectivity_audit_path": connectivity_path,
         "connectivity_acceptance_path": connectivity_acceptance_path,
         "release_preflight_path": preflight_path,
@@ -271,18 +300,14 @@ def test_pilot_report_and_profile_promotion_require_all_gates(
     assert all("sha256" not in item for item in report["evidence"].values())
     assert len(set(filter(None, report["evidence_code_commits"].values()))) == 5
 
-    _write_json(
-        q90_path,
-        {
-            "release_calibrated": False,
-            "code_provenance": {"code_commit": post_commit},
-        },
-    )
+    operational = json.loads(operational_path.read_text(encoding="utf-8"))
+    operational["passed"] = False
+    _write_json(operational_path, operational)
     red_report = build_pilot_acceptance_report(**arguments)
     assert red_report["passed"] is False
     assert [
         label for label, passed in red_report["checks"].items() if not passed
-    ] == ["q90_release_calibrated"]
+    ] == ["amazon_operational_transfer_v2_passed"]
 
     profile_path = ROOT / "configs" / "us_reference_instance_profile_v2.json"
     profile = json.loads(profile_path.read_text(encoding="utf-8"))

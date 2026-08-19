@@ -1,0 +1,76 @@
+{
+  "schema": "amazon_operational_transfer_acceptance_config_v2",
+  "acceptance_id": "amazon_operational_transfer_acceptance_v2",
+  "status": "frozen_before_test2_jacksonville_or_full_corpus",
+  "statistical_scope": "existing_140_family_non_release_pilot",
+  "evidence_boundary": {
+    "amazon_controls": "operational_templates",
+    "cle_controls": "target_city_geography",
+    "m2_m3_m5_role": "cross_city_spatial_diagnostic_v1_report_only",
+    "test2_jacksonville_full_corpus_inspected": false
+  },
+  "required_counts": {
+    "parent_families": 140,
+    "materialized_views": 2590,
+    "cities": 10,
+    "city_track_strata": 20,
+    "weekday_per_city_track": 5,
+    "weekend_per_city_track": 2
+  },
+  "m1_radial_fidelity": {
+    "normalizer": "per_structure_source_p99_time_envelope_s",
+    "maximum_family_normalized_w1": 0.05,
+    "maximum_corpus_normalized_w1": 0.05,
+    "radial_decile_row_and_column_margins_must_be_exact": true
+  },
+  "route_region_structure": {
+    "source_routes_must_equal_retained_regions": true,
+    "routes_dropped_by_rounding_must_equal": 0,
+    "region_sizes_must_sum_to_parent_customer_count": true
+  },
+  "order_template_transfer": {
+    "primary_structure_source_mode": "SINGLE_STRUCTURE_DAY",
+    "primary_order_source_mode": "SINGLE_ORDER_DAY",
+    "composite_primary_allowed": false,
+    "template_reuse_within_family_allowed": false,
+    "view_attributes_must_equal_observed_template": true,
+    "checked_attributes": [
+      "package_count",
+      "demand_cm3",
+      "service_time_s",
+      "tw_start_s",
+      "tw_end_s"
+    ]
+  },
+  "matching_bias": {
+    "maximum_relative_difference": 0.10,
+    "maximum_tw_presence_absolute_difference": 0.02,
+    "relative_fields": [
+      "demand_cm3_mean",
+      "demand_cm3_p90",
+      "package_count_mean",
+      "package_count_p90",
+      "service_time_s_mean",
+      "service_time_s_p90",
+      "tw_width_s_mean",
+      "tw_width_s_p50"
+    ],
+    "absolute_fields": [
+      "tw_presence_rate"
+    ]
+  },
+  "hard_gate_layers": {
+    "A": "correctness_connectivity_split_counts_quota_matrix_feasibility_provenance_5to2_verifier_no_timeout",
+    "B": "amazon_operational_transfer_m1_m4_orders_day_type_source_support",
+    "C": "spatial_diagnostics_report_only_never_contributes_to_passed"
+  },
+  "prohibited_actions": [
+    "regenerate_family",
+    "modify_family_artifact",
+    "inspect_test2",
+    "inspect_jacksonville",
+    "inspect_full_corpus",
+    "change_q90_v1_threshold",
+    "hash_evidence_files"
+  ]
+}

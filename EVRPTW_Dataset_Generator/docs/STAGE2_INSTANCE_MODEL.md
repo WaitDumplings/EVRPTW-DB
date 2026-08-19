@@ -1,5 +1,10 @@
 # CLE to EVRPTW instance generation contract
 
+> **D-5 revision (2026-08-19):** the M2/M3 Q90 text below is retained as the
+> historical v1 contract. It is superseded by
+> [`D5_CONSTRUCT_VALIDITY_REVISION_V2_ZH.md`](stage2_repair/D5_CONSTRUCT_VALIDITY_REVISION_V2_ZH.md):
+> Amazon operational transfer is hard-gated; M2/M3/M5 are report-only spatial diagnostics.
+
 This document is the authoritative scientific description of Stage 2. It
 explains exactly how a portable City Logistics Environment (CLE) becomes a
 classical, static EVRPTW instance and which outputs are retained for audit.

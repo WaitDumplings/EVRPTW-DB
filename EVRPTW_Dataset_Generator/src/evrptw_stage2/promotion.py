@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-PILOT_REPORT_SCHEMA = "cle_evrptw_stage2_pilot_acceptance_report_v2"
+PILOT_REPORT_SCHEMA = "cle_evrptw_stage2_pilot_acceptance_report_v3"
 PROMOTION_SCHEMA = "evrptw_profile_acceptance_promotion_v1"
 
 
@@ -35,7 +35,9 @@ def build_pilot_acceptance_report(
     *,
     run_report_path: str | Path,
     phase1_report_path: str | Path,
-    q90_report_path: str | Path,
+    operational_transfer_report_path: str | Path,
+    spatial_diagnostic_path: str | Path,
+    historical_q90_report_path: str | Path,
     connectivity_audit_path: str | Path,
     connectivity_acceptance_path: str | Path,
     release_preflight_path: str | Path,
@@ -48,7 +50,9 @@ def build_pilot_acceptance_report(
     paths = {
         "stage2_run_report": Path(run_report_path),
         "phase1_report": Path(phase1_report_path),
-        "q90_report": Path(q90_report_path),
+        "operational_transfer": Path(operational_transfer_report_path),
+        "spatial_diagnostic": Path(spatial_diagnostic_path),
+        "historical_q90_v1": Path(historical_q90_report_path),
         "connectivity_audit": Path(connectivity_audit_path),
         "connectivity_acceptance": Path(connectivity_acceptance_path),
         "release_preflight": Path(release_preflight_path),
@@ -57,7 +61,9 @@ def build_pilot_acceptance_report(
     }
     run = _read(paths["stage2_run_report"])
     phase1 = _read(paths["phase1_report"])
-    q90 = _read(paths["q90_report"])
+    operational = _read(paths["operational_transfer"])
+    spatial = _read(paths["spatial_diagnostic"])
+    historical_q90 = _read(paths["historical_q90_v1"])
     connectivity = _read(paths["connectivity_audit"])
     connectivity_acceptance = _read(paths["connectivity_acceptance"])
     preflight = _read(paths["release_preflight"])
@@ -69,7 +75,9 @@ def build_pilot_acceptance_report(
         run.get("generation_code_commit") or _code_commit(run)
     )
     reconciliation_commit = str(run.get("reconciliation_code_commit") or "")
-    q90_commit = _code_commit(q90)
+    operational_commit = _code_commit(operational)
+    spatial_commit = _code_commit(spatial)
+    historical_q90_commit = _code_commit(historical_q90)
     sensitivity_commit = _code_commit(sensitivity)
     connectivity_commit = _code_commit(connectivity)
     connectivity_acceptance_commit = _code_commit(connectivity_acceptance)
@@ -81,7 +89,9 @@ def build_pilot_acceptance_report(
     evidence_commits = {
         "generation": generation_commit,
         "reconciliation": reconciliation_commit,
-        "q90": q90_commit,
+        "operational_transfer_v2": operational_commit,
+        "spatial_diagnostic_v1": spatial_commit,
+        "historical_q90_v1": historical_q90_commit,
         "charging_sensitivity": sensitivity_commit,
         "connectivity_audit": connectivity_commit,
         "connectivity_acceptance": connectivity_acceptance_commit,
@@ -133,7 +143,28 @@ def build_pilot_acceptance_report(
         "phase1_all_hard_gates_passed": (
             phase1.get("all_hard_gates_passed") is True
         ),
-        "q90_release_calibrated": q90.get("release_calibrated") is True,
+        "amazon_operational_transfer_v2_passed": (
+            operational.get("schema") == "amazon_operational_transfer_acceptance_v2"
+            and operational.get("passed") is True
+            and operational.get("family_artifacts_modified") is False
+            and operational.get("hash_validation_performed") is False
+        ),
+        "spatial_diagnostic_v1_complete_report_only": (
+            spatial.get("schema") == "cross_city_spatial_diagnostic_v1"
+            and spatial.get("status") == "complete_report_only"
+            and spatial.get("hard_gate") is False
+            and spatial.get("contributes_to_operational_acceptance") is False
+        ),
+        "historical_q90_v1_failure_preserved": (
+            historical_q90.get("schema") == "evrptw_station_block_q90_gate_v1"
+            and historical_q90.get("release_calibrated") is False
+            and spatial.get("construct_validity_review", {}).get(
+                "triggered_by_q90_v1_failure"
+            ) is True
+            and spatial.get("construct_validity_review", {}).get(
+                "threshold_changed"
+            ) is False
+        ),
         "connectivity_c1_structural_contract_passed": (
             connectivity.get("schema")
             == "cle_evrptw_phase_c1_terminal_connectivity_audit_v3"
@@ -170,10 +201,15 @@ def build_pilot_acceptance_report(
             and _valid_commit(reconciliation_commit)
             and generation_commit == _code_commit(run)
         ),
-        "post_evaluation_uses_reconciliation_commit": (
+        "historical_post_evaluation_uses_reconciliation_commit": (
             _valid_commit(reconciliation_commit)
-            and q90_commit == reconciliation_commit
+            and historical_q90_commit == reconciliation_commit
             and sensitivity_commit == reconciliation_commit
+        ),
+        "d5_v2_evidence_uses_acceptance_revision": (
+            _valid_commit(operational_commit)
+            and operational_commit == spatial_commit
+            and operational_commit == acceptance_commit
         ),
         "reviewed_preflight_lineage_complete": (
             _valid_commit(connectivity_commit)

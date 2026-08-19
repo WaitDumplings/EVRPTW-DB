@@ -134,8 +134,25 @@ class Stage2Config:
         if source.get("primary_source_mode") != ["SINGLE_STRUCTURE_DAY", "SINGLE_ORDER_DAY"]:
             errors.append("V2 primary source mode must be single-day for structure and orders")
         acceptance = self.raw.get("acceptance", {})
-        if acceptance.get("realism_gate") != "station_block_q90_m2_m3_v1":
-            errors.append("V2 must freeze the station-block Q90 M2/M3 gate")
+        if (
+            acceptance.get("operational_transfer_gate")
+            != "amazon_operational_transfer_acceptance_v2"
+        ):
+            errors.append("V2 must freeze Amazon operational transfer acceptance v2")
+        if acceptance.get("spatial_diagnostic") != "cross_city_spatial_diagnostic_v1":
+            errors.append("V2 must retain M2/M3/M5 as the v1 spatial diagnostic")
+        if (
+            acceptance.get("historical_gate_retained")
+            != "station_block_q90_m2_m3_v1_fail_evidence"
+        ):
+            errors.append("V2 must retain the historical Q90 v1 FAIL evidence")
+        if acceptance.get("m2_m3_m5_hard_gate") is not False:
+            errors.append("M2/M3/M5 must not be Stage-2 hard gates")
+        if (
+            acceptance.get("amazon_controls") != "operational_templates"
+            or acceptance.get("cle_controls") != "target_city_geography"
+        ):
+            errors.append("V2 must freeze the Amazon/CLE evidence boundary")
         output = self.raw.get("output", {})
         if output.get("calibration_root") != "Calibration_v2" or output.get("instances_root") != "Instances_v2":
             errors.append("V2 outputs must use Calibration_v2 and Instances_v2")

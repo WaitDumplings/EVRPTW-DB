@@ -585,9 +585,11 @@ sources into `Calibration_v2/` and `Instances_v2/` only.
 
 The authorized calibration pilot covers the ten training cities and only the
 train/validation tracks. Test2, Jacksonville/Test3, Cus2000, and the complete
-7,500-family corpus are blocked until the M1-M5/Q90 pilot evidence has been
-reviewed and explicitly approved. The legacy performance report remains useful
-only as historical engineering context; it is not V2.1 acceptance evidence.
+7,500-family corpus remain blocked pending explicit review. D-5 now uses
+`amazon_operational_transfer_acceptance_v2` for transferred operational variables;
+M2/M3/M5 are retained in `cross_city_spatial_diagnostic_v1` as report-only evidence.
+The original Q90 v1 0/24 FAIL is permanently retained. See
+`docs/stage2_repair/D5_CONSTRUCT_VALIDITY_REVISION_V2_ZH.md`.
 
 ## Generation modes
 

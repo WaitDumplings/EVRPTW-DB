@@ -70,10 +70,15 @@
     "store_runtime_masks": false
   },
   "acceptance": {
-    "realism_gate": "station_block_q90_m2_m3_v1",
+    "operational_transfer_gate": "amazon_operational_transfer_acceptance_v2",
+    "spatial_diagnostic": "cross_city_spatial_diagnostic_v1",
+    "historical_gate_retained": "station_block_q90_m2_m3_v1_fail_evidence",
+    "amazon_controls": "operational_templates",
+    "cle_controls": "target_city_geography",
     "primary_scales": ["cus100", "cus500", "cus1000"],
     "compatibility_scale": "cus50",
     "report_only_scales": ["cus2000"],
+    "m2_m3_m5_hard_gate": false,
     "pair_subsampling_allowed": false,
     "max_attempts_per_family": 4
   },

@@ -1,5 +1,9 @@
 # CLE 到 EVRPTW Instance 的生成合同（中文审阅版）
 
+> **D-5 修订（2026-08-19）：**下文 M2/M3 Q90 规则作为历史 v1 合同保留，现由
+> [`D5_CONSTRUCT_VALIDITY_REVISION_V2_ZH.md`](stage2_repair/D5_CONSTRUCT_VALIDITY_REVISION_V2_ZH.md)
+> 取代：Amazon 只 hard-gate 运营迁移；M2/M3/M5 降为 report-only 空间诊断。
+
 本文对应英文权威规范
 [STAGE2_INSTANCE_MODEL.md](STAGE2_INSTANCE_MODEL.md)。代码字段、公开引用和
 最终 schema 以英文版为准。本版用于逐步审阅数据逻辑，已移除旧版的 40--100 km
