@@ -3,8 +3,10 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).parents[1]
@@ -25,6 +27,37 @@ C3_SPEC = importlib.util.spec_from_file_location(
 assert C3_SPEC is not None and C3_SPEC.loader is not None
 C3 = importlib.util.module_from_spec(C3_SPEC)
 C3_SPEC.loader.exec_module(C3)
+
+
+def test_c3_c2_binding_requires_exact_c0_evidence_for_inheritance(
+    tmp_path: Path,
+) -> None:
+    c2_path = tmp_path / "c2.json"
+    c2_path.write_text(
+        json.dumps(
+            {
+                "schema": "cle_evrptw_phase_c2_release_preflight_v1",
+                "passed": True,
+                "code_provenance": {"code_commit": "a" * 40},
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        c2_report=c2_path,
+        c0_comparison=None,
+        plan_root=tmp_path / "generation_plan",
+    )
+    with pytest.raises(ValueError, match="--c0-comparison"):
+        C3._validate_c2_evidence(
+            args,
+            {"code_commit": "b" * 40},
+        )
+    binding = C3._validate_c2_evidence(
+        args,
+        {"code_commit": "a" * 40},
+    )
+    assert binding["mode"] == "same_commit"
 
 
 def test_verifier_exception_writes_terminal_failed_state(tmp_path: Path) -> None:

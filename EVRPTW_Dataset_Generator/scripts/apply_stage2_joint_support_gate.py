@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import tempfile
 import time
 from collections import Counter
@@ -88,6 +89,79 @@ def _reason(error: Exception) -> tuple[str, str]:
     return code, str(error)
 
 
+def _validate_c2_evidence(
+    args: argparse.Namespace,
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    c2 = json.loads(args.c2_report.read_text(encoding="utf-8"))
+    if c2.get("schema") != "cle_evrptw_phase_c2_release_preflight_v1":
+        raise ValueError("C3 requires the frozen C2 release-preflight schema")
+    if not c2.get("passed"):
+        raise ValueError("C3 is forbidden because C2 did not pass")
+    baseline_commit = str(c2.get("code_provenance", {}).get("code_commit", ""))
+    current_commit = str(provenance["code_commit"])
+    if baseline_commit == current_commit:
+        return {
+            "mode": "same_commit",
+            "c2_commit": baseline_commit,
+            "current_commit": current_commit,
+        }
+    if args.c0_comparison is None:
+        raise ValueError(
+            "Inherited C2 evidence requires --c0-comparison bound to this fresh root"
+        )
+    comparison = json.loads(args.c0_comparison.read_text(encoding="utf-8"))
+    required_counts = {
+        "family_count_140",
+        "ten_city_split_membership",
+        "twenty_city_track_slots_are_5_to_2",
+        "view_count_2590",
+    }
+    if (
+        comparison.get("schema")
+        != "cle_evrptw_stage2_c0_exact_comparison_v1"
+        or not comparison.get("passed")
+        or not required_counts.issubset(comparison.get("fixed_counts", {}))
+        or not all(
+            bool(comparison["fixed_counts"][key]) for key in required_counts
+        )
+    ):
+        raise ValueError("C3 inherited C2 requires an exact passing C0 comparison")
+    candidate_root = Path(str(comparison["candidate_root"]))
+    if not candidate_root.is_absolute():
+        candidate_root = (Path.cwd() / candidate_root).resolve()
+    if candidate_root != args.plan_root.parent.resolve():
+        raise ValueError(
+            "C0 comparison candidate root does not match the current C3 plan root"
+        )
+    ancestry = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(Path(__file__).resolve().parents[2]),
+            "merge-base",
+            "--is-ancestor",
+            baseline_commit,
+            current_commit,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if ancestry.returncode:
+        raise ValueError("Inherited C2 commit is not an ancestor of current commit")
+    return {
+        "mode": "reviewer_authorized_frozen_c2_inheritance",
+        "basis": (
+            "CLE_v2, C0 customer split and R2-v2 certificates are frozen; "
+            "fresh C0 plan/split/view comparison is exact"
+        ),
+        "c2_commit": baseline_commit,
+        "current_commit": current_commit,
+        "c0_comparison": str(args.c0_comparison.resolve()),
+    }
+
+
 def _apply_updates(
     plan_root: Path,
     parts: list[tuple[Path, pd.DataFrame]],
@@ -135,13 +209,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         require_clean=True,
         require_branch="stage2-repair-candidate",
     )
-    c2 = json.loads(args.c2_report.read_text(encoding="utf-8"))
-    if c2.get("schema") != "cle_evrptw_phase_c2_release_preflight_v1":
-        raise ValueError("C3 requires the frozen C2 release-preflight schema")
-    if not c2.get("passed"):
-        raise ValueError("C3 is forbidden because C2 did not pass")
-    if c2.get("code_provenance", {}).get("code_commit") != provenance["code_commit"]:
-        raise ValueError("C3 requires a C2 report bound to the same clean commit")
+    c2_evidence_binding = _validate_c2_evidence(args, provenance)
 
     parts = _load_family_parts(args.plan_root)
     families = pd.concat([frame for _, frame in parts], ignore_index=True)
@@ -298,6 +366,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report = {
                 "schema": C3_SCHEMA,
                 "code_provenance": provenance,
+                "c2_evidence_binding": c2_evidence_binding,
                 "status": "failed",
                 "passed": False,
                 "failure_family_id": family_id,
@@ -335,6 +404,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     report = {
         "schema": C3_SCHEMA,
         "code_provenance": provenance,
+        "c2_evidence_binding": c2_evidence_binding,
         "status": "applying_plan" if not args.report_only else "passed_report_only",
         "passed": None if not args.report_only else True,
         "full_plan": full_plan,
@@ -377,6 +447,7 @@ def main() -> None:
     parser.add_argument("--amazon-cohort-split", type=Path, required=True)
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--c2-report", type=Path, required=True)
+    parser.add_argument("--c0-comparison", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--mode",

@@ -118,8 +118,8 @@ temporary file、fsync、os.replace。verifier 或其他未捕获异常必须保
     → full deterministic tests
     → fresh root C0 reconstruction
     → C0 equality/140-family/2,590-view/5:2 assertions
-    → reuse approved C1/R2-v2 evidence as permitted
-    → rerun C2 bound to the new clean commit
+    → reuse approved C1/R2-v2/C2 evidence as permitted
+    → bind inherited C2 to an exact fresh-root C0 comparison
     → C3 targeted three-family plan gate
     → confirm each original rank-0 pair is rejected by C3
     → confirm replacement pair selected for the same three slots
@@ -148,6 +148,7 @@ TERMINATION_GRACE_S=60、STOP_POLICY=abort_all_inflight_after_grace。
       --amazon-cohort-split <AMAZON_COHORT_SPLIT_JSON> \
       --profile configs/us_reference_instance_profile_v2.json \
       --c2-report <PILOT_ROOT>/reports/stage2_repair/c2_release_preflight.json \
+      --c0-comparison <PILOT_ROOT>/reports/stage2_repair/c0_exact_comparison.json \
       --output <PILOT_ROOT>/reports/stage2_repair/c3_joint_support.json \
       --mode non_release_pilot
 
