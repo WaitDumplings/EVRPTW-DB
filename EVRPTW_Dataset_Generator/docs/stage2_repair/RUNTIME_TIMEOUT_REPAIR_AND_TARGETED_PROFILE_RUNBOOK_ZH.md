@@ -298,3 +298,20 @@ differential tests 通过，当前完整 suite 为 207/207 passed。下一步只
 只有 Chicago < 7,200 s、Dallas < 7,200 s、LA smoke passed、verifier passed、无 orphan、
 代码再次 clean commit 并 push 后，才可以把新 140-family pilot 提交 reviewer。新 pilot 必须
 使用全新 root、`WORKERS=12`、`FAMILIES_PER_WORKER_TASK=1`，并从 0 开始。
+
+## 10. 三个 target 的最终状态
+
+候选 commit `a52e8fffd00e0c9c96e0fdbe205e6a6576346fbd` 已 push；完整 suite 为
+207/207 passed。三个 fresh-root target 已完成：Chicago 399.011 秒、Dallas 806.776 秒、
+LA 538.989 秒，existing verifier 全部 passed，rejected/timeout/unresolved 均为 0，三个
+runtime contract 的 remaining process group count 均为 0。LA 最大 connectivity-eligible
+charger roster 为 1,993，2,994-terminal exact batched Dijkstra 用时 324.164 秒，stop rule
+为 GREEN 且 `pilot_allowed=true`。
+
+完整证据、root、spatial/assignment 细分耗时与下一步 140-family pilot 申请见：
+
+```text
+docs/stage2_repair/TARGETED_GATE_RESULTS_AND_PILOT_APPROVAL_REQUEST_ZH.md
+```
+
+在 reviewer 明确批准前仍不启动 140-family pilot。
