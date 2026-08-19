@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -108,6 +109,7 @@ def run_supervised_materialization(
     python_executable: str | None = None,
     working_directory: Path | None = None,
     poll_interval_s: float = 1.0,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run exact family attempts under the killable runtime contract."""
 
@@ -223,6 +225,7 @@ def run_supervised_materialization(
         termination_grace_s=termination_grace_s,
         runner_exit_slack_s=runner_exit_slack_s,
         poll_interval_s=poll_interval_s,
+        progress_callback=progress_callback,
     )
     materialized: list[dict[str, Any]] = []
     rejected_attempts: list[dict[str, Any]] = []

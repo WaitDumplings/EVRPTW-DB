@@ -15,6 +15,7 @@ import tempfile
 import time
 from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from evrptw_stage2.planning import (
     write_generation_plan,
 )
 from evrptw_stage2.profile import load_reference_profile
+from evrptw_stage2.progress import Stage2ProgressWriter, append_json_event
 from evrptw_stage2.provenance import resolve_git_provenance
 from evrptw_stage2.reader import load_portable_cle
 from evrptw_stage2.release_discipline import (
@@ -42,6 +44,8 @@ from evrptw_stage2.subprocess_parallel import run_supervised_materialization
 
 STAGES = ("preflight", "splits", "plan", "materialize", "verify", "metrics")
 _ACTIVE_RUN_REPORT: dict[str, Any] | None = None
+_OBSERVABILITY_LEDGER_PATH: Path | None = None
+_TERMINAL_REPORT_COMMITTED = False
 _ACTIVE_RUN_REPORT_PATH: Path | None = None
 
 
@@ -138,6 +142,11 @@ def make_parser() -> argparse.ArgumentParser:
         default=0,
         help="Zero-based shard assigned to this runner.",
     )
+    parser.add_argument(
+        "--debug-print-full-report",
+        action="store_true",
+        help="Explicitly print the complete report JSON instead of a concise summary.",
+    )
     return parser
 
 
@@ -159,6 +168,60 @@ def _write_json(path: Path, payload: Any) -> None:
         except FileNotFoundError:
             pass
         raise
+
+def _record_observability_warning(
+    error: BaseException,
+    *,
+    phase: str,
+) -> None:
+    if _OBSERVABILITY_LEDGER_PATH is None:
+        return
+    try:
+        append_json_event(
+            _OBSERVABILITY_LEDGER_PATH,
+            {
+                "schema": "cle_evrptw_stage2_observability_warning_v1",
+                "warning_type": type(error).__name__,
+                "message": str(error),
+                "phase": phase,
+                "terminal_report_committed": bool(_TERMINAL_REPORT_COMMITTED),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except OSError:
+        pass
+
+
+def _emit_run_report(
+    report: dict[str, Any],
+    report_path: Path,
+    *,
+    debug_full_report: bool = False,
+    stream: Any | None = None,
+) -> bool:
+    """Best-effort stdout output that can never change the persisted outcome."""
+
+    destination = stream if stream is not None else sys.stdout
+    if debug_full_report:
+        message = json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False)
+    else:
+        message = "\n".join(
+            (
+                f"Stage-2 status: {report.get('status')}",
+                f"planned={len(report.get('planned_family_ids') or [])} "
+                f"materialized={len(report.get('materialized_family_ids') or [])} "
+                f"verified={len(report.get('verified_family_ids') or [])}",
+                f"report={report_path}",
+            )
+        )
+    try:
+        destination.write(message + "\n")
+        destination.flush()
+    except BrokenPipeError as error:
+        _record_observability_warning(error, phase="stdout_summary")
+        return False
+    return True
+
 
 
 def _mark_run_report_failed(
@@ -213,6 +276,11 @@ def _uncaught_run_report_hook(
     error: BaseException,
     traceback: Any,
 ) -> None:
+    if _TERMINAL_REPORT_COMMITTED:
+        _record_observability_warning(error, phase="uncaught_after_terminal_commit")
+        if not isinstance(error, BrokenPipeError):
+            sys.__excepthook__(error_type, error, traceback)
+        return
     if _ACTIVE_RUN_REPORT is not None and _ACTIVE_RUN_REPORT_PATH is not None:
         _mark_run_report_failed(_ACTIVE_RUN_REPORT, error)
         _write_json(_ACTIVE_RUN_REPORT_PATH, _ACTIVE_RUN_REPORT)
@@ -437,6 +505,9 @@ def _run_bounded_process_tasks(
 
 def main() -> None:
     global _ACTIVE_RUN_REPORT, _ACTIVE_RUN_REPORT_PATH
+    global _OBSERVABILITY_LEDGER_PATH, _TERMINAL_REPORT_COMMITTED
+
+    _TERMINAL_REPORT_COMMITTED = False
 
     run_started = time.perf_counter()
     args = make_parser().parse_args()
@@ -523,6 +594,9 @@ def main() -> None:
             "la_smoke, targeted_profile, or pilot"
         )
     args.output_root.mkdir(parents=True, exist_ok=True)
+    _OBSERVABILITY_LEDGER_PATH = (
+        args.output_root / "stage2_observability_warnings.jsonl"
+    )
     run_report: dict[str, Any] = {
         "schema": "cle_evrptw_stage2_run_report_v2",
         "status": "planned",
@@ -623,7 +697,11 @@ def main() -> None:
         run_report["passed"] = None
         run_report["last_completed_stage"] = "c0_preflight_and_splits"
         _write_json(_run_report_path(args), run_report)
-        print(json.dumps(run_report, indent=2, sort_keys=True, ensure_ascii=False))
+        _emit_run_report(
+            run_report,
+            _run_report_path(args),
+            debug_full_report=bool(args.debug_print_full_report),
+        )
         return
     families, views, registry = _load_plan(plan_root)
     plan_provenance = registry.get("code_provenance", {})
@@ -692,7 +770,11 @@ def main() -> None:
         run_report["passed"] = None
         run_report["last_completed_stage"] = "c0_plan"
         _write_json(_run_report_path(args), run_report)
-        print(json.dumps(run_report, indent=2, sort_keys=True, ensure_ascii=False))
+        _emit_run_report(
+            run_report,
+            _run_report_path(args),
+            debug_full_report=bool(args.debug_print_full_report),
+        )
         return
     generation_stopped = False
     pilot_supervisor: PilotStopController | None = None
@@ -737,6 +819,10 @@ def main() -> None:
             planned_family_count=len(selected_families),
             started_monotonic=run_started,
         )
+    progress_writer = Stage2ProgressWriter(
+        args.output_root,
+        list(map(str, selected_families["family_id"].tolist())),
+    )
     supervised_materialization = "materialize" in args.stages
     if supervised_materialization:
         run_report["status"] = "materializing"
@@ -755,6 +841,7 @@ def main() -> None:
             pilot_controller=pilot_supervisor,
             python_executable=sys.executable,
             working_directory=Path(__file__).resolve().parents[1],
+            progress_callback=progress_writer.apply_supervisor_event,
         )
         run_report["runtime_contract"] = supervised["runtime_contract"]
         run_report["runtime_run_id"] = supervised["run_id"]
@@ -831,14 +918,14 @@ def main() -> None:
             if family_dir.is_dir():
                 existing.append((family_id, family_dir))
             else:
-                run_report["verified"].append(
-                    {
-                        "family_id": family_id,
-                        "passed": False,
-                        "errors": ["materialized family directory is missing"],
-                        "warnings": [],
-                    }
-                )
+                verification = {
+                    "family_id": family_id,
+                    "passed": False,
+                    "errors": ["materialized family directory is missing"],
+                    "warnings": [],
+                }
+                run_report["verified"].append(verification)
+                progress_writer.record_verification(family_id, passed=False)
         context = mp.get_context("spawn")
         with ProcessPoolExecutor(
             max_workers=args.workers,
@@ -855,6 +942,9 @@ def main() -> None:
                 family_id = family_id_by_path[family_dir]
                 verification.setdefault("family_id", family_id)
                 run_report["verified"].append(verification)
+                progress_writer.record_verification(
+                    family_id, passed=bool(verification["passed"])
+                )
         run_report["verified"].sort(key=lambda item: str(item["family_id"]))
         failed = [item["family_id"] for item in run_report["verified"] if not item["passed"]]
         if failed:
@@ -864,6 +954,7 @@ def main() -> None:
                 ValueError(f"Materialized families failed verification: {failed}"),
                 last_completed_stage="verification",
             )
+            progress_writer.finalize(passed=False)
             _write_json(_run_report_path(args), run_report)
             raise ValueError(f"Materialized families failed verification: {failed}")
 
@@ -872,19 +963,22 @@ def main() -> None:
             family_id = str(family_row["family_id"])
             family_dir = args.output_root / "materialized" / "families" / family_id
             if not family_dir.is_dir():
-                run_report["verified"].append(
-                    {
-                        "family_id": family_id,
-                        "passed": False,
-                        "errors": ["materialized family directory is missing"],
-                        "warnings": [],
-                    }
-                )
+                verification = {
+                    "family_id": family_id,
+                    "passed": False,
+                    "errors": ["materialized family directory is missing"],
+                    "warnings": [],
+                }
+                run_report["verified"].append(verification)
+                progress_writer.record_verification(family_id, passed=False)
                 continue
             verification_started = time.perf_counter()
             verification = verify_materialized_family(family_dir)
             verification["verification_seconds"] = time.perf_counter() - verification_started
             run_report["verified"].append(verification)
+            progress_writer.record_verification(
+                family_id, passed=bool(verification["passed"])
+            )
             if not verification["passed"]:
                 run_report["last_completed_stage"] = "verification"
                 _mark_run_report_failed(
@@ -894,11 +988,14 @@ def main() -> None:
                     ),
                     last_completed_stage="verification",
                 )
+                progress_writer.finalize(passed=False)
                 _write_json(_run_report_path(args), run_report)
                 raise ValueError(f"Materialized family {family_id} failed verification")
 
-    run_report["passed"] = not generation_stopped and not run_report["unresolved_family_ids"] and all(
-        bool(item["passed"]) for item in run_report["verified"]
+    run_report["passed"] = (
+        not generation_stopped
+        and not run_report["unresolved_family_ids"]
+        and all(bool(item["passed"]) for item in run_report["verified"])
     )
     run_report["status"] = "passed" if run_report["passed"] else "failed"
     run_report["verified_family_ids"] = sorted(
@@ -908,6 +1005,9 @@ def main() -> None:
             if item.get("family_id") is not None and item.get("passed") is True
         }
     )
+    run_report["planned_count"] = len(run_report["planned_family_ids"])
+    run_report["materialized_count"] = len(run_report["materialized_family_ids"])
+    run_report["verified_count"] = len(run_report["verified_family_ids"])
     run_report["last_completed_stage"] = (
         "verification" if "verify" in args.stages else "materialization"
     )
@@ -957,10 +1057,21 @@ def main() -> None:
         ],
         "performance": run_report["performance"],
     }
-    _write_json(_run_report_path(args), run_report)
+    report_path = _run_report_path(args)
+    run_report["terminal_report_committed"] = True
+    run_report["terminal_report_committed_at"] = datetime.now(
+        timezone.utc
+    ).isoformat()
+    progress_writer.finalize(passed=bool(run_report["passed"]))
     if int(args.shard_count) == 1:
         _write_json(args.output_root / "run_manifest.json", run_manifest)
-    print(json.dumps(run_report, indent=2, sort_keys=True, ensure_ascii=False))
+    _write_json(report_path, run_report)
+    _TERMINAL_REPORT_COMMITTED = True
+    _emit_run_report(
+        run_report,
+        report_path,
+        debug_full_report=bool(args.debug_print_full_report),
+    )
     if not run_report["passed"]:
         raise SystemExit(2)
 

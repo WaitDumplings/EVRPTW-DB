@@ -274,6 +274,7 @@ def supervise_family_processes(
     runner_exit_slack_s: float = RUNNER_EXIT_SLACK_S,
     poll_interval_s: float = 1.0,
     install_signal_handlers: bool = True,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run family attempts and abort the complete process tree on a hard stop."""
 
@@ -382,6 +383,17 @@ def supervise_family_processes(
             stderr_handle=stderr_handle,
         )
 
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event_type": "family_started",
+                    "family_id": spec.family_id,
+                    "status": "active",
+                    "active_family_ids": sorted(active),
+                    "queued_family_ids": [item.family_id for item in queued],
+                }
+            )
+
     try:
         while queued or active:
             now = time.monotonic()
@@ -454,6 +466,19 @@ def supervise_family_processes(
                         trigger_hard_stop(decision.hard_stop_reason, now)
                     elif decision.follow_up is not None:
                         queued.appendleft(decision.follow_up)
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "event_type": "family_terminal",
+                                "family_id": family_id,
+                                "status": decision.status,
+                                "result": dict(decision.result or {}),
+                                "active_family_ids": sorted(active),
+                                "queued_family_ids": [
+                                    spec.family_id for spec in queued
+                                ],
+                            }
+                        )
                     continue
 
                 if item.termination_reason is None and now >= item.deadline_monotonic:
@@ -522,6 +547,19 @@ def supervise_family_processes(
                     }
                 )
                 del active[family_id]
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "event_type": "family_terminal",
+                            "family_id": family_id,
+                            "status": ledger["outcome"],
+                            "result": ledger,
+                            "active_family_ids": sorted(active),
+                            "queued_family_ids": [
+                                spec.family_id for spec in queued
+                            ],
+                        }
+                    )
 
             if queued or active:
                 time.sleep(float(poll_interval_s))
@@ -544,6 +582,18 @@ def supervise_family_processes(
             in {"timed_out", "aborted", "unresolved_prior_timeout_not_retried"}
         }
     )
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event_type": "supervisor_finished",
+                "family_id": "",
+                "status": (
+                    "failed" if hard_stop_reason is not None else "completed"
+                ),
+                "active_family_ids": [],
+                "queued_family_ids": [],
+            }
+        )
     return {
         "schema": "cle_evrptw_family_process_supervision_v2",
         "runtime_contract_id": RUNTIME_CONTRACT_ID,

@@ -467,6 +467,17 @@ PYTHONPATH=src python scripts/aggregate_phase1_metrics.py \
   --instance-root ../EVRPTW_Dataset/Instances_v2/us_11city
 ```
 
+### Live progress and report reconciliation
+
+Long Stage-2 runs atomically update `stage2_progress.json` after every family
+transition and append compact events to `stage2_progress_events.jsonl`. The
+canonical run report is written before the final best-effort stdout summary;
+full JSON is printed only with `--debug-print-full-report`.
+
+If generation and full verification completed but stdout closed afterward,
+do not regenerate or edit families. Follow the versioned, read-only procedure
+in [REPORT_CONTROL_RECONCILIATION_V1.md](docs/stage2_repair/REPORT_CONTROL_RECONCILIATION_V1.md).
+
 ### Slim instance distribution and reconstruction
 
 The dense parent matrices are a reproducible local cache. To distribute the
