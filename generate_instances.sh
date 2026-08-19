@@ -108,7 +108,7 @@ if [[ "$INSTANCE_METHOD" == "stage2" && "$INSTANCE_MODE" == "non_release_pilot" 
   fi
 fi
 
-if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
+run_stage2_builder() {
   "$PYTHON_BIN" scripts/build_stage2_instances.py \
     --config configs/cle_evrptw_stage2_v2.json \
     --profile "$REFERENCE_PROFILE" \
@@ -126,7 +126,27 @@ if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
     --termination-grace-s "$TERMINATION_GRACE_S" \
     --runner-exit-slack-s "$RUNNER_EXIT_SLACK_S" \
     --stop-policy "$STOP_POLICY" \
-    "${extra_args[@]}"
+    "$@"
+}
+
+if [[ "$INSTANCE_METHOD" == "stage2" && "$INSTANCE_MODE" == "official" ]]; then
+  run_stage2_builder "${extra_args[@]}" --stages preflight splits plan
+  "$PYTHON_BIN" scripts/apply_stage2_joint_support_gate_parallel.py \
+    --cle-root "$CLE_ROOT" \
+    --plan-root "$INSTANCE_OUTPUT_ROOT/generation_plan" \
+    --customer-split-root "$INSTANCE_OUTPUT_ROOT/customer_splits" \
+    --amazon-artifact-root "$AMAZON_ARTIFACT_ROOT" \
+    --amazon-cohort-split configs/amazon_cohort_split_v1.json \
+    --profile "$REFERENCE_PROFILE" \
+    --output "$INSTANCE_OUTPUT_ROOT/reports/stage2_repair/c3_joint_support_full.json" \
+    --progress-output "$INSTANCE_OUTPUT_ROOT/stage2_c3_progress.json" \
+    --workers "${C3_WORKERS:-$WORKERS}" \
+    --family-wall-timeout-s "$FAMILY_WALL_TIMEOUT_S" \
+    --termination-grace-s "$TERMINATION_GRACE_S" \
+    --official-cle-contract "$OFFICIAL_CLE_CONTRACT"
+  run_stage2_builder "${extra_args[@]}" --stages materialize verify metrics
+elif [[ "$INSTANCE_METHOD" == "stage2" ]]; then
+  run_stage2_builder "${extra_args[@]}"
 else
   INSTANCE_ROOT="$INSTANCE_OUTPUT_ROOT" \
   CLE_ROOT="$CLE_ROOT" \

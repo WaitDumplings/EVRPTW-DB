@@ -783,11 +783,14 @@ def main() -> None:
                 + repr(sorted(incomplete_c3["family_id"].astype(str).tolist()))
             )
         c3_registry = registry.get("joint_spatial_support", {})
-        if args.run_discipline == "pilot" and c3_registry.get("status") != (
-            "passed_full_plan"
+        full_c3_required = args.run_discipline == "pilot" or args.mode == "official"
+        if full_c3_required and (
+            c3_registry.get("status") != "passed_full_plan"
+            or int(c3_registry.get("covered_family_count", -1)) != len(families)
         ):
             raise ValueError(
-                "The 140-family pilot requires a passed_full_plan C3 registry"
+                "Pilot and official generation require a complete passed_full_plan "
+                "C3 registry covering the unsharded family plan"
             )
     if not ({"materialize", "verify", "metrics"} & set(args.stages)):
         run_report["status"] = "planned"

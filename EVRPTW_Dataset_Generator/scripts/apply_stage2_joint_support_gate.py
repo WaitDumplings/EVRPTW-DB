@@ -93,6 +93,38 @@ def _validate_c2_evidence(
     args: argparse.Namespace,
     provenance: dict[str, Any],
 ) -> dict[str, Any]:
+    if getattr(args, "mode", None) == "official":
+        profile = load_reference_profile(args.profile, official=True)
+        promotion = dict(profile.get("acceptance_promotion") or {})
+        if (
+            promotion.get("schema")
+            != "evrptw_profile_acceptance_promotion_v2_no_hash"
+            or promotion.get("construct_acceptance_schema")
+            != "stage2_acceptance_v3_construct_valid"
+            or promotion.get("ev_activity_audit_schema")
+            != "stage2_primary_view_ev_activity_audit_v1"
+            or promotion.get("hash_validation_performed") is not False
+            or not str(promotion.get("advisor_signoff_id", ""))
+        ):
+            raise ValueError(
+                "Official C3 requires a no-hash profile promoted from acceptance v3 "
+                "and the primary-view EV activity gate"
+            )
+        return {
+            "mode": "profile_bound_stage2_acceptance_v3",
+            "construct_acceptance_schema": promotion[
+                "construct_acceptance_schema"
+            ],
+            "construct_acceptance_code_commit": promotion.get(
+                "construct_acceptance_code_commit"
+            ),
+            "ev_activity_audit_schema": promotion["ev_activity_audit_schema"],
+            "ev_activity_code_commit": promotion.get("ev_activity_code_commit"),
+            "advisor_signoff_id": promotion["advisor_signoff_id"],
+            "hash_validation_performed": False,
+        }
+    if args.c2_report is None:
+        raise ValueError("Non-official C3 requires --c2-report")
     c2 = json.loads(args.c2_report.read_text(encoding="utf-8"))
     if c2.get("schema") != "cle_evrptw_phase_c2_release_preflight_v1":
         raise ValueError("C3 requires the frozen C2 release-preflight schema")
@@ -222,6 +254,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if missing:
             raise ValueError(f"Requested C3 families are absent from plan: {missing}")
         families = families.loc[families["family_id"].astype(str).isin(requested)]
+    requested_cities = set(map(str, args.cities or []))
+    if requested_cities:
+        missing_cities = sorted(
+            requested_cities - set(families["city_slug"].astype(str))
+        )
+        if missing_cities:
+            raise ValueError(f"Requested C3 cities are absent from plan: {missing_cities}")
+        families = families.loc[
+            families["city_slug"].astype(str).isin(requested_cities)
+        ]
     full_plan = len(families) == sum(len(frame) for _, frame in parts)
     if not full_plan and not args.targeted_gate:
         raise ValueError("Partial C3 requires --targeted-gate")
@@ -240,7 +282,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         family_id = str(family_row["family_id"])
         city = str(family_row["city_slug"])
         family_started = time.perf_counter()
-        cle = load_portable_cle(args.cle_root, city, mode=args.mode)
+        cle = load_portable_cle(
+            args.cle_root,
+            city,
+            mode=args.mode,
+            official_cle_contract=args.official_cle_contract,
+        )
         speeds = pd.read_parquet(cle.speeds_path)
         road_state, _ = build_family_road_state(
             speeds,
@@ -362,6 +409,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "elapsed_seconds": time.perf_counter() - family_started,
         }
         family_reports.append(family_report)
+        if args.progress_output is not None:
+            _atomic_json(
+                args.progress_output,
+                {
+                    "schema": "cle_evrptw_c3_progress_v1",
+                    "planned": int(len(families)),
+                    "completed": int(len(family_reports)),
+                    "last_completed_family_id": family_id,
+                    "city_slug": city,
+                    "failed": selected is None,
+                    "updated_monotonic_s": time.monotonic(),
+                },
+            )
         if selected is None:
             report = {
                 "schema": C3_SCHEMA,
@@ -446,7 +506,7 @@ def main() -> None:
     parser.add_argument("--amazon-artifact-root", type=Path, required=True)
     parser.add_argument("--amazon-cohort-split", type=Path, required=True)
     parser.add_argument("--profile", type=Path, required=True)
-    parser.add_argument("--c2-report", type=Path, required=True)
+    parser.add_argument("--c2-report", type=Path)
     parser.add_argument("--c0-comparison", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
@@ -455,11 +515,23 @@ def main() -> None:
         default="research",
     )
     parser.add_argument("--family-ids", nargs="*")
+    parser.add_argument("--cities", nargs="*")
+    parser.add_argument(
+        "--official-cle-contract",
+        choices=("strict_release_v1", "frozen_technical_candidate_v1"),
+        default="strict_release_v1",
+    )
+    parser.add_argument("--progress-output", type=Path)
     parser.add_argument("--targeted-gate", action="store_true")
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
     report = run(args)
-    print(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False))
+    print(
+        "C3 joint support: "
+        f"status={report['status']} passed={report['passed']} "
+        f"covered={report['covered_family_count']}"
+    )
+    print(f"Report: {args.output.resolve()}")
 
 
 if __name__ == "__main__":
