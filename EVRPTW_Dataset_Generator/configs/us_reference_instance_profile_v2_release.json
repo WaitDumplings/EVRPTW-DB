@@ -87,6 +87,9 @@
   },
   "schema": "cle_evrptw_us_reference_instance_profile_v2",
   "source_contract": {
+    "cle_eligibility_contract": "frozen_technical_candidate_v1",
+    "cle_manual_release_claimed": false,
+    "benchmark_positioning": "infrastructure_grounded_semi_synthetic_not_fully_real",
     "canonical_order_source_mode": "SINGLE_ORDER_DAY",
     "canonical_structure_source_mode": "SINGLE_STRUCTURE_DAY",
     "cohort_split": "amazon_cohort_split_v1",

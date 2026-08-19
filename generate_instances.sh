@@ -13,6 +13,7 @@ INSTANCE_OUTPUT_ROOT="${INSTANCE_OUTPUT_ROOT:-$ROOT_DIR/EVRPTW_Dataset/Instances
 AMAZON_MODEL_BUILD_INPUTS="${AMAZON_MODEL_BUILD_INPUTS:-$GENERATOR_DIR/data/sources/amazon-last-mile-2021/model_build_inputs}"
 AMAZON_ARTIFACT_ROOT="${AMAZON_ARTIFACT_ROOT:-$ROOT_DIR/EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3}"
 REFERENCE_PROFILE="${REFERENCE_PROFILE:-$GENERATOR_DIR/configs/us_reference_instance_profile_v2_release.json}"
+OFFICIAL_CLE_CONTRACT="${OFFICIAL_CLE_CONTRACT:-frozen_technical_candidate_v1}"
 MAX_ATTEMPTS_PER_FAMILY="${MAX_ATTEMPTS_PER_FAMILY:-4}"
 RUN_DISCIPLINE="${RUN_DISCIPLINE:-}"
 FAMILY_WALL_TIMEOUT_S="${FAMILY_WALL_TIMEOUT_S:-7200}"
@@ -117,6 +118,7 @@ if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
     --output-root "$INSTANCE_OUTPUT_ROOT" \
     --amazon-artifact-root "$AMAZON_ARTIFACT_ROOT" \
     --mode "$INSTANCE_MODE" \
+    --official-cle-contract "$OFFICIAL_CLE_CONTRACT" \
     --workers "$WORKERS" \
     --families-per-worker-task "$FAMILIES_PER_WORKER_TASK" \
     --max-attempts-per-family "$MAX_ATTEMPTS_PER_FAMILY" \

@@ -81,6 +81,7 @@ class PortableCLE:
     depot_eligibility_field: str
     charger_eligibility_field: str
     warnings: tuple[str, ...]
+    eligibility_contract: str = "strict_release_v1"
 
     @property
     def non_release_pilot(self) -> bool:
@@ -114,6 +115,10 @@ class PortableCLE:
             "non_release_pilot": self.non_release_pilot,
             "research_generation": self.research_generation,
             "cle_release_eligible": bool(self.manifest.get("release_eligible", False)),
+            "eligibility_contract": self.eligibility_contract,
+            "manual_cle_release_claimed": bool(
+                self.manifest.get("release_eligible", False)
+            ),
             "release_blockers": list(self.release_blockers),
             "customer_eligibility_field": self.customer_eligibility_field,
             "eligible_customers": _true_count(
@@ -137,6 +142,7 @@ def load_portable_cle(
     minimum_customers: int = 2_000,
     minimum_depots: int = 1,
     minimum_chargers: int = 50,
+    official_cle_contract: str = "strict_release_v1",
 ) -> PortableCLE:
     if mode not in {"official", "research", "non_release_pilot"}:
         raise ValueError(f"Unsupported Stage-2 run mode: {mode!r}")
@@ -167,7 +173,22 @@ def load_portable_cle(
         )
     if not bool(manifest.get("portable_package_verified", False)):
         raise CLEEligibilityError(f"CLE {city_slug} is not a verified portable package")
-    if mode == "official" and not bool(manifest.get("release_eligible", False)):
+    allowed_official_contracts = {
+        "strict_release_v1",
+        "frozen_technical_candidate_v1",
+    }
+    if official_cle_contract not in allowed_official_contracts:
+        raise ValueError(f"Unsupported official CLE contract: {official_cle_contract!r}")
+    technical_candidate = bool(
+        mode == "official"
+        and official_cle_contract == "frozen_technical_candidate_v1"
+        and manifest.get("technical_verification_passed") is True
+    )
+    if (
+        mode == "official"
+        and not bool(manifest.get("release_eligible", False))
+        and not technical_candidate
+    ):
         blockers = ", ".join(map(str, manifest.get("release_blockers", []))) or "unknown"
         raise CLEEligibilityError(
             f"CLE {city_slug} is not release eligible; blockers: {blockers}"
@@ -209,8 +230,11 @@ def load_portable_cle(
         "depot_candidate_eligible",
         "charger_candidate_eligible",
     )
+    use_release_fields = mode == "official" and bool(
+        manifest.get("release_eligible", False)
+    )
     customer_field, depot_field, charger_field = (
-        official_fields if mode == "official" else candidate_fields
+        official_fields if use_release_fields else candidate_fields
     )
     directional_access_fields = {
         "protected_inbound_access_eligible",
@@ -272,6 +296,17 @@ def load_portable_cle(
         )
 
     warnings: list[str] = []
+    if mode == "official" and technical_candidate and not manifest.get("release_eligible"):
+        warnings.append(
+            "Benchmark-release generation uses the frozen technically verified CLE "
+            "candidate pools. Open manual scientific-release labels remain explicit; "
+            "the dataset must be described as infrastructure-grounded semi-synthetic, "
+            "not as fully real or manually site-verified."
+        )
+        warnings.append(
+            "Open CLE manual-release labels retained in provenance: "
+            + ", ".join(map(str, manifest.get("release_blockers", [])))
+        )
     if mode == "research":
         warnings.append(
             "Research mode uses technically verified candidate/default pools for a full-size "
@@ -306,4 +341,5 @@ def load_portable_cle(
         depot_eligibility_field=depot_field,
         charger_eligibility_field=charger_field,
         warnings=tuple(warnings),
+        eligibility_contract=official_cle_contract,
     )

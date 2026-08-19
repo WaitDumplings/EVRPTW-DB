@@ -114,6 +114,15 @@ def make_parser() -> argparse.ArgumentParser:
         help="Required for any non-pilot corpus run after calibration approval.",
     )
     parser.add_argument(
+        "--official-cle-contract",
+        choices=("strict_release_v1", "frozen_technical_candidate_v1"),
+        default="strict_release_v1",
+        help=(
+            "Explicit Stage-1 boundary for official runs. The technical-candidate "
+            "contract preserves open CLE manual-review labels in provenance."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -567,6 +576,16 @@ def main() -> None:
                 "Full Stage-2 generation is frozen pending reviewed pilot evidence; "
                 "--full-run-approved is required after explicit approval"
             )
+        expected_cle_contract = str(
+            profile.get("source_contract", {}).get(
+                "cle_eligibility_contract", "strict_release_v1"
+            )
+        )
+        if args.official_cle_contract != expected_cle_contract:
+            raise ValueError(
+                "Official CLE contract differs from the promoted profile: "
+                f"runner={args.official_cle_contract}, profile={expected_cle_contract}"
+            )
     all_cities = (*config.train_cities, config.heldout_city)
     cities = tuple(
         dict.fromkeys(args.cities or (config.train_cities if non_release else all_cities))
@@ -641,7 +660,12 @@ def main() -> None:
 
     source_preset = json.loads(args.block_group_preset.read_text(encoding="utf-8"))
     for city in cities:
-        cle = load_portable_cle(args.cle_root, city, mode=args.mode)
+        cle = load_portable_cle(
+            args.cle_root,
+            city,
+            mode=args.mode,
+            official_cle_contract=args.official_cle_contract,
+        )
         run_report["preflight"].append(cle.eligibility_summary())
         if "splits" in args.stages:
             if args.frozen_split_root is not None:
@@ -1038,6 +1062,7 @@ def main() -> None:
         "config_schema": config.schema,
         "profile_schema": profile["schema"],
         "mode": args.mode,
+        "official_cle_contract": args.official_cle_contract,
         "code_provenance": code_provenance,
         "max_attempts_per_family": int(args.max_attempts_per_family),
         "run_discipline": args.run_discipline,
