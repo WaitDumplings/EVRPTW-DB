@@ -12,6 +12,7 @@ CLE_ROOT="${CLE_ROOT:-$ROOT_DIR/EVRPTW_Dataset/CLE_v2/us_11city}"
 INSTANCE_OUTPUT_ROOT="${INSTANCE_OUTPUT_ROOT:-$ROOT_DIR/EVRPTW_Dataset/Instances_v2/us_11city}"
 AMAZON_MODEL_BUILD_INPUTS="${AMAZON_MODEL_BUILD_INPUTS:-$GENERATOR_DIR/data/sources/amazon-last-mile-2021/model_build_inputs}"
 AMAZON_ARTIFACT_ROOT="${AMAZON_ARTIFACT_ROOT:-$ROOT_DIR/EVRPTW_Dataset/Calibration_v2/amazon_stage2_v3}"
+REFERENCE_PROFILE="${REFERENCE_PROFILE:-$GENERATOR_DIR/configs/us_reference_instance_profile_v2_release.json}"
 MAX_ATTEMPTS_PER_FAMILY="${MAX_ATTEMPTS_PER_FAMILY:-4}"
 RUN_DISCIPLINE="${RUN_DISCIPLINE:-}"
 FAMILY_WALL_TIMEOUT_S="${FAMILY_WALL_TIMEOUT_S:-7200}"
@@ -109,7 +110,7 @@ fi
 if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
   "$PYTHON_BIN" scripts/build_stage2_instances.py \
     --config configs/cle_evrptw_stage2_v2.json \
-    --profile configs/us_reference_instance_profile_v2.json \
+    --profile "$REFERENCE_PROFILE" \
     --cle-root "$CLE_ROOT" \
     --block-group-preset configs/us_census_block_groups_v1.json \
     --block-group-source-dir data/sources/census_block_groups_2025 \
