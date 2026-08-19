@@ -522,6 +522,71 @@ def test_exact_competition_cache_matches_reference_and_infeasible_boundary() -> 
     )
 
 
+def test_exact_competition_search_matches_first_feasible_reference_round() -> None:
+    import networkx as nx
+
+    chain = ["shared", *(f"transit-{index}" for index in range(1, 9))]
+    graph = nx.DiGraph()
+    graph.add_weighted_edges_from(
+        [
+            (left, right, float(index))
+            for index, (left, right) in enumerate(
+                zip(chain, chain[1:]), start=1
+            )
+        ],
+        weight="weight",
+    )
+    customers = pd.DataFrame(
+        [
+            {
+                "latent_service_location_id": customer_id,
+                "community_id": community,
+                "residential_units": units,
+                "radial_decile": 0,
+                "depot_running_time_s": running_time,
+            }
+            for customer_id, community, units, running_time in [
+                ("loc-shared", "shared", 1, 100.0),
+                ("loc-depth-five", "transit-5", 2, 105.0),
+            ]
+        ]
+    )
+    quotas = pd.DataFrame(
+        [
+            {
+                "region_id": region,
+                "structure_route_id": f"route-{region}",
+                "radial_decile": 0,
+                "quota": 1,
+            }
+            for region in ["r0", "r1"]
+        ]
+    )
+    regions = {"r0": {"shared"}, "r1": {"shared"}}
+
+    optimized = _competition_outcome(
+        _assign_with_competition_expansion,
+        customers,
+        quotas,
+        graph,
+        regions,
+    )
+    reference = _competition_outcome(
+        _assign_with_competition_expansion_reference,
+        customers,
+        quotas,
+        graph,
+        regions,
+    )
+    assert optimized == reference
+    assert optimized[0] == "ok"
+    assert optimized[2] == 10
+    assert all(
+        "transit-5" in members and "transit-6" not in members
+        for members in optimized[4].values()
+    )
+
+
 def test_amazon_covering_matching_and_inherited_attributes() -> None:
     profile = load_reference_profile(PROFILE)
     customer_count = 3

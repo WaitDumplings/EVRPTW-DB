@@ -286,9 +286,14 @@ family-local capacity/frontier/crossing cache 方案和等价性测试要求见�
 docs/stage2_repair/SPATIAL_GROWTH_EXACT_CACHE_REVIEW_ZH.md
 ```
 
-用户随后授权开始实施。三类 exact cache 均已完成，原始实现保留为 test-only reference，
-30 组随机 directed graph 和全部指定边界条件的 per-step differential trace 一致；当前完整
-suite 为 205/205 passed。下一步只允许从全新 root 完整运行三个 target，仍不得启动 pilot。
+用户随后授权开始实施。三类 growth exact cache 均已完成，原始实现保留为 test-only
+reference，30 组随机 directed graph 和全部指定边界条件的 per-step differential trace 一致。
+Chicago 复测中 1004 个 growth steps 已降到 0.166 秒；随后发现 global assignment 逐轮重复
+构图和 maximum flow 是新热点。现已增加 exact feasibility gate，并利用 candidate sets 随
+round 单调增加的性质，以惰性 deterministic expansion prefix、指数搜索和二分搜索寻找与
+reference 相同的 first feasible round；最终仍只在该轮运行原 min-cost-flow。多轮与失败边界
+differential tests 通过，当前完整 suite 为 207/207 passed。下一步只允许从全新 root 完整
+运行三个 target，仍不得启动 pilot。
 
 只有 Chicago < 7,200 s、Dallas < 7,200 s、LA smoke passed、verifier passed、无 orphan、
 代码再次 clean commit 并 push 后，才可以把新 140-family pilot 提交 reviewer。新 pilot 必须

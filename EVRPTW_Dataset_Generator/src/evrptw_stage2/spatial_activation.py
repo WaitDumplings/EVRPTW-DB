@@ -678,7 +678,8 @@ def _assign_customers(
     *,
     seed: int,
     progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
-) -> pd.DataFrame:
+    feasibility_only: bool = False,
+) -> pd.DataFrame | None:
     def begin(stage: str, **details: Any) -> tuple[float, float]:
         if progress_callback is not None:
             progress_callback(stage, {"status": "started", **details})
@@ -791,6 +792,8 @@ def _assign_customers(
         feasible_flow=feasible_flow,
         required_flow=total,
     )
+    if feasibility_only:
+        return None
     stage_started = begin(
         "global_assignment.min_cost_flow",
         graph_node_count=graph.number_of_nodes(),
@@ -876,16 +879,16 @@ def _assign_with_competition_expansion_reference(
     )
     while True:
         try:
-            return (
-                _assign_customers(
-                    customers,
-                    quotas,
-                    regions,
-                    seed=seed,
-                    progress_callback=progress_callback,
-                ),
-                expansions,
+            assignment = _assign_customers(
+                customers,
+                quotas,
+                regions,
+                seed=seed,
+                progress_callback=progress_callback,
             )
+            if assignment is None:
+                raise AssertionError("Full assignment unexpectedly returned no frame")
+            return assignment, expansions
         except SpatialActivationError as error:
             if error.code != "GLOBAL_CUSTOMER_ASSIGNMENT_INFEASIBLE":
                 raise
@@ -955,7 +958,14 @@ def _assign_with_competition_expansion(
     progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
     decision_trace: list[dict[str, Any]] | None = None,
 ) -> tuple[pd.DataFrame, int]:
-    """Expand competition regions with exact incremental graph-local caches."""
+    """Find the first feasible deterministic competition-expansion round exactly.
+
+    A region's next community depends only on that region's current members. Its
+    complete expansion sequence can therefore be cached independently. Since
+    every round only adds assignment edges, feasibility is monotone; exponential
+    search followed by binary search finds the same first feasible round as the
+    reference round-by-round implementation.
+    """
 
     _, community_support, region_quota, region_total = _growth_capacity_tables(
         customers, quotas
@@ -975,8 +985,6 @@ def _assign_with_competition_expansion(
         frontiers[region] = frontier
         crossing_minimums[region] = crossing
 
-    expansions = 0
-    expansion_round = 0
     maximum_expansions = max(1, len(graph) * len(regions))
     order = sorted(
         regions,
@@ -985,14 +993,76 @@ def _assign_with_competition_expansion(
             stable_u64(seed, "competition_expansion_order", region),
         ),
     )
-    while True:
+
+    base_regions = {region: set(members) for region, members in regions.items()}
+    expansion_sequences: dict[str, list[tuple[str, tuple[int, float, int, str]]]] = {
+        region: [] for region in regions
+    }
+    sequence_members = {
+        region: set(members) for region, members in base_regions.items()
+    }
+    target_deciles = {region: set(region_quota[region]) for region in regions}
+
+    def ensure_sequence_prefix(round_index: int) -> bool:
+        """Extend each deterministic sequence only as far as the next probe needs."""
+
+        for region in order:
+            members = sequence_members[region]
+            neighbors = frontiers[region]
+            crossing = crossing_minimums[region]
+
+            def selection_key(candidate: str) -> tuple[int, float, int, str]:
+                return (
+                    0
+                    if community_support.get(candidate, set())
+                    & target_deciles[region]
+                    else 1,
+                    crossing.get(candidate, math.inf),
+                    stable_u64(seed, "region_growth", region, candidate),
+                    candidate,
+                )
+
+            while len(expansion_sequences[region]) < round_index and neighbors:
+                chosen = min(neighbors, key=selection_key)
+                chosen_key = selection_key(chosen)
+                expansion_sequences[region].append((chosen, chosen_key))
+                members.add(chosen)
+                neighbors.discard(chosen)
+                crossing.pop(chosen, None)
+                for candidate, weight in incident_minimums.get(chosen, {}).items():
+                    if candidate in members:
+                        continue
+                    neighbors.add(candidate)
+                    crossing[candidate] = min(
+                        crossing.get(candidate, math.inf), weight
+                    )
+        return all(not frontiers[region] for region in order)
+
+    def regions_at_round(round_index: int) -> dict[str, set[str]]:
+        return {
+            region: base_regions[region]
+            | {
+                community
+                for community, _ in expansion_sequences[region][:round_index]
+            }
+            for region in regions
+        }
+
+    def expansions_at_round(round_index: int) -> int:
+        return sum(
+            min(round_index, len(expansion_sequences[region])) for region in order
+        )
+
+    def attempt_feasibility(round_index: int) -> bool:
+        expansion_count = expansions_at_round(round_index)
         if progress_callback is not None:
             progress_callback(
                 "global_assignment.competition_round",
                 {
                     "status": "started",
-                    "competition_round": int(expansion_round),
-                    "competition_expansions": int(expansions),
+                    "competition_round": int(round_index),
+                    "competition_expansions": int(expansion_count),
+                    "search_mode": "exact_monotone_feasibility",
                 },
             )
 
@@ -1002,81 +1072,166 @@ def _assign_with_competition_expansion(
                     stage,
                     {
                         **dict(details),
-                        "competition_round": int(expansion_round),
-                        "competition_expansions": int(expansions),
+                        "competition_round": int(round_index),
+                        "competition_expansions": int(expansion_count),
+                        "search_mode": "exact_monotone_feasibility",
                     },
                 )
 
         try:
-            assignment = _assign_customers(
+            _assign_customers(
                 customers,
                 quotas,
-                regions,
+                regions_at_round(round_index),
                 seed=seed,
                 progress_callback=attempt_progress,
+                feasibility_only=True,
             )
             if progress_callback is not None:
                 progress_callback(
                     "global_assignment.competition_round",
                     {
-                        "status": "completed",
-                        "competition_round": int(expansion_round),
-                        "competition_expansions": int(expansions),
+                        "status": "feasible",
+                        "competition_round": int(round_index),
+                        "competition_expansions": int(expansion_count),
+                        "search_mode": "exact_monotone_feasibility",
                     },
                 )
-            return assignment, expansions
+            return True
         except SpatialActivationError as error:
             if error.code != "GLOBAL_CUSTOMER_ASSIGNMENT_INFEASIBLE":
                 raise
-        if expansions >= maximum_expansions:
+            if progress_callback is not None:
+                progress_callback(
+                    "global_assignment.competition_round",
+                    {
+                        "status": "infeasible",
+                        "competition_round": int(round_index),
+                        "competition_expansions": int(expansion_count),
+                        "search_mode": "exact_monotone_feasibility",
+                    },
+                )
+            return False
+
+    first_feasible_round: int | None = None
+    if attempt_feasibility(0):
+        first_feasible_round = 0
+    elif all(not frontiers[region] for region in order):
+        raise SpatialActivationError(
+            "GLOBAL_ASSIGNMENT_EXPANSION_EXHAUSTED",
+            "all regions cover their reachable graph but assignment is infeasible",
+        )
+    else:
+        last_infeasible_round = 0
+        probe_round = 1
+        while True:
+            all_exhausted = ensure_sequence_prefix(probe_round)
+            if attempt_feasibility(probe_round):
+                first_feasible_round = probe_round
+                break
+            last_infeasible_round = probe_round
+            if all_exhausted:
+                break
+            probe_round *= 2
+
+        if first_feasible_round is not None:
+            lower = last_infeasible_round + 1
+            upper = first_feasible_round
+            while lower < upper:
+                middle = (lower + upper) // 2
+                if attempt_feasibility(middle):
+                    upper = middle
+                else:
+                    lower = middle + 1
+            first_feasible_round = lower
+
+    if first_feasible_round is None:
+        maximum_round = max(
+            (len(sequence) for sequence in expansion_sequences.values()), default=0
+        )
+        final_expansions = expansions_at_round(maximum_round)
+        final_regions = regions_at_round(maximum_round)
+        for region in regions:
+            regions[region].clear()
+            regions[region].update(final_regions[region])
+        if decision_trace is not None:
+            for round_index in range(maximum_round):
+                for region in order:
+                    sequence = expansion_sequences[region]
+                    if round_index >= len(sequence):
+                        continue
+                    chosen, chosen_key = sequence[round_index]
+                    decision_trace.append(
+                        {
+                            "expansion_step": len(decision_trace),
+                            "region_id": region,
+                            "chosen_community_id": chosen,
+                            "selection_key": chosen_key,
+                        }
+                    )
+        if final_expansions >= maximum_expansions:
             raise SpatialActivationError(
                 "GLOBAL_ASSIGNMENT_EXPANSION_EXHAUSTED",
                 "global assignment remained infeasible after graph-wide expansion",
             )
-        changed = False
-        for region in order:
-            target_deciles = set(region_quota[region])
-            neighbors = frontiers[region]
-            if not neighbors:
-                continue
+        raise SpatialActivationError(
+            "GLOBAL_ASSIGNMENT_EXPANSION_EXHAUSTED",
+            "all regions cover their reachable graph but assignment is infeasible",
+        )
 
-            def selection_key(candidate: str) -> tuple[int, float, int, str]:
-                return (
-                    0 if community_support.get(candidate, set()) & target_deciles else 1,
-                    crossing_minimums[region].get(candidate, math.inf),
-                    stable_u64(seed, "region_growth", region, candidate),
-                    candidate,
-                )
-
-            chosen = min(neighbors, key=selection_key)
-            if decision_trace is not None:
+    final_regions = regions_at_round(first_feasible_round)
+    for region in regions:
+        regions[region].clear()
+        regions[region].update(final_regions[region])
+    if decision_trace is not None:
+        for round_index in range(first_feasible_round):
+            for region in order:
+                sequence = expansion_sequences[region]
+                if round_index >= len(sequence):
+                    continue
+                chosen, chosen_key = sequence[round_index]
                 decision_trace.append(
                     {
-                        "expansion_step": int(expansions),
+                        "expansion_step": len(decision_trace),
                         "region_id": region,
                         "chosen_community_id": chosen,
-                        "selection_key": selection_key(chosen),
+                        "selection_key": chosen_key,
                     }
                 )
-            regions[region].add(chosen)
-            neighbors.discard(chosen)
-            crossing_minimums[region].pop(chosen, None)
-            for candidate, weight in incident_minimums.get(chosen, {}).items():
-                if candidate in regions[region]:
-                    continue
-                neighbors.add(candidate)
-                crossing_minimums[region][candidate] = min(
-                    crossing_minimums[region].get(candidate, math.inf),
-                    weight,
-                )
-            expansions += 1
-            changed = True
-        if not changed:
-            raise SpatialActivationError(
-                "GLOBAL_ASSIGNMENT_EXPANSION_EXHAUSTED",
-                "all regions cover their reachable graph but assignment is infeasible",
+    expansions = expansions_at_round(first_feasible_round)
+
+    def final_progress(stage: str, details: Mapping[str, Any]) -> None:
+        if progress_callback is not None:
+            progress_callback(
+                stage,
+                {
+                    **dict(details),
+                    "competition_round": int(first_feasible_round),
+                    "competition_expansions": int(expansions),
+                    "search_mode": "final_min_cost_assignment",
+                },
             )
-        expansion_round += 1
+
+    assignment = _assign_customers(
+        customers,
+        quotas,
+        regions,
+        seed=seed,
+        progress_callback=final_progress,
+    )
+    if assignment is None:
+        raise AssertionError("Full assignment unexpectedly returned no frame")
+    if progress_callback is not None:
+        progress_callback(
+            "global_assignment.competition_round",
+            {
+                "status": "completed",
+                "competition_round": int(first_feasible_round),
+                "competition_expansions": int(expansions),
+                "search_mode": "final_min_cost_assignment",
+            },
+        )
+    return assignment, expansions
 
 
 

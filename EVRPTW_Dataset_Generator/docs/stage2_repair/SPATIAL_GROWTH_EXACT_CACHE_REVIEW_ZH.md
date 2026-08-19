@@ -236,6 +236,52 @@ tests，以及 zero-customer transit、单向 edge、tie crossing weight、empty
 diagnostics 测试。optimized/reference 的每一步 chosen community、selection tuple、regions、
 growth_steps、progress events 和 error diagnostics 逐项相同。
 
-当前完整 generator suite 为 205/205 passed。下一放行点仍是 clean commit/push 后，从全新
+growth cache 完成时的完整 generator suite 为 205/205 passed。后续 Chicago 定向运行确认
+1004 个 growth steps 已缩短至 0.166 秒，并暴露下一个热点为 global unique-customer
+assignment；该热点的处理和新增验证见下一节。
+
+## 9. Global assignment 精确搜索补充
+
+### 9.1 新证据
+
+Chicago 初始 assignment graph 为 63,189 nodes、154,568 edges，其中 91,381 条为
+cell-customer candidate edges。初始 maximum flow 为 997/1000；逐轮旧逻辑到第 44 轮仍为
+997/1000，累计 616 次 competition expansion。每轮都重建大图并重新验证，单轮 maximum
+flow 从约 1.6 秒增加到约 4.6 秒，因此继续线性逐轮探测没有意义。
+
+### 9.2 不变的数学对象
+
+每个 region 的 competition expansion 顺序只依赖：
+
+- 本 region 当前 community members；
+- frozen target deciles；
+- directed community graph 的 exact incident crossing minimum；
+- frozen `stable_u64` tie-break。
+
+它不依赖其他 region 的扩展，也不依赖上一轮 flow 的具体取值。每一轮只增加 community，
+因此只会增加 assignment candidate edges；可行性关于 round index 单调不减。
+
+### 9.3 已实施的 exact 搜索
+
+实现保留 test-only 逐轮 reference，并执行：
+
+1. 对每个 region 惰性缓存 deterministic expansion sequence；
+2. 只生成下一次 probe 所需的 sequence prefix，不预展开整个连通分量；
+3. round 0 先做 exact maximum-flow feasibility；
+4. 以 1、2、4、8……指数探测找到首个可行上界，或证明所有 frontier exhausted；
+5. 在最后不可行轮与可行上界之间二分；
+6. 回放到与 reference 完全相同的 first feasible round；
+7. 仅在该轮运行原 `nx.min_cost_flow`，objective、capacity、唯一性和 tie weight 均不变。
+
+搜索不近似 flow、不删候选、不改变 quota、region、seed 或评分键。最终 regions、expansion
+count、逐步 decision trace、assignment 和失败 error code 必须与 reference 相同。
+
+### 9.4 验证状态
+
+新增测试强制首个可行点位于第 5 轮且图在第 8 轮后仍有 tail，从而实际覆盖指数探测与二分
+回退；optimized/reference 的 assignment records、10 次 expansion、每步 selection tuple 和
+最终 region members 逐项相同。原一轮可行与完全不可行边界测试继续通过。
+
+当前完整 generator suite 为 207/207 passed。下一放行点是 clean commit/push 后，从全新
 root 完整跑完 Chicago、Dallas 和 LA；只有三者 `<7200 s`、verifier passed、零 orphan，
 才能重新申请 140-family pilot。
