@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -27,6 +28,21 @@ C3_SPEC = importlib.util.spec_from_file_location(
 assert C3_SPEC is not None and C3_SPEC.loader is not None
 C3 = importlib.util.module_from_spec(C3_SPEC)
 C3_SPEC.loader.exec_module(C3)
+
+
+def test_supervisor_plan_envelope_normalizes_arrow_numpy_values() -> None:
+    value = {
+        "required_decile_counts": np.asarray([1, 2, 3], dtype=np.int64),
+        "candidate_depot_count": np.int64(7),
+        "optional": np.nan,
+    }
+    normalized = RUNNER._json_safe_plan_value(value)
+    assert normalized == {
+        "required_decile_counts": [1, 2, 3],
+        "candidate_depot_count": 7,
+        "optional": None,
+    }
+    json.dumps(normalized)
 
 
 def test_c3_c2_binding_requires_exact_c0_evidence_for_inheritance(

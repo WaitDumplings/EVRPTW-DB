@@ -18,6 +18,7 @@ from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from evrptw_stage2.amazon import load_amazon_stage2_artifacts
@@ -226,6 +227,25 @@ def _run_report_path(args: argparse.Namespace) -> Path:
     )
 
 
+def _json_safe_plan_value(value: Any) -> Any:
+    """Normalize Arrow/NumPy plan values before supervisor JSON envelopes."""
+
+    if isinstance(value, np.ndarray):
+        return [_json_safe_plan_value(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe_plan_value(item) for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_plan_value(item) for item in value]
+    missing = pd.isna(value)
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    return value
+
+
 def _reuse_frozen_customer_split(
     frozen_root: Path,
     output_root: Path,
@@ -316,13 +336,19 @@ def _build_materialization_tasks(
         for chunk_start in range(0, len(ordered), chunk_size):
             chunk = ordered.iloc[chunk_start : chunk_start + chunk_size]
             families_payload = []
-            for family in chunk.to_dict("records"):
+            for family_raw in chunk.to_dict("records"):
+                family = _json_safe_plan_value(family_raw)
                 family_id = str(family["family_id"])
                 family_views = views.loc[views["family_id"].astype(str).eq(family_id)].sort_values(
                     "view_id"
                 )
                 families_payload.append(
-                    {"family": family, "views": family_views.to_dict("records")}
+                    {
+                        "family": family,
+                        "views": _json_safe_plan_value(
+                            family_views.to_dict("records")
+                        ),
+                    }
                 )
             tasks.append(
                 {
