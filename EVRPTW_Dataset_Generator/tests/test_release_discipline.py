@@ -146,11 +146,17 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) -> None:
+def test_pilot_report_and_profile_promotion_require_all_gates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     materialized = [
-        {"family_id": f"f{index}", "status": "materialized"} for index in range(140)
+        {"family_id": f"f{index}", "status": "materialized"}
+        for index in range(140)
     ]
-    verified = [{"family_id": f"f{index}", "passed": True} for index in range(140)]
+    verified = [
+        {"family_id": f"f{index}", "passed": True} for index in range(140)
+    ]
     run_path = tmp_path / "run.json"
     phase1_path = tmp_path / "phase1.json"
     q90_path = tmp_path / "q90.json"
@@ -159,6 +165,11 @@ def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) ->
     smoke_path = tmp_path / "smoke.json"
     connectivity_acceptance_path = tmp_path / "connectivity_acceptance.json"
     sensitivity_path = tmp_path / "sensitivity.json"
+    generation_commit = "a" * 40
+    post_commit = "b" * 40
+    reviewed_commit = "c" * 40
+    smoke_commit = "d" * 40
+    acceptance_commit = "e" * 40
     _write_json(
         run_path,
         {
@@ -172,12 +183,22 @@ def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) ->
             "materialized": materialized,
             "verified": verified,
             "unresolved_family_ids": [],
-            "code_provenance": {"code_commit": "a" * 40},
+            "code_provenance": {"code_commit": generation_commit},
+            "generation_code_commit": generation_commit,
+            "reconciliation_code_commit": post_commit,
+            "reconciled": True,
+            "family_artifacts_modified": False,
+            "original_exception": {"type": "BrokenPipeError"},
         },
     )
     _write_json(phase1_path, {"all_hard_gates_passed": True})
-    provenance = {"code_commit": "a" * 40}
-    _write_json(q90_path, {"release_calibrated": True, "code_provenance": provenance})
+    _write_json(
+        q90_path,
+        {
+            "release_calibrated": True,
+            "code_provenance": {"code_commit": post_commit},
+        },
+    )
     _write_json(
         connectivity_path,
         {
@@ -185,7 +206,7 @@ def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) ->
             "passed": False,
             "structural_contract_passed": True,
             "r2_v1": {"outcome": "triggered_stop_and_review"},
-            "code_provenance": provenance,
+            "code_provenance": {"code_commit": reviewed_commit},
         },
     )
     _write_json(
@@ -194,18 +215,27 @@ def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) ->
             "schema": "cle_evrptw_connectivity_audit_acceptance_v2",
             "passed": True,
             "c2_allowed": True,
-            "inputs": {
-                "connectivity_audit_sha256": sha256_file(connectivity_path)
+            "inputs": {"connectivity_audit": str(connectivity_path)},
+            "automated_gate": {"passed": True},
+            "manual_h64_gate": {
+                "passed": True,
+                "reviewer_signoff_id": "signed-review",
             },
-            "code_provenance": provenance,
+            "code_provenance": {"code_commit": reviewed_commit},
         },
     )
-    _write_json(preflight_path, {"passed": True, "code_provenance": provenance})
+    _write_json(
+        preflight_path,
+        {
+            "passed": True,
+            "code_provenance": {"code_commit": reviewed_commit},
+        },
+    )
     _write_json(
         smoke_path,
         {
             "run_discipline": {"status": "GREEN", "pilot_allowed": True},
-            "code_provenance": provenance,
+            "code_provenance": {"code_commit": smoke_commit},
         },
     )
     _write_json(
@@ -214,21 +244,45 @@ def test_pilot_report_and_profile_promotion_require_all_gates(tmp_path: Path) ->
             "schema": "evrptw_charging_derating_sensitivity_v1",
             "factors": [0.85, 0.9, 0.95],
             "rows": [{}, {}, {}],
-            "code_provenance": provenance,
+            "code_provenance": {"code_commit": post_commit},
         },
     )
-    report = build_pilot_acceptance_report(
-        run_report_path=run_path,
-        phase1_report_path=phase1_path,
-        q90_report_path=q90_path,
-        connectivity_audit_path=connectivity_path,
-        connectivity_acceptance_path=connectivity_acceptance_path,
-        release_preflight_path=preflight_path,
-        la_smoke_report_path=smoke_path,
-        charging_sensitivity_path=sensitivity_path,
-    )
+
+    def reject_hashing(_path: str | Path) -> str:
+        raise AssertionError("pilot acceptance must not hash evidence files")
+
+    monkeypatch.setattr("evrptw_stage2.promotion.sha256_file", reject_hashing)
+    arguments = {
+        "run_report_path": run_path,
+        "phase1_report_path": phase1_path,
+        "q90_report_path": q90_path,
+        "connectivity_audit_path": connectivity_path,
+        "connectivity_acceptance_path": connectivity_acceptance_path,
+        "release_preflight_path": preflight_path,
+        "la_smoke_report_path": smoke_path,
+        "charging_sensitivity_path": sensitivity_path,
+        "acceptance_code_provenance": {"code_commit": acceptance_commit},
+    }
+    report = build_pilot_acceptance_report(**arguments)
     assert report["schema"] == PILOT_REPORT_SCHEMA
     assert report["passed"]
+    assert report["hash_validation_performed"] is False
+    assert report["evidence_inventory_method"] == "path_size_mtime_ns_no_hash"
+    assert all("sha256" not in item for item in report["evidence"].values())
+    assert len(set(filter(None, report["evidence_code_commits"].values()))) == 5
+
+    _write_json(
+        q90_path,
+        {
+            "release_calibrated": False,
+            "code_provenance": {"code_commit": post_commit},
+        },
+    )
+    red_report = build_pilot_acceptance_report(**arguments)
+    assert red_report["passed"] is False
+    assert [
+        label for label, passed in red_report["checks"].items() if not passed
+    ] == ["q90_release_calibrated"]
 
     profile_path = ROOT / "configs" / "us_reference_instance_profile_v2.json"
     profile = json.loads(profile_path.read_text(encoding="utf-8"))

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from evrptw_stage2.promotion import build_pilot_acceptance_report
+from evrptw_stage2.provenance import resolve_git_provenance
 
 
 def main() -> None:
@@ -22,6 +23,11 @@ def main() -> None:
     parser.add_argument("--charging-sensitivity", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    acceptance_code_provenance = resolve_git_provenance(
+        Path(__file__).resolve().parents[2],
+        require_clean=True,
+        require_branch="stage2-repair-candidate",
+    )
     report = build_pilot_acceptance_report(
         run_report_path=args.run_report,
         phase1_report_path=args.phase1_report,
@@ -31,6 +37,7 @@ def main() -> None:
         la_smoke_report_path=args.la_smoke_report,
         charging_sensitivity_path=args.charging_sensitivity,
         connectivity_acceptance_path=args.connectivity_acceptance,
+        acceptance_code_provenance=acceptance_code_provenance,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

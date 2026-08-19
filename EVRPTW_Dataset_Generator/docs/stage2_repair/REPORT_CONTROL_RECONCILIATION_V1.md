@@ -100,3 +100,17 @@ orphan cleanup.
 After reconciliation PASS, existing families may be read for Phase-1,
 M1-M5, Q90, charging sensitivity, and pilot acceptance. Stop for reviewer
 after those reports. Full generation and archive/restore remain unapproved.
+
+## Pilot acceptance report v2
+
+The acceptance builder is report-only and performs no SHA256 or other file-hash
+validation. Evidence inventory entries contain absolute path, byte size, and
+nanosecond modification time. The report records separate commits for
+Stage-2 generation, reconciliation, post-evaluation, reviewed C1/C2/H64
+evidence, LA smoke, and the acceptance builder. Cross-commit evidence is not
+misrepresented as a single executable commit.
+
+R2-v2 acceptance requires the embedded automated gate and signed manual H64
+gate to pass. D-5 remains unchanged: any primary M2/M3 Q90 failure makes the
+pilot acceptance report fail. A failed acceptance report cannot authorize
+profile promotion or full generation.

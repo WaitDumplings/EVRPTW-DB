@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-PILOT_REPORT_SCHEMA = "cle_evrptw_stage2_pilot_acceptance_report_v1"
+PILOT_REPORT_SCHEMA = "cle_evrptw_stage2_pilot_acceptance_report_v2"
 PROMOTION_SCHEMA = "evrptw_profile_acceptance_promotion_v1"
 
 
@@ -19,6 +19,16 @@ def sha256_file(path: str | Path) -> str:
 
 def _read(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _code_commit(payload: Mapping[str, Any]) -> str:
+    return str(dict(payload.get("code_provenance") or {}).get("code_commit", ""))
+
+
+def _valid_commit(value: str) -> bool:
+    return len(value) == 40 and all(
+        character in "0123456789abcdef" for character in value.lower()
+    )
 
 
 def build_pilot_acceptance_report(
@@ -31,8 +41,9 @@ def build_pilot_acceptance_report(
     release_preflight_path: str | Path,
     la_smoke_report_path: str | Path,
     charging_sensitivity_path: str | Path,
+    acceptance_code_provenance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Combine immutable pilot evidence and fail closed on any release gate."""
+    """Combine pilot evidence without file hashing and fail closed on gates."""
 
     paths = {
         "stage2_run_report": Path(run_report_path),
@@ -51,39 +62,77 @@ def build_pilot_acceptance_report(
     connectivity_acceptance = _read(paths["connectivity_acceptance"])
     preflight = _read(paths["release_preflight"])
     smoke_run = _read(paths["la_smoke_report"])
-    smoke = smoke_run.get("run_discipline", {})
+    smoke = dict(smoke_run.get("run_discipline") or {})
     sensitivity = _read(paths["charging_sensitivity"])
-    code_commit = str(run.get("code_provenance", {}).get("code_commit", ""))
-    evidence_commits = [
-        str(payload.get("code_provenance", {}).get("code_commit", ""))
-        for payload in (
-            connectivity,
-            connectivity_acceptance,
-            preflight,
-            smoke_run,
-            q90,
-            sensitivity,
-        )
-    ]
+
+    generation_commit = str(
+        run.get("generation_code_commit") or _code_commit(run)
+    )
+    reconciliation_commit = str(run.get("reconciliation_code_commit") or "")
+    q90_commit = _code_commit(q90)
+    sensitivity_commit = _code_commit(sensitivity)
+    connectivity_commit = _code_commit(connectivity)
+    connectivity_acceptance_commit = _code_commit(connectivity_acceptance)
+    preflight_commit = _code_commit(preflight)
+    smoke_commit = _code_commit(smoke_run)
+    acceptance_commit = str(
+        dict(acceptance_code_provenance or {}).get("code_commit", "")
+    )
+    evidence_commits = {
+        "generation": generation_commit,
+        "reconciliation": reconciliation_commit,
+        "q90": q90_commit,
+        "charging_sensitivity": sensitivity_commit,
+        "connectivity_audit": connectivity_commit,
+        "connectivity_acceptance": connectivity_acceptance_commit,
+        "release_preflight": preflight_commit,
+        "la_smoke": smoke_commit,
+        "acceptance_builder": acceptance_commit or None,
+    }
+
     successful = [
         item
         for item in run.get("materialized", [])
         if item.get("status") in {"materialized", "reused_verified"}
     ]
-    verified = [item for item in run.get("verified", []) if bool(item.get("passed"))]
-    discipline = run.get("run_discipline", {})
+    verified = [
+        item for item in run.get("verified", []) if bool(item.get("passed"))
+    ]
+    discipline = dict(run.get("run_discipline") or {})
+    manual_h64 = dict(
+        connectivity_acceptance.get("manual_h64_gate") or {}
+    )
+    automated_r2v2 = dict(
+        connectivity_acceptance.get("automated_gate") or {}
+    )
+    declared_audit = str(
+        dict(connectivity_acceptance.get("inputs") or {}).get(
+            "connectivity_audit", ""
+        )
+    )
+    declared_audit_name = Path(declared_audit).name if declared_audit else ""
+
     checks = {
         "run_mode_is_non_release_pilot": run.get("mode") == "non_release_pilot",
         "pilot_discipline_recorded": (
             discipline.get("schema") == "cle_evrptw_pilot_stop_discipline_v1"
         ),
         "pilot_not_stopped": discipline.get("stopped") is False,
-        "planned_140": int(run.get("execution", {}).get("selected_family_count", -1)) == 140,
+        "planned_140": (
+            int(run.get("execution", {}).get("selected_family_count", -1)) == 140
+        ),
         "materialized_140": len(successful) == 140,
         "verified_140": len(verified) == 140,
         "no_unresolved": not run.get("unresolved_family_ids", []),
         "runner_passed": run.get("passed") is True,
-        "phase1_all_hard_gates_passed": phase1.get("all_hard_gates_passed") is True,
+        "reconciliation_passed": (
+            run.get("reconciled") is True
+            and run.get("family_artifacts_modified") is False
+            and run.get("original_exception", {}).get("type") == "BrokenPipeError"
+        ),
+        "phase1_all_hard_gates_passed": (
+            phase1.get("all_hard_gates_passed") is True
+        ),
         "q90_release_calibrated": q90.get("release_calibrated") is True,
         "connectivity_c1_structural_contract_passed": (
             connectivity.get("schema")
@@ -92,15 +141,17 @@ def build_pilot_acceptance_report(
             and connectivity.get("r2_v1", {}).get("outcome")
             == "triggered_stop_and_review"
         ),
-        "connectivity_r2_v2_passed": (
+        "connectivity_r2_v2_automated_and_h64_passed": (
             connectivity_acceptance.get("schema")
             == "cle_evrptw_connectivity_audit_acceptance_v2"
             and connectivity_acceptance.get("passed") is True
             and connectivity_acceptance.get("c2_allowed") is True
-            and connectivity_acceptance.get("inputs", {}).get(
-                "connectivity_audit_sha256"
-            )
-            == sha256_file(paths["connectivity_audit"])
+            and automated_r2v2.get("passed") is True
+            and manual_h64.get("passed") is True
+            and bool(manual_h64.get("reviewer_signoff_id"))
+        ),
+        "connectivity_acceptance_declares_audit_path": (
+            declared_audit_name == paths["connectivity_audit"].name
         ),
         "amazon_h3_pf_c2_passed": preflight.get("passed") is True,
         "la_smoke_green_or_amber": (
@@ -108,18 +159,37 @@ def build_pilot_acceptance_report(
             and smoke.get("pilot_allowed") is True
         ),
         "charging_sensitivity_complete": (
-            sensitivity.get("schema") == "evrptw_charging_derating_sensitivity_v1"
+            sensitivity.get("schema")
+            == "evrptw_charging_derating_sensitivity_v1"
             and sensitivity.get("factors") == [0.85, 0.9, 0.95]
             and len(sensitivity.get("rows", [])) == 3
         ),
-        "all_evidence_uses_one_candidate_commit": (
-            len(code_commit) == 40 and all(commit == code_commit for commit in evidence_commits)
+        "generation_reconciliation_lineage_complete": (
+            run.get("reconciled") is True
+            and _valid_commit(generation_commit)
+            and _valid_commit(reconciliation_commit)
+            and generation_commit == _code_commit(run)
+        ),
+        "post_evaluation_uses_reconciliation_commit": (
+            _valid_commit(reconciliation_commit)
+            and q90_commit == reconciliation_commit
+            and sensitivity_commit == reconciliation_commit
+        ),
+        "reviewed_preflight_lineage_complete": (
+            _valid_commit(connectivity_commit)
+            and connectivity_acceptance_commit == connectivity_commit
+            and preflight_commit == connectivity_commit
+            and _valid_commit(smoke_commit)
         ),
     }
-    evidence = {
-        label: {"path": str(path.resolve()), "sha256": sha256_file(path)}
-        for label, path in paths.items()
-    }
+    evidence = {}
+    for label, path in paths.items():
+        stat = path.resolve(strict=True).stat()
+        evidence[label] = {
+            "path": str(path.resolve()),
+            "size_bytes": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        }
     core = {
         "schema": PILOT_REPORT_SCHEMA,
         "checks": checks,
@@ -129,10 +199,17 @@ def build_pilot_acceptance_report(
         "verified_family_count": len(verified),
         "unresolved_family_ids": list(run.get("unresolved_family_ids", [])),
         "code_provenance": dict(run.get("code_provenance", {})),
+        "acceptance_code_provenance": dict(acceptance_code_provenance or {}),
+        "evidence_code_commits": evidence_commits,
         "evidence": evidence,
+        "evidence_inventory_method": "path_size_mtime_ns_no_hash",
+        "hash_validation_performed": False,
     }
-    canonical = json.dumps(core, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    core["pilot_report_id"] = "pilot_" + hashlib.sha256(canonical).hexdigest()[:24]
+    report_commit = acceptance_commit or reconciliation_commit
+    core["pilot_report_id"] = (
+        f"pilot_{generation_commit[:8]}_{reconciliation_commit[:8]}_"
+        f"{report_commit[:8]}_140family"
+    )
     return core
 
 
