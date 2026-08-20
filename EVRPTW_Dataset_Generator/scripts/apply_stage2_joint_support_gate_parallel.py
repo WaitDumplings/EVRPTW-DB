@@ -20,6 +20,10 @@ import apply_stage2_joint_support_gate as c3
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.provenance import resolve_git_provenance
 from evrptw_stage2.selection import JOINT_SUPPORT_CONTRACT_ID
+from evrptw_stage2.selection_capsule import (
+    SELECTION_CAPSULE_SCHEMA,
+    capsule_paths,
+)
 from evrptw_stage2.toy import load_full_path_toy_manifest, toy_family_ids
 
 
@@ -62,6 +66,8 @@ def _valid_completed_task_report(
     city: str,
     expected_family_ids: tuple[str, ...],
     code_commit: str,
+    output_root: Path | None = None,
+    expected_capsule_relpath: str | None = None,
 ) -> bool:
     if not report_path.is_file():
         return False
@@ -71,13 +77,39 @@ def _valid_completed_task_report(
         return False
     rows = report.get("families", [])
     observed_ids = tuple(sorted(str(row.get("family_id")) for row in rows))
+    capsule = dict(report.get("selection_capsule") or {})
+    if output_root is None and expected_capsule_relpath is None:
+        capsule_valid = True
+    elif output_root is None or expected_capsule_relpath is None:
+        capsule_valid = False
+    else:
+        capsule_base = output_root / expected_capsule_relpath
+        capsule_files_valid = all(
+            path.is_file() for path in capsule_paths(capsule_base).values()
+        )
+        capsule_valid = bool(
+            capsule.get("schema") == SELECTION_CAPSULE_SCHEMA
+            and capsule.get("relpath") == expected_capsule_relpath
+            and int(capsule.get("family_count", -1)) == len(expected_family_ids)
+            and capsule_files_valid
+        )
     return bool(
         report.get("schema") == c3.C3_SCHEMA
         and report.get("passed") is True
         and report.get("status") == "passed_report_only"
         and report.get("code_provenance", {}).get("code_commit") == code_commit
+        and capsule_valid
         and observed_ids == tuple(sorted(expected_family_ids))
         and all(str(row.get("city_slug")) == city and row.get("selected") for row in rows)
+    )
+
+
+def _selection_capsule_relpath(task_id: str) -> str:
+    return str(
+        Path("reports")
+        / "stage2_repair"
+        / "c3_selection_capsules"
+        / task_id
     )
 
 
@@ -187,6 +219,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             city=str(task["city"]),
             expected_family_ids=tuple(task["family_ids"]),
             code_commit=str(provenance["code_commit"]),
+            output_root=args.plan_root.parent,
+            expected_capsule_relpath=_selection_capsule_relpath(task_id),
         ):
             completed.add(task_id)
         else:
@@ -210,6 +244,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         progress = work_root / f"{task_id}.progress.json"
         log_path = work_root / f"{task_id}.log"
         handle = log_path.open("w", encoding="utf-8")
+        capsule_relpath = _selection_capsule_relpath(task_id)
+        capsule_base = args.plan_root.parent / capsule_relpath
         command = [
             sys.executable,
             str(worker_script),
@@ -227,6 +263,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "--targeted-gate",
             "--report-only",
             "--progress-output", str(progress),
+            "--selection-capsule-base", str(capsule_base),
+            "--selection-capsule-relpath", capsule_relpath,
         ]
         process = subprocess.Popen(
             command,
@@ -281,6 +319,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     city=str(task["city"]),
                     expected_family_ids=tuple(task["family_ids"]),
                     code_commit=str(provenance["code_commit"]),
+                    output_root=args.plan_root.parent,
+                    expected_capsule_relpath=_selection_capsule_relpath(task_id),
                 ):
                     raise RuntimeError(f"C3 task report failed validation: {report_path}")
                 completed.add(task_id)
@@ -359,6 +399,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "capacity_contract_fingerprint": selected[
                     "capacity_contract_fingerprint"
                 ],
+                "c3_selection_capsule_schema": selected[
+                    "selection_capsule_schema"
+                ],
+                "c3_selection_capsule_relpath": selected[
+                    "selection_capsule_relpath"
+                ],
                 "rejected_pair_reason_counts": json.dumps(
                     dict(sorted(family.get("rejected_pair_reason_counts", {}).items())),
                     sort_keys=True,
@@ -375,6 +421,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     ],
                     "capacity_contract_fingerprint": selected[
                         "capacity_contract_fingerprint"
+                    ],
+                    "c3_selection_capsule_schema": selected[
+                        "selection_capsule_schema"
+                    ],
+                    "c3_selection_capsule_relpath": selected[
+                        "selection_capsule_relpath"
                     ],
                     "elapsed_seconds": float(family["elapsed_seconds"]),
                     "attempted_pair_count": len(family.get("attempted_pairs", [])),
@@ -405,6 +457,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "full_c3" if full_plan else "non_release_full_path_toy"
         ),
         "covered_family_count": len(updates),
+        "selection_capsule": {
+            "schema": SELECTION_CAPSULE_SCHEMA,
+            "family_count": len(updates),
+            "storage": "task_partitioned_parquet_plus_json_metadata",
+            "materialization_policy": "strict_binding_replay_or_hard_fail",
+            "hash_validation_performed": False,
+        },
         "city_count": len(cities),
         "workers": int(args.workers),
         "families_per_task": int(args.families_per_task),

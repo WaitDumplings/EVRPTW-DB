@@ -8,6 +8,7 @@ import resource
 import sys
 import time
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,7 @@ from .planning import derive_seed
 from .reader import PortableCLE
 from .release_discipline import roster_fingerprint
 from .routing import DepotTerminalStar, PhysicalRoadNetwork, TerminalConnectivityError
+from .selection_capsule import load_family_selection_capsule
 from .spatial_activation import (
     SpatialActivationError,
     activate_spatial_customers,
@@ -849,6 +851,32 @@ def assess_joint_spatial_support_pair(
         "activation_region_attempts_used": int(
             activation.metadata["region_attempts_used"]
         ),
+        "_selection_capsule": {
+            "family_id": str(family["family_id"]),
+            "binding": {
+                "family_id": str(family["family_id"]),
+                "city_slug": str(family["city_slug"]),
+                "day_type": str(family["day_type"]),
+                "parent_customer_count": int(family["parent_customer_count"]),
+                "customer_superset_seed": int(family["customer_superset_seed"]),
+                "road_state_seed": int(family["road_state_seed"]),
+                "selected_depot_id": str(depot["candidate_id"]),
+                "selected_structure_source_ids": list(
+                    map(str, selected_structure_source_ids)
+                ),
+                "joint_support_contract_id": JOINT_SUPPORT_CONTRACT_ID,
+                "capacity_contract_fingerprint": fingerprint,
+            },
+            "selected_customers": activation.customers.reset_index(drop=True),
+            "radial_baseline": activation.radial_baseline[[
+                "latent_service_location_id",
+                "community_id",
+                "radial_decile",
+                "depot_running_time_s",
+            ]].reset_index(drop=True),
+            "territory_report": territory_report,
+            "spatial_activation_metadata": activation.metadata,
+        },
     }
 
 
@@ -862,6 +890,7 @@ def select_family_terminals_v2(
     network: PhysicalRoadNetwork,
     amazon: AmazonStage2Artifacts,
     community_adjacency_cache: dict[str, pd.DataFrame] | None = None,
+    selection_capsule_root: str | Path | None = None,
     progress_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
     """Select a depot, one Amazon-structured customer parent and relevant CSs."""
@@ -926,24 +955,45 @@ def select_family_terminals_v2(
         "structure_and_depot_preflight", stage_started, depot_count=len(depots)
     )
 
-    stage_started = begin("customer_preflight")
-    territory, territory_report = _prepare_customer_territory(
-        cle,
-        family=family,
-        depot=depot,
-        structure_metadata=structure_metadata,
-        customer_split_path=customer_split_path,
-        profile=profile,
-        network=network,
+    capsule = (
+        load_family_selection_capsule(
+            selection_capsule_root,
+            family,
+            selected_depot_id=str(depot["candidate_id"]),
+            selected_structure_source_ids=list(
+                structure_metadata["structure_source_ids"]
+            ),
+        )
+        if selection_capsule_root is not None
+        else None
     )
+    stage_started = begin("customer_preflight")
+    if capsule is None:
+        territory, territory_report = _prepare_customer_territory(
+            cle,
+            family=family,
+            depot=depot,
+            structure_metadata=structure_metadata,
+            customer_split_path=customer_split_path,
+            profile=profile,
+            network=network,
+        )
+        territory_count = len(territory)
+    else:
+        territory = None
+        territory_report = dict(capsule.territory_report)
+        territory_count = int(territory_report["territory_count"])
     finish(
         "customer_preflight",
         stage_started,
         split_pool_count=territory_report["split_pool_count"],
         connectivity_eligible_count=territory_report["connectivity_eligible_count"],
-        territory_count=len(territory),
+        territory_count=territory_count,
+        replayed_from_c3_selection_capsule=capsule is not None,
     )
-    stage_started = begin("customer_spatial_activation", territory_count=len(territory))
+    stage_started = begin(
+        "customer_spatial_activation", territory_count=territory_count
+    )
     amazon_nn = pd.to_numeric(
         structure_targets.get("amazon_route_nearest_neighbor_time_s"), errors="coerce"
     ).dropna()
@@ -951,18 +1001,6 @@ def select_family_terminals_v2(
     amazon_pair_reference = amazon.route_spatial_reference.loc[
         amazon.route_spatial_reference["route_id"].astype(str).isin(source_route_ids)
     ]
-    adjacency_cache_key = f"{cle.city_slug}:{day_type}"
-    adjacency = (
-        community_adjacency_cache.get(adjacency_cache_key)
-        if community_adjacency_cache is not None
-        else None
-    )
-    if adjacency is None:
-        adjacency = _road_time_adjacency(
-            pd.read_parquet(community_adjacency_path), network
-        )
-        if community_adjacency_cache is not None:
-            community_adjacency_cache[adjacency_cache_key] = adjacency
     planned_fingerprint_raw = family.get("capacity_contract_fingerprint")
     planned_fingerprint = (
         None
@@ -973,32 +1011,57 @@ def select_family_terminals_v2(
         )
         else str(planned_fingerprint_raw)
     )
-    try:
-        activation = activate_spatial_customers(
-            territory,
-            adjacency,
-            structure_targets,
-            customer_count=customer_count,
-            seed=int(family["customer_superset_seed"]),
-            region_redraw_cap=int(spatial_cfg.get("region_redraw_cap", 3)),
-            progress_callback=(
-                (
-                    lambda substage, details: progress_callback(
-                        f"customer_spatial_activation.{substage}", details
-                    )
-                )
-                if progress_callback is not None
-                else None
-            ),
+    if capsule is None:
+        adjacency_cache_key = f"{cle.city_slug}:{day_type}"
+        adjacency = (
+            community_adjacency_cache.get(adjacency_cache_key)
+            if community_adjacency_cache is not None
+            else None
         )
-    except SpatialActivationError as error:
-        if planned_fingerprint is not None:
-            raise JointSupportConsistencyError(
-                f"approved pair failed exact activation with {error.code}",
-                capacity_contract_fingerprint=planned_fingerprint,
-            ) from error
-        raise
-    quota_report = activation.metadata["quota"]
+        if adjacency is None:
+            adjacency = _road_time_adjacency(
+                pd.read_parquet(community_adjacency_path), network
+            )
+            if community_adjacency_cache is not None:
+                community_adjacency_cache[adjacency_cache_key] = adjacency
+        try:
+            activation = activate_spatial_customers(
+                territory,
+                adjacency,
+                structure_targets,
+                customer_count=customer_count,
+                seed=int(family["customer_superset_seed"]),
+                region_redraw_cap=int(spatial_cfg.get("region_redraw_cap", 3)),
+                progress_callback=(
+                    (
+                        lambda substage, details: progress_callback(
+                            f"customer_spatial_activation.{substage}", details
+                        )
+                    )
+                    if progress_callback is not None
+                    else None
+                ),
+            )
+        except SpatialActivationError as error:
+            if planned_fingerprint is not None:
+                raise JointSupportConsistencyError(
+                    f"approved pair failed exact activation with {error.code}",
+                    capacity_contract_fingerprint=planned_fingerprint,
+                ) from error
+            raise
+        activation_metadata = activation.metadata
+        selected_customers = activation.customers.reset_index(drop=True)
+        radial_baseline = activation.radial_baseline.reset_index(drop=True)
+        adjacency_row_count = len(adjacency)
+    else:
+        activation_metadata = {
+            **capsule.spatial_activation_metadata,
+            "c3_selection_capsule_replayed": True,
+        }
+        selected_customers = capsule.selected_customers.reset_index(drop=True)
+        radial_baseline = capsule.radial_baseline.reset_index(drop=True)
+        adjacency_row_count = None
+    quota_report = activation_metadata["quota"]
     replay_fingerprint = capacity_contract_fingerprint(
         family=family,
         selected_depot_id=str(depot["candidate_id"]),
@@ -1014,7 +1077,6 @@ def select_family_terminals_v2(
             f"(planned={planned_fingerprint}, actual={replay_fingerprint})",
             capacity_contract_fingerprint=replay_fingerprint,
         )
-    selected_customers = activation.customers.reset_index(drop=True)
     route_quota_used = {
         str(route_id): int(count)
         for route_id, count in sorted(
@@ -1038,7 +1100,8 @@ def select_family_terminals_v2(
         "customer_spatial_activation",
         stage_started,
         selected_customer_count=len(selected_customers),
-        adjacency_row_count=len(adjacency),
+        adjacency_row_count=adjacency_row_count,
+        replayed_from_c3_selection_capsule=capsule is not None,
     )
 
     stage_started = begin("charger_preflight")
@@ -1290,12 +1353,12 @@ def select_family_terminals_v2(
             ],
             "split_legal_pool_count": territory_report["split_pool_count"],
             "time_envelope_pool_count": territory_report["time_envelope_count"],
-            "energy_screen_pool_count": len(territory),
+            "energy_screen_pool_count": territory_count,
             "energy_screen_removed_count": territory_report["time_envelope_count"]
-            - len(territory),
+            - territory_count,
             "energy_screen_removed_share": (
                 (
-                    territory_report["time_envelope_count"] - len(territory)
+                    territory_report["time_envelope_count"] - territory_count
                 )
                 / territory_report["time_envelope_count"]
                 if territory_report["time_envelope_count"]
@@ -1303,7 +1366,7 @@ def select_family_terminals_v2(
             ),
             "energy_screen_semantics": "direct_depot_customer_depot_sufficient_condition",
             "pool_floor": 1.0,
-            "territory_reserve_ratio": len(territory) / customer_count,
+            "territory_reserve_ratio": territory_count / customer_count,
             "depot_star": territory_report["depot_star_report"],
         },
         "joint_spatial_support": {
@@ -1327,7 +1390,7 @@ def select_family_terminals_v2(
             "coordinate_space_only": True,
             "cross_route_centroid_separation_normative": False,
         },
-        "spatial_activation": activation.metadata,
+        "spatial_activation": activation_metadata,
         "charger_selection": {
             **charger_metadata,
             "core_count": 0,
@@ -1345,4 +1408,4 @@ def select_family_terminals_v2(
         "radial_decile",
         "depot_running_time_s",
     ]
-    return terminal_index, metadata, activation.radial_baseline[baseline_columns]
+    return terminal_index, metadata, radial_baseline[baseline_columns]

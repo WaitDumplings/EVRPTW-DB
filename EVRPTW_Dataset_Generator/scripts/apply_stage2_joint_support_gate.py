@@ -28,6 +28,10 @@ from evrptw_stage2.selection import (
     prepare_customer_split_roster,
 )
 from evrptw_stage2.spatial_activation import SpatialActivationError
+from evrptw_stage2.selection_capsule import (
+    SELECTION_CAPSULE_SCHEMA,
+    write_task_selection_capsule,
+)
 
 
 C3_SCHEMA = "cle_evrptw_phase_c3_joint_spatial_support_v1"
@@ -236,6 +240,12 @@ def _apply_updates(
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.perf_counter()
+    if (args.selection_capsule_base is None) != (
+        args.selection_capsule_relpath is None
+    ):
+        raise ValueError(
+            "selection capsule base and relative path must be provided together"
+        )
     repo_root = Path(__file__).resolve().parents[2]
     provenance = resolve_git_provenance(
         repo_root,
@@ -278,6 +288,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     updates: dict[str, dict[str, Any]] = {}
     family_reports: list[dict[str, Any]] = []
+    selection_capsules: list[dict[str, Any]] = []
     topology_cache: dict[str, PhysicalRoadNetwork] = {}
     cle_cache: dict[str, Any] = {}
     speeds_cache: dict[str, pd.DataFrame] = {}
@@ -402,6 +413,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         }
                     )
                     continue
+                capsule_payload = support.pop("_selection_capsule")
+                if args.selection_capsule_base is not None:
+                    if not args.selection_capsule_relpath:
+                        raise ValueError(
+                            "--selection-capsule-base requires --selection-capsule-relpath"
+                        )
+                    selection_capsules.append(capsule_payload)
+                    support["selection_capsule_schema"] = SELECTION_CAPSULE_SCHEMA
+                    support["selection_capsule_relpath"] = str(
+                        args.selection_capsule_relpath
+                    )
                 aggregate_pass_count += 1
                 exact_pass_count += 1
                 selected = support
@@ -488,6 +510,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 separators=(",", ":"),
             ),
         }
+        if selected.get("selection_capsule_relpath"):
+            updates[family_id].update(
+                {
+                    "c3_selection_capsule_schema": selected[
+                        "selection_capsule_schema"
+                    ],
+                    "c3_selection_capsule_relpath": selected[
+                        "selection_capsule_relpath"
+                    ],
+                }
+            )
+
+    capsule_report = None
+    if selection_capsules:
+        capsule_report = write_task_selection_capsule(
+            args.selection_capsule_base, selection_capsules
+        )
 
     report = {
         "schema": C3_SCHEMA,
@@ -497,6 +536,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "passed": None if not args.report_only else True,
         "full_plan": full_plan,
         "covered_family_count": len(updates),
+        "selection_capsule": (
+            {
+                "schema": SELECTION_CAPSULE_SCHEMA,
+                "family_count": int(capsule_report["family_count"]),
+                "relpath": str(args.selection_capsule_relpath),
+                "hash_validation_performed": False,
+            }
+            if capsule_report is not None
+            else None
+        ),
         "families": family_reports,
         "elapsed_seconds": time.perf_counter() - started,
     }
@@ -550,6 +599,8 @@ def main() -> None:
         default="strict_release_v1",
     )
     parser.add_argument("--progress-output", type=Path)
+    parser.add_argument("--selection-capsule-base", type=Path)
+    parser.add_argument("--selection-capsule-relpath")
     parser.add_argument("--targeted-gate", action="store_true")
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()

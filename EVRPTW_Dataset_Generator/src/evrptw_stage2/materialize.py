@@ -279,6 +279,7 @@ def materialize_family(
         network=network,
         amazon=amazon_artifacts,
         community_adjacency_cache=community_adjacency_cache,
+        selection_capsule_root=output_root,
         progress_callback=(
             lambda stage, details: progress(f"terminal_selection.{stage}", **details)
         ),

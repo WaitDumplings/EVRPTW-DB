@@ -21,6 +21,7 @@ from .materialize import materialize_family
 from .planning import derive_seed, materialization_attempt_inputs
 from .profile import load_reference_profile
 from .reader import load_portable_cle
+from .selection_capsule import SelectionCapsuleError
 
 
 def _process_peak_rss_bytes() -> int:
@@ -84,6 +85,7 @@ def worker_error_is_fatal(error: Exception) -> bool:
             MemoryError,
             NameError,
             OSError,
+            SelectionCapsuleError,
             TypeError,
         ),
     )
