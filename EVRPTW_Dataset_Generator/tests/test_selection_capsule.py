@@ -112,6 +112,29 @@ def test_selection_capsule_round_trip_and_exact_binding(tmp_path) -> None:
     ]
 
 
+def test_capsule_paths_preserve_dotted_task_partition(tmp_path) -> None:
+    family = _family()
+    family["c3_selection_capsule_relpath"] = "capsules/chicago.part-0007"
+    base = tmp_path / str(family["c3_selection_capsule_relpath"])
+
+    write_task_selection_capsule(base, [_capsule()])
+
+    assert (tmp_path / "capsules/chicago.part-0007.metadata.json").is_file()
+    assert (
+        tmp_path / "capsules/chicago.part-0007.selected_customers.parquet"
+    ).is_file()
+    assert (tmp_path / "capsules/chicago.part-0007.radial_baseline.parquet").is_file()
+    assert not (tmp_path / "capsules/chicago.metadata.json").exists()
+    loaded = load_family_selection_capsule(
+        tmp_path,
+        family,
+        selected_depot_id="depot-1",
+        selected_structure_source_ids=["source-1"],
+    )
+    assert loaded is not None
+    assert len(loaded.selected_customers) == 2
+
+
 def test_selection_capsule_rejects_seed_mismatch(tmp_path) -> None:
     family = _family()
     write_task_selection_capsule(

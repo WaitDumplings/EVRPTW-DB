@@ -89,9 +89,13 @@ def _atomic_parquet(path: Path, frame: pd.DataFrame) -> None:
 def capsule_paths(base: str | Path) -> dict[str, Path]:
     base_path = Path(base)
     return {
-        "metadata": base_path.with_suffix(".metadata.json"),
-        "selected_customers": base_path.with_suffix(".selected_customers.parquet"),
-        "radial_baseline": base_path.with_suffix(".radial_baseline.parquet"),
+        # ``base`` is a task identifier, not a filename with an extension.
+        # Parallel C3 task IDs deliberately contain ``.part-XXXX``; using
+        # Path.with_suffix() here would strip that partition and make every
+        # task for a city overwrite the same three files.
+        "metadata": Path(f"{base_path}.metadata.json"),
+        "selected_customers": Path(f"{base_path}.selected_customers.parquet"),
+        "radial_baseline": Path(f"{base_path}.radial_baseline.parquet"),
     }
 
 
