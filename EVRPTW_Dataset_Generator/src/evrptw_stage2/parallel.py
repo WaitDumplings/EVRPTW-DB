@@ -244,6 +244,7 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
                     community_adjacency_path=community_adjacency_path,
                     amazon_artifacts=amazon_artifacts,
                     output_root=work_materialized_root,
+                    selection_capsule_root=output_root,
                     routing_topology_cache=topology_cache,
                     community_adjacency_cache=adjacency_cache,
                     code_provenance=task.get("code_provenance"),

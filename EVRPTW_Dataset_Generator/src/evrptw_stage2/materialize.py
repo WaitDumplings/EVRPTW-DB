@@ -208,6 +208,7 @@ def materialize_family(
     community_adjacency_path: str | Path,
     amazon_artifacts: AmazonStage2Artifacts,
     output_root: str | Path,
+    selection_capsule_root: str | Path | None = None,
     routing_topology_cache: dict[str, PhysicalRoadNetwork] | None = None,
     community_adjacency_cache: dict[str, pd.DataFrame] | None = None,
     code_provenance: Mapping[str, Any] | None = None,
@@ -279,7 +280,9 @@ def materialize_family(
         network=network,
         amazon=amazon_artifacts,
         community_adjacency_cache=community_adjacency_cache,
-        selection_capsule_root=output_root,
+        selection_capsule_root=(
+            output_root if selection_capsule_root is None else selection_capsule_root
+        ),
         progress_callback=(
             lambda stage, details: progress(f"terminal_selection.{stage}", **details)
         ),

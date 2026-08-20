@@ -188,6 +188,71 @@ def test_materialization_worker_receives_frozen_candidate_contract(monkeypatch) 
     }
 
 
+def test_materialization_worker_reads_capsule_from_canonical_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observed = {}
+
+    class ExpectedStop(OSError):
+        pass
+
+    monkeypatch.setattr(parallel, "load_stage2_config", lambda _path: object())
+    monkeypatch.setattr(
+        parallel,
+        "load_reference_profile",
+        lambda _path, *, official: {"official": official},
+    )
+    monkeypatch.setattr(
+        parallel, "load_portable_cle", lambda *_args, **_kwargs: object()
+    )
+    monkeypatch.setattr(
+        parallel, "load_amazon_stage2_artifacts", lambda *_args, **_kwargs: object()
+    )
+    monkeypatch.setattr(
+        parallel,
+        "materialization_attempt_inputs",
+        lambda family, views, *, attempt_number: (family, views),
+    )
+
+    def fake_materialize(_cle, **kwargs):
+        observed.update(
+            output_root=Path(kwargs["output_root"]),
+            selection_capsule_root=Path(kwargs["selection_capsule_root"]),
+        )
+        raise ExpectedStop
+
+    monkeypatch.setattr(parallel, "materialize_family", fake_materialize)
+    canonical = tmp_path / "instance-root"
+    inflight = canonical / ".inflight" / "mf_test" / "attempt-000" / "materialized"
+    with pytest.raises(ExpectedStop):
+        parallel.materialize_family_chunk(
+            {
+                "heartbeat_path": None,
+                "families": [
+                    {"family": {"family_id": "mf_test"}, "views": []}
+                ],
+                "chunk_id": "chicago:00000",
+                "config_path": "config.json",
+                "profile_path": "profile.json",
+                "mode": "official_toy",
+                "official_cle_contract": "frozen_technical_candidate_v1",
+                "city_slug": "chicago",
+                "cle_root": "cle",
+                "output_root": str(canonical),
+                "materialized_output_root": str(inflight),
+                "customer_split_path": "split.parquet",
+                "community_adjacency_path": "adjacency.parquet",
+                "amazon_artifact_root": "amazon",
+                "amazon_cohort_split_path": "cohort.json",
+                "max_attempts_per_family": 1,
+            }
+        )
+    assert observed == {
+        "output_root": inflight,
+        "selection_capsule_root": canonical,
+    }
+
+
 def test_builder_places_candidate_contract_in_every_worker_envelope(tmp_path: Path) -> None:
     families = pd.DataFrame(
         [{"family_id": "mf_test", "city_slug": "chicago"}]
