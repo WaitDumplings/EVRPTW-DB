@@ -20,6 +20,7 @@ import apply_stage2_joint_support_gate as c3
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.provenance import resolve_git_provenance
 from evrptw_stage2.selection import JOINT_SUPPORT_CONTRACT_ID
+from evrptw_stage2.toy import load_full_path_toy_manifest, toy_family_ids
 
 
 SCHEMA = "cle_evrptw_phase_c3_parallel_full_plan_v1"
@@ -143,10 +144,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     if families.empty:
         raise ValueError("Full C3 plan is empty")
+    toy_manifest = None
+    full_plan = args.toy_manifest is None
+    if args.toy_manifest is not None:
+        if args.mode != "official_toy":
+            raise ValueError("--toy-manifest requires --mode official_toy")
+        toy_manifest = load_full_path_toy_manifest(
+            args.toy_manifest,
+            code_commit=str(provenance["code_commit"]),
+        )
+        requested_ids = set(toy_family_ids(toy_manifest))
+        missing_ids = sorted(requested_ids - set(families["family_id"].astype(str)))
+        if missing_ids:
+            raise ValueError(f"Toy families are absent from the plan: {missing_ids}")
+        families = families.loc[
+            families["family_id"].astype(str).isin(requested_ids)
+        ].copy()
+    elif args.mode == "official_toy":
+        raise ValueError("official_toy parallel C3 requires --toy-manifest")
     cities = sorted(families["city_slug"].astype(str).unique())
-    if len(families) != 7_500 or len(cities) != 11:
+    expected_family_count = 7_500 if full_plan else 150
+    if len(families) != expected_family_count or len(cities) != 11:
         raise ValueError(
-            "Official parallel C3 requires the complete 7,500-family / 11-city plan; "
+            "Parallel C3 plan scope mismatch: "
+            f"expected families={expected_family_count}, cities=11; "
             f"observed families={len(families)}, cities={len(cities)}"
         )
     city_counts = {
@@ -199,7 +220,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "--amazon-cohort-split", str(args.amazon_cohort_split),
             "--profile", str(args.profile),
             "--output", str(output),
-            "--mode", "official",
+            "--mode", args.mode,
             "--official-cle-contract", args.official_cle_contract,
             "--cities", str(task["city"]),
             "--family-ids", *map(str, task["family_ids"]),
@@ -373,12 +394,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ]
     planned_ids = set(families["family_id"].astype(str))
     if set(updates) != planned_ids:
-        raise RuntimeError("Parallel C3 update IDs do not equal full family plan IDs")
+        raise RuntimeError("Parallel C3 update IDs do not equal selected plan-scope IDs")
     report = {
         "schema": SCHEMA,
         "status": "applying_plan",
         "passed": None,
-        "full_plan": True,
+        "full_plan": full_plan,
+        "release_eligible": full_plan,
+        "benchmark_role": (
+            "full_c3" if full_plan else "non_release_full_path_toy"
+        ),
         "covered_family_count": len(updates),
         "city_count": len(cities),
         "workers": int(args.workers),
@@ -389,11 +414,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "benchmark_positioning": (
             "infrastructure_grounded_semi_synthetic_not_fully_real"
         ),
+        "benchmark_description": "infrastructure-grounded semi-synthetic",
         "manual_cle_release_claimed": False,
         "city_summaries": city_summaries,
         "families": family_summaries,
         "code_provenance": provenance,
         "hash_validation_performed": False,
+        "toy_manifest": (
+            str(args.toy_manifest.resolve()) if args.toy_manifest is not None else None
+        ),
         "elapsed_seconds": time.perf_counter() - started,
     }
     c3._atomic_json(args.output, report)
@@ -403,7 +432,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         updates,
         c3_report=args.output,
         code_provenance=provenance,
-        full_plan=True,
+        full_plan=full_plan,
     )
     report["status"] = "passed"
     report["passed"] = True
@@ -420,6 +449,12 @@ def main() -> None:
     parser.add_argument("--amazon-artifact-root", type=Path, required=True)
     parser.add_argument("--amazon-cohort-split", type=Path, required=True)
     parser.add_argument("--profile", type=Path, required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("official", "official_toy"),
+        default="official",
+    )
+    parser.add_argument("--toy-manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--progress-output", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=11)

@@ -60,9 +60,9 @@ fi
 
 if [[ "$INSTANCE_METHOD" == "stage2" ]]; then
   case "$INSTANCE_MODE" in
-    official|research|non_release_pilot) ;;
+    official|official_toy|research|non_release_pilot) ;;
     *)
-      echo "INSTANCE_MODE must be official, research, or non_release_pilot." >&2
+      echo "INSTANCE_MODE must be official, official_toy, research, or non_release_pilot." >&2
       exit 2
       ;;
   esac
@@ -146,6 +146,36 @@ if [[ "$INSTANCE_METHOD" == "stage2" && "$INSTANCE_MODE" == "official" ]]; then
     --termination-grace-s "$TERMINATION_GRACE_S" \
     --official-cle-contract "$OFFICIAL_CLE_CONTRACT"
   run_stage2_builder "${extra_args[@]}" --stages materialize verify metrics
+elif [[ "$INSTANCE_METHOD" == "stage2" && "$INSTANCE_MODE" == "official_toy" ]]; then
+  toy_manifest="$INSTANCE_OUTPUT_ROOT/reports/stage2_repair/full_path_toy_manifest.json"
+  run_stage2_builder "${extra_args[@]}" \
+    --run-discipline full_path_toy \
+    --stages preflight splits plan
+  if [[ ! -f "$toy_manifest" ]]; then
+    "$PYTHON_BIN" scripts/build_stage2_toy_manifest.py \
+      --plan-root "$INSTANCE_OUTPUT_ROOT/generation_plan" \
+      --output "$toy_manifest"
+  fi
+  "$PYTHON_BIN" scripts/apply_stage2_joint_support_gate_parallel.py \
+    --cle-root "$CLE_ROOT" \
+    --plan-root "$INSTANCE_OUTPUT_ROOT/generation_plan" \
+    --customer-split-root "$INSTANCE_OUTPUT_ROOT/customer_splits" \
+    --amazon-artifact-root "$AMAZON_ARTIFACT_ROOT" \
+    --amazon-cohort-split configs/amazon_cohort_split_v1.json \
+    --profile "$REFERENCE_PROFILE" \
+    --mode official_toy \
+    --toy-manifest "$toy_manifest" \
+    --output "$INSTANCE_OUTPUT_ROOT/reports/stage2_repair/c3_joint_support_toy.json" \
+    --progress-output "$INSTANCE_OUTPUT_ROOT/stage2_c3_progress.json" \
+    --workers "${C3_WORKERS:-$WORKERS}" \
+    --families-per-task "${C3_FAMILIES_PER_TASK:-5}" \
+    --family-wall-timeout-s "$FAMILY_WALL_TIMEOUT_S" \
+    --termination-grace-s "$TERMINATION_GRACE_S" \
+    --official-cle-contract "$OFFICIAL_CLE_CONTRACT"
+  run_stage2_builder "${extra_args[@]}" \
+    --run-discipline full_path_toy \
+    --toy-manifest "$toy_manifest" \
+    --stages materialize verify metrics
 elif [[ "$INSTANCE_METHOD" == "stage2" ]]; then
   run_stage2_builder "${extra_args[@]}"
 else

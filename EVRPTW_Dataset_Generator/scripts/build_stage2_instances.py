@@ -41,6 +41,7 @@ from evrptw_stage2.release_discipline import (
     classify_la_smoke,
 )
 from evrptw_stage2.subprocess_parallel import run_supervised_materialization
+from evrptw_stage2.toy import load_full_path_toy_manifest, toy_family_ids
 
 STAGES = ("preflight", "splits", "plan", "materialize", "verify", "metrics")
 _ACTIVE_RUN_REPORT: dict[str, Any] | None = None
@@ -70,12 +71,12 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--amazon-artifact-root", type=Path, required=True)
     parser.add_argument(
         "--mode",
-        choices=("official", "research", "non_release_pilot"),
+        choices=("official", "official_toy", "research", "non_release_pilot"),
         default="research",
     )
     parser.add_argument(
         "--run-discipline",
-        choices=("la_smoke", "targeted_profile", "pilot"),
+        choices=("la_smoke", "targeted_profile", "pilot", "full_path_toy"),
         help="Required materialization stop discipline for non-release runs.",
     )
     parser.add_argument("--cities", nargs="+")
@@ -84,6 +85,11 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pilot-families-per-city", type=int)
     parser.add_argument("--max-families", type=int)
     parser.add_argument("--family-ids", nargs="+")
+    parser.add_argument(
+        "--toy-manifest",
+        type=Path,
+        help="Frozen 75 x 2 full-path toy selection; legal only in official_toy mode.",
+    )
     parser.add_argument("--max-attempts-per-family", type=int, default=4)
     parser.add_argument(
         "--family-wall-timeout-s",
@@ -112,6 +118,11 @@ def make_parser() -> argparse.ArgumentParser:
         "--full-run-approved",
         action="store_true",
         help="Required for any non-pilot corpus run after calibration approval.",
+    )
+    parser.add_argument(
+        "--toy-run-approved",
+        action="store_true",
+        help="Required for the non-release 75 x 2 official-contract toy run.",
     )
     parser.add_argument(
         "--official-cle-contract",
@@ -434,6 +445,7 @@ def _build_materialization_tasks(
                     "profile_path": str(args.profile.resolve()),
                     "cle_root": str(args.cle_root.resolve()),
                     "mode": args.mode,
+                    "official_cle_contract": args.official_cle_contract,
                     "city_slug": str(city),
                     "customer_split_path": str(
                         (
@@ -564,14 +576,32 @@ def main() -> None:
         cohort_split_path=args.amazon_cohort_split_path,
     )
     non_release = args.mode == "non_release_pilot"
-    profile = load_reference_profile(args.profile, official=args.mode == "official")
-    if not non_release:
-        if args.mode != "official":
+    full_path_toy = args.mode == "official_toy"
+    official_contract_mode = args.mode in {"official", "official_toy"}
+    profile = load_reference_profile(args.profile, official=official_contract_mode)
+    if full_path_toy:
+        if args.run_discipline != "full_path_toy":
+            raise ValueError("official_toy requires --run-discipline full_path_toy")
+        if not args.toy_run_approved:
+            raise ValueError("official_toy requires explicit --toy-run-approved")
+        if (
+            args.toy_manifest is None
+            and {"materialize", "verify", "metrics"} & set(args.stages)
+        ):
             raise ValueError(
-                "A full Stage-2 corpus may only use mode=official with a promoted "
-                "release_calibrated profile; research-mode full generation is forbidden"
+                "official_toy requires --toy-manifest before materialize/verify/metrics"
             )
-        if not args.full_run_approved:
+        if args.full_run_approved:
+            raise ValueError("official_toy must not use --full-run-approved")
+    elif args.toy_manifest is not None or args.toy_run_approved:
+        raise ValueError("Toy manifest/approval flags are legal only in official_toy mode")
+    if not non_release:
+        if not official_contract_mode:
+            raise ValueError(
+                "A full Stage-2 corpus may only use an official-contract mode with a "
+                "promoted release_calibrated profile"
+            )
+        if not full_path_toy and not args.full_run_approved:
             raise ValueError(
                 "Full Stage-2 generation is frozen pending reviewed pilot evidence; "
                 "--full-run-approved is required after explicit approval"
@@ -622,6 +652,14 @@ def main() -> None:
         "passed": None,
         "last_completed_stage": "runner_initialization",
         "mode": args.mode,
+        "release_eligible": args.mode == "official",
+        "benchmark_role": (
+            "non_release_full_path_toy" if full_path_toy else "stage2_generation"
+        ),
+        "benchmark_positioning": (
+            "infrastructure_grounded_semi_synthetic_not_fully_real"
+        ),
+        "benchmark_description": "infrastructure-grounded semi-synthetic",
         "code_provenance": code_provenance,
         "cities": list(cities),
         "stages": list(args.stages),
@@ -741,7 +779,33 @@ def main() -> None:
     _write_json(_run_report_path(args), run_report)
 
     selected_families = families.sort_values(["city_slug", "family_id"])
+    toy_manifest = None
+    if full_path_toy and args.toy_manifest is not None:
+        toy_manifest = load_full_path_toy_manifest(
+            args.toy_manifest,
+            code_commit=code_provenance["code_commit"],
+        )
+        requested_family_ids = set(toy_family_ids(toy_manifest))
+        selected_families = selected_families.loc[
+            selected_families["family_id"].astype(str).isin(requested_family_ids)
+        ]
+        if len(selected_families) != 150:
+            raise ValueError(
+                "official_toy plan selection must resolve exactly 150 families"
+            )
+        run_report["toy_manifest"] = {
+            "path": str(args.toy_manifest.resolve()),
+            "schema": toy_manifest["schema"],
+            "template_count": toy_manifest["template_count"],
+            "families_per_template": toy_manifest["families_per_template"],
+            "family_count": toy_manifest["family_count"],
+            "release_eligible": False,
+        }
     if args.family_ids:
+        if full_path_toy:
+            raise ValueError(
+                "official_toy selection is frozen by --toy-manifest"
+            )
         requested_family_ids = set(map(str, args.family_ids))
         selected_families = selected_families.loc[
             selected_families["family_id"].astype(str).isin(requested_family_ids)
@@ -751,6 +815,12 @@ def main() -> None:
         )
         if missing_family_ids:
             raise ValueError(f"Requested family IDs are absent from the plan: {missing_family_ids}")
+    if full_path_toy and (
+        args.shard_count != 1
+        or args.shard_index != 0
+        or args.max_families is not None
+    ):
+        raise ValueError("official_toy forbids sharding and --max-families")
     selected_families = selected_families.iloc[int(args.shard_index) :: int(args.shard_count)]
     if args.max_families is not None:
         selected_families = selected_families.iloc[: int(args.max_families)]
@@ -791,6 +861,14 @@ def main() -> None:
             raise ValueError(
                 "Pilot and official generation require a complete passed_full_plan "
                 "C3 registry covering the unsharded family plan"
+            )
+        if full_path_toy and (
+            c3_registry.get("status") != "passed_targeted_gate_only"
+            or int(c3_registry.get("covered_family_count", -1)) != 150
+        ):
+            raise ValueError(
+                "official_toy requires a passed targeted C3 registry covering exactly "
+                "the frozen 150-family toy selection"
             )
     if not ({"materialize", "verify", "metrics"} & set(args.stages)):
         run_report["status"] = "planned"
@@ -846,6 +924,30 @@ def main() -> None:
             planned_family_count=len(selected_families),
             started_monotonic=run_started,
         )
+    if "materialize" in args.stages and args.run_discipline == "full_path_toy":
+        if (
+            args.mode != "official_toy"
+            or args.workers != 30
+            or args.families_per_worker_task != 1
+            or args.max_attempts_per_family != 4
+            or len(selected_families) != 150
+            or len(set(selected_families["city_slug"].astype(str))) != 11
+            or set(selected_families["track_id"].astype(str))
+            != {
+                "train",
+                "validation",
+                "test1_new_seed",
+                "test2_heldout_locations",
+                "test3_heldout_city",
+                "unseen_scale_same_cities",
+            }
+            or set(selected_families["day_type"].astype(str))
+            != {"weekday", "weekend"}
+        ):
+            raise ValueError(
+                "full_path_toy requires mode=official_toy, 150 families, 11 cities, "
+                "all six tracks, both day types, workers=30, task=1, attempts=4"
+            )
     progress_writer = Stage2ProgressWriter(
         args.output_root,
         list(map(str, selected_families["family_id"].tolist())),
@@ -1065,12 +1167,23 @@ def main() -> None:
         "config_schema": config.schema,
         "profile_schema": profile["schema"],
         "mode": args.mode,
+        "release_eligible": args.mode == "official",
+        "benchmark_role": (
+            "non_release_full_path_toy" if full_path_toy else "stage2_generation"
+        ),
+        "benchmark_description": "infrastructure-grounded semi-synthetic",
         "official_cle_contract": args.official_cle_contract,
         "code_provenance": code_provenance,
         "max_attempts_per_family": int(args.max_attempts_per_family),
         "run_discipline": args.run_discipline,
         "selected_cities": list(cities),
-        "selected_tracks": list(args.tracks or []),
+        "selected_tracks": sorted(
+            set(selected_families["track_id"].astype(str))
+        ),
+        "selected_day_types": sorted(
+            set(selected_families["day_type"].astype(str))
+        ),
+        "toy_contract": run_report.get("toy_manifest"),
         "baseline_solver": {
             "run": False,
             "solver_version": None,

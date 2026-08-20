@@ -366,6 +366,48 @@ def test_official_reader_explicitly_accepts_frozen_technical_candidate(
     assert cle.warnings
 
 
+def test_official_toy_reader_uses_candidate_contract_and_is_non_release(
+    tmp_path: Path,
+) -> None:
+    _write_fake_cle(tmp_path, release_eligible=False)
+    manifest_path = tmp_path / "cities" / "test-city" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["technical_verification_passed"] = True
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    cle = load_portable_cle(
+        tmp_path,
+        "test-city",
+        mode="official_toy",
+        minimum_customers=1,
+        minimum_depots=1,
+        minimum_chargers=1,
+        official_cle_contract="frozen_technical_candidate_v1",
+    )
+    assert cle.non_release_pilot is True
+    assert cle.eligibility_contract == "frozen_technical_candidate_v1"
+    assert cle.eligibility_summary()["manual_cle_release_claimed"] is False
+    assert any("non-release test corpus" in warning for warning in cle.warnings)
+
+
+def test_official_toy_reader_rejects_default_strict_contract(
+    tmp_path: Path,
+) -> None:
+    _write_fake_cle(tmp_path, release_eligible=False)
+    manifest_path = tmp_path / "cities" / "test-city" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["technical_verification_passed"] = True
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(CLEEligibilityError, match="not release eligible"):
+        load_portable_cle(
+            tmp_path,
+            "test-city",
+            mode="official_toy",
+            minimum_customers=1,
+            minimum_depots=1,
+            minimum_chargers=1,
+        )
+
+
 def test_reader_rejects_legacy_cle_v1_root(tmp_path: Path) -> None:
     cle_root = tmp_path / "CLE_v1" / "us_11city"
     _write_fake_cle(cle_root, release_eligible=False)

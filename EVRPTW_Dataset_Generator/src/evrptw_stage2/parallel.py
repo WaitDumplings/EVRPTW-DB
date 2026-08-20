@@ -128,10 +128,17 @@ def materialize_family_chunk(task: Mapping[str, Any]) -> dict[str, Any]:
     config = load_stage2_config(task["config_path"])
     profile = load_reference_profile(
         task["profile_path"],
-        official=str(task["mode"]) == "official",
+        official=str(task["mode"]) in {"official", "official_toy"},
     )
     city = str(task["city_slug"])
-    cle = load_portable_cle(task["cle_root"], city, mode=str(task["mode"]))
+    cle = load_portable_cle(
+        task["cle_root"],
+        city,
+        mode=str(task["mode"]),
+        official_cle_contract=str(
+            task.get("official_cle_contract", "strict_release_v1")
+        ),
+    )
     output_root = Path(task["output_root"])
     customer_split_path = Path(task["customer_split_path"])
     community_adjacency_path = Path(task["community_adjacency_path"])

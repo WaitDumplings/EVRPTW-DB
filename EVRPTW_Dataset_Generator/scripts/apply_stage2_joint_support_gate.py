@@ -94,7 +94,7 @@ def _validate_c2_evidence(
     args: argparse.Namespace,
     provenance: dict[str, Any],
 ) -> dict[str, Any]:
-    if getattr(args, "mode", None) == "official":
+    if getattr(args, "mode", None) in {"official", "official_toy"}:
         profile = load_reference_profile(args.profile, official=True)
         promotion = dict(profile.get("acceptance_promotion") or {})
         if (
@@ -269,7 +269,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not full_plan and not args.targeted_gate:
         raise ValueError("Partial C3 requires --targeted-gate")
 
-    profile = load_reference_profile(args.profile, official=args.mode == "official")
+    profile = load_reference_profile(
+        args.profile, official=args.mode in {"official", "official_toy"}
+    )
     amazon = load_amazon_stage2_artifacts(
         args.amazon_artifact_root,
         cohort_split_path=args.amazon_cohort_split,
@@ -537,7 +539,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--mode",
-        choices=("official", "research", "non_release_pilot"),
+        choices=("official", "official_toy", "research", "non_release_pilot"),
         default="research",
     )
     parser.add_argument("--family-ids", nargs="*")

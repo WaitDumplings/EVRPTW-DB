@@ -15,7 +15,7 @@ from typing import Any, Literal
 import pandas as pd
 import pyarrow.parquet as pq
 
-RunMode = Literal["official", "research", "non_release_pilot"]
+RunMode = Literal["official", "official_toy", "research", "non_release_pilot"]
 
 
 class CLEEligibilityError(RuntimeError):
@@ -85,7 +85,7 @@ class PortableCLE:
 
     @property
     def non_release_pilot(self) -> bool:
-        return self.mode == "non_release_pilot"
+        return self.mode in {"official_toy", "non_release_pilot"}
 
     @property
     def research_generation(self) -> bool:
@@ -144,7 +144,7 @@ def load_portable_cle(
     minimum_chargers: int = 50,
     official_cle_contract: str = "strict_release_v1",
 ) -> PortableCLE:
-    if mode not in {"official", "research", "non_release_pilot"}:
+    if mode not in {"official", "official_toy", "research", "non_release_pilot"}:
         raise ValueError(f"Unsupported Stage-2 run mode: {mode!r}")
     cle_root_path = Path(cle_root)
     if "CLE_v1" in cle_root_path.parts:
@@ -179,13 +179,14 @@ def load_portable_cle(
     }
     if official_cle_contract not in allowed_official_contracts:
         raise ValueError(f"Unsupported official CLE contract: {official_cle_contract!r}")
+    official_contract_mode = mode in {"official", "official_toy"}
     technical_candidate = bool(
-        mode == "official"
+        official_contract_mode
         and official_cle_contract == "frozen_technical_candidate_v1"
         and manifest.get("technical_verification_passed") is True
     )
     if (
-        mode == "official"
+        official_contract_mode
         and not bool(manifest.get("release_eligible", False))
         and not technical_candidate
     ):
@@ -230,7 +231,7 @@ def load_portable_cle(
         "depot_candidate_eligible",
         "charger_candidate_eligible",
     )
-    use_release_fields = mode == "official" and bool(
+    use_release_fields = official_contract_mode and bool(
         manifest.get("release_eligible", False)
     )
     customer_field, depot_field, charger_field = (
@@ -327,6 +328,13 @@ def load_portable_cle(
                 "Open CLE release blockers: "
                 + ", ".join(map(str, manifest["release_blockers"]))
             )
+    if mode == "official_toy":
+        warnings.append(
+            "Official-contract toy mode exercises the release code path but is a "
+            "non-release test corpus and cannot be published as an official split. "
+            "It uses the frozen technically verified CLE candidate pools while all "
+            "manual scientific-release blockers remain explicit."
+        )
     return PortableCLE(
         root=root,
         city_slug=city_slug,
