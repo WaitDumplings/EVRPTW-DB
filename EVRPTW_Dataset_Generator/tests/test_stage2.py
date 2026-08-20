@@ -995,6 +995,11 @@ def test_cached_topology_accepts_new_family_road_state() -> None:
     )
     matrices = network.route_terminals(terminals)
     assert network._distance_adjacency is cached._distance_adjacency
+    assert network.edges["edge_travel_time_s"].tolist() == [5.0, 40.0]
+    assert network.edges["instance_speed_kph"].tolist() == [72.0, 9.0]
+    assert cached.edges["edge_travel_time_s"].tolist() == [10.0, 20.0]
+    fresh = PhysicalRoadNetwork(graph, next_state, profile)
+    pd.testing.assert_frame_equal(network.edges, fresh.edges)
     assert matrices.distance_matrix_km[0, 1] == pytest.approx(0.05)
     assert matrices.distance_path_travel_time_s[0, 1] == pytest.approx(2.5)
     assert matrices.distance_path_travel_time_s[1, 0] == pytest.approx(20.0)

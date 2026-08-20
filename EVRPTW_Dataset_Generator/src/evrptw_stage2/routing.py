@@ -262,7 +262,7 @@ class PhysicalRoadNetwork:
     ) -> PhysicalRoadNetwork:
         """Reuse immutable city topology with a new family-level speed state."""
 
-        frame = road_state.reset_index(drop=True)
+        frame = road_state.copy().reset_index(drop=True)
         required = {
             "edge_u",
             "edge_v",
@@ -274,6 +274,8 @@ class PhysicalRoadNetwork:
         missing = required - set(frame.columns)
         if missing:
             raise ValueError(f"Road state is missing routing columns: {sorted(missing)}")
+        for column in ("edge_u", "edge_v", "edge_key"):
+            frame[column] = frame[column].astype(str)
         if len(frame) != len(self.edges):
             raise ValueError("Road-state edge count differs from cached city topology")
         edge_keys = tuple(
@@ -287,13 +289,13 @@ class PhysicalRoadNetwork:
             raise ValueError("Road-state edge order differs from cached city topology")
         frame["u_index"] = self.edge_u_index
         frame["v_index"] = self.edge_v_index
+        frame["bearing_degrees"] = self.edge_bearing_degrees
 
         network = object.__new__(PhysicalRoadNetwork)
         for name in (
             "graph",
             "node_ids",
             "node_to_index",
-            "edges",
             "edge_count",
             "_edge_keys_in_order",
             "edge_length_m",
@@ -315,6 +317,11 @@ class PhysicalRoadNetwork:
             "_topological_reversal_forbidden_count",
         ):
             setattr(network, name, getattr(self, name))
+        # The topology columns are stable, but ``edges`` also carries the
+        # family-specific speed and travel-time realization.  Reusing the
+        # cached frame here made non-routing consumers (notably C3 community
+        # adjacency) silently read the first family's road state.
+        network.edges = frame
         network.profile = profile
         turn_cfg = profile["turn_penalty"]
         network._straight_max_degrees = float(turn_cfg["straight_max_degrees"])
