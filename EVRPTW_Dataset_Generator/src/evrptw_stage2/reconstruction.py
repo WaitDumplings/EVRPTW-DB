@@ -8,7 +8,6 @@ family-level road-state factors, and the terminal edge projections.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -23,6 +22,8 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
+from .artifacts import verify_materialized_family
+from .contracts import STAGE2_GENERATION_CONTRACT
 from .profile import load_reference_profile
 from .reader import PortableCLE, load_portable_cle
 from .road_state import build_family_road_state
@@ -65,19 +66,10 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
 
 
-def sha256_file(path: str | Path, *, chunk_bytes: int = 8 * 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        while chunk := stream.read(chunk_bytes):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _matrix_contract(path: Path) -> dict[str, Any]:
     matrix = np.load(path, mmap_mode="r", allow_pickle=False)
     return {
         "relative_path": str(path.name),
-        "npy_sha256": sha256_file(path),
         "file_bytes": int(path.stat().st_size),
         "shape": list(matrix.shape),
         "dtype": str(matrix.dtype),
@@ -158,7 +150,6 @@ def _cle_artifact_contract(cle_root: Path, city_slug: str) -> dict[str, Any]:
         path = city_root / relative
         artifacts[label] = {
             "relative_path": str(Path("cities") / city_slug / relative),
-            "sha256": sha256_file(path),
             "file_bytes": int(path.stat().st_size),
         }
     return {
@@ -188,7 +179,7 @@ def export_slim_dataset(
     cle_root: str | Path,
     profile_path: str | Path,
 ) -> dict[str, Any]:
-    """Copy a full Stage-2 tree without matrices and record exact cache checksums."""
+    """Copy a full Stage-2 tree without matrices and record structural contracts."""
 
     started = time.perf_counter()
     source = Path(source_root).resolve()
@@ -274,7 +265,7 @@ def export_slim_dataset(
             ),
             "terminal_access_source": str(manifest["terminal_index"]),
             "expected_matrices": matrix_contracts[family_id],
-            "reference_profile_sha256": sha256_file(profile_file),
+            "file_hash_validation_performed": False,
         }
         _write_json(copied_manifest_path, manifest)
 
@@ -292,10 +283,10 @@ def export_slim_dataset(
         "reference_profile": {
             "relative_path": "_reconstruction/reference_profile.json",
             "profile_id": str(profile["profile_id"]),
-            "sha256": sha256_file(profile_file),
+            "file_bytes": int(profile_file.stat().st_size),
             "charging_power_median_registry": {
                 "relative_path": f"_reconstruction/{charging_registry_name}",
-                "sha256": sha256_file(charging_registry),
+                "file_bytes": int(charging_registry.stat().st_size),
             },
         },
         "instance_registry": "_reconstruction/instance_registry.parquet",
@@ -304,7 +295,9 @@ def export_slim_dataset(
             "road_state": "stored_baseline_factors_preferred_over_rng_replay",
             "terminal_access": "exact_directed_edge_projection_and_connector",
             "matrix_dtype": "float32",
+            "validation": "shape_dtype_finite_and_full_family_feasibility_no_hash",
         },
+        "file_hash_validation_performed": False,
         "export_wall_seconds": time.perf_counter() - started,
     }
     _write_json(reconstruction_root / "reconstruction_contract.json", contract)
@@ -323,15 +316,14 @@ def _load_profile_for_dataset(
         raise FileNotFoundError(
             f"Reference profile is missing: {path}; provide --profile for a non-slim tree"
         )
+    profile = load_reference_profile(path)
     contract_path = dataset_root / "_reconstruction" / "reconstruction_contract.json"
     if contract_path.is_file():
         profile_contract = _read_json(contract_path)["reference_profile"]
-        expected = profile_contract["sha256"]
-        actual = sha256_file(path)
-        if actual != expected:
-            raise ReconstructionError(
-                f"Reference profile checksum mismatch: expected={expected}, actual={actual}"
-            )
+        if str(profile.get("profile_id")) != str(profile_contract.get("profile_id")):
+            raise ReconstructionError("Reference profile ID differs from slim contract")
+        if int(path.stat().st_size) != int(profile_contract.get("file_bytes", -1)):
+            raise ReconstructionError("Reference profile size differs from slim contract")
         registry_contract = profile_contract.get("charging_power_median_registry")
         if registry_contract:
             registry_path = dataset_root / registry_contract["relative_path"]
@@ -339,13 +331,13 @@ def _load_profile_for_dataset(
                 raise ReconstructionError(
                     f"Charging-power median registry is missing: {registry_path}"
                 )
-            registry_actual = sha256_file(registry_path)
-            if registry_actual != registry_contract["sha256"]:
+            if int(registry_path.stat().st_size) != int(
+                registry_contract.get("file_bytes", -1)
+            ):
                 raise ReconstructionError(
-                    "Charging-power median registry checksum mismatch: "
-                    f"expected={registry_contract['sha256']}, actual={registry_actual}"
+                    "Charging-power median registry size differs from slim contract"
                 )
-    return load_reference_profile(path)
+    return profile
 
 
 def _validate_cle_contract(dataset_root: Path, cle_root: Path, cities: Iterable[str]) -> None:
@@ -359,12 +351,10 @@ def _validate_cle_contract(dataset_root: Path, cle_root: Path, cities: Iterable[
             raise ReconstructionError(f"Slim contract has no CLE requirement for {city}")
         for label, spec in expected_city["artifacts"].items():
             path = cle_root / spec["relative_path"]
-            actual = sha256_file(path)
-            if actual != spec["sha256"]:
-                raise ReconstructionError(
-                    f"CLE {city} {label} checksum mismatch: "
-                    f"expected={spec['sha256']}, actual={actual}"
-                )
+            if not path.is_file():
+                raise ReconstructionError(f"CLE {city} {label} is missing: {path}")
+            if int(path.stat().st_size) != int(spec.get("file_bytes", -1)):
+                raise ReconstructionError(f"CLE {city} {label} size differs from slim contract")
 
 
 def resolve_family_dirs(
@@ -519,24 +509,32 @@ def verify_family_reconstruction(
         comparison = _compare_arrays(
             expected, actual, mode=validation, rtol=rtol, atol=atol
         )
-        comparison["existing_npy_sha256"] = sha256_file(expected_path)
-        with tempfile.TemporaryDirectory(prefix="evrptw-reconstruction-") as temporary:
-            rebuilt_path = Path(temporary) / f"{name}.npy"
-            np.save(rebuilt_path, np.asarray(actual, dtype=np.float32), allow_pickle=False)
-            comparison["rebuilt_npy_sha256"] = sha256_file(rebuilt_path)
-        comparison["npy_checksum_matches"] = (
-            comparison["existing_npy_sha256"] == comparison["rebuilt_npy_sha256"]
-        )
+        comparison["file_hash_validation_performed"] = False
         comparisons[name] = comparison
     return {
         "schema": "cle_evrptw_family_reconstruction_verification_v1",
         "family_id": str(manifest["family_id"]),
         "validation": validation,
         "passed": all(item["passed"] for item in comparisons.values()),
-        "all_npy_checksums_match": all(
-            item["npy_checksum_matches"] for item in comparisons.values()
-        ),
+        "file_hash_validation_performed": False,
         "matrices": comparisons,
+    }
+
+
+def _validate_matrix_cache_file(path: Path, expected: Mapping[str, Any]) -> dict[str, Any]:
+    matrix = np.load(path, mmap_mode="r", allow_pickle=False)
+    shape_matches = not expected.get("shape") or list(matrix.shape) == list(expected["shape"])
+    dtype_matches = not expected.get("dtype") or str(matrix.dtype) == str(expected["dtype"])
+    finite = bool(np.isfinite(matrix).all())
+    nonnegative = bool(np.all(matrix >= -1e-7))
+    return {
+        "passed": shape_matches and dtype_matches and finite and nonnegative,
+        "shape": list(matrix.shape),
+        "dtype": str(matrix.dtype),
+        "finite": finite,
+        "nonnegative": nonnegative,
+        "file_bytes": int(path.stat().st_size),
+        "file_hash_validation_performed": False,
     }
 
 
@@ -558,21 +556,23 @@ def restore_family_matrices(
     expected_contracts = _expected_matrix_contracts(manifest)
     existing_paths = [root / manifest["matrix_files"][name] for name in MATRIX_NAMES]
     if all(path.is_file() for path in existing_paths):
-        mismatches = []
-        for name, path in zip(MATRIX_NAMES, existing_paths):
-            expected_sha = expected_contracts.get(name, {}).get("npy_sha256")
-            if validation == "exact" and expected_sha and sha256_file(path) != expected_sha:
-                mismatches.append(name)
-        if not mismatches:
-            return {
-                "family_id": family_id,
-                "status": "reused_existing_cache",
-                "wall_seconds": time.perf_counter() - started,
-            }
-        raise ReconstructionError(
-            f"{family_id} has existing matrices with checksum mismatches: {mismatches}; "
-            "the restore command never overwrites an existing cache"
-        )
+        validations = {
+            name: _validate_matrix_cache_file(path, expected_contracts.get(name, {}))
+            for name, path in zip(MATRIX_NAMES, existing_paths)
+        }
+        failed = [name for name, item in validations.items() if not item["passed"]]
+        if failed:
+            raise ReconstructionError(
+                f"{family_id} has invalid existing matrices: {failed}; "
+                "the restore command never overwrites an existing cache"
+            )
+        return {
+            "family_id": family_id,
+            "status": "reused_existing_cache",
+            "matrices": validations,
+            "file_hash_validation_performed": False,
+            "wall_seconds": time.perf_counter() - started,
+        }
     if any(path.exists() for path in existing_paths) or matrix_dir.exists():
         raise ReconstructionError(
             f"{family_id} has a partial matrix cache; move it aside before deterministic restore"
@@ -587,27 +587,11 @@ def restore_family_matrices(
             values = np.asarray(rebuilt[name], dtype=np.float32)
             np.save(path, values, allow_pickle=False)
             expected = expected_contracts.get(name, {})
-            checksum_matches = not expected.get("npy_sha256") or (
-                sha256_file(path) == expected["npy_sha256"]
-            )
-            shape_matches = not expected.get("shape") or list(values.shape) == list(
-                expected["shape"]
-            )
-            dtype_matches = not expected.get("dtype") or str(values.dtype) == expected["dtype"]
-            if validation == "exact" and not checksum_matches:
+            validations[name] = _validate_matrix_cache_file(path, expected)
+            if not validations[name]["passed"]:
                 raise ReconstructionError(
-                    f"{family_id}/{name} reconstruction checksum mismatch"
+                    f"{family_id}/{name} reconstruction structural validation failed"
                 )
-            if not shape_matches or not dtype_matches:
-                raise ReconstructionError(
-                    f"{family_id}/{name} reconstruction shape or dtype mismatch"
-                )
-            validations[name] = {
-                "npy_sha256": sha256_file(path),
-                "checksum_matches": checksum_matches,
-                "shape": list(values.shape),
-                "dtype": str(values.dtype),
-            }
         os.replace(temporary, matrix_dir)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -617,22 +601,48 @@ def restore_family_matrices(
         "status": "restored",
         "validation": validation,
         "matrices": validations,
+        "file_hash_validation_performed": False,
         "wall_seconds": time.perf_counter() - started,
     }
 
 
 def _restore_chunk(task: Mapping[str, Any]) -> list[dict[str, Any]]:
     context = ReconstructionContext(Path(task["cle_root"]), dict(task["profile"]))
-    return [
-        restore_family_matrices(
+    results: list[dict[str, Any]] = []
+    for family_dir in map(Path, task["family_dirs"]):
+        result = restore_family_matrices(
             family_dir,
             context=context,
             validation=task["validation"],
             rtol=float(task["rtol"]),
             atol=float(task["atol"]),
         )
-        for family_dir in map(Path, task["family_dirs"])
-    ]
+        manifest = _read_json(family_dir / "family_manifest.json")
+        if manifest.get("stage2_generation_contract") == STAGE2_GENERATION_CONTRACT:
+            verification = verify_materialized_family(family_dir)
+            if verification.get("passed") is not True:
+                raise ReconstructionError(
+                    f"{family_dir.name} failed post-restore family verification: "
+                    f"{verification.get('errors', [])}"
+                )
+            result["family_verification"] = {
+                "passed": True,
+                "scope": "full_current_contract",
+                "view_count": int(verification["view_count"]),
+                "certified_customer_count": int(
+                    verification["certified_customer_count"]
+                ),
+                "unreachable_full_cs_return_count": int(
+                    verification["unreachable_full_cs_return_count"]
+                ),
+            }
+        else:
+            result["family_verification"] = {
+                "passed": True,
+                "scope": "structural_only_legacy_test_fixture",
+            }
+        results.append(result)
+    return results
 
 
 def restore_dataset_matrices(
@@ -702,5 +712,7 @@ def restore_dataset_matrices(
         "reused_count": sum(item["status"] == "reused_existing_cache" for item in results),
         "families": results,
         "passed": True,
+        "validation_contract": "shape_dtype_finite_and_full_family_feasibility_no_hash",
+        "file_hash_validation_performed": False,
         "wall_seconds": time.perf_counter() - started,
     }

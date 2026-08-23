@@ -73,9 +73,11 @@ def _synthetic_amazon() -> AmazonStage2Artifacts:
     )
 
 
-def test_v2_profile_rejects_v1_schema() -> None:
+def test_v2_profile_rejects_v1_schema(tmp_path: Path) -> None:
+    legacy = tmp_path / "legacy_profile.json"
+    legacy.write_text(json.dumps({"schema": "cle_evrptw_us_reference_instance_profile_v1"}))
     with pytest.raises(ValueError, match="Unsupported"):
-        load_reference_profile(ROOT / "configs" / "us_reference_instance_profile_v1.json")
+        load_reference_profile(legacy)
 
 
 def test_v2_profile_rejects_deleted_sampler_keys(tmp_path: Path) -> None:

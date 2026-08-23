@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .contracts import STAGE2_GENERATION_CONTRACT
 from .metrics import PHASE1_FAMILY_METRICS_SCHEMA
 from .orders import (
     FULL_CS_TO_DEPOT_CACHE_CONTRACT,
@@ -282,8 +283,8 @@ def verify_materialized_family(family_dir: str | Path) -> dict[str, Any]:
         errors.append("terminal_index row count does not match family manifest")
     if terminal_index["source_id"].astype(str).duplicated().any():
         errors.append("terminal_index contains duplicate source IDs")
-    current_contract = manifest.get("stage2_generation_contract") == (
-        "amazon_spatial_activation_v2"
+    current_contract = (
+        manifest.get("stage2_generation_contract") == STAGE2_GENERATION_CONTRACT
     )
     customer_count = int(manifest.get("parent_customer_count", 0))
     customer_rows = terminal_index.iloc[1 : 1 + customer_count]

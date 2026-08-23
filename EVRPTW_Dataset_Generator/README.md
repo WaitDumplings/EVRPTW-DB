@@ -117,10 +117,9 @@ under `data/sources/` and are reused by later cities. Useful modes are:
 ```
 
 Research-mode custom building registries do not pre-scan a multi-gigabyte state
-file solely to pin a hash and feature count. Those values are recorded during
-the one extraction pass. The final public release workflow may pin and verify
-the resulting source snapshot. This optimization changes provenance timing,
-not the extracted locations or CLE schema.
+file to compute content hashes. Structural metadata is recorded during the one
+extraction pass. The frozen workflow uses versioned source and schema identities
+without file-content hash validation.
 
 ## Two production commands
 
@@ -134,7 +133,7 @@ export NLR_API_KEY=YOUR_FREE_NLR_DEVELOPER_KEY
 
 The first command runs `scripts/prepare_us11_sources.py` before the CLE build.
 It downloads only missing fixed-cohort sources and reuses every existing
-nonempty input. The second command uses 12 workers by default and downloads the
+nonempty input. The second command uses 30 workers by default and downloads the
 three Amazon model-build JSON files automatically when its compact calibration
 artifact and raw inputs are both absent.
 For the exact server execution order, background commands, success criteria,
@@ -426,7 +425,7 @@ the Phase-1 metric bundle below
 `EVRPTW_Dataset/Validation/san-diego/`; it does not replace the production
 US-11-city release tree.
 
-The production shell defaults to 12 processes and one BLAS/OpenMP thread per
+The production shell defaults to 30 processes and one BLAS/OpenMP thread per
 process. A worker keeps one city's immutable routing topology across a
 25-family chunk. The runner conservatively budgets 5 GiB per worker and
 reserves 4 GiB for the parent/OS. Completed families are verified and reused
@@ -498,7 +497,7 @@ restore every family:
 ```bash
 CLE_ROOT=/data/EVRPTW_Dataset/CLE_v2/us_11city \
 INSTANCE_ROOT=/data/EVRPTW_Dataset/Instances_v2/us_11city \
-WORKERS=12 scripts/restore_stage2_instances.sh
+WORKERS=30 scripts/restore_stage2_instances.sh
 ```
 
 Or restore only the parent family required by one or more instance IDs:
@@ -511,20 +510,20 @@ scripts/restore_stage2_instances.sh --view-id-file instance_ids.txt
 ```
 
 The restore uses stored family road-state factors rather than replaying RNG,
-checks the CLE and profile hashes, and accepts the output only when all four
-`.npy` checksums match the original export. It never overwrites a partial or
+checks CLE and profile identity/schema, recomputes matrix shape/dtype/numeric constraints,
+and accepts the output only when the full materialized-family verifier including feasibility passes. It never overwrites a partial or
 conflicting matrix directory. See [OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md)
 for the reconstruction contract.
 
 At repository level, the production archive creator performs the slim export,
 copies CLE, enforces the CLE/Stage-2/Phase-1 acceptance reports, and publishes
-the archive plus checksum atomically:
+the archive atomically:
 
 ```bash
 cd ..
 ./auto.sh archive create \
   --archive /data/EVRPTW_Dataset_us11city_research_slim_v1.tar.zst \
-  --compression-threads 12
+  --compression-threads 30
 ```
 
 If CLE and slim parameters are distributed together as the supported
@@ -536,7 +535,7 @@ cd ..
 ./auto.sh archive start \
   --archive /data/EVRPTW_Dataset_us11city_research_slim_v1.tar.zst \
   --destination /data \
-  --workers 12 \
+  --workers 30 \
   --families-per-worker-task 25
 
 ./auto.sh archive status --destination /data
@@ -544,8 +543,7 @@ cd ..
 ./auto.sh archive wait --destination /data
 ```
 
-The required checksum defaults to `<archive>.sha256`; pass
-`--sha256-file FILE` only when it has another name. The workflow rejects
+The no-hash workflow validates the zstd frame and every tar member, then rejects
 absolute paths, `..` traversal, links, special files, duplicate members,
 unexpected archive roots, insufficient disk space, and unrelated existing
 targets. It extracts into private staging and publishes the tree atomically

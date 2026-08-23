@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from evrptw_stage2.artifacts import verify_materialized_family
+from evrptw_stage2.contracts import STAGE2_GENERATION_CONTRACT
 from evrptw_stage2.profile import load_reference_profile
 from evrptw_stage2.reconstruction import (
     MATRIX_NAMES,
@@ -16,7 +18,6 @@ from evrptw_stage2.reconstruction import (
     export_slim_dataset,
     resolve_family_dirs,
     restore_dataset_matrices,
-    sha256_file,
 )
 
 PROFILE_PATH = Path(__file__).parents[1] / "configs" / "us_reference_instance_profile_v2.json"
@@ -254,9 +255,10 @@ def test_slim_export_resolve_view_and_exact_restore(tmp_path: Path) -> None:
         restored_path = slim_family / "matrices" / f"{name}.npy"
         np.testing.assert_array_equal(np.load(restored_path, allow_pickle=False), expected[name])
         manifest = json.loads((slim_family / "family_manifest.json").read_text())
-        assert sha256_file(restored_path) == manifest["matrix_reconstruction"][
-            "expected_matrices"
-        ][name]["npy_sha256"]
+        contract_item = manifest["matrix_reconstruction"]["expected_matrices"][name]
+        assert contract_item["shape"] == list(expected[name].shape)
+        assert contract_item["dtype"] == "float32"
+        assert "npy_sha256" not in contract_item
     assert not list(slim_family.glob(".matrices-rebuild-*"))
 
 
@@ -267,7 +269,11 @@ def test_slim_restore_rejects_profile_and_cle_mismatch(tmp_path: Path) -> None:
 
     altered_profile = tmp_path / "profile.json"
     altered_profile.write_text(PROFILE_PATH.read_text(encoding="utf-8") + "\n", encoding="utf-8")
-    with pytest.raises(ReconstructionError, match="profile checksum mismatch"):
+    registry_name = load_reference_profile(PROFILE_PATH)["charging"][
+        "national_mode_median_registry"
+    ]
+    (tmp_path / registry_name).write_bytes((PROFILE_PATH.parent / registry_name).read_bytes())
+    with pytest.raises(ReconstructionError, match="profile size differs"):
         restore_dataset_matrices(
             slim,
             cle_root=cle_root,
@@ -277,7 +283,7 @@ def test_slim_restore_rejects_profile_and_cle_mismatch(tmp_path: Path) -> None:
 
     graph_path = cle_root / "cities" / "tiny-city" / "graph" / "graph_operational.graphml"
     graph_path.write_text(graph_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
-    with pytest.raises(ReconstructionError, match="operational_graph checksum mismatch"):
+    with pytest.raises(ReconstructionError, match="operational_graph size differs"):
         restore_dataset_matrices(slim, cle_root=cle_root, view_ids=["iv-tiny"])
 
 
@@ -289,11 +295,29 @@ def test_failed_exact_restore_leaves_no_partial_matrix_cache(tmp_path: Path) -> 
     manifest_path = family_root / "family_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["matrix_reconstruction"]["expected_matrices"]["distance_matrix_km"][
-        "npy_sha256"
-    ] = "0" * 64
+        "shape"
+    ] = [99, 99]
     _write_json(manifest_path, manifest)
 
-    with pytest.raises(ReconstructionError, match="reconstruction checksum mismatch"):
+    with pytest.raises(ReconstructionError, match="structural validation failed"):
         restore_dataset_matrices(slim, cle_root=cle_root, view_ids=["iv-tiny"])
     assert not (family_root / "matrices").exists()
     assert not list(family_root.glob(".matrices-rebuild-*"))
+
+
+
+def test_current_generation_contract_enables_strict_verifier_fields(
+    tmp_path: Path,
+) -> None:
+    source, _ = _build_tiny_full_dataset(tmp_path)
+    family = source / "materialized" / "families" / "mf-tiny"
+    manifest_path = family / "family_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["stage2_generation_contract"] = STAGE2_GENERATION_CONTRACT
+    _write_json(manifest_path, manifest)
+
+    result = verify_materialized_family(family)
+
+    assert result["passed"] is False
+    assert any("order_template_id" in error for error in result["errors"])
+    assert any("three Phase-1 metric files" in error for error in result["errors"])

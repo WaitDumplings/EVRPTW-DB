@@ -3,16 +3,15 @@
 
 This module is the non-interactive worker behind ``restore_dataset_archive.sh``.
 It deliberately separates archive extraction from the existing matrix
-reconstruction implementation: archives are fully inspected before GNU tar is
-allowed to extract them, and reconstruction still goes through ``auto.sh
-restore`` with exact checksum validation.
+reconstruction implementation: archives are fully inspected before extraction,
+and reconstruction still goes through ``auto.sh restore`` with structural and
+feasibility validation. No archive or matrix file hashes are calculated.
 """
 
 from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
 import json
 import os
 import shutil
@@ -29,10 +28,9 @@ from typing import Any
 ARCHIVE_ROOT = "EVRPTW_Dataset"
 RELEASE_MANIFEST_SCHEMA = "evrptw_slim_dataset_release_manifest_v1"
 RECONSTRUCTION_CONTRACT_SCHEMA = "cle_evrptw_slim_instances_v1"
-PROVENANCE_SCHEMA = "evrptw_dataset_archive_provenance_v1"
+PROVENANCE_SCHEMA = "evrptw_dataset_archive_provenance_v2"
 STATE_SCHEMA = "evrptw_dataset_restore_state_v1"
 MIN_SAFETY_BYTES = 5 * 1024**3
-SHA_CHUNK_BYTES = 8 * 1024**2
 
 
 class ArchiveWorkflowError(RuntimeError):
@@ -64,55 +62,26 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(SHA_CHUNK_BYTES), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def _archive_identity(path: Path) -> dict[str, int]:
+    """Record cheap file identity fields without reading the archive payload."""
+
+    status = path.stat()
+    return {
+        "device": int(status.st_dev),
+        "inode": int(status.st_ino),
+        "size": int(status.st_size),
+        "mtime_ns": int(status.st_mtime_ns),
+        "ctime_ns": int(status.st_ctime_ns),
+    }
 
 
-def _verified_archive_snapshot(source: Path, job_dir: Path, expected_sha: str) -> Path:
-    """Copy one immutable, checksum-bound archive snapshot into the job dir."""
-
-    snapshot = job_dir / "archive.snapshot.tar.zst"
-    if snapshot.is_file() and _sha256_file(snapshot) == expected_sha:
-        return snapshot
-    snapshot.unlink(missing_ok=True)
-    temporary = job_dir / f".archive.snapshot.tmp-{os.getpid()}"
-    temporary.unlink(missing_ok=True)
-    digest = hashlib.sha256()
-    try:
-        with source.open("rb") as input_handle, temporary.open("xb") as output_handle:
-            for block in iter(lambda: input_handle.read(SHA_CHUNK_BYTES), b""):
-                digest.update(block)
-                output_handle.write(block)
-            output_handle.flush()
-            os.fsync(output_handle.fileno())
-        actual_sha = digest.hexdigest()
-        if actual_sha != expected_sha:
-            raise ArchiveWorkflowError(
-                f"Archive SHA-256 mismatch: expected {expected_sha}, got {actual_sha}"
-            )
-        os.replace(temporary, snapshot)
-        directory_fd = os.open(job_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-        return snapshot
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _expected_sha256(path: Path) -> str:
-    try:
-        first = path.read_text(encoding="utf-8").splitlines()[0].split()[0].lower()
-    except (OSError, IndexError) as exc:
-        raise ArchiveWorkflowError(f"Cannot read checksum sidecar {path}: {exc}") from exc
-    if len(first) != 64 or any(character not in "0123456789abcdef" for character in first):
-        raise ArchiveWorkflowError(f"Invalid SHA-256 in sidecar: {path}")
-    return first
+def _assert_archive_unchanged(path: Path, expected: dict[str, Any]) -> None:
+    actual = _archive_identity(path)
+    normalized = {key: int(value) for key, value in expected.items()}
+    if actual != normalized:
+        raise ArchiveWorkflowError(
+            "Archive identity changed after preflight; restart with the stable file"
+        )
 
 
 def _validate_member(member: tarfile.TarInfo, seen: set[str]) -> None:
@@ -287,7 +256,7 @@ def validate_dataset_layout(dataset_root: Path) -> dict[str, Any]:
     }
 
 
-def validate_dataset_provenance(dataset_root: Path, expected_sha: str) -> None:
+def validate_dataset_provenance(dataset_root: Path, expected_release_id: str) -> None:
     if dataset_root.is_symlink():
         raise ArchiveWorkflowError(
             f"Refusing to reuse a symlinked dataset tree: {dataset_root}"
@@ -300,8 +269,8 @@ def validate_dataset_provenance(dataset_root: Path, expected_sha: str) -> None:
     provenance = _read_json(provenance_path)
     if provenance.get("schema") != PROVENANCE_SCHEMA:
         raise ArchiveWorkflowError("Existing dataset provenance schema is unsupported")
-    if provenance.get("archive_sha256") != expected_sha:
-        raise ArchiveWorkflowError("Existing dataset was extracted from another archive")
+    if provenance.get("release_id") != expected_release_id:
+        raise ArchiveWorkflowError("Existing dataset was extracted from another release")
 
 
 def _check_code_revision(repo_root: Path, required_commit: str) -> None:
@@ -352,14 +321,18 @@ def _load_config(job_dir: Path) -> dict[str, Any]:
 
 def initialize_job(args: argparse.Namespace) -> None:
     archive = args.archive.expanduser().resolve(strict=True)
-    checksum = args.sha256_file.expanduser().resolve(strict=True)
     destination = args.destination.expanduser().resolve()
     repo_root = args.repo_root.expanduser().resolve(strict=True)
     if destination == Path("/"):
         raise ArchiveWorkflowError("Refusing to use / as the extraction destination")
     if args.workers <= 0 or args.families_per_worker_task <= 0:
         raise ArchiveWorkflowError("Worker counts must be positive")
-    expected_sha = _expected_sha256(checksum)
+    identity = _archive_identity(archive)
+    inspection = inspect_archive(archive, str(args.zstd_bin))
+    release = inspection["release_manifest"]
+    release_id = str(release.get("release_id", ""))
+    if not release_id:
+        raise ArchiveWorkflowError("Release manifest does not declare release_id")
     destination.mkdir(parents=True, exist_ok=True)
     job_dir = args.job_dir.expanduser().resolve()
     expected_job_parent = destination / ".evrptw_restore_us11city"
@@ -371,10 +344,8 @@ def initialize_job(args: argparse.Namespace) -> None:
             f"Refusing to replace or reuse a symlinked dataset target: {target}"
         )
     if target.exists():
-        validate_dataset_provenance(target, expected_sha)
+        validate_dataset_provenance(target, release_id)
     job_dir.mkdir(parents=True, exist_ok=True)
-    # Do not rewrite a live worker's configuration. This lock also protects
-    # foreground starts on systems where tmux is intentionally unavailable.
     worker_lock_path = job_dir / "worker.lock"
     with worker_lock_path.open("a+") as worker_lock:
         try:
@@ -383,9 +354,11 @@ def initialize_job(args: argparse.Namespace) -> None:
             raise ArchiveWorkflowError("Another restore worker already owns this job") from exc
         config = {
             "archive": str(archive),
-            "archive_size": archive.stat().st_size,
-            "archive_sha256_expected": expected_sha,
-            "checksum_file": str(checksum),
+            "archive_identity": identity,
+            "archive_logical_bytes": int(inspection["logical_file_bytes"]),
+            "archive_member_count": int(inspection["member_count"]),
+            "release_id": release_id,
+            "release_manifest": release,
             "destination": str(destination),
             "dataset_root": str(target),
             "repo_root": str(repo_root),
@@ -399,12 +372,13 @@ def initialize_job(args: argparse.Namespace) -> None:
         _update_state(
             job_dir,
             "queued",
-            "Restore job configured",
+            "Restore job configured after full member inspection",
             session=args.session,
             archive=str(archive),
-            archive_sha256=expected_sha,
+            release_id=release_id,
             destination=str(destination),
             log=str(job_dir / "restore.log"),
+            file_hash_validation_performed=False,
         )
 
 
@@ -439,26 +413,55 @@ def _source_acceptance(cle_root: Path, instance_root: Path) -> dict[str, Any]:
 
     stage2 = _read_json(instance_root / "stage2_run_report.json")
     unresolved = stage2.get("unresolved_family_ids")
-    if not stage2.get("passed") or not isinstance(unresolved, list) or unresolved:
+    runtime = dict(stage2.get("runtime_contract") or {})
+    if (
+        stage2.get("passed") is not True
+        or stage2.get("terminal_report_committed") is not True
+        or not isinstance(unresolved, list)
+        or unresolved
+        or int(runtime.get("remaining_process_group_count", -1)) != 0
+    ):
         raise ArchiveWorkflowError(
-            "Stage-2 acceptance failed; require passed=true and no unresolved families"
+            "Stage-2 acceptance failed; require terminal passed report, no unresolved "
+            "families, and no remaining process groups"
         )
 
     phase1 = _read_json(instance_root / "reports" / "phase1" / "summary.json")
-    if not phase1.get("all_hard_gates_passed"):
+    if phase1.get("all_hard_gates_passed") is not True:
         raise ArchiveWorkflowError(
             "Phase-1 acceptance failed; not every hard correctness gate passed"
         )
-    realism = _read_json(instance_root / "reports" / "stage2_repair" / "q90_gate.json")
-    if not realism.get("release_calibrated"):
-        raise ArchiveWorkflowError(
-            "Stage-2 realism acceptance failed; release_calibrated is not true"
-        )
+    construct = _read_json(
+        instance_root
+        / "reports"
+        / "stage2_repair"
+        / "stage2_acceptance_v3_construct_valid.json"
+    )
+    if (
+        construct.get("schema") != "stage2_acceptance_v3_construct_valid"
+        or construct.get("passed") is not True
+    ):
+        raise ArchiveWorkflowError("Construct-valid v3 acceptance did not pass")
+    feasibility = _read_json(
+        instance_root
+        / "reports"
+        / "post_generation"
+        / "full_corpus_feasibility_gate_v1.json"
+    )
+    if feasibility.get("passed") is not True:
+        raise ArchiveWorkflowError("Full-corpus feasibility watcher gate did not pass")
+    c3 = _read_json(
+        instance_root / "reports" / "stage2_repair" / "c3_joint_support_full.json"
+    )
+    if c3.get("passed") is not True:
+        raise ArchiveWorkflowError("C3 full-plan joint-support gate did not pass")
     return {
         "cle_index": cle_index,
         "stage2": stage2,
         "phase1": phase1,
-        "realism": realism,
+        "construct_valid_v3": construct,
+        "feasibility": feasibility,
+        "c3": c3,
     }
 
 
@@ -564,7 +567,7 @@ def _write_tar_zstd(
 
 
 def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
-    """Create one accepted CLE + slim-instance release archive and checksum."""
+    """Create one accepted CLE + slim-instance release archive without hashing."""
 
     started = time.perf_counter()
     cle_root = args.cle_root.expanduser().resolve(strict=True)
@@ -572,20 +575,13 @@ def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
     profile = args.profile.expanduser().resolve(strict=True)
     repo_root = args.repo_root.expanduser().resolve(strict=True)
     archive = args.archive.expanduser().resolve()
-    checksum = (
-        args.sha256_file.expanduser().resolve()
-        if args.sha256_file is not None
-        else Path(f"{archive}.sha256")
-    )
     if archive.suffixes[-2:] != [".tar", ".zst"]:
         raise ArchiveWorkflowError("Release archive name must end in .tar.zst")
     if args.compression_threads <= 0 or not 1 <= args.compression_level <= 19:
         raise ArchiveWorkflowError("Compression threads must be positive and level must be 1..19")
     archive.parent.mkdir(parents=True, exist_ok=True)
-    if archive.exists() or checksum.exists():
-        raise ArchiveWorkflowError(
-            f"Refusing to overwrite an archive or checksum: {archive}, {checksum}"
-        )
+    if archive.exists():
+        raise ArchiveWorkflowError(f"Refusing to overwrite an archive: {archive}")
     for source in (cle_root, instance_root):
         if source in archive.parents:
             raise ArchiveWorkflowError("Release archive must be outside its source trees")
@@ -599,7 +595,6 @@ def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
         tempfile.mkdtemp(prefix=f".{archive.name}.build-", dir=archive.parent)
     )
     archive_created = False
-    checksum_created = False
     try:
         payload = staging_parent / ARCHIVE_ROOT
         cle_release = payload / "CLE_v2" / "us_11city"
@@ -636,8 +631,14 @@ def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
         if _matrix_payload_bytes(instances_release) != 0:
             raise ArchiveWorkflowError("Slim export unexpectedly contains matrix payload files")
 
+        release_id = (
+            f"evrptw-us11city-{commit[:12]}-"
+            f"{stage2.get('runtime_run_id', 'deterministic-run')}-"
+            f"{family_count}f-{view_count}v"
+        )
         release = {
             "schema": RELEASE_MANIFEST_SCHEMA,
+            "release_id": release_id,
             "archive_layout": ARCHIVE_ROOT,
             "code_commit": commit,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -651,7 +652,7 @@ def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
             "cle_payload_bytes": _tree_file_bytes(cle_release),
             "slim_instance_payload_bytes": _tree_file_bytes(instances_release),
             "reference_profile_id": contract["reference_profile"]["profile_id"],
-            "reference_profile_sha256": contract["reference_profile"]["sha256"],
+            "file_hash_validation_performed": False,
             "acceptance": {
                 "cle_status": acceptance["cle_index"]["status"],
                 "verified_cle_count": int(
@@ -659,7 +660,10 @@ def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "stage2_passed": True,
                 "phase1_all_hard_gates_passed": True,
-                "stage2_realism_release_calibrated": True,
+                "construct_valid_v3_passed": True,
+                "full_corpus_feasibility_passed": True,
+                "c3_joint_support_passed": True,
+                "spatial_and_operational_similarity_diagnostics_are_report_only": True,
             },
         }
         _atomic_write_json(payload / "release_manifest.json", release)
@@ -669,11 +673,11 @@ def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
             "This archive contains the accepted 11-city CLE and all lightweight "
             "Stage-2 family/view parameters. Dense matrix files are intentionally "
             "omitted and must be reconstructed with the repository code.\n\n"
-            "After cloning a compatible repository revision, keep the SHA-256 "
-            "sidecar beside the archive and run:\n\n"
+            "After cloning a compatible repository revision, "
+            "run:\n\n"
             f"{markdown_fence}bash\n"
             "./auto.sh archive start --archive /path/to/release.tar.zst "
-            "--destination /data --workers 12\n"
+            "--destination /data --workers 30\n"
             "./auto.sh archive wait --destination /data\n"
             f"{markdown_fence}\n\n"
             "Do not use the restored dataset until archive status is succeeded.\n",
@@ -691,38 +695,18 @@ def create_release_archive(args: argparse.Namespace) -> dict[str, Any]:
         inspection = inspect_archive(archive, str(args.zstd_bin))
         if inspection["release_manifest"] != release:
             raise ArchiveWorkflowError("Archived release manifest differs from staging")
-        digest = _sha256_file(archive)
-        checksum.parent.mkdir(parents=True, exist_ok=True)
-        temporary_checksum = checksum.with_name(f".{checksum.name}.tmp-{os.getpid()}")
-        try:
-            with temporary_checksum.open("x", encoding="utf-8") as handle:
-                handle.write(f"{digest}  {archive.name}\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            try:
-                os.link(temporary_checksum, checksum)
-            except FileExistsError as exc:
-                raise ArchiveWorkflowError(
-                    f"Checksum appeared during creation: {checksum}"
-                ) from exc
-            temporary_checksum.unlink()
-            checksum_created = True
-        finally:
-            temporary_checksum.unlink(missing_ok=True)
         return {
             "archive": str(archive),
-            "sha256_file": str(checksum),
-            "archive_sha256": digest,
             "archive_bytes": archive.stat().st_size,
             "logical_file_bytes": int(inspection["logical_file_bytes"]),
             "family_count": family_count,
             "view_count": view_count,
+            "release_id": release_id,
             "matrix_payload_bytes_omitted": int(contract["source_matrix_bytes_omitted"]),
+            "file_hash_validation_performed": False,
             "wall_seconds": time.perf_counter() - started,
         }
     except BaseException:
-        if checksum_created:
-            checksum.unlink(missing_ok=True)
         if archive_created:
             archive.unlink(missing_ok=True)
         raise
@@ -779,31 +763,24 @@ def run_job(job_dir: Path) -> None:
         destination = Path(config["destination"])
         dataset_root = Path(config["dataset_root"])
         repo_root = Path(config["repo_root"])
-        expected_sha = str(config["archive_sha256_expected"])
+        release_id = str(config["release_id"])
+        expected_identity = dict(config["archive_identity"])
         staging = job_dir / "staging"
         try:
-            _update_state(job_dir, "checksum", "Verifying archive SHA-256")
+            _update_state(job_dir, "preflight", "Checking stable archive file identity")
+            _assert_archive_unchanged(archive, expected_identity)
             if dataset_root.is_symlink():
                 raise ArchiveWorkflowError(
                     f"Refusing to replace or reuse a symlinked dataset target: {dataset_root}"
                 )
             if dataset_root.exists():
-                validate_dataset_provenance(dataset_root, expected_sha)
-                actual_sha = _sha256_file(archive)
-                if actual_sha != expected_sha:
-                    raise ArchiveWorkflowError(
-                        f"Archive SHA-256 mismatch: expected {expected_sha}, got {actual_sha}"
-                    )
-                inspected_archive = archive
-            else:
-                inspected_archive = _verified_archive_snapshot(
-                    archive, job_dir, expected_sha
-                )
-                actual_sha = expected_sha
-
-            _update_state(job_dir, "preflight", "Inspecting every archive member")
-            inspection = inspect_archive(inspected_archive, config["zstd_bin"])
-            release = inspection["release_manifest"]
+                validate_dataset_provenance(dataset_root, release_id)
+            release = dict(config["release_manifest"])
+            inspection = {
+                "release_manifest": release,
+                "member_count": int(config["archive_member_count"]),
+                "logical_file_bytes": int(config["archive_logical_bytes"]),
+            }
             omitted = int(release.get("matrix_payload_bytes_omitted", -1))
             if omitted <= 0:
                 raise ArchiveWorkflowError("Release manifest has no valid omitted matrix size")
@@ -814,7 +791,7 @@ def run_job(job_dir: Path) -> None:
                 # Recheck provenance in the worker. The target may have
                 # appeared or been replaced after the launcher initialized the
                 # job but before this persistent process acquired its lock.
-                validate_dataset_provenance(dataset_root, expected_sha)
+                validate_dataset_provenance(dataset_root, release_id)
                 layout = validate_dataset_layout(dataset_root)
                 existing_matrix_bytes = _matrix_payload_bytes(Path(layout["instance_root"]))
                 extraction_bytes = 0
@@ -843,24 +820,19 @@ def run_job(job_dir: Path) -> None:
                     shutil.rmtree(staging)
                 _update_state(job_dir, "extracting", "Extracting archive into private staging")
                 _extract_archive(
-                    inspected_archive,
+                    archive,
                     staging,
                     config["zstd_bin"],
                 )
-                # Bind the published tree to the checksum that was verified at
-                # job start.  A changed archive is discarded with staging.
-                extracted_archive_sha = _sha256_file(inspected_archive)
-                if extracted_archive_sha != expected_sha:
-                    raise ArchiveWorkflowError(
-                        "Archive changed while it was being inspected or extracted"
-                    )
+                _assert_archive_unchanged(archive, expected_identity)
                 staged_dataset = staging / ARCHIVE_ROOT
                 _update_state(job_dir, "validating", "Validating extracted slim dataset")
                 validate_dataset_layout(staged_dataset)
                 provenance = {
                     "schema": PROVENANCE_SCHEMA,
-                    "archive_sha256": actual_sha,
-                    "archive_size": int(config["archive_size"]),
+                    "release_id": release_id,
+                    "archive_size": int(expected_identity["size"]),
+                    "file_hash_validation_performed": False,
                     "release_manifest_schema": RELEASE_MANIFEST_SCHEMA,
                     "extracted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 }
@@ -876,12 +848,9 @@ def run_job(job_dir: Path) -> None:
                     os.fsync(destination_fd)
                 finally:
                     os.close(destination_fd)
-                inspected_archive.unlink(missing_ok=True)
 
             layout = validate_dataset_layout(dataset_root)
-            validate_dataset_provenance(dataset_root, expected_sha)
-            if inspected_archive != archive:
-                inspected_archive.unlink(missing_ok=True)
+            validate_dataset_provenance(dataset_root, release_id)
             instance_root = Path(layout["instance_root"])
             expected_families = int(layout["family_count"])
             report_path = instance_root / "matrix_restore_report.json"
@@ -908,9 +877,8 @@ def run_job(job_dir: Path) -> None:
                     "PYTHON_BIN": str(config["python_bin"]),
                 }
             )
-            # Always enter the reconstruction verifier, even when a previous
-            # success report exists. It hashes every existing matrix before
-            # reuse, so a stale report cannot hide missing or corrupt data.
+            # Always enter structural and feasibility validation, even when a
+            # previous success report exists; file hashes are intentionally disabled.
             result = subprocess.run(
                 [str(repo_root / "auto.sh"), "restore"],
                 cwd=repo_root,
@@ -979,7 +947,6 @@ def make_parser() -> argparse.ArgumentParser:
     create.add_argument("--instance-root", type=Path, required=True)
     create.add_argument("--profile", type=Path, required=True)
     create.add_argument("--archive", type=Path, required=True)
-    create.add_argument("--sha256-file", type=Path)
     create.add_argument("--repo-root", type=Path, required=True)
     create.add_argument("--zstd-bin", required=True)
     create.add_argument("--compression-threads", type=int, default=12)
@@ -987,7 +954,6 @@ def make_parser() -> argparse.ArgumentParser:
 
     init = commands.add_parser("init")
     init.add_argument("--archive", type=Path, required=True)
-    init.add_argument("--sha256-file", type=Path, required=True)
     init.add_argument("--destination", type=Path, required=True)
     init.add_argument("--repo-root", type=Path, required=True)
     init.add_argument("--job-dir", type=Path, required=True)

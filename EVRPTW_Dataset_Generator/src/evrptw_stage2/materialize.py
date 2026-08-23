@@ -17,6 +17,7 @@ import pandas as pd
 
 from .amazon import AmazonStage2Artifacts
 from .config import Stage2Config
+from .contracts import STAGE2_GENERATION_CONTRACT
 from .metrics import build_phase1_family_metrics
 from .orders import (
     FULL_CS_TO_DEPOT_CACHE_CONTRACT,
@@ -573,7 +574,7 @@ def materialize_family(
         )
         manifest = {
             "schema": "cle_evrptw_materialized_matrix_family_v3",
-            "stage2_generation_contract": "stage2_repair_v2_1_final",
+            "stage2_generation_contract": STAGE2_GENERATION_CONTRACT,
             "code_provenance": dict(code_provenance or {"status": "unbound_test_fixture"}),
             "cle_reference": _cle_reference(cle),
             "family_id": family_id,

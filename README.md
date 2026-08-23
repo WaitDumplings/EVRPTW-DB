@@ -15,7 +15,7 @@ A CLE freezes the static city-level substrate:
 - latent residential service locations with house/apartment evidence;
 - candidate depot and public charging-site layers;
 - edge-level legal and commercial-vehicle reference running speeds;
-- road-access connectors, provenance, checksums, and QA/release gates.
+- road-access connectors, versioned provenance, and QA/release gates.
 
 It deliberately contains no active customer, package count, demand, service
 time, or realized time window.
@@ -143,7 +143,7 @@ export NLR_API_KEY=YOUR_FREE_NLR_DEVELOPER_KEY
 Microsoft building, bounded HPMS, AFDC/coordinate-evidence, and Census
 block-group files are downloaded or derived; existing nonempty files are
 reused. NSI is cached during the CLE customer stage. `generate_instances.sh`
-uses 12 workers by default and downloads only the three public Amazon training
+uses 30 workers by default and downloads only the three public Amazon training
 JSON files used by Stage 2 when neither those files nor the compact artifact
 already exists. AWS access is unsigned, so no AWS account is required. Raw
 Amazon files stay outside Git; see
@@ -246,13 +246,13 @@ python -m pip install -r requirements.txt
 ```
 
 Use the same `python` executable for installation and archive restoration. The
-archive launcher checks the Stage-2 restore imports before checksum scanning so
+archive launcher checks the Stage-2 restore imports before archive inspection so
 a missing dependency fails immediately with the corresponding install command.
 
 These are the two production entry points. `generate_cle.sh` writes the eleven
 portable CLEs under `EVRPTW_Dataset/CLE_v2/us_11city/` and removes its
 intermediate work tree after a complete successful run. `generate_instances.sh`
-uses 12 processes by default and writes the split plan, community adjacency,
+uses 30 processes by default and writes the split plan, community adjacency,
 matrix families, views, verification reports, rejected-attempt records, and
 Phase-1 metrics under
 `EVRPTW_Dataset/Instances_v2/us_11city/`.
@@ -272,32 +272,31 @@ The combined entry point exposes both supported CLE-backed acquisition modes:
 # Add --view-id/--view-id-file to restore only selected parent families.
 CLE_ROOT=/data/EVRPTW_Dataset/CLE_v2/us_11city \
 INSTANCE_OUTPUT_ROOT=/data/EVRPTW_Dataset/Instances_v2/us_11city \
-WORKERS=12 ./auto.sh restore
+WORKERS=30 ./auto.sh restore
 ```
 
 After CLE and the full Stage-2 corpus pass the checks above, create the
-transferable CLE + slim-instance archive and its required SHA-256 sidecar:
+transferable CLE + slim-instance archive:
 
 ```bash
 ./auto.sh archive create \
   --archive /data/EVRPTW_Dataset_us11city_research_slim_v1.tar.zst \
-  --compression-threads 12
+  --compression-threads 30
 ```
 
 Creation refuses incomplete reports, failed Phase-1 hard gates, links or special
 files, existing output paths, and any slim export that still contains matrix
-payloads. It validates the finished archive before publishing the checksum.
+payloads. It validates the complete archive member set and release manifest before publishing the archive.
 
-For a transferred slim release archive, one command verifies its SHA-256,
+For a transferred slim release archive, one command validates the zstd stream,
 checks every archive member, unpacks it safely, and restores all matrix
 families in a persistent background `tmux` session:
 
 ```bash
-# Keep the required sidecar beside the archive as FILE.tar.zst.sha256.
 ./auto.sh archive start \
   --archive /data/EVRPTW_Dataset_us11city_research_slim_v1.tar.zst \
   --destination /data \
-  --workers 12
+  --workers 30
 
 ./auto.sh archive status --destination /data
 ./auto.sh archive logs --destination /data --follow
@@ -319,7 +318,7 @@ The build keeps raw sources, caches, and debug artifacts under
 operational GraphML and all runtime paths to remain inside the city package.
 Large source files and generated GraphML/GeoParquet artifacts are intentionally
 excluded from ordinary Git history and should be distributed with versioned
-checksum manifests.
+release manifests.
 
 ## Current implementation status
 
@@ -337,17 +336,15 @@ runtime action mask.
 The Stage-2 V2.1 candidate rebuilds all eleven CLE packages from current
 sources. Only a ten-training-city train/validation pilot is authorized before
 review; Test2/Jacksonville and the complete 7,500-family corpus remain blocked.
-The production instance shell defaults to `research` mode, but non-pilot
-generation requires explicit post-review approval. The stricter `official`
-mode remains available for a later final public release. The exact
+The production instance shell defaults to `research` mode. Full-corpus generation uses
+the frozen `official` profile and requires the explicit `--full-run-approved` flag. The exact
 build evidence is recorded in
 [`US_11CITY_BUILD_REPORT.md`](EVRPTW_Dataset_Generator/docs/US_11CITY_BUILD_REPORT.md).
 
 ## Reproducibility and release policy
 
-- Routine research runs record versioned source/profile IDs, seeds, and manifest
-  references. A complete byte-level checksum audit is deferred to the final
-  release workflow.
+- Routine research and release runs record versioned source/profile IDs, seeds, and
+  manifest references; the frozen workflow does not compute file-content hashes.
 - Road extension uses real OSM roads only; outside-city roads are transit-only.
 - Customer/facility access-distance values are QA references, not arbitrary
   hard-deletion thresholds.

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL="$ROOT_DIR/EVRPTW_Dataset_Generator/scripts/dataset_archive_tool.py"
 DEFAULT_DESTINATION="/data"
-DEFAULT_WORKERS=12
+DEFAULT_WORKERS=30
 DEFAULT_FAMILIES_PER_TASK=25
 
 usage() {
@@ -19,9 +19,8 @@ Usage:
 
 Start options:
   --archive FILE                 Required slim .tar.zst archive.
-  --sha256-file FILE             Default: FILE.sha256 (required).
   --destination DIR              Parent for EVRPTW_Dataset (default: /data).
-  --workers N                    Matrix restore processes (default: 12).
+  --workers N                    Matrix restore processes (default: 30).
   --families-per-worker-task N   Family chunk size (default: 25).
   --foreground                   Run synchronously instead of in tmux.
 
@@ -72,9 +71,7 @@ check_restore_python_dependencies() {
 job_paths() {
   DESTINATION_RESOLVED="$(canonical_destination "$1")"
   JOB_DIR="$DESTINATION_RESOLVED/.evrptw_restore_us11city"
-  local destination_hash
-  destination_hash="$(printf '%s' "$DESTINATION_RESOLVED" | sha256sum | cut -c1-12)"
-  SESSION="evrptw-restore-$destination_hash"
+  SESSION="evrptw-restore-us11city-${USER:-user}"
 }
 
 resolve_command PYTHON_RESOLVED "${PYTHON_BIN:-python}"
@@ -89,7 +86,6 @@ shift
 case "$command_name" in
   start)
     archive=""
-    checksum=""
     destination="$DEFAULT_DESTINATION"
     workers="$DEFAULT_WORKERS"
     families_per_task="$DEFAULT_FAMILIES_PER_TASK"
@@ -99,11 +95,6 @@ case "$command_name" in
         --archive)
           (($# >= 2)) || fail "--archive requires a value"
           archive="$2"
-          shift 2
-          ;;
-        --sha256-file)
-          (($# >= 2)) || fail "--sha256-file requires a value"
-          checksum="$2"
           shift 2
           ;;
         --destination)
@@ -136,10 +127,6 @@ case "$command_name" in
     done
     [[ -n "$archive" ]] || fail "start requires --archive FILE.tar.zst"
     [[ -f "$archive" ]] || fail "Archive not found: $archive"
-    if [[ -z "$checksum" ]]; then
-      checksum="$archive.sha256"
-    fi
-    [[ -f "$checksum" ]] || fail "Checksum sidecar not found: $checksum"
     [[ "$workers" =~ ^[1-9][0-9]*$ ]] || fail "--workers must be positive"
     [[ "$families_per_task" =~ ^[1-9][0-9]*$ ]] || \
       fail "--families-per-worker-task must be positive"
@@ -177,7 +164,6 @@ case "$command_name" in
 
     "$PYTHON_RESOLVED" "$TOOL" init \
       --archive "$archive" \
-      --sha256-file "$checksum" \
       --destination "$DESTINATION_RESOLVED" \
       --repo-root "$ROOT_DIR" \
       --job-dir "$JOB_DIR" \

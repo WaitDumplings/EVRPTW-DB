@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
 import importlib.util
 import io
 import json
@@ -59,6 +58,29 @@ def _tar_bytes(members: list[tarfile.TarInfo]) -> bytes:
     return buffer.getvalue()
 
 
+def _minimal_release_archive(tmp_path: Path, release_id: str = "test-release") -> Path:
+    payload = tmp_path / "minimal-payload" / archive_tool.ARCHIVE_ROOT
+    payload.mkdir(parents=True)
+    (payload / "release_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": archive_tool.RELEASE_MANIFEST_SCHEMA,
+                "release_id": release_id,
+                "archive_layout": archive_tool.ARCHIVE_ROOT,
+                "code_commit": "0" * 40,
+                "family_count": 1,
+                "view_count": 1,
+                "matrix_payload_bytes_omitted": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    archive = tmp_path / "release.tar.zst"
+    with tarfile.open(archive, mode="w") as output:
+        output.add(payload, arcname=archive_tool.ARCHIVE_ROOT)
+    return archive
+
+
 @pytest.mark.parametrize(
     ("members", "message"),
     [
@@ -102,19 +124,14 @@ def test_archive_inspection_rejects_noncanonical_alias(tmp_path: Path) -> None:
 
 
 def _init_arguments(tmp_path: Path, destination: Path) -> argparse.Namespace:
-    archive = tmp_path / "release.tar.zst"
-    archive.write_bytes(b"tiny-test-archive")
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    checksum = tmp_path / "release.tar.zst.sha256"
-    checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    archive = _minimal_release_archive(tmp_path)
     return argparse.Namespace(
         archive=archive,
-        sha256_file=checksum,
         destination=destination,
         repo_root=REPOSITORY_ROOT,
         job_dir=destination / ".evrptw_restore_us11city",
         python_bin=Path(sys.executable),
-        zstd_bin=Path("/bin/true"),
+        zstd_bin=_fake_zstd(tmp_path),
         workers=2,
         families_per_worker_task=3,
         session="test-restore-session",
@@ -143,34 +160,28 @@ def test_job_init_accepts_only_matching_archive_provenance(tmp_path: Path) -> No
     target = destination / "EVRPTW_Dataset"
     target.mkdir(parents=True)
     arguments = _init_arguments(tmp_path, destination)
-    expected = hashlib.sha256(arguments.archive.read_bytes()).hexdigest()
     provenance = target / ".archive_provenance.json"
     provenance.write_text(
         json.dumps(
-            {
-                "schema": archive_tool.PROVENANCE_SCHEMA,
-                "archive_sha256": "0" * 64,
-            }
+            {"schema": archive_tool.PROVENANCE_SCHEMA, "release_id": "wrong-release"}
         ),
         encoding="utf-8",
     )
-    with pytest.raises(archive_tool.ArchiveWorkflowError, match="another archive"):
+    with pytest.raises(archive_tool.ArchiveWorkflowError, match="another release"):
         archive_tool.initialize_job(arguments)
 
     provenance.write_text(
         json.dumps(
-            {
-                "schema": archive_tool.PROVENANCE_SCHEMA,
-                "archive_sha256": expected,
-            }
+            {"schema": archive_tool.PROVENANCE_SCHEMA, "release_id": "test-release"}
         ),
         encoding="utf-8",
     )
     archive_tool.initialize_job(arguments)
     job = json.loads((arguments.job_dir / "job.json").read_text(encoding="utf-8"))
-    assert job["archive_sha256_expected"] == expected
+    assert job["release_id"] == "test-release"
     assert job["workers"] == 2
     assert job["families_per_worker_task"] == 3
+    assert job["archive_identity"]["size"] == arguments.archive.stat().st_size
 
 
 def test_worker_rechecks_provenance_after_init(tmp_path: Path) -> None:
@@ -187,11 +198,7 @@ def test_worker_rechecks_provenance_after_init(tmp_path: Path) -> None:
 
 
 def test_auto_archive_background_start_uses_tmux_without_running_restore(tmp_path: Path) -> None:
-    archive = tmp_path / "release.tar.zst"
-    archive.write_bytes(b"tiny-placeholder")
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    checksum = tmp_path / "release.tar.zst.sha256"
-    checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    archive = _minimal_release_archive(tmp_path)
     destination = tmp_path / "destination"
     fake_zstd = _fake_zstd(tmp_path)
     tmux_log = tmp_path / "tmux.log"
@@ -211,22 +218,11 @@ def test_auto_archive_background_start_uses_tmux_without_running_restore(tmp_pat
             "TMUX_BIN": str(fake_tmux),
         }
     )
-
     result = subprocess.run(
         [
-            str(AUTO_PATH),
-            "archive",
-            "start",
-            "--archive",
-            str(archive),
-            "--sha256-file",
-            str(checksum),
-            "--destination",
-            str(destination),
-            "--workers",
-            "7",
-            "--families-per-worker-task",
-            "11",
+            str(AUTO_PATH), "archive", "start", "--archive", str(archive),
+            "--destination", str(destination), "--workers", "7",
+            "--families-per-worker-task", "11",
         ],
         cwd=REPOSITORY_ROOT,
         env=environment,
@@ -235,16 +231,16 @@ def test_auto_archive_background_start_uses_tmux_without_running_restore(tmp_pat
         check=False,
         timeout=30,
     )
-
     assert result.returncode == 0, result.stderr
     assert "Restore started in background" in result.stdout
-    assert "new-session -d -s evrptw-restore-" in tmux_log.read_text(encoding="utf-8")
+    assert "new-session -d -s evrptw-restore-us11city-" in tmux_log.read_text(encoding="utf-8")
     job_dir = destination / ".evrptw_restore_us11city"
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     state = json.loads((job_dir / "status.json").read_text(encoding="utf-8"))
     assert job["workers"] == 7
     assert job["families_per_worker_task"] == 11
     assert state["phase"] == "queued"
+    assert state["file_hash_validation_performed"] is False
     assert not (destination / "EVRPTW_Dataset").exists()
 
 
@@ -285,11 +281,6 @@ def test_status_reports_stopped_nonterminal_job_as_failure(tmp_path: Path) -> No
 def test_concurrent_archive_launcher_is_rejected(tmp_path: Path) -> None:
     archive = tmp_path / "release.tar.zst"
     archive.write_bytes(b"tiny-placeholder")
-    checksum = tmp_path / "release.tar.zst.sha256"
-    checksum.write_text(
-        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
-        encoding="utf-8",
-    )
     destination = tmp_path / "destination"
     job_dir = destination / ".evrptw_restore_us11city"
     job_dir.mkdir(parents=True)
@@ -306,15 +297,8 @@ def test_concurrent_archive_launcher_is_rejected(tmp_path: Path) -> None:
     try:
         result = subprocess.run(
             [
-                str(AUTO_PATH),
-                "archive",
-                "start",
-                "--archive",
-                str(archive),
-                "--sha256-file",
-                str(checksum),
-                "--destination",
-                str(destination),
+                str(AUTO_PATH), "archive", "start", "--archive", str(archive),
+                "--destination", str(destination),
             ],
             cwd=REPOSITORY_ROOT,
             env=environment,
@@ -325,7 +309,6 @@ def test_concurrent_archive_launcher_is_rejected(tmp_path: Path) -> None:
         )
     finally:
         lock_handle.close()
-
     assert result.returncode == 2
     assert "Another archive launcher is active" in result.stderr
 
@@ -335,31 +318,24 @@ def test_create_tiny_release_enforces_acceptance_and_omits_matrices(
 ) -> None:
     reconstruction_spec = importlib.util.spec_from_file_location(
         "reconstruction_create_fixture",
-        REPOSITORY_ROOT
-        / "EVRPTW_Dataset_Generator"
-        / "tests"
-        / "test_reconstruction.py",
+        REPOSITORY_ROOT / "EVRPTW_Dataset_Generator" / "tests" / "test_reconstruction.py",
     )
     assert reconstruction_spec is not None and reconstruction_spec.loader is not None
     fixture_module = importlib.util.module_from_spec(reconstruction_spec)
     reconstruction_spec.loader.exec_module(fixture_module)
-
     source, cle_source = fixture_module._build_tiny_full_dataset(tmp_path / "fixture")
     (cle_source / "cle_index.json").write_text(
-        json.dumps(
-            {
-                "status": "complete",
-                "verified_cle_count": 11,
-                "failures": [],
-            }
-        ),
+        json.dumps({"status": "complete", "verified_cle_count": 11, "failures": []}),
         encoding="utf-8",
     )
     (source / "stage2_run_report.json").write_text(
         json.dumps(
             {
-                "mode": "research",
+                "mode": "official",
                 "passed": True,
+                "terminal_report_committed": True,
+                "runtime_run_id": "tiny-run",
+                "runtime_contract": {"remaining_process_group_count": 0},
                 "unresolved_family_ids": [],
                 "execution": {"selected_family_count": 1},
                 "verified": [{"family_id": "mf-tiny", "passed": True}],
@@ -370,18 +346,22 @@ def test_create_tiny_release_enforces_acceptance_and_omits_matrices(
     phase1 = source / "reports" / "phase1" / "summary.json"
     phase1.parent.mkdir(parents=True)
     phase1.write_text(
-        json.dumps(
-            {
-                "all_hard_gates_passed": True,
-                "successful_parent_family_count": 1,
-            }
-        ),
+        json.dumps({"all_hard_gates_passed": True, "successful_parent_family_count": 1}),
         encoding="utf-8",
     )
-    realism = source / "reports" / "stage2_repair" / "q90_gate.json"
-    realism.parent.mkdir(parents=True)
-    realism.write_text(
-        json.dumps({"release_calibrated": True}), encoding="utf-8"
+    repair = source / "reports" / "stage2_repair"
+    repair.mkdir(parents=True)
+    (repair / "stage2_acceptance_v3_construct_valid.json").write_text(
+        json.dumps({"schema": "stage2_acceptance_v3_construct_valid", "passed": True}),
+        encoding="utf-8",
+    )
+    (repair / "c3_joint_support_full.json").write_text(
+        json.dumps({"passed": True}), encoding="utf-8"
+    )
+    post = source / "reports" / "post_generation"
+    post.mkdir(parents=True)
+    (post / "full_corpus_feasibility_gate_v1.json").write_text(
+        json.dumps({"passed": True}), encoding="utf-8"
     )
     archive = tmp_path / "tiny-created.tar.zst"
     arguments = argparse.Namespace(
@@ -389,41 +369,33 @@ def test_create_tiny_release_enforces_acceptance_and_omits_matrices(
         instance_root=source,
         profile=fixture_module.PROFILE_PATH,
         archive=archive,
-        sha256_file=None,
         repo_root=REPOSITORY_ROOT,
         zstd_bin=str(_fake_zstd(tmp_path)),
         compression_threads=1,
         compression_level=1,
     )
-
     report = archive_tool.create_release_archive(arguments)
-
     assert report["family_count"] == 1
     assert report["view_count"] == 1
+    assert report["file_hash_validation_performed"] is False
     assert archive.is_file()
-    checksum = Path(f"{archive}.sha256")
-    assert checksum.read_text(encoding="utf-8").split()[0] == hashlib.sha256(
-        archive.read_bytes()
-    ).hexdigest()
+    assert not Path(f"{archive}.sha256").exists()
     inspection = archive_tool.inspect_archive(archive, str(_fake_zstd(tmp_path)))
     assert inspection["release_manifest"]["acceptance"] == {
+        "c3_joint_support_passed": True,
         "cle_status": "complete",
+        "construct_valid_v3_passed": True,
+        "full_corpus_feasibility_passed": True,
         "phase1_all_hard_gates_passed": True,
-        "stage2_realism_release_calibrated": True,
+        "spatial_and_operational_similarity_diagnostics_are_report_only": True,
         "stage2_passed": True,
         "verified_cle_count": 11,
     }
     with tarfile.open(archive, mode="r:") as created:
         names = created.getnames()
     assert not any("/matrices/" in name for name in names)
-
     phase1.write_text(
-        json.dumps(
-            {
-                "all_hard_gates_passed": False,
-                "successful_parent_family_count": 1,
-            }
-        ),
+        json.dumps({"all_hard_gates_passed": False, "successful_parent_family_count": 1}),
         encoding="utf-8",
     )
     with pytest.raises(archive_tool.ArchiveWorkflowError, match="Phase-1 acceptance failed"):
@@ -433,15 +405,11 @@ def test_create_tiny_release_enforces_acceptance_and_omits_matrices(
 def test_tiny_archive_end_to_end_exact_restore(tmp_path: Path) -> None:
     reconstruction_spec = importlib.util.spec_from_file_location(
         "reconstruction_test_fixture",
-        REPOSITORY_ROOT
-        / "EVRPTW_Dataset_Generator"
-        / "tests"
-        / "test_reconstruction.py",
+        REPOSITORY_ROOT / "EVRPTW_Dataset_Generator" / "tests" / "test_reconstruction.py",
     )
     assert reconstruction_spec is not None and reconstruction_spec.loader is not None
     fixture_module = importlib.util.module_from_spec(reconstruction_spec)
     reconstruction_spec.loader.exec_module(fixture_module)
-
     source, cle_source = fixture_module._build_tiny_full_dataset(tmp_path / "fixture")
     payload = tmp_path / "payload" / "EVRPTW_Dataset"
     cle_release = payload / "CLE_v2" / "us_11city"
@@ -449,9 +417,7 @@ def test_tiny_archive_end_to_end_exact_restore(tmp_path: Path) -> None:
     cle_release.parent.mkdir(parents=True)
     shutil.copytree(cle_source, cle_release)
     contract = fixture_module.export_slim_dataset(
-        source,
-        instances_release,
-        cle_root=cle_release,
+        source, instances_release, cle_root=cle_release,
         profile_path=fixture_module.PROFILE_PATH,
     )
     required_commit = subprocess.check_output(
@@ -459,95 +425,54 @@ def test_tiny_archive_end_to_end_exact_restore(tmp_path: Path) -> None:
     ).strip()
     release = {
         "schema": archive_tool.RELEASE_MANIFEST_SCHEMA,
+        "release_id": "tiny-end-to-end-release",
         "archive_layout": archive_tool.ARCHIVE_ROOT,
         "code_commit": required_commit,
         "family_count": contract["family_count"],
         "view_count": contract["view_count"],
         "matrix_payload_bytes_omitted": contract["source_matrix_bytes_omitted"],
     }
-    (payload / "release_manifest.json").write_text(
-        json.dumps(release), encoding="utf-8"
-    )
+    (payload / "release_manifest.json").write_text(json.dumps(release), encoding="utf-8")
     archive = tmp_path / "tiny-release.tar.zst"
     with tarfile.open(archive, mode="w") as output:
         output.add(payload, arcname=archive_tool.ARCHIVE_ROOT)
-    checksum = tmp_path / "tiny-release.tar.zst.sha256"
-    checksum.write_text(
-        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
-        encoding="utf-8",
-    )
     destination = tmp_path / "restored"
     environment = os.environ.copy()
     environment.update(
         {
             "PYTHON_BIN": sys.executable,
             "ZSTD_BIN": str(_fake_zstd(tmp_path)),
-            # Foreground/CI operation must not require tmux.
             "TMUX_BIN": str(tmp_path / "tmux-does-not-exist"),
         }
     )
     command = [
-        str(AUTO_PATH),
-        "archive",
-        "start",
-        "--archive",
-        str(archive),
-        "--sha256-file",
-        str(checksum),
-        "--destination",
-        str(destination),
-        "--workers",
-        "1",
-        "--families-per-worker-task",
-        "1",
-        "--foreground",
+        str(AUTO_PATH), "archive", "start", "--archive", str(archive),
+        "--destination", str(destination), "--workers", "1",
+        "--families-per-worker-task", "1", "--foreground",
     ]
     first_run = subprocess.run(
-        command,
-        cwd=REPOSITORY_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=60,
+        command, cwd=REPOSITORY_ROOT, env=environment, text=True,
+        capture_output=True, check=False, timeout=60,
     )
     assert first_run.returncode == 0, first_run.stderr
-
     instance_root = destination / "EVRPTW_Dataset" / "Instances_v2" / "us_11city"
-    report = json.loads(
-        (instance_root / "matrix_restore_report.json").read_text(encoding="utf-8")
-    )
+    report = json.loads((instance_root / "matrix_restore_report.json").read_text(encoding="utf-8"))
     state = json.loads(
-        (destination / ".evrptw_restore_us11city" / "status.json").read_text(
-            encoding="utf-8"
-        )
+        (destination / ".evrptw_restore_us11city" / "status.json").read_text(encoding="utf-8")
     )
     assert report["passed"] is True
     assert report["restored_count"] == 1
+    assert report["file_hash_validation_performed"] is False
+    assert report["families"][0]["family_verification"]["passed"] is True
     assert state["phase"] == "succeeded"
-    matrices = list(
-        (instance_root / "materialized" / "families").glob("*/matrices/*.npy")
-    )
+    matrices = list((instance_root / "materialized" / "families").glob("*/matrices/*.npy"))
     assert len(matrices) == 4
-
-    # A prior success report is not sufficient: a removed complete cache must
-    # be reconstructed on the next idempotent run.
     shutil.rmtree(matrices[0].parent)
     second_run = subprocess.run(
-        command,
-        cwd=REPOSITORY_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=60,
+        command, cwd=REPOSITORY_ROOT, env=environment, text=True,
+        capture_output=True, check=False, timeout=60,
     )
     assert second_run.returncode == 0, second_run.stderr
-    second_report = json.loads(
-        (instance_root / "matrix_restore_report.json").read_text(encoding="utf-8")
-    )
+    second_report = json.loads((instance_root / "matrix_restore_report.json").read_text(encoding="utf-8"))
     assert second_report["passed"] is True
     assert second_report["restored_count"] == 1
-    assert len(
-        list((instance_root / "materialized" / "families").glob("*/matrices/*.npy"))
-    ) == 4

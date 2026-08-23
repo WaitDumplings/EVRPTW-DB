@@ -147,6 +147,96 @@ def _diagnostic_row(
     }
 
 
+def _full_plan_and_split_gate(
+    instance_root: Path, required: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Audit full-corpus C0 invariants directly when no pilot comparison exists."""
+
+    registry = _read_json(instance_root / "generation_plan" / "split_registry.json")
+    family_files = sorted((instance_root / "generation_plan").rglob("family_index.parquet"))
+    families = pd.concat(
+        [pd.read_parquet(path) for path in family_files], ignore_index=True
+    )
+    expected_families = int(required["parent_families"])
+    expected_views = int(required["materialized_views"])
+    checks: dict[str, bool] = {
+        "split_registry_schema": registry.get("schema") == "cle_evrptw_generation_plan_v3",
+        "family_count_exact": int(registry.get("family_count", -1)) == expected_families == len(families),
+        "view_count_exact": int(registry.get("view_count", -1)) == expected_views,
+        "family_ids_unique": families["family_id"].astype(str).nunique() == expected_families,
+        "official_not_pilot": not families["non_release_pilot"].astype(bool).any(),
+        "day_policy_frozen": set(families["day_type_allocation_policy"].astype(str))
+        == {"fixed_city_cohort_largest_remainder_5_to_2_v1"},
+        "test2_uses_heldout_locations": set(
+            families.loc[families["track_id"].eq("test2_heldout_locations"), "customer_pool"].astype(str)
+        ) == {"heldout"},
+        "non_heldout_tracks_use_train_pool": set(
+            families.loc[
+                ~families["track_id"].isin(
+                    {"test2_heldout_locations", "test3_heldout_city"}
+                ),
+                "customer_pool",
+            ].astype(str)
+        ) == {"train"},
+        "test3_uses_all_release_eligible": set(
+            families.loc[families["track_id"].eq("test3_heldout_city"), "customer_pool"].astype(str)
+        ) == {"all_release_eligible"},
+        "test3_is_only_jacksonville": set(
+            families.loc[families["track_id"].eq("test3_heldout_city"), "city_slug"].astype(str)
+        ) == {"jacksonville"},
+        "jacksonville_is_only_test3": set(
+            families.loc[families["city_slug"].eq("jacksonville"), "track_id"].astype(str)
+        ) == {"test3_heldout_city"},
+    }
+    day_type_ok = True
+    for _, group in families.groupby(["city_slug", "track_id"], sort=False):
+        total = len(group)
+        expected_weekday = (5 * total + 3) // 7
+        counts = group["day_type"].astype(str).value_counts()
+        if int(counts.get("weekday", 0)) != expected_weekday:
+            day_type_ok = False
+        if int(counts.get("weekend", 0)) != total - expected_weekday:
+            day_type_ok = False
+    checks["weekday_weekend_largest_remainder_5_to_2"] = day_type_ok
+
+    split_reports = sorted(
+        (instance_root / "customer_splits").glob("*/customer_split_report.json")
+    )
+    split_ok = len(split_reports) == 11
+    complete_community_ok = True
+    location_ids: set[str] = set()
+    unique_locations = True
+    for report_path in split_reports:
+        report = _read_json(report_path)
+        split_ok = split_ok and (
+            report.get("schema") == "cle_evrptw_customer_split_report_v1"
+            and report.get("partition_version")
+            == "census_block_group_road_scc_80_20_v1"
+            and report.get("non_release_pilot") is False
+        )
+        manifest_path = report_path.parent / str(
+            report.get("outputs", {}).get(
+                "customer_split_manifest", "customer_split_manifest.parquet"
+            )
+        )
+        frame = pd.read_parquet(
+            manifest_path,
+            columns=["latent_service_location_id", "community_id", "customer_pool"],
+        )
+        complete_community_ok = complete_community_ok and bool(
+            frame.groupby("community_id")["customer_pool"].nunique().le(1).all()
+        )
+        ids = set(frame["latent_service_location_id"].astype(str))
+        unique_locations = unique_locations and len(ids) == len(frame) and not (
+            location_ids & ids
+        )
+        location_ids.update(ids)
+    checks["all_11_split_reports_valid"] = split_ok
+    checks["complete_community_never_crosses_pool"] = complete_community_ok
+    checks["split_customer_ids_unique"] = unique_locations
+    return {"passed": all(checks.values()), "checks": checks}
+
+
 def evaluate_construct_valid_acceptance(
     *,
     instance_root: Path,
@@ -162,7 +252,12 @@ def evaluate_construct_valid_acceptance(
     before = _artifact_snapshot(family_root)
     run = _read_json(instance_root / "stage2_run_report.json")
     phase1 = _read_json(instance_root / "reports" / "phase1" / "summary.json")
-    c0 = _read_json(instance_root / "reports" / "stage2_repair" / "c0_exact_comparison.json")
+    c0_path = instance_root / "reports" / "stage2_repair" / "c0_exact_comparison.json"
+    c0 = (
+        _read_json(c0_path)
+        if c0_path.is_file()
+        else _full_plan_and_split_gate(instance_root, config["required_counts"])
+    )
     templates = pd.read_parquet(amazon_artifact_root / "templates.parquet")
     template_index = templates.set_index("template_id", drop=False)
     template_id_set = set(template_index.index.astype(str))
@@ -290,9 +385,20 @@ def evaluate_construct_valid_acceptance(
         "quota_route_count_and_source_provenance_self_consistent": bool(route_rows and all(row["passed"] for row in route_rows) and not source_failures),
         "amazon_customer_attributes_inherited_exactly": not inheritance_failures,
         "matrix_connectivity_feasibility_nested_views_and_verifier_passed": bool(verified and all(item.get("passed") is True for item in verified)),
-        "no_timeout_rejection_unresolved_or_abort": not any([run.get("unresolved_family_ids", []), run.get("timed_out_family_ids", []), run.get("aborted_family_ids", []), run.get("rejected_attempts", [])]),
-        "no_orphan_process_groups": int(run.get("remaining_process_group_count", 0)) == 0,
-        "runner_terminal_report_passed": run.get("passed") is True and discipline.get("stopped") is False,
+        "no_timeout_rejection_unresolved_or_abort": not any([
+            run.get("unresolved_family_ids", []),
+            run.get("timed_out_attempts", []),
+            run.get("aborted_attempts", []),
+            run.get("rejected_attempts", []),
+        ]),
+        "no_orphan_process_groups": int(
+            run.get("runtime_contract", {}).get("remaining_process_group_count", -1)
+        ) == 0,
+        "runner_terminal_report_passed": (
+            run.get("passed") is True
+            and run.get("terminal_report_committed") is True
+            and discipline.get("stopped", False) is False
+        ),
     }
     after = _artifact_snapshot(family_root)
     checks["family_artifacts_unchanged_during_read_only_audit"] = before == after
@@ -318,7 +424,7 @@ def evaluate_construct_valid_acceptance(
         "schema": REPORT_SCHEMA,
         "status": "passed" if all(checks.values()) else "failed",
         "passed": all(checks.values()),
-        "scope": "existing_140_family_non_release_pilot_read_only",
+        "scope": str(config.get("statistical_scope", "read_only_corpus")),
         "benchmark_definition": config["benchmark_definition"],
         "checks": checks,
         "counts": {
@@ -333,6 +439,7 @@ def evaluate_construct_valid_acceptance(
         "route_quota_audit": {"failed_family_count": sum(not row["passed"] for row in route_rows), "rows": route_rows},
         "source_provenance_failures": source_failures,
         "inheritance_failures": inheritance_failures,
+        "c0_evidence": c0,
         "diagnostics_report": DIAGNOSTIC_SCHEMA,
         "diagnostics_do_not_contribute_to_passed": True,
         "family_artifacts_modified": before != after,

@@ -7,7 +7,7 @@
     "ev_activity_audit_schema": "stage2_primary_view_ev_activity_audit_v1",
     "ev_activity_code_commit": "fb9dc72ce6c5523d57f85afd80abd08617a8e57a",
     "hash_validation_performed": false,
-    "required_next_step": "commit_and_push_clean_acceptance_revision_before_full_run",
+    "required_next_step": "clean_commit_then_fresh_full_run_and_restore_then_push_on_success",
     "schema": "evrptw_profile_acceptance_promotion_v2_no_hash"
   },
   "charging": {
