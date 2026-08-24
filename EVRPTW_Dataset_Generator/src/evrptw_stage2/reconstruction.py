@@ -408,6 +408,11 @@ class ReconstructionContext:
             )
         if city not in self._cle_by_city:
             mode = str(manifest.get("generation_mode", "research"))
+            official_cle_contract = str(
+                self.profile.get("source_contract", {}).get(
+                    "cle_eligibility_contract", "strict_release_v1"
+                )
+            )
             self._cle_by_city[city] = load_portable_cle(
                 self.cle_root,
                 city,
@@ -415,6 +420,7 @@ class ReconstructionContext:
                 minimum_customers=1,
                 minimum_depots=1,
                 minimum_chargers=1,
+                official_cle_contract=official_cle_contract,
             )
             self._speeds_by_city[city] = pd.read_parquet(self._cle_by_city[city].speeds_path)
         baselines = manifest.get("road_state_report", {}).get(

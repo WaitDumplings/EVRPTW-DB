@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import evrptw_stage2.reconstruction as reconstruction_module
 from evrptw_stage2.artifacts import verify_materialized_family
 from evrptw_stage2.contracts import STAGE2_GENERATION_CONTRACT
 from evrptw_stage2.profile import load_reference_profile
@@ -321,3 +322,41 @@ def test_current_generation_contract_enables_strict_verifier_fields(
     assert result["passed"] is False
     assert any("order_template_id" in error for error in result["errors"])
     assert any("three Phase-1 metric files" in error for error in result["errors"])
+
+def test_reconstruction_propagates_profile_cle_eligibility_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    family = tmp_path / "mf-official"
+    _write_json(
+        family / "family_manifest.json",
+        {
+            "family_id": "mf-official",
+            "city_slug": "chicago",
+            "generation_mode": "official",
+            "reference_profile_id": "release-profile",
+        },
+    )
+    observed: dict[str, object] = {}
+
+    def stop_after_cle_contract(*args: object, **kwargs: object) -> object:
+        observed.update(kwargs)
+        raise RuntimeError("contract captured")
+
+    monkeypatch.setattr(
+        reconstruction_module, "load_portable_cle", stop_after_cle_contract
+    )
+    context = ReconstructionContext(
+        tmp_path / "cle",
+        {
+            "profile_id": "release-profile",
+            "source_contract": {
+                "cle_eligibility_contract": "frozen_technical_candidate_v1"
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="contract captured"):
+        context.route_family(family)
+
+    assert observed["mode"] == "official"
+    assert observed["official_cle_contract"] == "frozen_technical_candidate_v1"
