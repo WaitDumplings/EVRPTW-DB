@@ -2,13 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/common.sh"
+source "${SCRIPT_DIR}/cus50_common.sh"
 
 readonly SOLVER_DIR="${REPO_ROOT}/EVRPTW_Benchmark/Exact/Gurobi_Solver"
-readonly SAVE_PATH="${RESULTS_ROOT}/${TEST_RESULT_RELATIVE_ROOT}/Gurobi_Solver_cs2_2h"
+base_save_path="${RESULTS_ROOT}/${TEST_RESULT_RELATIVE_ROOT}/Gurobi_Solver_cs2_2h"
+partition_output SAVE_PATH "${base_save_path}"
+readonly SAVE_PATH
 
 prepare_output "${SAVE_PATH}"
-print_contract "Gurobi exact (cs_copies=2, threads=1)" "${SAVE_PATH}"
+print_contract "Gurobi exact (cs_copies=2, threads=1)" "test1_new_seed_same_cities" "${TEST_INDEX}" "${SAVE_PATH}"
 
 run_python "${SOLVER_DIR}/run_gurobi.py" \
   --dataset_path "${TEST_INDEX}" \

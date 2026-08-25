@@ -2,34 +2,49 @@
 set -euo pipefail
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  echo "common.sh is a shared library; run one of the run_*_cus50_test.sh scripts." >&2
+  echo "common.sh is a shared library; run one of the run_*_test.sh scripts." >&2
   exit 2
 fi
+
+: "${CUS_SCALE:?CUS_SCALE must be set before sourcing common.sh}"
+: "${TEST_VIEW_COUNT:?TEST_VIEW_COUNT must be set before sourcing common.sh}"
+readonly CUS_SCALE
+readonly TEST_VIEW_COUNT
 
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${TEST_SCRIPT_DIR}/../.." && pwd)"
 readonly CHECKPOINTS_S="300,1800,3600,7200"
 readonly TIME_LIMIT_S="7200"
-readonly CUS_SCALE="Cus50"
-readonly TEST_RELATIVE_INDEX="compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet"
-readonly TEST_RESULT_RELATIVE_ROOT="compatibility_cus50/test1_new_seed_same_cities"
 readonly BASE_SEED="2026"
 
-readonly WORKERS="${EVRPTW_TEST_WORKERS:-30}"
-readonly MAX_IN_FLIGHT="${EVRPTW_MAX_IN_FLIGHT:-$((WORKERS * 2))}"
+WORKERS="${EVRPTW_TEST_WORKERS:-30}"
+if ! [[ "${WORKERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "EVRPTW_TEST_WORKERS must be a positive integer, got: ${WORKERS}" >&2
+  exit 2
+fi
+readonly WORKERS
+
+if [[ -n "${EVRPTW_MAX_IN_FLIGHT:-}" ]]; then
+  MAX_IN_FLIGHT="${EVRPTW_MAX_IN_FLIGHT}"
+else
+  MAX_IN_FLIGHT="$((WORKERS * 2))"
+fi
+if ! [[ "${MAX_IN_FLIGHT}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "EVRPTW_MAX_IN_FLIGHT must be a positive integer, got: ${MAX_IN_FLIGHT}" >&2
+  exit 2
+fi
+readonly MAX_IN_FLIGHT
+
 readonly CSV_FLUSH_INTERVAL="${EVRPTW_CSV_FLUSH_INTERVAL:-25}"
 readonly CONDA_ENV="${EVRPTW_CONDA_ENV:-maojie}"
 readonly DRY_RUN="${EVRPTW_DRY_RUN:-0}"
 
-for value_name in WORKERS MAX_IN_FLIGHT; do
-  value="${!value_name}"
-  if ! [[ "${value}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "${value_name} must be a positive integer, got: ${value}" >&2
-    exit 2
-  fi
-done
+if ! [[ "${TEST_VIEW_COUNT}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TEST_VIEW_COUNT must be a positive integer, got: ${TEST_VIEW_COUNT}" >&2
+  exit 2
+fi
 if ! [[ "${CSV_FLUSH_INTERVAL}" =~ ^[0-9]+$ ]]; then
-  echo "CSV_FLUSH_INTERVAL must be a non-negative integer, got: ${CSV_FLUSH_INTERVAL}" >&2
+  echo "EVRPTW_CSV_FLUSH_INTERVAL must be a non-negative integer." >&2
   exit 2
 fi
 if [[ "${DRY_RUN}" != "0" && "${DRY_RUN}" != "1" ]]; then
@@ -51,15 +66,10 @@ else
   exit 2
 fi
 readonly DATASET_ROOT
-readonly TEST_INDEX="${DATASET_ROOT}/generation_plan/${TEST_RELATIVE_INDEX}"
 readonly FAMILY_ROOT="${DATASET_ROOT}/materialized/families"
 readonly RESULTS_ROOT="${EVRPTW_TEST_RESULTS_ROOT:-${REPO_ROOT}/EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_2h}"
 
 if [[ "${DRY_RUN}" == "0" ]]; then
-  if [[ ! -f "${TEST_INDEX}" ]]; then
-    echo "Missing Cus50 Test-1 view index: ${TEST_INDEX}" >&2
-    exit 2
-  fi
   if [[ ! -d "${FAMILY_ROOT}" ]]; then
     echo "Missing Stage-2 materialized family root: ${FAMILY_ROOT}" >&2
     exit 2
@@ -74,24 +84,102 @@ export PYTHONDONTWRITEBYTECODE=1
 export EVRPTW_META_THREADS_PER_WORKER=1
 export PYTHONPATH="${REPO_ROOT}/EVRPTW_Core:${REPO_ROOT}/EVRPTW_Dataset_Generator/src:${REPO_ROOT}/EVRPTW_Benchmark/Exact/Gurobi_Solver:${REPO_ROOT}/EVRPTW_Benchmark/MetaHeuristics:${REPO_ROOT}/EVRPTW_Benchmark/MetaHeuristics/ALNS_Solver:${REPO_ROOT}/EVRPTW_Benchmark/MetaHeuristics/VNS_TS_Solver${PYTHONPATH:+:${PYTHONPATH}}"
 
-EXACT_SELECTION_ARGS=()
-META_SELECTION_ARGS=()
-if [[ -n "${EVRPTW_MAX_INSTANCES:-}" ]]; then
-  if ! [[ "${EVRPTW_MAX_INSTANCES}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "EVRPTW_MAX_INSTANCES must be a positive integer." >&2
+if [[ -n "${EVRPTW_MAX_INSTANCES:-}" ]] && \
+  ! [[ "${EVRPTW_MAX_INSTANCES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "EVRPTW_MAX_INSTANCES must be a positive integer." >&2
+  exit 2
+fi
+
+shard_count_raw="${EVRPTW_SHARD_COUNT:-}"
+shard_index_raw="${EVRPTW_SHARD_INDEX:-}"
+start_raw="${EVRPTW_START_INDEX:-}"
+end_raw="${EVRPTW_END_INDEX:-}"
+if [[ -n "${shard_count_raw}" || -n "${shard_index_raw}" ]]; then
+  if [[ -z "${shard_count_raw}" || -z "${shard_index_raw}" ]]; then
+    echo "Set both EVRPTW_SHARD_COUNT and EVRPTW_SHARD_INDEX." >&2
     exit 2
   fi
+  if [[ -n "${start_raw}" || -n "${end_raw}" ]]; then
+    echo "Do not combine shard selection with explicit start/end indices." >&2
+    exit 2
+  fi
+  if ! [[ "${shard_count_raw}" =~ ^[1-9][0-9]*$ ]] || \
+    ! [[ "${shard_index_raw}" =~ ^[0-9]+$ ]]; then
+    echo "Shard count must be positive and shard index must be non-negative." >&2
+    exit 2
+  fi
+  if ((shard_count_raw > TEST_VIEW_COUNT)); then
+    echo "EVRPTW_SHARD_COUNT cannot exceed ${TEST_VIEW_COUNT}." >&2
+    exit 2
+  fi
+  if ((shard_index_raw >= shard_count_raw)); then
+    echo "EVRPTW_SHARD_INDEX must satisfy 0 <= index < count." >&2
+    exit 2
+  fi
+  RANGE_START="$((TEST_VIEW_COUNT * shard_index_raw / shard_count_raw))"
+  RANGE_END="$((TEST_VIEW_COUNT * (shard_index_raw + 1) / shard_count_raw))"
+  if ((shard_count_raw > 1)); then
+    RESULT_PARTITION_DIR="shard_${shard_index_raw}_of_${shard_count_raw}"
+  else
+    RESULT_PARTITION_DIR=""
+  fi
+else
+  RANGE_START="${start_raw:-0}"
+  RANGE_END="${end_raw:-${TEST_VIEW_COUNT}}"
+  if ! [[ "${RANGE_START}" =~ ^[0-9]+$ ]] || \
+    ! [[ "${RANGE_END}" =~ ^[0-9]+$ ]]; then
+    echo "EVRPTW_START_INDEX and EVRPTW_END_INDEX must be non-negative integers." >&2
+    exit 2
+  fi
+  if ((RANGE_START < 0 || RANGE_START >= RANGE_END || RANGE_END > TEST_VIEW_COUNT)); then
+    echo "Required range: 0 <= start < end <= ${TEST_VIEW_COUNT}." >&2
+    exit 2
+  fi
+  if [[ -n "${start_raw}" || -n "${end_raw}" ]]; then
+    RESULT_PARTITION_DIR="range_${RANGE_START}_${RANGE_END}"
+  else
+    RESULT_PARTITION_DIR=""
+  fi
+fi
+readonly RANGE_START
+readonly RANGE_END
+readonly RESULT_PARTITION_DIR
+
+SELECTED_VIEW_COUNT="$((RANGE_END - RANGE_START))"
+if [[ -n "${EVRPTW_MAX_INSTANCES:-}" ]] && \
+  ((EVRPTW_MAX_INSTANCES < SELECTED_VIEW_COUNT)); then
+  SELECTED_VIEW_COUNT="${EVRPTW_MAX_INSTANCES}"
+fi
+readonly SELECTED_VIEW_COUNT
+
+EXACT_SELECTION_ARGS=()
+META_SELECTION_ARGS=()
+if ((RANGE_START != 0 || RANGE_END != TEST_VIEW_COUNT)); then
+  EXACT_SELECTION_ARGS+=(--start_index "${RANGE_START}" --end_index "${RANGE_END}")
+  META_SELECTION_ARGS+=(--start_index "${RANGE_START}" --end_index "${RANGE_END}")
+fi
+if [[ -n "${EVRPTW_MAX_INSTANCES:-}" ]]; then
   EXACT_SELECTION_ARGS+=(--limit "${EVRPTW_MAX_INSTANCES}")
   META_SELECTION_ARGS+=(--max_instances "${EVRPTW_MAX_INSTANCES}")
 fi
-if [[ -n "${EVRPTW_START_INDEX:-}" ]]; then
-  EXACT_SELECTION_ARGS+=(--start_index "${EVRPTW_START_INDEX}")
-  META_SELECTION_ARGS+=(--start_index "${EVRPTW_START_INDEX}")
-fi
-if [[ -n "${EVRPTW_END_INDEX:-}" ]]; then
-  EXACT_SELECTION_ARGS+=(--end_index "${EVRPTW_END_INDEX}")
-  META_SELECTION_ARGS+=(--end_index "${EVRPTW_END_INDEX}")
-fi
+
+require_test_index() {
+  local index_path="$1"
+  if [[ "${DRY_RUN}" == "0" && ! -f "${index_path}" ]]; then
+    echo "Missing test view index: ${index_path}" >&2
+    exit 2
+  fi
+}
+
+partition_output() {
+  local variable_name="$1"
+  local base_path="$2"
+  if [[ -n "${RESULT_PARTITION_DIR}" ]]; then
+    printf -v "${variable_name}" '%s/%s' "${base_path}" "${RESULT_PARTITION_DIR}"
+  else
+    printf -v "${variable_name}" '%s' "${base_path}"
+  fi
+}
 
 prepare_output() {
   local output_path="$1"
@@ -102,12 +190,16 @@ prepare_output() {
 
 print_contract() {
   local solver_name="$1"
-  local output_path="$2"
+  local track_name="$2"
+  local index_path="$3"
+  local output_path="$4"
   printf '%s\n' \
     "solver=${solver_name}" \
-    "dataset=${TEST_INDEX}" \
+    "track=${track_name}" \
+    "dataset=${index_path}" \
     "scale=${CUS_SCALE}" \
-    "instances=500" \
+    "views=${SELECTED_VIEW_COUNT}/${TEST_VIEW_COUNT}" \
+    "range=[${RANGE_START},${RANGE_END})" \
     "checkpoints_s=${CHECKPOINTS_S}" \
     "time_limit_s=${TIME_LIMIT_S}" \
     "workers=${WORKERS}" \

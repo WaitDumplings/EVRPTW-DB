@@ -2,13 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/common.sh"
+source "${SCRIPT_DIR}/cus50_common.sh"
 
 readonly SOLVER_DIR="${REPO_ROOT}/EVRPTW_Benchmark/MetaHeuristics/VNS_TS_Solver"
-readonly SAVE_PATH="${RESULTS_ROOT}/${TEST_RESULT_RELATIVE_ROOT}/VNS_TS_Solver_2h"
+base_save_path="${RESULTS_ROOT}/${TEST_RESULT_RELATIVE_ROOT}/VNS_TS_Solver_2h"
+partition_output SAVE_PATH "${base_save_path}"
+readonly SAVE_PATH
 
 prepare_output "${SAVE_PATH}"
-print_contract "VNS-TS adaptive-fast" "${SAVE_PATH}"
+print_contract "VNS-TS adaptive-fast" "test1_new_seed_same_cities" "${TEST_INDEX}" "${SAVE_PATH}"
 
 run_python "${SOLVER_DIR}/run_vns_ts.py" \
   --dataset_path "${TEST_INDEX}" \

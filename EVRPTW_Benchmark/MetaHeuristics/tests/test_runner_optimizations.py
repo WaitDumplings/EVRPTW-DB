@@ -230,6 +230,42 @@ def test_view_seed_and_shards_are_order_server_and_slice_independent(monkeypatch
     } == {view: reference[view] for view in expected}
 
 
+def test_stage2_range_is_applied_after_scale_filtering(monkeypatch) -> None:
+    tasks = [
+        Stage2ViewTask(
+            index_path="/tmp/view_index.parquet",
+            family_dir=f"/tmp/family-{index}",
+            view_id=f"view-{scale}-{index}",
+            family_id=f"family-{index}",
+            consumer_cohort_id="cohort",
+            split_id="test",
+            track_id="core",
+            city_slug="city",
+            scale_id=scale,
+            customer_count=int(scale.removeprefix("Cus")),
+            charging_station_count=5,
+            row_position=index,
+        )
+        for index, scale in enumerate(
+            ["Cus100", "Cus500", "Cus1000", "Cus500", "Cus100", "Cus500", "Cus500"]
+        )
+    ]
+    monkeypatch.setattr(benchmark_common, "read_stage2_tasks", lambda *a, **k: tasks)
+    monkeypatch.setattr(benchmark_common, "missing_family_directories", lambda selected: [])
+
+    selected = build_input_tasks(
+        "/unused",
+        scales={"Cus500"},
+        start_index=1,
+        end_index=3,
+    )
+
+    assert [
+        item["stage2_task"]["view_id"]
+        for item in selected
+    ] == ["view-Cus500-3", "view-Cus500-5"]
+
+
 def _run_contract(
     *,
     time_limit_s: float = 30.0,

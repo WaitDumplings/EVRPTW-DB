@@ -99,6 +99,46 @@ def parse_scales(raw: str) -> set[str]:
     return scales
 
 
+def select_stage2_tasks(
+    tasks: list[Stage2ViewTask],
+    *,
+    scale_filter: set[str],
+    start_index: int | None,
+    end_index: int | None,
+    limit: int | None,
+    completed_ids: set[str],
+    skip_completed: bool,
+) -> tuple[list[Stage2ViewTask], int, int]:
+    """Select a stable range after scale filtering, matching heuristic runners."""
+
+    filtered_tasks = [
+        task
+        for task in tasks
+        if not scale_filter or task.scale_label in scale_filter
+    ]
+    selected: list[Stage2ViewTask] = []
+    skipped_range_count = 0
+    skipped_completed_count = 0
+    if limit == 0:
+        return selected, skipped_range_count, skipped_completed_count
+
+    for filtered_position, task in enumerate(filtered_tasks):
+        if start_index is not None and filtered_position < start_index:
+            skipped_range_count += 1
+            continue
+        if end_index is not None and filtered_position >= end_index:
+            skipped_range_count += 1
+            continue
+        if skip_completed and task.instance_id in completed_ids:
+            skipped_completed_count += 1
+            continue
+        selected.append(task)
+        if limit is not None and len(selected) >= limit:
+            break
+
+    return selected, skipped_range_count, skipped_completed_count
+
+
 def resolve_time_schedule(
     requested_checkpoints_s: tuple[float, ...],
     requested_time_limit_s: float | None,
@@ -683,8 +723,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--threads", type=int, default=None, help="Optional Gurobi thread limit per model. Defaults to 1 when --workers > 1.")
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel worker processes. Default: 1.")
     parser.add_argument("--limit", type=int, default=None, help="Optional total instance limit after scale filtering.")
-    parser.add_argument("--start_index", type=int, default=None, help="Inclusive stable Stage-2 view-index row position.")
-    parser.add_argument("--end_index", type=int, default=None, help="Exclusive stable Stage-2 view-index row position.")
+    parser.add_argument("--start_index", type=int, default=None, help="Inclusive stable position after --scales filtering.")
+    parser.add_argument("--end_index", type=int, default=None, help="Exclusive stable position after --scales filtering.")
     parser.add_argument("--scales", default="", help="Optional comma-separated scale filter, e.g. Cus5,Cus15.")
     parser.add_argument("--skip_completed", action="store_true", help="Skip instances already present in gurobi_summary.csv.")
     parser.add_argument("--reference_save_path", default="", help="Optional reference_solutions root for split/Cus*/solutions.csv and routes/*.json.")
@@ -750,9 +790,6 @@ def main(argv: list[str] | None = None) -> None:
         for row in existing_summary_rows
         if is_terminal_summary_row(row)
     }
-    records: list[tuple[Path, Any]] = []
-    skipped_completed_count = 0
-    skipped_range_count = 0
     stage2_tasks = read_stage2_tasks(
         dataset_path,
         family_root=args.family_root or None,
@@ -764,22 +801,19 @@ def main(argv: list[str] | None = None) -> None:
             "generator or the CLE+ID reconstruction workflow first."
         )
     input_file_count = len({task.index_path for task in stage2_tasks})
-    for task in stage2_tasks:
-        if limit is not None and len(records) >= limit:
-            break
-        if scale_filter and task.scale_label not in scale_filter:
-            continue
-        idx = task.row_position
-        if args.start_index is not None and idx < args.start_index:
-            skipped_range_count += 1
-            continue
-        if args.end_index is not None and idx >= args.end_index:
-            skipped_range_count += 1
-            continue
-        if args.skip_completed and task.instance_id in completed_ids:
-            skipped_completed_count += 1
-            continue
-        records.append((Path(task.index_path), task))
+    selected_tasks, skipped_range_count, skipped_completed_count = select_stage2_tasks(
+        stage2_tasks,
+        scale_filter=scale_filter,
+        start_index=args.start_index,
+        end_index=args.end_index,
+        limit=limit,
+        completed_ids=completed_ids,
+        skip_completed=args.skip_completed,
+    )
+    records: list[tuple[Path, Any]] = [
+        (Path(task.index_path), task)
+        for task in selected_tasks
+    ]
     missing = missing_family_directories(record for _, record in records)
     if missing:
         preview = "\n".join(str(path) for path in missing[:10])

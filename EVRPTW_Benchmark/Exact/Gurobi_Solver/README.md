@@ -135,9 +135,10 @@ If explicitly enabled, it is diagnostic only: the published final objective
 and route always remain the frozen primary distance solution.
 
 For Stage-2 inputs, `--start_index A --end_index B` selects the half-open stable
-row-position range `[A,B)` in the view index. This supports disjoint server
-shards without interpreting the hashed `view_id`. `--skip_completed` resumes
-from an existing summary.
+position range `[A,B)` after `--scales` filtering. This matches the ALNS and
+VNS-TS runners and supports identical disjoint server shards without
+interpreting the hashed `view_id`. `--skip_completed` resumes from an existing
+summary.
 
 ## Outputs
 

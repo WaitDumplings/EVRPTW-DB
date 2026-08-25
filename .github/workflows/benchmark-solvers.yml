@@ -59,6 +59,9 @@ jobs:
             bash -n "$script"
           done
           bash EVRPTW_Benchmark/test_scripts/run_all_cus50_tests.sh
+          bash EVRPTW_Benchmark/test_scripts/run_all_cus500_tests.sh
+          EVRPTW_SHARD_COUNT=10 EVRPTW_SHARD_INDEX=3 \
+            bash EVRPTW_Benchmark/test_scripts/run_all_cus500_tests.sh
 
       - name: Lint
         run: >-

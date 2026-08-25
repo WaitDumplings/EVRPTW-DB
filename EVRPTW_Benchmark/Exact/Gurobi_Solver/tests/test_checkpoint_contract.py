@@ -15,7 +15,9 @@ from run_gurobi import (
     append_time_rows,
     is_terminal_summary_row,
     resolve_time_schedule,
+    select_stage2_tasks,
 )
+from stage2_adapter import Stage2ViewTask
 
 
 def _snapshot(
@@ -50,6 +52,42 @@ def test_short_explicit_smoke_schedule_does_not_expand_to_two_hours() -> None:
 
     assert checkpoints == (30.0,)
     assert time_limit_s == 30.0
+
+
+def test_stage2_range_is_applied_after_scale_filtering() -> None:
+    tasks = [
+        Stage2ViewTask(
+            index_path="/tmp/view_index.parquet",
+            family_dir=f"/tmp/family-{index}",
+            view_id=f"view-{scale}-{index}",
+            family_id=f"family-{index}",
+            consumer_cohort_id="cohort",
+            split_id="test",
+            track_id="core",
+            city_slug="city",
+            scale_id=scale,
+            customer_count=int(scale.removeprefix("Cus")),
+            charging_station_count=5,
+            row_position=index,
+        )
+        for index, scale in enumerate(
+            ["Cus100", "Cus500", "Cus1000", "Cus500", "Cus100", "Cus500", "Cus500"]
+        )
+    ]
+
+    selected, skipped_range, skipped_completed = select_stage2_tasks(
+        tasks,
+        scale_filter={"Cus500"},
+        start_index=1,
+        end_index=3,
+        limit=None,
+        completed_ids=set(),
+        skip_completed=False,
+    )
+
+    assert [task.view_id for task in selected] == ["view-Cus500-3", "view-Cus500-5"]
+    assert skipped_range == 2
+    assert skipped_completed == 0
 
 
 def test_cs_copies_must_be_positive() -> None:
