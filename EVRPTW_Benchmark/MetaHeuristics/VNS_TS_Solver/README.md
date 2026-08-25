@@ -28,13 +28,21 @@ consolidated solution for the remainder of the wall-clock budget.
 
 ## Cus50 test run
 
+The frozen 5/30/60/120-minute test contract is available as one launcher:
+
+```bash
+bash EVRPTW_Benchmark/test_scripts/run_vnsts_cus50_test.sh
+```
+
+Equivalent raw runner invocation:
+
 ```bash
 python EVRPTW_Benchmark/MetaHeuristics/VNS_TS_Solver/run_vns_ts.py \
   --dataset_path EVRPTW_Dataset/Instances_v2/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
   --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/VNS_TS_Solver_2h \
   --num_workers 30 \
   --time_limit_s 7200 \
-  --checkpoints_s 60,300,900,3600,7200 \
+  --checkpoints_s 300,1800,3600,7200 \
   --seed 2026 \
   --skip_completed
 ```

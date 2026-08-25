@@ -25,6 +25,9 @@ before writing leaderboard metrics. Charging follows
 `full_charge_linear_derated_v2`: station power is multiplied by the exported
 `charging_power_derating_factor` (0.90 in the frozen profile).
 
+The frozen Cus50 Test-1 launchers for Exact, ALNS, and VNS-TS are documented
+in [`test_scripts/`](test_scripts/README.md).
+
 
 ## Summary Comparison
 

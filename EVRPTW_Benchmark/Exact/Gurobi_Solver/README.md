@@ -98,6 +98,14 @@ Gurobi license; pure checkpoint and route-replay tests still run.
 
 ## Compatibility Cus50 test run
 
+The frozen 5/30/60/120-minute test contract is available as one launcher:
+
+```bash
+bash EVRPTW_Benchmark/test_scripts/run_gurobi_cus50_test.sh
+```
+
+Equivalent raw runner invocation:
+
 ```bash
 PYTHONPATH=EVRPTW_Core:EVRPTW_Dataset_Generator/src:\
 EVRPTW_Benchmark/Exact/Gurobi_Solver \
@@ -109,7 +117,7 @@ EVRPTW_Dataset/Instances_v2/us_11city/materialized/families \
   --save_path \
 EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/Gurobi_Solver \
   --time_limit_s 7200 \
-  --checkpoints_s 60,300,900,3600,7200 \
+  --checkpoints_s 300,1800,3600,7200 \
   --cs_copies 2 \
   --workers 4 \
   --threads 1 \
