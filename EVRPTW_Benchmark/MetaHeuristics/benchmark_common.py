@@ -6,7 +6,7 @@ import math
 import signal
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
@@ -15,6 +15,7 @@ import pandas as pd
 
 from evrptw_core.schema import EVRPTWInstance, merge_route_sequences
 from evrptw_stage2.artifacts import load_materialized_view
+from evrptw_stage2.contracts import STAGE2_GENERATION_CONTRACT
 
 
 DEFAULT_CHECKPOINTS_S = (60.0, 300.0, 900.0, 3600.0, 7200.0)
@@ -22,8 +23,12 @@ DEFAULT_TIME_LIMIT_S = 7200.0
 SEED_SCHEME = "blake2b_view_id_v1"
 TIME_BUDGET_ITERATION_CEILING = 2_147_483_647
 ALGORITHM_TIMING_SCOPE = "adapter_solver_constructor_and_solve"
-RUN_CONTRACT_SCHEMA = "evrptw_meta_run_contract_v2"
-CANONICAL_REPLAY_PROFILE_ID = "full_charge_strict_route_v2"
+RUN_CONTRACT_SCHEMA = "evrptw_meta_run_contract_v3"
+CANONICAL_REPLAY_PROFILE_ID = "full_charge_derated_strict_route_v3"
+FAMILY_SCHEMA = "cle_evrptw_materialized_matrix_family_v3"
+VIEW_SCHEMA = "cle_evrptw_materialized_view_v4"
+VIEW_MATRIX_STORAGE = "parent_index_view"
+DATA_IDENTITY_MODE = "deterministic_stage2_ids_no_content_hash_v1"
 
 REQUIRED_VIEW_INDEX_COLUMNS = {
     "view_id",
@@ -38,9 +43,6 @@ REQUIRED_VIEW_INDEX_COLUMNS = {
     "family_cohort_id",
     "terminal_count",
     "view_seed",
-    "package_seed",
-    "service_time_seed",
-    "time_window_seed",
 }
 
 
@@ -84,13 +86,6 @@ class Stage2ViewTask:
     family_cohort_id: str = ""
     terminal_count: int = 0
     view_seed: int = 0
-    package_seed: int = 0
-    service_time_seed: int = 0
-    time_window_seed: int = 0
-    family_manifest_fingerprint: str = ""
-    family_artifact_fingerprint: str = ""
-    view_manifest_fingerprint: str = ""
-    data_identity_fingerprint: str = ""
 
     @property
     def instance_id(self) -> str:
@@ -256,21 +251,11 @@ def build_run_contract(
             ),
             "terminal_count": int(reference.get("terminal_count", 0)),
             "view_seed": int(reference.get("view_seed", 0)),
-            "package_seed": int(reference.get("package_seed", 0)),
-            "service_time_seed": int(reference.get("service_time_seed", 0)),
-            "time_window_seed": int(reference.get("time_window_seed", 0)),
-            "family_manifest_fingerprint": str(
-                reference.get("family_manifest_fingerprint", "")
-            ),
-            "family_artifact_fingerprint": str(
-                reference.get("family_artifact_fingerprint", "")
-            ),
-            "view_manifest_fingerprint": str(
-                reference.get("view_manifest_fingerprint", "")
-            ),
-            "data_identity_fingerprint": str(
-                reference.get("data_identity_fingerprint", "")
-            ),
+            "identity_mode": DATA_IDENTITY_MODE,
+            "expected_family_schema": FAMILY_SCHEMA,
+            "expected_view_schema": VIEW_SCHEMA,
+            "expected_generation_contract": STAGE2_GENERATION_CONTRACT,
+            "expected_matrix_storage": VIEW_MATRIX_STORAGE,
             "view_index_identity": _portable_dataset_path_identity(
                 str(reference.get("index_path", "")), "generation_plan"
             ),
@@ -300,143 +285,6 @@ def discover_view_indices(dataset_path: str | Path) -> list[Path]:
     if not root.exists():
         raise FileNotFoundError(root)
     return sorted(root.rglob("view_index.parquet"))
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _semantic_json_fingerprint(
-    path: Path,
-    *,
-    ignored_keys: tuple[str, ...] = (),
-) -> str:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"expected a JSON object in {path}")
-    for key in ignored_keys:
-        payload.pop(key, None)
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=True,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _attach_stage2_data_identity(
-    task: Stage2ViewTask,
-    family_manifest_cache: dict[str, tuple[str, str]],
-) -> Stage2ViewTask:
-    """Bind resume identity to the small materialized artifacts, not host paths.
-
-    Each selected family is hashed once per launch: its terminal index and four
-    stored matrix files are content-addressed alongside the semantic manifest.
-    The view manifest and three small per-view artifacts are also hashed
-    byte-for-byte. ``matrix_reconstruction`` is excluded from manifest semantics
-    so direct and CLE-restored copies of the same family retain one portable
-    identity, while the reconstructed matrix bytes must still match exactly.
-    """
-
-    family_dir = Path(task.family_dir)
-    family_manifest = family_dir / "family_manifest.json"
-    family_key = str(family_manifest.resolve())
-    family_identity = family_manifest_cache.get(family_key)
-    if family_identity is None:
-        if not family_manifest.is_file():
-            raise FileNotFoundError(family_manifest)
-        family_payload = json.loads(family_manifest.read_text(encoding="utf-8"))
-        if not isinstance(family_payload, dict):
-            raise ValueError(f"expected a JSON object in {family_manifest}")
-        family_fingerprint = _semantic_json_fingerprint(
-            family_manifest,
-            ignored_keys=("matrix_reconstruction",),
-        )
-        artifact_paths: dict[str, str] = {}
-        terminal_index = family_payload.get("terminal_index")
-        matrix_files = family_payload.get("matrix_files")
-        if not isinstance(terminal_index, str) or not terminal_index:
-            raise ValueError(f"{family_manifest} has no terminal_index artifact")
-        if not isinstance(matrix_files, dict) or not matrix_files:
-            raise ValueError(f"{family_manifest} has no matrix_files artifacts")
-        artifact_paths["terminal_index"] = terminal_index
-        for matrix_name, relative_path in sorted(matrix_files.items()):
-            if not isinstance(relative_path, str) or not relative_path:
-                raise ValueError(
-                    f"{family_manifest} has an invalid matrix path for {matrix_name}"
-                )
-            artifact_paths[f"matrix:{matrix_name}"] = relative_path
-
-        family_root = family_dir.resolve()
-        family_artifact_sha256: dict[str, str] = {}
-        for label, relative_path in artifact_paths.items():
-            artifact = (family_dir / relative_path).resolve()
-            if family_root not in artifact.parents:
-                raise ValueError(
-                    f"family artifact escapes its directory: {relative_path}"
-                )
-            if not artifact.is_file():
-                raise FileNotFoundError(artifact)
-            family_artifact_sha256[label] = _sha256_file(artifact)
-        family_artifact_json = json.dumps(
-            family_artifact_sha256,
-            ensure_ascii=True,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        family_artifact_fingerprint = hashlib.sha256(
-            family_artifact_json.encode("utf-8")
-        ).hexdigest()
-        family_identity = (family_fingerprint, family_artifact_fingerprint)
-        family_manifest_cache[family_key] = family_identity
-    family_fingerprint, family_artifact_fingerprint = family_identity
-
-    view_dir = family_dir / "views" / task.view_id
-    view_manifest = view_dir / "view_manifest.json"
-    if not view_manifest.is_file():
-        raise FileNotFoundError(view_manifest)
-    view_fingerprint = _semantic_json_fingerprint(view_manifest)
-    artifact_fingerprints: dict[str, str] = {}
-    for name in (
-        "terminal_parent_indices.npy",
-        "customer_attributes.npz",
-        "charging_attributes.npz",
-    ):
-        artifact = view_dir / name
-        if not artifact.is_file():
-            raise FileNotFoundError(artifact)
-        artifact_fingerprints[name] = _sha256_file(artifact)
-
-    combined_payload = {
-        "schema": "evrptw_stage2_materialized_data_identity_v1",
-        "family_manifest_sha256": family_fingerprint,
-        "family_artifact_sha256": family_artifact_fingerprint,
-        "view_manifest_sha256": view_fingerprint,
-        "view_artifact_sha256": artifact_fingerprints,
-    }
-    combined_json = json.dumps(
-        combined_payload,
-        ensure_ascii=True,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return replace(
-        task,
-        family_manifest_fingerprint=family_fingerprint,
-        family_artifact_fingerprint=family_artifact_fingerprint,
-        view_manifest_fingerprint=view_fingerprint,
-        data_identity_fingerprint=hashlib.sha256(
-            combined_json.encode("utf-8")
-        ).hexdigest(),
-    )
 
 
 def infer_family_root(index_path: str | Path) -> Path | None:
@@ -491,9 +339,6 @@ def read_stage2_tasks(
                     family_cohort_id=str(row["family_cohort_id"]),
                     terminal_count=int(row["terminal_count"]),
                     view_seed=int(row["view_seed"]),
-                    package_seed=int(row["package_seed"]),
-                    service_time_seed=int(row["service_time_seed"]),
-                    time_window_seed=int(row["time_window_seed"]),
                 )
             )
             position += 1
@@ -511,6 +356,33 @@ def missing_family_directories(tasks: Iterable[Stage2ViewTask]) -> list[Path]:
 
 
 def load_stage2_instance(task: Stage2ViewTask) -> EVRPTWInstance:
+    family_dir = Path(task.family_dir)
+    family_path = family_dir / "family_manifest.json"
+    view_path = family_dir / "views" / task.view_id / "view_manifest.json"
+    family_manifest = json.loads(family_path.read_text(encoding="utf-8"))
+    view_manifest = json.loads(view_path.read_text(encoding="utf-8"))
+    if family_manifest.get("schema") != FAMILY_SCHEMA:
+        raise ValueError(
+            f"unsupported Stage-2 family schema: {family_manifest.get('schema')!r}"
+        )
+    if view_manifest.get("schema") != VIEW_SCHEMA:
+        raise ValueError(
+            f"unsupported Stage-2 view schema: {view_manifest.get('schema')!r}"
+        )
+    if (
+        family_manifest.get("stage2_generation_contract")
+        != STAGE2_GENERATION_CONTRACT
+    ):
+        raise ValueError("Stage-2 generation contract mismatch")
+    if view_manifest.get("matrix_storage") != VIEW_MATRIX_STORAGE:
+        raise ValueError("Stage-2 view does not use parent_index_view matrix storage")
+    if family_manifest.get("materialization_status") != "complete":
+        raise ValueError("Stage-2 family is not completely materialized")
+    if str(view_manifest.get("view_id")) != task.view_id:
+        raise ValueError("view manifest ID does not match view index")
+    if str(view_manifest.get("family_id")) != task.family_id:
+        raise ValueError("view manifest family ID does not match view index")
+
     payload = load_materialized_view(task.family_dir, task.view_id)
     if str(payload["instance_id"]) != task.view_id:
         raise ValueError("loaded Stage-2 view_id does not match view index")
@@ -520,10 +392,12 @@ def load_stage2_instance(task: Stage2ViewTask) -> EVRPTWInstance:
         raise ValueError("loaded customer count does not match view index")
     if len(payload["charging_stations"]) != task.charging_station_count:
         raise ValueError("loaded charging-station count does not match view index")
+    if task.terminal_count != 1 + task.customer_count + task.charging_station_count:
+        raise ValueError("view-index terminal count is inconsistent")
 
     vehicle = dict(payload["vehicle"])
-    vehicle["charging_efficiency"] = float(
-        payload["charging_policy"]["charging_efficiency"]
+    vehicle["charging_power_derating_factor"] = float(
+        payload["charging_policy"]["charging_power_derating_factor"]
     )
     metadata = {
         **dict(payload["metadata"]),
@@ -533,8 +407,16 @@ def load_stage2_instance(task: Stage2ViewTask) -> EVRPTWInstance:
         "split_id": task.split_id,
         "track_id": task.track_id,
         "consumer_cohort_id": task.consumer_cohort_id,
+        "family_cohort_id": task.family_cohort_id,
+        "view_seed": task.view_seed,
         "source_view_index": task.index_path,
         "source_family_dir": task.family_dir,
+        "source_family_schema": family_manifest["schema"],
+        "source_view_schema": view_manifest["schema"],
+        "stage2_generation_contract": family_manifest[
+            "stage2_generation_contract"
+        ],
+        "matrix_storage": view_manifest["matrix_storage"],
         "metric_contract": {
             "objective": "distance_matrix_km",
             "travel_time": "running_time_shortest_matrix_s",
@@ -628,11 +510,6 @@ def build_input_tasks(
         if missing:
             preview = ", ".join(str(path) for path in missing[:5])
             raise FileNotFoundError(f"missing {len(missing)} Stage-2 family directories: {preview}")
-        family_manifest_cache: dict[str, tuple[str, str]] = {}
-        selected = [
-            _attach_stage2_data_identity(task, family_manifest_cache)
-            for task in selected
-        ]
         return [{"input_kind": "stage2", "stage2_task": task.to_dict()} for task in selected]
 
     raise ValueError(
@@ -739,17 +616,26 @@ def charging_profile(instance: EVRPTWInstance) -> tuple[np.ndarray, float, str]:
         raw = instance.cs_activation.get("charging_power_kw")
         source = "cs_activation.charging_power_kw"
     policy = instance.raw.get("charging_policy", {})
-    efficiency = float(
-        policy.get("charging_efficiency", instance.vehicle.get("charging_efficiency", 1.0))
-    )
-    if not 0.0 < efficiency <= 1.0:
-        raise ValueError(f"charging_efficiency must be in (0, 1], got {efficiency}")
+    if "charging_power_derating_factor" in policy:
+        if "charging_efficiency" in policy:
+            raise ValueError("charging policy cannot define both derating and efficiency")
+        power_factor = float(policy["charging_power_derating_factor"])
+    elif "charging_efficiency" in policy:
+        power_factor = float(policy["charging_efficiency"])
+    elif "charging_power_derating_factor" in instance.vehicle:
+        power_factor = float(instance.vehicle["charging_power_derating_factor"])
+    else:
+        power_factor = float(instance.vehicle.get("charging_efficiency", 1.0))
+    if not 0.0 < power_factor <= 1.0:
+        raise ValueError(
+            f"charging power factor must be in (0, 1], got {power_factor}"
+        )
     if raw is None and count:
         raise ValueError("Stage-2 charging stations require per-station charging_power_kw")
     power = np.asarray([] if raw is None else raw, dtype=np.float64)
     if power.shape != (count,) or np.any(~np.isfinite(power)) or np.any(power <= 0.0):
         raise ValueError(f"charging_power_kw must contain {count} finite positive values")
-    return power, efficiency, source
+    return power, power_factor, source
 
 
 def validate_routes(
@@ -762,7 +648,7 @@ def validate_routes(
 
     n = instance.num_customers
     first_station = n + 1
-    power, efficiency, power_source = charging_profile(instance)
+    power, power_factor, power_source = charging_profile(instance)
     distance = np.asarray(instance.distance_matrix_km)
     travel = running_time_matrix_s(instance)
     energy = running_time_energy_matrix_kwh(instance)
@@ -817,7 +703,7 @@ def validate_routes(
                     violations.append(f"route {route_index} exceeds cargo capacity")
             elif destination >= first_station:
                 station = destination - first_station
-                charge_s = max(0.0, battery_capacity - battery) / (efficiency * power[station]) * 3600.0
+                charge_s = max(0.0, battery_capacity - battery) / (power_factor * power[station]) * 3600.0
                 current_time += charge_s
                 total_charging_time += charge_s
                 charging_visits += 1
@@ -838,7 +724,7 @@ def validate_routes(
         "charging_visit_count": charging_visits,
         "total_charging_time_s": total_charging_time,
         "charging_power_source": power_source,
-        "charging_efficiency": efficiency,
+        "charging_power_derating_factor": power_factor,
     }
 
 
@@ -882,14 +768,14 @@ def certificate_singleton_routes(
         # runners that do not request a certificate avoid importing SciPy.
         from evrptw_stage2.orders import _build_full_state_route_cache
 
-        power_kw, efficiency, _ = charging_profile(instance)
+        power_kw, power_factor, _ = charging_profile(instance)
         cache = _build_full_state_route_cache(
             customer_count=instance.num_customers,
             running_time_matrix_s=running_time_matrix_s(instance),
             running_time_energy_matrix_kwh=running_time_energy_matrix_kwh(instance),
             charging_power_kw=power_kw,
             battery_capacity_kwh=float(instance.vehicle["battery_capacity_kwh"]),
-            charging_efficiency=efficiency,
+            charging_power_derating_factor=power_factor,
         )
         full_nodes = np.asarray(cache.terminal_indices, dtype=np.int64)
         full_position = {int(node): pos for pos, node in enumerate(full_nodes)}

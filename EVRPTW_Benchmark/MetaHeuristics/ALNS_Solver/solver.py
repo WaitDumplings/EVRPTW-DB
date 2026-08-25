@@ -6,7 +6,6 @@ import time
 from collections import defaultdict
 from itertools import islice
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from tqdm import tqdm
 import numpy as np
 
 
@@ -260,17 +259,22 @@ class ALNS_Solver:
         self.feasibility_certificate = instance.get("feasibility_certificate")
         if format == "tensor":
             power = np.asarray(instance.get("charging_power_kw", []), dtype=float)
-            efficiency = float(instance.get("charging_efficiency", 1.0))
+            power_factor = float(
+                instance.get(
+                    "charging_power_derating_factor",
+                    instance.get("charging_efficiency", 1.0),
+                )
+            )
             if power.shape != (self.n_stations,):
                 raise ValueError(
                     f"charging_power_kw shape {power.shape} does not match {(self.n_stations,)}"
                 )
-            if not 0.0 < efficiency <= 1.0:
-                raise ValueError("charging_efficiency must be in (0, 1]")
+            if not 0.0 < power_factor <= 1.0:
+                raise ValueError("charging power factor must be in (0, 1]")
             if np.any(~np.isfinite(power)) or np.any(power <= 0.0):
                 raise ValueError("charging_power_kw must contain finite positive values")
             self.station_charge_minutes_per_kwh = {
-                node: 60.0 / (efficiency * float(power[offset]))
+                node: 60.0 / (power_factor * float(power[offset]))
                 for offset, node in enumerate(self.station_indices)
             }
 

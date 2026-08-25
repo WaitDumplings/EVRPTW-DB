@@ -21,7 +21,7 @@ def to_alns_tensor_instance(instance: EVRPTWInstance) -> dict[str, Any]:
     objective remains total road distance in km, matching the exact solver.
     """
     battery_capacity = float(instance.vehicle.get("battery_capacity_kwh", 100.0))
-    charging_power_kw, charging_efficiency, charging_power_source = charging_profile(instance)
+    charging_power_kw, charging_power_factor, charging_power_source = charging_profile(instance)
     effective_speed_kmh = float(
         instance.speed_profile.get("effective_speed_kmh")
         or instance.vehicle.get("design_speed_kmh")
@@ -46,7 +46,7 @@ def to_alns_tensor_instance(instance: EVRPTWInstance) -> dict[str, Any]:
         "time_matrix_min": time_matrix_min,
         "energy_matrix_kwh": energy_matrix_kwh,
         "charging_power_kw": charging_power_kw,
-        "charging_efficiency": charging_efficiency,
+        "charging_power_derating_factor": charging_power_factor,
         "charging_power_source": charging_power_source,
         # Only the reconstructed routes are suitable for a warm start: the
         # helper has independently replayed them under the canonical contract.

@@ -13,7 +13,7 @@ There is no legacy pickle input fallback.
 
 ## Model contract
 
-For every directed terminal arc, the V1 solver uses:
+For every directed terminal arc, the current solver uses:
 
 - `distance_matrix_km` in the minimization objective;
 - `running_time_shortest_matrix_s` for time propagation and time windows; and
@@ -31,11 +31,13 @@ remaining battery on arrival at station `q` is `b_q`, full linear charging takes
 ```text
 (battery_capacity_kwh - b_q)
 -------------------------------- * 3600 seconds.
-charging_efficiency * power_q_kw
+charging_power_derating_factor * power_q_kw
 ```
 
-The departure battery is then reset to full. The old instance-wide fixed
-charging time is not used for Stage-2 views. `full_cs_to_depot_time_s` is an
+The departure battery is then reset to full. The frozen v7 profile uses a
+power derating factor of 0.90 and intentionally does not define the removed
+`charging_efficiency` field. The old instance-wide fixed charging time is not
+used for Stage-2 views. `full_cs_to_depot_time_s` is an
 environment/mask acceleration cache and is not substituted for explicit MILP
 station visits.
 
@@ -53,7 +55,7 @@ when this replay passes.
 The normal release layout is:
 
 ```text
-Instances_v1/us_11city/
+Instances_v2/us_11city/
 ├── generation_plan/
 │   └── compatibility_cus50/
 │       ├── val/view_index.parquet
@@ -68,7 +70,8 @@ Instances_v1/us_11city/
 When the view index is inside this canonical tree, the runner infers the family
 root. For a separately copied or reconstructed bundle, pass `--family_root`.
 The solver deliberately does not distinguish directly generated matrices from
-reconstructed matrices once they satisfy this layout and schema.
+reconstructed matrices once they satisfy this layout and the frozen v3/v4
+schema contract. It preserves the Stage-2 feasibility certificate as provenance.
 
 ## Smoke test
 
@@ -100,11 +103,11 @@ PYTHONPATH=EVRPTW_Core:EVRPTW_Dataset_Generator/src:\
 EVRPTW_Benchmark/Exact/Gurobi_Solver \
 python EVRPTW_Benchmark/Exact/Gurobi_Solver/run_gurobi.py \
   --dataset_path \
-EVRPTW_Dataset/Instances_v1/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
+EVRPTW_Dataset/Instances_v2/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
   --family_root \
-EVRPTW_Dataset/Instances_v1/us_11city/materialized/families \
+EVRPTW_Dataset/Instances_v2/us_11city/materialized/families \
   --save_path \
-EVRPTW_Benchmark/results/CLE_EVRPTW_v1/compatibility_cus50/test1/Gurobi_Solver \
+EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/Gurobi_Solver \
   --time_limit_s 7200 \
   --checkpoints_s 60,300,900,3600,7200 \
   --cs_copies 2 \

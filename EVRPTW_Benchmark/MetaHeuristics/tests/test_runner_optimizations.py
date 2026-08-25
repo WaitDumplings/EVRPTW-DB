@@ -4,7 +4,6 @@ import csv
 import importlib.util
 import json
 import multiprocessing
-import os
 import sys
 import time
 import types
@@ -12,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 import pytest
 
 
@@ -37,6 +37,7 @@ from benchmark_common import (
     resolve_optional_iteration_budget,
     running_time_energy_matrix_kwh,
     running_time_matrix_s,
+    read_stage2_tasks,
     stable_view_seed,
     stable_view_shard,
     validate_routes,
@@ -96,7 +97,7 @@ def make_multihop_certificate_instance() -> EVRPTWInstance:
             "vehicle": {
                 "battery_capacity_kwh": 100.0,
                 "cargo_capacity_cm3": 100.0,
-                "charging_efficiency": 1.0,
+                "charging_power_derating_factor": 0.9,
             },
             "raw_travel_time_matrix_s": travel,
             "energy_matrix_kwh": energy,
@@ -104,8 +105,8 @@ def make_multihop_certificate_instance() -> EVRPTWInstance:
             "running_time_path_energy_kwh": energy,
             "charging_power_kw": np.asarray([100.0, 100.0], dtype=np.float32),
             "charging_policy": {
-                "mode": "full_charge_linear_v1",
-                "charging_efficiency": 1.0,
+                "policy": "full_charge_linear_derated_v2",
+                "charging_power_derating_factor": 0.9,
             },
             "cs_activation": {"charging_power_kw": [100.0, 100.0]},
             "feasibility_certificate": {
@@ -208,11 +209,6 @@ def test_view_seed_and_shards_are_order_server_and_slice_independent(monkeypatch
     tasks = _stage2_tasks(12)
     monkeypatch.setattr(benchmark_common, "read_stage2_tasks", lambda *a, **k: tasks)
     monkeypatch.setattr(benchmark_common, "missing_family_directories", lambda selected: [])
-    monkeypatch.setattr(
-        benchmark_common,
-        "_attach_stage2_data_identity",
-        lambda task, cache: task,
-    )
     selected = build_input_tasks(
         "/unused",
         start_index=2,
@@ -241,7 +237,7 @@ def _run_contract(
     solver_parameter: int = 20,
     host_prefix: str = "/server-a/data",
     view_seed: int = 11,
-    data_identity_fingerprint: str = "d" * 64,
+    family_id: str = "mf-contract-a",
 ) -> tuple[str, str]:
     view_id = "view-contract-a"
     task = {
@@ -253,7 +249,7 @@ def _run_contract(
             ),
             "family_dir": f"{host_prefix}/materialized/families/mf-contract-a",
             "view_id": view_id,
-            "family_id": "mf-contract-a",
+            "family_id": family_id,
             "consumer_cohort_id": "compatibility_cus50",
             "split_id": "test",
             "track_id": "core",
@@ -264,12 +260,6 @@ def _run_contract(
             "terminal_count": 56,
             "family_cohort_id": "compatibility_cus50",
             "view_seed": view_seed,
-            "package_seed": 12,
-            "service_time_seed": 13,
-            "time_window_seed": 14,
-            "family_manifest_fingerprint": "b" * 64,
-            "view_manifest_fingerprint": "c" * 64,
-            "data_identity_fingerprint": data_identity_fingerprint,
             # Execution-only fields must not enter the run identity.
             "row_position": 123,
         },
@@ -320,7 +310,7 @@ def test_run_contract_changes_for_pilot_seed_or_solver_parameter() -> None:
     changed_view_seed, _ = _run_contract(time_limit_s=7200.0, view_seed=99)
     changed_data, _ = _run_contract(
         time_limit_s=7200.0,
-        data_identity_fingerprint="e" * 64,
+        family_id="mf-contract-b",
     )
     assert len(
         {
@@ -337,7 +327,7 @@ def test_run_contract_changes_for_pilot_seed_or_solver_parameter() -> None:
 def test_run_contract_versions_canonical_replay_semantics(monkeypatch) -> None:
     original, original_json = _run_contract()
     assert json.loads(original_json)["canonical_replay_profile_id"] == (
-        "full_charge_strict_route_v2"
+        "full_charge_derated_strict_route_v3"
     )
     monkeypatch.setattr(
         benchmark_common,
@@ -348,84 +338,20 @@ def test_run_contract_versions_canonical_replay_semantics(monkeypatch) -> None:
     assert changed != original
 
 
-def test_materialized_data_identity_ignores_slim_contract_but_tracks_payload(
-    tmp_path: Path,
-) -> None:
-    family = tmp_path / "materialized" / "families" / "mf-a"
-    view = family / "views" / "view-a"
-    view.mkdir(parents=True)
-    family_manifest = {
-        "schema": "family-v2",
-        "family_id": "mf-a",
-        "materialization_attempt_seed": 123,
-        "road_state_seed": 456,
-        "reference_profile_id": "profile-v1",
-        "terminal_index": "terminal_index.parquet",
-        "matrix_files": {
-            "distance_matrix_km": "matrices/distance_matrix_km.npy",
-        },
-    }
-    (family / "family_manifest.json").write_text(
-        json.dumps(family_manifest), encoding="utf-8"
+def test_run_contract_uses_ids_without_dataset_content_hashing() -> None:
+    _, contract_json = _run_contract()
+    identity = json.loads(contract_json)["data_identity"]
+    assert identity["identity_mode"] == (
+        "deterministic_stage2_ids_no_content_hash_v1"
     )
-    (view / "view_manifest.json").write_text(
-        json.dumps(
-            {
-                "schema": "view-v3",
-                "view_id": "view-a",
-                "materialization_attempt_seed": 123,
-            }
-        ),
-        encoding="utf-8",
+    assert identity["expected_family_schema"] == (
+        "cle_evrptw_materialized_matrix_family_v3"
     )
-    (family / "terminal_index.parquet").write_bytes(b"terminal-table")
-    (family / "matrices").mkdir()
-    (family / "matrices" / "distance_matrix_km.npy").write_bytes(
-        b"distance-matrix"
-    )
-    for name, content in {
-        "terminal_parent_indices.npy": b"terminal-index",
-        "customer_attributes.npz": b"customer-attributes",
-        "charging_attributes.npz": b"charging-attributes",
-    }.items():
-        (view / name).write_bytes(content)
-    task = Stage2ViewTask(
-        index_path=str(tmp_path / "generation_plan" / "view_index.parquet"),
-        family_dir=str(family),
-        view_id="view-a",
-        family_id="mf-a",
-        consumer_cohort_id="cohort",
-        split_id="test",
-        track_id="core",
-        city_slug="city",
-        scale_id="Cus1",
-        customer_count=1,
-        charging_station_count=1,
-        row_position=0,
-    )
-    direct = benchmark_common._attach_stage2_data_identity(task, {})
-
-    family_manifest["matrix_reconstruction"] = {"portable": True}
-    (family / "family_manifest.json").write_text(
-        json.dumps(family_manifest), encoding="utf-8"
-    )
-    slim = benchmark_common._attach_stage2_data_identity(task, {})
-    assert slim.data_identity_fingerprint == direct.data_identity_fingerprint
-
-    (view / "customer_attributes.npz").write_bytes(b"changed-customer-attributes")
-    changed = benchmark_common._attach_stage2_data_identity(task, {})
-    assert changed.data_identity_fingerprint != direct.data_identity_fingerprint
-
-    (view / "customer_attributes.npz").write_bytes(b"customer-attributes")
-    (family / "matrices" / "distance_matrix_km.npy").write_bytes(
-        b"changed-distance-matrix"
-    )
-    changed_family = benchmark_common._attach_stage2_data_identity(task, {})
-    assert (
-        changed_family.family_artifact_fingerprint
-        != direct.family_artifact_fingerprint
-    )
-    assert changed_family.data_identity_fingerprint != direct.data_identity_fingerprint
+    assert identity["expected_view_schema"] == "cle_evrptw_materialized_view_v4"
+    assert identity["expected_generation_contract"] == "stage2_construct_valid_v3"
+    assert identity["expected_matrix_storage"] == "parent_index_view"
+    assert "sha256" not in contract_json.lower()
+    assert "artifact_fingerprint" not in contract_json
 
 
 def test_bounded_process_map_never_exceeds_configured_in_flight(monkeypatch) -> None:
@@ -1099,3 +1025,43 @@ def test_vns_default_budget_is_wall_clock_but_explicit_cap_remains_for_smoke() -
     assert resolve_optional_iteration_budget(20) == (20, "iteration_limited")
     with pytest.raises(ValueError):
         resolve_optional_iteration_budget(-1)
+
+
+def _current_view_index_row() -> dict[str, object]:
+    return {
+        "view_id": "iv-current",
+        "family_id": "mf-current",
+        "family_cohort_id": "core/test/test1_new_seed",
+        "consumer_cohort_id": "compatibility_cus50/test/test1_new_seed_same_cities",
+        "split_id": "test",
+        "track_id": "test1_new_seed",
+        "city_slug": "new-york",
+        "scale_id": "cus50",
+        "customer_count": 50,
+        "charging_station_count": 10,
+        "terminal_count": 61,
+        "view_seed": 123456789,
+    }
+
+
+def test_current_view_index_needs_no_removed_attribute_seed_columns(
+    tmp_path: Path,
+) -> None:
+    index = (
+        tmp_path
+        / "generation_plan"
+        / "compatibility_cus50"
+        / "test"
+        / "view_index.parquet"
+    )
+    index.parent.mkdir(parents=True)
+    pd.DataFrame([_current_view_index_row()]).to_parquet(index, index=False)
+    family = tmp_path / "materialized" / "families" / "mf-current"
+    family.mkdir(parents=True)
+    (family / "family_manifest.json").write_text("{}", encoding="utf-8")
+
+    tasks = read_stage2_tasks(index)
+    assert len(tasks) == 1
+    assert tasks[0].view_id == "iv-current"
+    assert tasks[0].terminal_count == 61
+    assert tasks[0].view_seed == 123456789

@@ -11,7 +11,8 @@ The resource model matches Stage 2 and the exact benchmark:
 - travel time: directed `running_time_shortest_matrix_s`;
 - battery use: directed `running_time_path_energy_kwh`;
 - charging: full recharge with the visited station's individual 11/100 kW (or
-  other exported) `charging_power_kw` and charging efficiency;
+  other exported) `charging_power_kw` multiplied by the exported
+  `charging_power_derating_factor`;
 - customer demand/capacity: cm3; all temporal quantities: seconds.
 
 Every incumbent is independently replayed before it is admitted to the anytime
@@ -29,8 +30,8 @@ consolidated solution for the remainder of the wall-clock budget.
 
 ```bash
 python EVRPTW_Benchmark/MetaHeuristics/VNS_TS_Solver/run_vns_ts.py \
-  --dataset_path EVRPTW_Dataset/Instances_v1/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
-  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v1/compatibility_cus50/test1/VNS_TS_Solver_2h \
+  --dataset_path EVRPTW_Dataset/Instances_v2/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
+  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/VNS_TS_Solver_2h \
   --num_workers 30 \
   --time_limit_s 7200 \
   --checkpoints_s 60,300,900,3600,7200 \
@@ -93,11 +94,10 @@ directories for reading. It skips a terminal row only when the stored
 `run_contract_fingerprint` exactly matches the new task. The contract covers
 algorithm/profile, budget and checkpoints, base and per-view seeds, every
 requested/effective search parameter, timing scope, and portable
-view-index/family identity. Data identity includes the actual family/view
-manifests, generation seeds, and byte-level hashes of the family terminal index,
-four matrices, and small per-view artifacts, while direct and CLE-restored
-copies deliberately share the same identity. Each selected family is read for
-hashing only once per launch. The canonical replay policy is versioned too. Worker count,
+view-index/family identity. Data identity uses deterministic family/view IDs, cohort fields, view seed,
+and the frozen v3/v4 schema contract. Solver startup performs no SHA256 or
+byte-level content hashing of dataset artifacts, while direct and CLE-restored
+copies deliberately share the same portable identity. The canonical replay policy is versioned too. Worker count,
 shard/range selection, ordering, and output path are deliberately absent. Thus
 a short pilot, regenerated data, or a seed/profile/search change is rerun in the
 same directory. Contract-scoped artifact directories prevent such reruns from

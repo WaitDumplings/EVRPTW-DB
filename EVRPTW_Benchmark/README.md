@@ -9,15 +9,21 @@ MetaHeuristics/ALNS_Solver
 Reinforcement_Learning/TERRAN
 ```
 
-Exact and metaheuristic runners consume the CLE-backed Stage-2
-`view_index.parquet` plus its `materialized/families` store. They expose a
+Exact and metaheuristic runners consume the current CLE-backed Stage-2
+`view_index.parquet` plus its `materialized/families` store. The frozen input
+contract is family schema `cle_evrptw_materialized_matrix_family_v3`, view
+schema `cle_evrptw_materialized_view_v4`, generation contract
+`stage2_construct_valid_v3`, and `parent_index_view` matrix storage. They expose a
 common solver interface:
 
 ```python
 solve(instance, config) -> solution
 ```
 
-The benchmark runner will validate every returned solution with `EVRPTW_Core` before writing leaderboard metrics.
+The benchmark runner validates every returned solution with `EVRPTW_Core`
+before writing leaderboard metrics. Charging follows
+`full_charge_linear_derated_v2`: station power is multiplied by the exported
+`charging_power_derating_factor` (0.90 in the frozen profile).
 
 
 ## Summary Comparison

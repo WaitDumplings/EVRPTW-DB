@@ -10,8 +10,8 @@ The solver contract matches Stage 2 and the exact benchmark:
 - objective: directed `distance_matrix_km`;
 - travel time: directed `running_time_shortest_matrix_s`;
 - battery use: directed `running_time_path_energy_kwh`;
-- charging: `full_charge_linear_v1`, using each station's own
-  `charging_power_kw` and the configured charging efficiency;
+- charging: `full_charge_linear_derated_v2`, using each station's own
+  `charging_power_kw` multiplied by `charging_power_derating_factor`;
 - customer demand/capacity: cm3; time and time windows: seconds at the dataset
   boundary (ALNS converts them to minutes internally).
 
@@ -29,8 +29,8 @@ Missing or stale certificates fall back to solver-side repair.
 
 ```bash
 python EVRPTW_Benchmark/MetaHeuristics/ALNS_Solver/run_alns.py \
-  --dataset_path EVRPTW_Dataset/Instances_v1/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
-  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v1/compatibility_cus50/test1/ALNS_Solver_2h \
+  --dataset_path EVRPTW_Dataset/Instances_v2/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
+  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/ALNS_Solver_2h \
   --num_workers 30 \
   --time_limit_s 7200 \
   --checkpoints_s 60,300,900,3600,7200 \
@@ -91,11 +91,10 @@ directories for reading. A terminal row is skipped only when its
 the algorithm/profile, budget and checkpoints, base and per-view seeds, search
 parameters, timing scope, and portable view-index/family identity; worker
 count, shard/range selection, ordering, and output path are deliberately
-excluded. Data identity includes the actual family/view manifests, generation
-seeds, and byte-level hashes of the family terminal index, four matrices, and
-small per-view artifacts; direct and CLE-restored copies intentionally share
-the same identity. Each selected family is read for hashing only once per
-launch. The canonical replay policy is versioned too. Therefore a 30-second pilot, regenerated data, another
+excluded. Data identity uses deterministic family/view IDs, cohort fields, view seed,
+and the frozen v3/v4 schema contract. Solver startup performs no SHA256 or
+byte-level content hashing of dataset artifacts; direct and CLE-restored copies
+therefore share the same portable identity. The canonical replay policy is versioned too. Therefore a 30-second pilot, regenerated data, another
 seed/profile, or changed search parameter is rerun even in the same directory.
 Contract-scoped artifact directories isolate those reruns. Legacy rows without
 a contract fingerprint are conservatively rerun rather than assumed equivalent.

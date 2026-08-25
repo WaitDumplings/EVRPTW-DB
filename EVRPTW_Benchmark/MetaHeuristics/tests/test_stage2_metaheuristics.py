@@ -75,7 +75,7 @@ def make_instance() -> EVRPTWInstance:
                 "battery_capacity_kwh": 100.0,
                 "cargo_capacity_cm3": 100.0,
                 "consumption_kwh_per_km": 99.0,
-                "charging_efficiency": 1.0,
+                "charging_power_derating_factor": 0.9,
             },
             "raw_travel_time_matrix_s": travel,
             "energy_matrix_kwh": energy,
@@ -83,8 +83,8 @@ def make_instance() -> EVRPTWInstance:
             "running_time_path_energy_kwh": energy,
             "charging_power_kw": [11.0, 100.0],
             "charging_policy": {
-                "mode": "full_charge_linear_v1",
-                "charging_efficiency": 1.0,
+                "policy": "full_charge_linear_derated_v2",
+                "charging_power_derating_factor": 0.9,
             },
             "cs_activation": {"charging_power_kw": [11.0, 100.0]},
         }
@@ -93,9 +93,9 @@ def make_instance() -> EVRPTWInstance:
 
 def test_adapters_preserve_stage2_time_energy_and_station_power() -> None:
     instance = make_instance()
-    power, efficiency, source = charging_profile(instance)
+    power, power_factor, source = charging_profile(instance)
     assert power.tolist() == [11.0, 100.0]
-    assert efficiency == 1.0
+    assert power_factor == 0.9
     assert source == "charging_power_kw"
 
     alns = to_alns_tensor_instance(instance)
@@ -115,8 +115,8 @@ def test_route_replay_uses_station_specific_full_charge_time() -> None:
     fast = validate_routes(instance, [[0, 1, 3, 0]])
     assert slow["passed"]
     assert fast["passed"]
-    assert np.isclose(slow["total_charging_time_s"], 20.0 / 11.0 * 3600.0)
-    assert np.isclose(fast["total_charging_time_s"], 20.0 / 100.0 * 3600.0)
+    assert np.isclose(slow["total_charging_time_s"], 20.0 / (0.9 * 11.0) * 3600.0)
+    assert np.isclose(fast["total_charging_time_s"], 20.0 / (0.9 * 100.0) * 3600.0)
     assert slow["total_charging_time_s"] > fast["total_charging_time_s"]
 
 
@@ -130,16 +130,16 @@ def test_both_solvers_use_station_specific_full_charge_time() -> None:
     )
     slow_sim = alns._simulate_route([0, 1, 2, 0])
     fast_sim = alns._simulate_route([0, 1, 3, 0])
-    assert np.isclose(slow_sim["departure_times"][2], 20.0 * 60.0 / 11.0)
-    assert np.isclose(fast_sim["departure_times"][2], 20.0 * 60.0 / 100.0)
+    assert np.isclose(slow_sim["departure_times"][2], 20.0 * 60.0 / (0.9 * 11.0))
+    assert np.isclose(fast_sim["departure_times"][2], 20.0 * 60.0 / (0.9 * 100.0))
 
     vnst_module = load_module(
         "vnst_solver_stage2_test", META_ROOT / "VNS_TS_Solver" / "solver.py"
     )
     adapted = to_vnst_instance(instance)
     vnst = vnst_module.VNSTSolver(adapted)
-    assert np.isclose(vnst.charging_time(adapted.stations[0], 20.0), 20.0 / 11.0 * 3600.0)
-    assert np.isclose(vnst.charging_time(adapted.stations[1], 20.0), 20.0 / 100.0 * 3600.0)
+    assert np.isclose(vnst.charging_time(adapted.stations[0], 20.0), 20.0 / (0.9 * 11.0) * 3600.0)
+    assert np.isclose(vnst.charging_time(adapted.stations[1], 20.0), 20.0 / (0.9 * 100.0) * 3600.0)
 
 
 def test_canonical_replay_rejects_internal_depot_and_customerless_routes() -> None:

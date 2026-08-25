@@ -10,7 +10,6 @@ import pandas as pd
 import pytest
 from shapely.geometry import Point, Polygon
 
-from evrptw_stage2.artifacts import load_materialized_view, verify_materialized_family
 from evrptw_stage2.community import build_customer_split
 from evrptw_stage2.config import load_stage2_config
 from evrptw_stage2.materialize import (

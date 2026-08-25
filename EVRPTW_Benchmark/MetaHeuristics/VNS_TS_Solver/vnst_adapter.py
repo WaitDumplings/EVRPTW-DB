@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import namedtuple
-from typing import Any
 
 import numpy as np
 
@@ -105,7 +104,7 @@ def to_vnst_instance(instance: EVRPTWInstance) -> VNSTInstance:
         )
 
     battery_capacity = float(instance.vehicle.get("battery_capacity_kwh", 100.0))
-    charging_power_kw, charging_efficiency, charging_power_source = charging_profile(instance)
+    charging_power_kw, charging_power_factor, charging_power_source = charging_profile(instance)
     effective_speed_kmh = float(
         instance.speed_profile.get("effective_speed_kmh")
         or instance.vehicle.get("design_speed_kmh")
@@ -116,7 +115,7 @@ def to_vnst_instance(instance: EVRPTWInstance) -> VNSTInstance:
         "fuel_cap": battery_capacity,
         "load_cap": float(instance.vehicle.get("cargo_capacity_cm3", np.inf)),
         "consump_rate": float(instance.vehicle.get("consumption_kwh_per_km", 0.404)),
-        "charging_efficiency": charging_efficiency,
+        "charging_power_derating_factor": charging_power_factor,
         "charging_power_source": charging_power_source,
         "velocity": effective_speed_kmh / 3600.0,
     }

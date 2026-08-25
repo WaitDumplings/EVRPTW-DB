@@ -130,7 +130,8 @@ SUMMARY_FIELDNAMES = [
     "search_mode", "move_candidate_limit", "route_neighbor_limit", "position_neighbor_limit",
     "exchange_neighbor_limit", "station_candidate_limit", "route_validation_passed",
     "charging_visit_count", "total_charging_time_s", "charging_power_min_kw",
-    "charging_power_max_kw", "routes_json", "route_sequence_json", "solution_path",
+    "charging_power_max_kw", "charging_power_derating_factor", "routes_json",
+    "route_sequence_json", "solution_path",
     "time_trace_path", "incumbent_replay_hits", "incumbent_replay_misses", "errors", "traceback",
     "algorithm_profile_id", "initial_construction_strategy", "initial_solution_source",
     "initial_construction_time_s", "initial_route_count", "fast_policy_version",
@@ -233,6 +234,7 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
         replay_cache = IncumbentReplayCache(instance)
         solver: VNSTSolver | None = None
         power_kw = np.asarray([], dtype=np.float32)
+        charging_power_factor = 1.0
         initial_incumbent: dict[str, Any] = {}
         start = time.perf_counter()
 
@@ -255,8 +257,8 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
                 )
 
         def construct_and_run_solver() -> None:
-            nonlocal power_kw, solver
-            power_kw, _, _ = charging_profile(instance)
+            nonlocal charging_power_factor, power_kw, solver
+            power_kw, charging_power_factor, _ = charging_profile(instance)
             adapted = to_vnst_instance(instance)
             solver = VNSTSolver(
                 adapted,
@@ -375,7 +377,8 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
                     "terminated_by_time_limit": terminated_by_time_limit,
                     "timing_scope": ALGORITHM_TIMING_SCOPE,
                     "checkpoint_snapshots": snapshots,
-                    "charging_model": "full_charge_per_station_power",
+                    "charging_model": "full_charge_linear_derated_v2",
+                    "charging_power_derating_factor": charging_power_factor,
                     "benchmark_status": status,
                     "benchmark_completed": True,
                     "has_incumbent": True,
@@ -453,6 +456,7 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
             "total_charging_time_s": audit["total_charging_time_s"],
             "charging_power_min_kw": float(np.min(power_kw)) if len(power_kw) else "",
             "charging_power_max_kw": float(np.max(power_kw)) if len(power_kw) else "",
+            "charging_power_derating_factor": charging_power_factor,
             "routes_json": json.dumps(routes),
             "route_sequence_json": json.dumps(merge_route_sequences(routes)),
             "solution_path": "",

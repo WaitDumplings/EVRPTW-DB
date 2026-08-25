@@ -44,3 +44,8 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+# Freeze Ruff's historical correctness-oriented default. New Ruff releases
+# must not silently enable broad style/docstring rule families in CI.
+select = ["E4", "E7", "E9", "F"]

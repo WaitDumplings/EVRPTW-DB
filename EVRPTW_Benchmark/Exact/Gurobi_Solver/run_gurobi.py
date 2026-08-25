@@ -43,6 +43,7 @@ SUMMARY_FIELDNAMES = [
     "travel_time_matrix_source", "energy_matrix_source",
     "travel_time_asymmetry_max_s", "energy_asymmetry_max_kwh",
     "charging_time_model", "charging_power_min_kw", "charging_power_max_kw",
+    "charging_power_derating_factor", "charging_power_factor_source",
     "route_validation_passed", "charging_visit_count", "total_charging_time_s",
     "errors", "traceback",
 ]
@@ -312,6 +313,8 @@ def invalid_summary_row(instance: Any, instance_file: Path, errors: str) -> dict
         "charging_time_model": "",
         "charging_power_min_kw": "",
         "charging_power_max_kw": "",
+        "charging_power_derating_factor": "",
+        "charging_power_factor_source": "",
         "route_validation_passed": "",
         "charging_visit_count": "",
         "total_charging_time_s": "",
@@ -361,6 +364,8 @@ def error_summary_row(
         "charging_time_model": "",
         "charging_power_min_kw": "",
         "charging_power_max_kw": "",
+        "charging_power_derating_factor": "",
+        "charging_power_factor_source": "",
         "route_validation_passed": "",
         "charging_visit_count": "",
         "total_charging_time_s": "",
@@ -407,6 +412,12 @@ def solved_summary_row(instance: Any, instance_file: Path, solution: EVRPTWSolut
         "charging_time_model": solution.metadata.get("charging_time_model"),
         "charging_power_min_kw": solution.metadata.get("charging_power_min_kw"),
         "charging_power_max_kw": solution.metadata.get("charging_power_max_kw"),
+        "charging_power_derating_factor": solution.metadata.get(
+            "charging_power_derating_factor"
+        ),
+        "charging_power_factor_source": solution.metadata.get(
+            "charging_power_factor_source"
+        ),
         "route_validation_passed": route_validation.get("passed"),
         "charging_visit_count": route_validation.get("charging_visit_count"),
         "total_charging_time_s": route_validation.get("total_charging_time_s"),
@@ -661,7 +672,7 @@ def main(argv: list[str] | None = None) -> None:
         default="",
         help=(
             "Stage-2 materialized/families directory. It is inferred when "
-            "the view index is inside the canonical Instances_v1 tree."
+            "the view index is inside the canonical Instances_v2 tree."
         ),
     )
     parser.add_argument("--save_path", required=True, help="Directory for benchmark summaries and route snapshots.")

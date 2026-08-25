@@ -231,8 +231,13 @@ class VNSTSolver:
 
     def charging_time(self, station, missing_energy_kwh):
         power = float(self.instance.station_charging_power_kw[station.id])
-        efficiency = float(self.instance.vehicle_params.get("charging_efficiency", 1.0))
-        return max(0.0, float(missing_energy_kwh)) / (efficiency * power) * 3600.0
+        power_factor = float(
+            self.instance.vehicle_params.get(
+                "charging_power_derating_factor",
+                self.instance.vehicle_params.get("charging_efficiency", 1.0),
+            )
+        )
+        return max(0.0, float(missing_energy_kwh)) / (power_factor * power) * 3600.0
 
     def _time_limit_reached(self):
         if self._deadline is None:
@@ -1144,7 +1149,6 @@ class VNSTSolver:
             best_move_cost = float("inf")
 
             # Track best feasible (distance-only objective) candidate
-            best_feas_move = None
             best_feas_cost = float("inf")
 
             # -------------------------
@@ -1181,7 +1185,6 @@ class VNSTSolver:
                             c_feas = self.generalized_cost(current_solution, penalty_value=False, p_div_value=False, allow_infeasible=False)
                             if c_feas < best_feas_cost:
                                 best_feas_cost = c_feas
-                                best_feas_move = ("two_opt", i, j, split1, split2, old_i_nodes, old_j_nodes)
 
                             # rollback
                             ri.nodes = old_i_nodes
@@ -1224,7 +1227,6 @@ class VNSTSolver:
                             c_feas = self.generalized_cost(current_solution, False, False, False)
                             if c_feas < best_feas_cost:
                                 best_feas_cost = c_feas
-                                best_feas_move = ("relocate", i, j, split_pos, insert_pos, removed)
 
                             # rollback
                             rj.nodes.pop(adj_insert)
@@ -1247,7 +1249,6 @@ class VNSTSolver:
                     c_feas = self.generalized_cost(current_solution, False, False, False)
                     if c_feas < best_feas_cost:
                         best_feas_cost = c_feas
-                        best_feas_move = ("relocate_new", i, split_pos, removed)
 
                     # rollback
                     current_solution.pop()
@@ -1282,7 +1283,6 @@ class VNSTSolver:
                             c_feas = self.generalized_cost(current_solution, False, False, False)
                             if c_feas < best_feas_cost:
                                 best_feas_cost = c_feas
-                                best_feas_move = ("exchange", i, j, p1, p2)
 
                             # rollback
                             ri.nodes[p1], rj.nodes[p2] = rj.nodes[p2], ri.nodes[p1]
@@ -1315,7 +1315,6 @@ class VNSTSolver:
                         c_feas = self.generalized_cost(current_solution, False, False, False)
                         if c_feas < best_feas_cost:
                             best_feas_cost = c_feas
-                            best_feas_move = ("station_remove", i, pos, removed_station, arc)
 
                         # rollback
                         r.nodes.insert(pos, removed_station)
@@ -1343,7 +1342,6 @@ class VNSTSolver:
                             c_feas = self.generalized_cost(current_solution, False, False, False)
                             if c_feas < best_feas_cost:
                                 best_feas_cost = c_feas
-                                best_feas_move = ("station_insert", i, pos, st, arc)
 
                             # rollback
                             r.nodes.pop(pos)
@@ -1950,9 +1948,6 @@ class VNSTSolver:
         i = 0
         feasibilityPhase = not self.is_solution_feasible(S)
 
-        best_solution = self.clone_solution_shallow(S)
-        best_value = initial_value
-
         pbar = tqdm(total=self.η_dist + self.η_feas, disable=not self.show_progress)
 
         while (feasibilityPhase or (not feasibilityPhase and i < self.η_dist)) and not self._time_limit_reached():
@@ -1974,9 +1969,6 @@ class VNSTSolver:
                     p_div_value=False,
                     allow_infeasible=True,
                 )
-                if val < best_value:
-                    best_value = val
-                    best_solution = self.clone_solution_shallow(S)
                 if val < self.global_value:
                     self.global_value = val
                     self.global_solution = self.clone_solution_shallow(S)

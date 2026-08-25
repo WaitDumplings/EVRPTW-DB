@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -8,8 +9,12 @@ import pandas as pd
 
 from evrptw_core.schema import EVRPTWInstance
 from evrptw_stage2.artifacts import load_materialized_view
+from evrptw_stage2.contracts import STAGE2_GENERATION_CONTRACT
 
 
+FAMILY_SCHEMA = "cle_evrptw_materialized_matrix_family_v3"
+VIEW_SCHEMA = "cle_evrptw_materialized_view_v4"
+VIEW_MATRIX_STORAGE = "parent_index_view"
 REQUIRED_VIEW_INDEX_COLUMNS = {
     "view_id",
     "family_id",
@@ -20,6 +25,9 @@ REQUIRED_VIEW_INDEX_COLUMNS = {
     "scale_id",
     "customer_count",
     "charging_station_count",
+    "family_cohort_id",
+    "terminal_count",
+    "view_seed",
 }
 
 
@@ -39,6 +47,9 @@ class Stage2ViewTask:
     customer_count: int
     charging_station_count: int
     row_position: int
+    family_cohort_id: str = ""
+    terminal_count: int = 0
+    view_seed: int = 0
 
     @property
     def instance_id(self) -> str:
@@ -123,6 +134,9 @@ def read_stage2_tasks(
                     customer_count=int(row["customer_count"]),
                     charging_station_count=int(row["charging_station_count"]),
                     row_position=position,
+                    family_cohort_id=str(row["family_cohort_id"]),
+                    terminal_count=int(row["terminal_count"]),
+                    view_seed=int(row["view_seed"]),
                 )
             )
             position += 1
@@ -140,6 +154,37 @@ def missing_family_directories(tasks: Iterable[Stage2ViewTask]) -> list[Path]:
 
 
 def load_stage2_instance(task: Stage2ViewTask) -> EVRPTWInstance:
+    family_dir = Path(task.family_dir)
+    family_manifest = json.loads(
+        (family_dir / "family_manifest.json").read_text(encoding="utf-8")
+    )
+    view_manifest = json.loads(
+        (family_dir / "views" / task.view_id / "view_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if family_manifest.get("schema") != FAMILY_SCHEMA:
+        raise ValueError(
+            f"Unsupported Stage-2 family schema: {family_manifest.get('schema')!r}"
+        )
+    if view_manifest.get("schema") != VIEW_SCHEMA:
+        raise ValueError(
+            f"Unsupported Stage-2 view schema: {view_manifest.get('schema')!r}"
+        )
+    if (
+        family_manifest.get("stage2_generation_contract")
+        != STAGE2_GENERATION_CONTRACT
+    ):
+        raise ValueError("Stage-2 generation contract mismatch")
+    if view_manifest.get("matrix_storage") != VIEW_MATRIX_STORAGE:
+        raise ValueError("Stage-2 view does not use parent_index_view matrix storage")
+    if family_manifest.get("materialization_status") != "complete":
+        raise ValueError("Stage-2 family is not completely materialized")
+    if str(view_manifest.get("view_id")) != task.view_id:
+        raise ValueError("View manifest ID does not match view index")
+    if str(view_manifest.get("family_id")) != task.family_id:
+        raise ValueError("View manifest family ID does not match view index")
+
     payload = load_materialized_view(task.family_dir, task.view_id)
     if payload["instance_id"] != task.view_id:
         raise ValueError("Loaded Stage-2 view ID does not match view index")
@@ -149,10 +194,12 @@ def load_stage2_instance(task: Stage2ViewTask) -> EVRPTWInstance:
         raise ValueError("Loaded customer count does not match view index")
     if len(payload["charging_stations"]) != task.charging_station_count:
         raise ValueError("Loaded charging-station count does not match view index")
+    if task.terminal_count != 1 + task.customer_count + task.charging_station_count:
+        raise ValueError("View-index terminal count is inconsistent")
 
     vehicle = dict(payload["vehicle"])
-    vehicle["charging_efficiency"] = float(
-        payload["charging_policy"]["charging_efficiency"]
+    vehicle["charging_power_derating_factor"] = float(
+        payload["charging_policy"]["charging_power_derating_factor"]
     )
     metadata: dict[str, Any] = {
         **dict(payload["metadata"]),
@@ -162,8 +209,16 @@ def load_stage2_instance(task: Stage2ViewTask) -> EVRPTWInstance:
         "split_id": task.split_id,
         "track_id": task.track_id,
         "consumer_cohort_id": task.consumer_cohort_id,
+        "family_cohort_id": task.family_cohort_id,
+        "view_seed": task.view_seed,
         "source_view_index": task.index_path,
         "source_family_dir": task.family_dir,
+        "source_family_schema": family_manifest["schema"],
+        "source_view_schema": view_manifest["schema"],
+        "stage2_generation_contract": family_manifest[
+            "stage2_generation_contract"
+        ],
+        "matrix_storage": view_manifest["matrix_storage"],
         "metric_contract": {
             "objective": "distance_matrix_km",
             "travel_time": "running_time_shortest_matrix_s",
@@ -215,5 +270,6 @@ def load_stage2_instance(task: Stage2ViewTask) -> EVRPTWInstance:
         "distance_path_travel_time_s": payload["distance_path_travel_time_s"],
         "full_cs_to_depot_time_s": payload["full_cs_to_depot_time_s"],
         "terminal_parent_indices": payload["terminal_parent_indices"],
+        "feasibility_certificate": payload.get("feasibility_certificate"),
     }
     return EVRPTWInstance.from_dict(canonical_payload)

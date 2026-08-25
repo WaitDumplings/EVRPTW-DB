@@ -11,27 +11,39 @@ from evrptw_core.schema import EVRPTWInstance
 @dataclass(frozen=True)
 class ChargingProfile:
     power_kw: np.ndarray
-    efficiency: float
-    source: str
+    power_factor: float
+    power_source: str
+    power_factor_source: str
 
 
 def resolve_charging_profile(instance: EVRPTWInstance) -> ChargingProfile:
     m = instance.num_charging_stations
     raw_power = instance.raw.get("charging_power_kw")
-    source = "stage2_charging_power_kw"
+    power_source = "charging_power_kw"
     if raw_power is None:
         raw_power = instance.cs_activation.get("charging_power_kw")
-        source = "cs_activation.charging_power_kw"
+        power_source = "cs_activation.charging_power_kw"
 
     policy = instance.raw.get("charging_policy", {})
-    efficiency = float(
-        policy.get(
-            "charging_efficiency",
-            instance.vehicle.get("charging_efficiency", 1.0),
+    if "charging_power_derating_factor" in policy:
+        if "charging_efficiency" in policy:
+            raise ValueError("charging policy cannot define both derating and efficiency")
+        power_factor = float(policy["charging_power_derating_factor"])
+        factor_source = "charging_policy.charging_power_derating_factor"
+    elif "charging_efficiency" in policy:
+        power_factor = float(policy["charging_efficiency"])
+        factor_source = "charging_policy.charging_efficiency_legacy"
+    elif "charging_power_derating_factor" in instance.vehicle:
+        power_factor = float(instance.vehicle["charging_power_derating_factor"])
+        factor_source = "vehicle.charging_power_derating_factor"
+    else:
+        power_factor = float(instance.vehicle.get("charging_efficiency", 1.0))
+        factor_source = "vehicle.charging_efficiency_legacy_default"
+    if not 0.0 < power_factor <= 1.0:
+        raise ValueError(
+            "charging power factor must be in (0, 1], "
+            f"got {power_factor}"
         )
-    )
-    if not 0.0 < efficiency <= 1.0:
-        raise ValueError(f"charging_efficiency must be in (0, 1], got {efficiency}")
 
     if raw_power is None and m:
         raise ValueError(
@@ -48,7 +60,12 @@ def resolve_charging_profile(instance: EVRPTWInstance) -> ChargingProfile:
         )
     if np.any(~np.isfinite(power)) or np.any(power <= 0.0):
         raise ValueError("charging_power_kw must contain finite positive values")
-    return ChargingProfile(power_kw=power, efficiency=efficiency, source=source)
+    return ChargingProfile(
+        power_kw=power,
+        power_factor=power_factor,
+        power_source=power_source,
+        power_factor_source=factor_source,
+    )
 
 
 def validate_routes(
@@ -57,7 +74,7 @@ def validate_routes(
     *,
     tolerance: float = 1e-5,
 ) -> dict[str, Any]:
-    """Independently replay routes under the Stage-2 V1 resource contract."""
+    """Independently replay routes under the current Stage-2 resource contract."""
 
     n = instance.num_customers
     terminal_count = instance.num_terminals
@@ -128,7 +145,7 @@ def validate_routes(
                 missing_energy = max(0.0, battery_capacity - remaining_battery)
                 charge_time = (
                     missing_energy
-                    / (profile.efficiency * float(profile.power_kw[station]))
+                    / (profile.power_factor * float(profile.power_kw[station]))
                     * 3600.0
                 )
                 current_time += charge_time
@@ -164,8 +181,9 @@ def validate_routes(
         "objective_distance_km": total_distance,
         "charging_visit_count": charging_visits,
         "total_charging_time_s": total_charge_time,
-        "charging_power_source": profile.source,
-        "charging_efficiency": profile.efficiency,
+        "charging_power_source": profile.power_source,
+        "charging_power_factor_source": profile.power_factor_source,
+        "charging_power_derating_factor": profile.power_factor,
         "route_metrics": route_metrics,
     }
 

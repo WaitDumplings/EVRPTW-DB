@@ -306,7 +306,7 @@ class GurobiEVRPTWSolver:
             power = float(charging.power_kw[physical_station])
             charging_power_by_node[cs_node] = power
             maximum_charge_time_by_node[cs_node] = (
-                battery_capacity / (charging.efficiency * power) * 3600.0
+                battery_capacity / (charging.power_factor * power) * 3600.0
             )
 
         model = Model(f"EVRPTW_{instance.instance_id}")
@@ -367,7 +367,7 @@ class GurobiEVRPTWSolver:
             model.addConstr(visit <= 1, name=f"cs_visit_{f}")
             max_charge_s = maximum_charge_time_by_node[f]
             seconds_per_kwh = 3600.0 / (
-                charging.efficiency * charging_power_by_node[f]
+                charging.power_factor * charging_power_by_node[f]
             )
             exact_charge_s = seconds_per_kwh * (
                 battery_capacity - battery[f]
@@ -439,9 +439,10 @@ class GurobiEVRPTWSolver:
 
         metric_metadata.update(
             {
-                "charging_time_model": "arrival_soc_station_power_linear_full_charge_v1",
-                "charging_power_source": charging.source,
-                "charging_efficiency": charging.efficiency,
+                "charging_time_model": "arrival_soc_station_power_linear_full_charge_derated_v2",
+                "charging_power_source": charging.power_source,
+                "charging_power_factor_source": charging.power_factor_source,
+                "charging_power_derating_factor": charging.power_factor,
                 "charging_power_min_kw": (
                     float(np.min(charging.power_kw)) if charging.power_kw.size else None
                 ),
@@ -460,7 +461,7 @@ class GurobiEVRPTWSolver:
         instance: EVRPTWInstance,
         terminals: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
-        """Return the V1 objective, running-time, and running-path energy matrices."""
+        """Return the current objective, running-time, and running-path energy matrices."""
 
         distance = instance.distance_matrix_km[np.ix_(terminals, terminals)].astype(float)
 

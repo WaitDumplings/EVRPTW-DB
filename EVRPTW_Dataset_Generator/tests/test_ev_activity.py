@@ -4,7 +4,6 @@ from evrptw_stage2.ev_activity import run_deterministic_route_heuristic
 
 
 def _case(distance: np.ndarray, battery: float):
-    n = 2
     return run_deterministic_route_heuristic(
         time_matrix_s=distance * 60.0,
         distance_matrix_km=distance,
