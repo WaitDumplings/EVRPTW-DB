@@ -1,5 +1,9 @@
 # Test benchmark shells
 
+The canonical explicit `solver × scale × test` entry points now live in
+`EVRPTW_Benchmark/scripts/`. This folder retains the earlier combined Cus50 and
+Cus500 launchers for compatibility.
+
 This folder contains frozen Test launchers for the Exact, ALNS, and VNS-TS
 baselines. All runs use the same per-instance timing contract:
 

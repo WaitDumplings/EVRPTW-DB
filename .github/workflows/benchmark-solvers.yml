@@ -62,6 +62,11 @@ jobs:
           bash EVRPTW_Benchmark/test_scripts/run_all_cus500_tests.sh
           EVRPTW_SHARD_COUNT=10 EVRPTW_SHARD_INDEX=3 \
             bash EVRPTW_Benchmark/test_scripts/run_all_cus500_tests.sh
+          bash -n EVRPTW_Benchmark/scripts/common.sh
+          for script in EVRPTW_Benchmark/scripts/{Gurobi,ALNS,VNSTS}/Cus*/*.sh; do
+            bash -n "$script"
+            bash "$script" >/dev/null
+          done
 
       - name: Lint
         run: >-
