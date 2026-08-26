@@ -16,6 +16,7 @@ sys.path.insert(0, str(META_ROOT))
 sys.path.insert(0, str(META_ROOT / "ALNS_Solver"))
 sys.path.insert(0, str(META_ROOT / "VNS_TS_Solver"))
 
+from evrptw_core.benchmark_schema import UNIFIED_TIME_TRACE_FIELDNAMES
 from evrptw_core.schema import EVRPTWInstance
 
 from benchmark_common import (
@@ -243,6 +244,7 @@ def test_natural_early_completion_only_forward_fills_future() -> None:
 
 
 def test_exact_compatible_status_fields_are_declared() -> None:
+    assert TIME_TRACE_FIELDNAMES == UNIFIED_TIME_TRACE_FIELDNAMES
     assert {
         "benchmark_status",
         "solver_name",

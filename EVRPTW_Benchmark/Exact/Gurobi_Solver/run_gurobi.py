@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Dataset_Generator" / "src"))
 
+from evrptw_core.benchmark_schema import UNIFIED_TIME_TRACE_FIELDNAMES
 from evrptw_core.io import save_solution
 from evrptw_core.schema import EVRPTWSolution, solution_route_sequence
 from evrptw_core.validation import validate_instance_structure
@@ -48,14 +49,8 @@ SUMMARY_FIELDNAMES = [
     "errors", "traceback",
 ]
 
-TIME_TRACE_FIELDNAMES = [
-    "instance_id", "file", "checkpoint_s", "elapsed_s", "reached_checkpoint", "status",
-    "benchmark_status",
-    "has_incumbent", "first_feasible_time_s", "objective_distance_km", "best_bound", "mip_gap",
-    "vehicle_count", "routes_json", "route_sequence_json", "checkpoint_solution_path", "source", "errors",
-    "route_validation_passed", "route_validation_json",
-    "diagnostic_objective_distance_km", "diagnostic_routes_json",
-]
+TIME_TRACE_FIELDNAMES = list(UNIFIED_TIME_TRACE_FIELDNAMES)
+GUROBI_ALGORITHM_PROFILE_ID = "gurobi_exact_distance_anytime_v1"
 
 TERMINAL_BENCHMARK_STATUSES = {
     "COMPLETED_OPTIMAL",
@@ -237,7 +232,9 @@ def append_time_rows(
     instance_id: str,
     solution: EVRPTWSolution,
     checkpoint_dir: Path,
+    source_info: dict[str, Any] | None = None,
 ) -> None:
+    trace_source_info = source_info or {}
     first_feasible_time_s = solution.metadata.get("first_feasible_time_s")
     for snapshot in solution.metadata.get("checkpoint_snapshots", []):
         checkpoint_solution_path = write_checkpoint_solution(
@@ -249,6 +246,12 @@ def append_time_rows(
         rows.append({
             "instance_id": instance_id,
             "file": str(instance_file),
+            "family_id": trace_source_info.get("family_id", ""),
+            "solver_name": solution.solver_name,
+            "algorithm_profile_id": GUROBI_ALGORITHM_PROFILE_ID,
+            "seed": "",
+            "seed_scheme": "",
+            "run_contract_fingerprint": "",
             "checkpoint_s": snapshot.get("checkpoint_s"),
             "elapsed_s": snapshot.get("elapsed_s"),
             "reached_checkpoint": snapshot.get("reached_checkpoint"),
@@ -256,6 +259,7 @@ def append_time_rows(
             "benchmark_status": snapshot.get("benchmark_status"),
             "has_incumbent": snapshot.get("has_incumbent"),
             "first_feasible_time_s": first_feasible_time_s,
+            "incumbent_event_time_s": "",
             "objective_distance_km": snapshot.get("objective_distance_km"),
             "best_bound": snapshot.get("best_bound"),
             "mip_gap": snapshot.get("mip_gap"),
@@ -288,11 +292,19 @@ def append_error_time_rows(
     instance_id: str,
     status: str,
     error: str,
+    source_info: dict[str, Any] | None = None,
 ) -> None:
+    trace_source_info = source_info or {}
     for checkpoint_s in checkpoints_s:
         rows.append({
             "instance_id": instance_id,
             "file": str(instance_file),
+            "family_id": trace_source_info.get("family_id", ""),
+            "solver_name": GurobiEVRPTWSolver.name,
+            "algorithm_profile_id": GUROBI_ALGORITHM_PROFILE_ID,
+            "seed": "",
+            "seed_scheme": "",
+            "run_contract_fingerprint": "",
             "checkpoint_s": checkpoint_s,
             "elapsed_s": "",
             "reached_checkpoint": False,
@@ -300,6 +312,7 @@ def append_error_time_rows(
             "benchmark_status": status,
             "has_incumbent": False,
             "first_feasible_time_s": "",
+            "incumbent_event_time_s": "",
             "objective_distance_km": "",
             "best_bound": "",
             "mip_gap": "",
@@ -481,7 +494,15 @@ def solve_instance_task(
         if not validation.success:
             errors = json.dumps(validation.errors)
             time_rows: list[dict[str, Any]] = []
-            append_error_time_rows(time_rows, checkpoints_s, instance_file, instance_id, "INVALID_INSTANCE", errors)
+            append_error_time_rows(
+                time_rows,
+                checkpoints_s,
+                instance_file,
+                instance_id,
+                "INVALID_INSTANCE",
+                errors,
+                {"family_id": task.family_id},
+            )
             return {
                 "instance_id": instance_id,
                 "summary_row": invalid_summary_row(instance, instance_file, errors),
@@ -500,7 +521,15 @@ def solve_instance_task(
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         time_rows = []
-        append_error_time_rows(time_rows, checkpoints_s, instance_file, instance_id, "ERROR", error)
+        append_error_time_rows(
+            time_rows,
+            checkpoints_s,
+            instance_file,
+            instance_id,
+            "ERROR",
+            error,
+            {"family_id": task.family_id},
+        )
         return {
             "instance_id": instance_id,
             "summary_row": error_summary_row(
@@ -868,7 +897,14 @@ def main(argv: list[str] | None = None) -> None:
             solution_path = solutions_dir / f"{instance_id}_solution.pkl"
             save_solution(solution_path, solution)
             summary_row["solution_path"] = str(solution_path)
-            append_time_rows(new_time_rows, Path(summary_row.get("file") or dataset_path), instance_id, solution, checkpoint_dir)
+            append_time_rows(
+                new_time_rows,
+                Path(summary_row.get("file") or dataset_path),
+                instance_id,
+                solution,
+                checkpoint_dir,
+                summary_row,
+            )
         else:
             new_time_rows.extend(result.get("time_rows", []))
 

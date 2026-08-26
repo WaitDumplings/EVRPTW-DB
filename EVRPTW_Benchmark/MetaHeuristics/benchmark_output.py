@@ -11,37 +11,14 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+from evrptw_core.benchmark_schema import UNIFIED_TIME_TRACE_FIELDNAMES
 from evrptw_core.io import save_solution
 from evrptw_core.schema import EVRPTWSolution
 
 from benchmark_common import checkpoint_label
 
 
-TIME_TRACE_FIELDNAMES = [
-    "instance_id",
-    "file",
-    "family_id",
-    "solver_name",
-    "algorithm_profile_id",
-    "seed",
-    "seed_scheme",
-    "run_contract_fingerprint",
-    "checkpoint_s",
-    "elapsed_s",
-    "reached_checkpoint",
-    "status",
-    "benchmark_status",
-    "has_incumbent",
-    "first_feasible_time_s",
-    "incumbent_event_time_s",
-    "objective_distance_km",
-    "vehicle_count",
-    "routes_json",
-    "route_sequence_json",
-    "checkpoint_solution_path",
-    "source",
-    "errors",
-]
+TIME_TRACE_FIELDNAMES = list(UNIFIED_TIME_TRACE_FIELDNAMES)
 
 
 def snapshot_rows(
@@ -80,12 +57,28 @@ def snapshot_rows(
             "objective_distance_km": (
                 "" if snapshot["objective_distance_km"] is None else snapshot["objective_distance_km"]
             ),
+            "best_bound": "",
+            "mip_gap": "",
             "vehicle_count": "" if snapshot["vehicle_count"] is None else snapshot["vehicle_count"],
             "routes_json": json.dumps(snapshot["routes"]),
             "route_sequence_json": json.dumps(snapshot["route_sequence"]),
             "checkpoint_solution_path": "",
             "source": snapshot["source"],
             "errors": "",
+            "route_validation_passed": True if snapshot["has_incumbent"] else "",
+            "route_validation_json": (
+                json.dumps(
+                    {
+                        "passed": True,
+                        "source": "canonical_replay_before_record",
+                    },
+                    sort_keys=True,
+                )
+                if snapshot["has_incumbent"]
+                else ""
+            ),
+            "diagnostic_objective_distance_km": "",
+            "diagnostic_routes_json": "[]",
         }
         for snapshot in snapshots
     ]
@@ -124,12 +117,18 @@ def error_snapshot_rows(
             "first_feasible_time_s": "",
             "incumbent_event_time_s": "",
             "objective_distance_km": "",
+            "best_bound": "",
+            "mip_gap": "",
             "vehicle_count": "",
             "routes_json": "[]",
             "route_sequence_json": "[]",
             "checkpoint_solution_path": "",
             "source": "error",
             "errors": errors,
+            "route_validation_passed": "",
+            "route_validation_json": "",
+            "diagnostic_objective_distance_km": "",
+            "diagnostic_routes_json": "[]",
         }
         for checkpoint in checkpoints_s
     ]

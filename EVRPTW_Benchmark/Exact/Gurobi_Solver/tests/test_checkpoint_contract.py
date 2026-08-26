@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import gurobi_solver as gurobi_module
+from evrptw_core.benchmark_schema import UNIFIED_TIME_TRACE_FIELDNAMES
 from evrptw_core.schema import EVRPTWSolution
 from gurobi_solver import (
     STANDARD_BENCHMARK_CHECKPOINTS_S,
@@ -12,6 +13,7 @@ from gurobi_solver import (
     GurobiSolverConfig,
 )
 from run_gurobi import (
+    TIME_TRACE_FIELDNAMES,
     append_time_rows,
     is_terminal_summary_row,
     resolve_time_schedule,
@@ -45,6 +47,10 @@ def test_default_schedule_is_the_published_five_checkpoints() -> None:
 
     assert checkpoints == STANDARD_BENCHMARK_CHECKPOINTS_S
     assert time_limit_s == 7200.0
+
+
+def test_exact_uses_unified_time_trace_schema() -> None:
+    assert TIME_TRACE_FIELDNAMES == UNIFIED_TIME_TRACE_FIELDNAMES
 
 
 def test_short_explicit_smoke_schedule_does_not_expand_to_two_hours() -> None:
@@ -315,6 +321,7 @@ def test_invalid_checkpoint_does_not_write_feasible_solution(
     assert rows[0]["has_incumbent"] is False
     assert rows[0]["routes_json"] == "[]"
     assert rows[0]["diagnostic_routes_json"] == "[[0, 1, 0]]"
+    assert set(rows[0]) == set(UNIFIED_TIME_TRACE_FIELDNAMES)
     assert not (tmp_path / "checkpoints").exists()
 
 

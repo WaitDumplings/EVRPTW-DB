@@ -804,6 +804,15 @@ def test_trace_rows_carry_portable_run_identity_for_standalone_merging() -> None
     for row in (*rows, *errors):
         for key, value in provenance.items():
             assert row[key] == value
+        assert set(row) == set(benchmark_output.TIME_TRACE_FIELDNAMES)
+
+    assert rows[0]["objective_distance_km"] == 2.0
+    assert rows[0]["routes_json"] == "[[0, 1, 0]]"
+    assert rows[0]["route_sequence_json"] == "[0, 1, 0]"
+    assert rows[0]["route_validation_passed"] is True
+    assert json.loads(rows[0]["route_validation_json"])["passed"] is True
+    assert rows[0]["best_bound"] == ""
+    assert rows[0]["mip_gap"] == ""
 
 
 def test_replay_cache_only_skips_exact_duplicate_routes(monkeypatch) -> None:

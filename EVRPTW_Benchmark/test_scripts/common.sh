@@ -52,22 +52,28 @@ if [[ "${DRY_RUN}" != "0" && "${DRY_RUN}" != "1" ]]; then
   exit 2
 fi
 
-canonical_root="${REPO_ROOT}/EVRPTW_Dataset/Instances_v2/us_11city"
-generated_root="${REPO_ROOT}/EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
-if [[ -n "${EVRPTW_DATASET_ROOT:-}" ]]; then
-  DATASET_ROOT="${EVRPTW_DATASET_ROOT}"
-elif [[ -d "${canonical_root}" ]]; then
-  DATASET_ROOT="${canonical_root}"
-elif [[ -d "${generated_root}" ]]; then
-  DATASET_ROOT="${generated_root}"
-else
+resolve_repo_relative_path() {
+  local raw_path="$1"
+  if [[ "${raw_path}" == /* ]]; then
+    printf '%s' "${raw_path}"
+  else
+    printf '%s/%s' "${REPO_ROOT}" "${raw_path}"
+  fi
+}
+
+readonly CANONICAL_DATASET_RELATIVE_ROOT="EVRPTW_Dataset/Instances_v2/us_11city"
+dataset_root_raw="${EVRPTW_DATASET_ROOT:-${CANONICAL_DATASET_RELATIVE_ROOT}}"
+DATASET_ROOT="$(resolve_repo_relative_path "${dataset_root_raw}")"
+if [[ "${DRY_RUN}" == "0" && ! -d "${DATASET_ROOT}" ]]; then
   echo "No Stage-2 v7 dataset root was found." >&2
-  echo "Restore it to ${canonical_root} or set EVRPTW_DATASET_ROOT." >&2
+  echo "Restore it to ${REPO_ROOT}/${CANONICAL_DATASET_RELATIVE_ROOT}" >&2
+  echo "or set EVRPTW_DATASET_ROOT to a repository-relative or absolute path." >&2
   exit 2
 fi
 readonly DATASET_ROOT
 readonly FAMILY_ROOT="${DATASET_ROOT}/materialized/families"
-readonly RESULTS_ROOT="${EVRPTW_TEST_RESULTS_ROOT:-${REPO_ROOT}/EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_2h}"
+results_root_raw="${EVRPTW_TEST_RESULTS_ROOT:-EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_2h}"
+readonly RESULTS_ROOT="$(resolve_repo_relative_path "${results_root_raw}")"
 
 if [[ "${DRY_RUN}" == "0" ]]; then
   if [[ ! -d "${FAMILY_ROOT}" ]]; then
