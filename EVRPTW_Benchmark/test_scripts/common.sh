@@ -13,6 +13,7 @@ readonly TEST_VIEW_COUNT
 
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${TEST_SCRIPT_DIR}/../.." && pwd)"
+cd "${REPO_ROOT}"
 readonly CHECKPOINTS_S="300,1800,3600,7200"
 readonly TIME_LIMIT_S="7200"
 readonly BASE_SEED="2026"
@@ -52,28 +53,46 @@ if [[ "${DRY_RUN}" != "0" && "${DRY_RUN}" != "1" ]]; then
   exit 2
 fi
 
-resolve_repo_relative_path() {
-  local raw_path="$1"
-  if [[ "${raw_path}" == /* ]]; then
-    printf '%s' "${raw_path}"
-  else
-    printf '%s/%s' "${REPO_ROOT}" "${raw_path}"
-  fi
-}
-
 readonly CANONICAL_DATASET_RELATIVE_ROOT="EVRPTW_Dataset/Instances_v2/us_11city"
-dataset_root_raw="${EVRPTW_DATASET_ROOT:-${CANONICAL_DATASET_RELATIVE_ROOT}}"
-DATASET_ROOT="$(resolve_repo_relative_path "${dataset_root_raw}")"
+readonly SOURCE_DATASET_RELATIVE_ROOT="EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
+dataset_candidates=(
+  "${CANONICAL_DATASET_RELATIVE_ROOT}"
+  "${SOURCE_DATASET_RELATIVE_ROOT}"
+  "../evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city"
+  "../../evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city"
+  "../../../evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city"
+)
+
+if [[ -n "${EVRPTW_DATASET_ROOT:-}" ]]; then
+  if [[ "${EVRPTW_DATASET_ROOT}" == /* ]]; then
+    echo "EVRPTW_DATASET_ROOT must be relative to the repository root." >&2
+    echo "Example: EVRPTW_DATASET_ROOT=../evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city" >&2
+    exit 2
+  fi
+  DATASET_ROOT="${EVRPTW_DATASET_ROOT}"
+else
+  DATASET_ROOT=""
+  for candidate in "${dataset_candidates[@]}"; do
+    if [[ -d "${candidate}/materialized/families" && -d "${candidate}/generation_plan" ]]; then
+      DATASET_ROOT="${candidate}"
+      break
+    fi
+  done
+  if [[ -z "${DATASET_ROOT}" && "${DRY_RUN}" == "1" ]]; then
+    DATASET_ROOT="${CANONICAL_DATASET_RELATIVE_ROOT}"
+  fi
+fi
 if [[ "${DRY_RUN}" == "0" && ! -d "${DATASET_ROOT}" ]]; then
   echo "No Stage-2 v7 dataset root was found." >&2
-  echo "Restore it to ${REPO_ROOT}/${CANONICAL_DATASET_RELATIVE_ROOT}" >&2
-  echo "or set EVRPTW_DATASET_ROOT to a repository-relative or absolute path." >&2
+  echo "Checked repository-relative roots:" >&2
+  printf '  %s\n' "${dataset_candidates[@]}" >&2
+  echo "Set EVRPTW_DATASET_ROOT to a repository-relative path if needed." >&2
   exit 2
 fi
 readonly DATASET_ROOT
 readonly FAMILY_ROOT="${DATASET_ROOT}/materialized/families"
 results_root_raw="${EVRPTW_TEST_RESULTS_ROOT:-EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_2h}"
-readonly RESULTS_ROOT="$(resolve_repo_relative_path "${results_root_raw}")"
+readonly RESULTS_ROOT="${results_root_raw}"
 
 if [[ "${DRY_RUN}" == "0" ]]; then
   if [[ ! -d "${FAMILY_ROOT}" ]]; then
@@ -220,6 +239,5 @@ run_python() {
     printf '\n'
     return 0
   fi
-  cd "${REPO_ROOT}"
   "${command[@]}"
 }

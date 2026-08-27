@@ -51,7 +51,7 @@ jobs:
 
       - name: Validate benchmark shells
         env:
-          EVRPTW_DATASET_ROOT: /tmp/evrptw-ci-dataset
+          EVRPTW_DATASET_ROOT: EVRPTW_Dataset/Instances_v2/us_11city
           EVRPTW_DRY_RUN: "1"
           EVRPTW_MAX_INSTANCES: "1"
         run: |
@@ -67,6 +67,19 @@ jobs:
             bash -n "$script"
             bash "$script" >/dev/null
           done
+          portable_output="$(
+            cd /tmp
+            bash "$GITHUB_WORKSPACE/EVRPTW_Benchmark/scripts/VNSTS/Cus50/test1.sh"
+          )"
+          grep -q '^dataset=EVRPTW_Dataset/' <<<"$portable_output"
+          if grep -q '^dataset=/' <<<"$portable_output"; then
+            echo "Dataset argument unexpectedly became absolute" >&2
+            exit 1
+          fi
+          if EVRPTW_DATASET_ROOT=/tmp/nonportable bash EVRPTW_Benchmark/scripts/VNSTS/Cus50/test1.sh; then
+            echo "Absolute EVRPTW_DATASET_ROOT was unexpectedly accepted" >&2
+            exit 1
+          fi
 
       - name: Lint
         run: >-

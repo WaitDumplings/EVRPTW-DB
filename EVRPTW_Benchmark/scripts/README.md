@@ -52,11 +52,19 @@ All shells use the frozen contract: checkpoints at 300, 1800, 3600, and 7200
 seconds; a 7200-second limit; 30 workers by default; seed 2026 for ALNS/VNS-TS;
 and `cs_copies=2`, `mip_gap=0`, and one Gurobi thread per worker for Exact.
 
-The default dataset root is repository-relative:
-`EVRPTW_Dataset/Instances_v2/us_11city`. Extract/restore the dataset there and
-the same clone works on every server. `EVRPTW_DATASET_ROOT` and
-`EVRPTW_TEST_RESULTS_ROOT` may also be repository-relative; absolute
-overrides remain supported.
+Dataset arguments stay repository-relative. The launcher changes to the
+repository root before validation and execution, so it is safe to invoke a
+leaf shell from any working directory. It checks these portable locations in
+order:
+
+1. `EVRPTW_Dataset/Instances_v2/us_11city`;
+2. the frozen source-server v7 root;
+3. `evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city` beside one of the
+   repository's first three parent directories.
+
+`EVRPTW_DATASET_ROOT` is available for nonstandard layouts, but it must be
+relative to the repository root. Absolute dataset overrides are rejected so a
+server-specific path cannot leak into a launcher command or result manifest.
 
 ## Unified checkpoint output
 
@@ -92,14 +100,14 @@ Useful controls:
 EVRPTW_TEST_WORKERS       default 30
 EVRPTW_MAX_IN_FLIGHT      default 2 × workers for ALNS/VNS-TS
 EVRPTW_CSV_FLUSH_INTERVAL default 25
-EVRPTW_TEST_RESULTS_ROOT  custom output root (repository-relative or absolute)
+EVRPTW_TEST_RESULTS_ROOT  custom output root
 EVRPTW_SHARD_COUNT        total server shards
 EVRPTW_SHARD_INDEX        zero-based shard index
 EVRPTW_MAX_INSTANCES      pilot limit within the selected shard
 EVRPTW_START_INDEX        manual inclusive filtered position
 EVRPTW_END_INDEX          manual exclusive filtered position
 EVRPTW_CONDA_ENV          default maojie
-EVRPTW_DATASET_ROOT       restored dataset root (repository-relative or absolute)
+EVRPTW_DATASET_ROOT       restored dataset root (repository-relative only)
 EVRPTW_DRY_RUN=1          print the command without solving
 ```
 
