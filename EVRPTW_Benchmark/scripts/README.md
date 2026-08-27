@@ -43,10 +43,23 @@ scripts/
 ## Examples
 
 ```bash
+# Every command starts a detached nohup job and returns immediately.
 bash EVRPTW_Benchmark/scripts/Gurobi/Cus500/test2.sh
 bash EVRPTW_Benchmark/scripts/ALNS/Cus100/test3.sh
 EVRPTW_MAX_INSTANCES=20 bash EVRPTW_Benchmark/scripts/VNSTS/Cus1000/test1.sh
 ```
+
+Detached job control files are written below
+`logs/benchmarks/nohup/<solver>_<scale>_<test>/`:
+
+- `run.log`: combined stdout/stderr;
+- `pid.txt`: background process ID;
+- `exit_code.txt`: `RUNNING` until completion, then the numeric exit code.
+
+Launching the same shell while its recorded process is alive reports the
+existing job instead of starting a duplicate. Use `EVRPTW_FOREGROUND=1` only
+for interactive debugging; `EVRPTW_DRY_RUN=1` remains non-executing and
+prints the resolved command directly.
 
 All shells use the frozen contract: checkpoints at 300, 1800, 3600, and 7200
 seconds; a 7200-second limit; 30 workers by default; seed 2026 for ALNS/VNS-TS;
@@ -108,6 +121,8 @@ EVRPTW_START_INDEX        manual inclusive filtered position
 EVRPTW_END_INDEX          manual exclusive filtered position
 EVRPTW_CONDA_ENV          default maojie
 EVRPTW_DATASET_ROOT       restored dataset root (repository-relative only)
+EVRPTW_NOHUP_LOG_ROOT     detached-job log root (default logs/benchmarks/nohup)
+EVRPTW_FOREGROUND=1       disable nohup for interactive debugging
 EVRPTW_DRY_RUN=1          print the command without solving
 ```
 

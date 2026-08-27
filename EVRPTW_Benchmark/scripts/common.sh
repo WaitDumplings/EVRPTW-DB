@@ -21,6 +21,10 @@ run_frozen_test() {
   local result_relative_root="$5"
   local TEST_VIEW_COUNT="500"
 
+  if [[ "${EVRPTW_NOHUP_CHILD:-0}" == "1" && -n "${EVRPTW_NOHUP_EXIT_FILE:-}" ]]; then
+    trap 'printf "%s\n" "$?" > "${EVRPTW_NOHUP_EXIT_FILE}"' EXIT
+  fi
+
   # Reuse the validated restore discovery, shard, resume, and timing contract.
   source "${BENCHMARK_SCRIPT_ROOT}/../test_scripts/common.sh"
 
@@ -51,6 +55,59 @@ run_frozen_test() {
   local base_save_path="${RESULTS_ROOT}/${result_relative_root}/${solver_dir}"
   local save_path
   partition_output save_path "${base_save_path}"
+
+  local foreground="${EVRPTW_FOREGROUND:-0}"
+  if [[ "${foreground}" != "0" && "${foreground}" != "1" ]]; then
+    echo "EVRPTW_FOREGROUND must be 0 or 1, got: ${foreground}" >&2
+    return 2
+  fi
+  if [[ "${DRY_RUN}" == "0" && "${foreground}" == "0" && "${EVRPTW_NOHUP_CHILD:-0}" != "1" ]]; then
+    command -v nohup >/dev/null 2>&1 || {
+      echo "nohup is required for detached benchmark launch." >&2
+      return 2
+    }
+    local launcher_path
+    launcher_path="$(cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")"
+    local job_slug="${solver_kind,,}_${CUS_SCALE,,}_${track_id}"
+    if [[ -n "${RESULT_PARTITION_DIR}" ]]; then
+      job_slug+="_${RESULT_PARTITION_DIR}"
+    fi
+    local nohup_log_root="${EVRPTW_NOHUP_LOG_ROOT:-logs/benchmarks/nohup}"
+    local job_dir="${nohup_log_root}/${job_slug}"
+    local log_file="${job_dir}/run.log"
+    local pid_file="${job_dir}/pid.txt"
+    local exit_file="${job_dir}/exit_code.txt"
+    mkdir -p "${job_dir}"
+
+    if [[ -f "${pid_file}" ]]; then
+      local existing_pid=""
+      local existing_command=""
+      read -r existing_pid < "${pid_file}" || true
+      if [[ "${existing_pid}" =~ ^[1-9][0-9]*$ ]]; then
+        existing_command="$(ps -p "${existing_pid}" -o args= 2>/dev/null || true)"
+      fi
+      if [[ "${existing_command}" == *"${launcher_path}"* ]]; then
+        echo "Benchmark is already running."
+        echo "  pid:  ${existing_pid}"
+        echo "  log:  ${log_file}"
+        echo "  exit: ${exit_file}"
+        return 0
+      fi
+    fi
+
+    printf '%s\n' "RUNNING" > "${exit_file}"
+    printf '\n[%s] starting %s %s %s\n' "$(date -Is)" "${solver_kind}" "${CUS_SCALE}" "${track_id}" >> "${log_file}"
+    nohup env EVRPTW_NOHUP_CHILD=1 EVRPTW_NOHUP_EXIT_FILE="${exit_file}" bash "${launcher_path}" >> "${log_file}" 2>&1 < /dev/null &
+    local launched_pid=$!
+    printf '%s\n' "${launched_pid}" > "${pid_file}"
+    echo "Benchmark started with nohup."
+    echo "  pid:  ${launched_pid}"
+    echo "  log:  ${log_file}"
+    echo "  exit: ${exit_file}"
+    echo "  data: ${DATASET_ROOT}"
+    return 0
+  fi
+
   prepare_output "${save_path}"
   print_contract "${solver_label}" "${track_id}" "${test_index}" "${save_path}"
 

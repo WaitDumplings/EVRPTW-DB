@@ -80,6 +80,23 @@ jobs:
             echo "Absolute EVRPTW_DATASET_ROOT was unexpectedly accepted" >&2
             exit 1
           fi
+          smoke_dataset=EVRPTW_Dataset/Instances_v2/nohup_smoke
+          smoke_index="$smoke_dataset/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet"
+          mkdir -p "$smoke_dataset/materialized/families" "$(dirname "$smoke_index")"
+          touch "$smoke_index"
+          smoke_bin="$(mktemp -d)"
+          ln -s /bin/true "$smoke_bin/conda"
+          smoke_logs="$RUNNER_TEMP/evrptw-nohup-smoke"
+          EVRPTW_DRY_RUN=0 EVRPTW_DATASET_ROOT="$smoke_dataset" EVRPTW_NOHUP_LOG_ROOT="$smoke_logs" PATH="$smoke_bin:$PATH" bash EVRPTW_Benchmark/scripts/VNSTS/Cus50/test1.sh
+          smoke_exit="$smoke_logs/vnsts_cus50_test1_new_seed/exit_code.txt"
+          for attempt in $(seq 1 50); do
+            if [[ -f "$smoke_exit" && "$(tr -d '\n' < "$smoke_exit")" != RUNNING ]]; then
+              break
+            fi
+            sleep 0.1
+          done
+          test "$(tr -d '\n' < "$smoke_exit")" = 0
+          grep -q '^dataset=EVRPTW_Dataset/' "$smoke_logs/vnsts_cus50_test1_new_seed/run.log"
 
       - name: Lint
         run: >-
