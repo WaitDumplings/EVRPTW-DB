@@ -110,6 +110,11 @@ methods:
     effective_batch: {Cus50: 8, Cus100: 8, Cus500: 1, Cus1000: 1}
 
 hardware:
+  deployment:
+    2080ti_4_1: {gpu_count: 4, canonical_slots: [0, 3, 6, 9]}
+    2080ti_4_2: {gpu_count: 4, canonical_slots: [1, 4, 7, 10]}
+    2080ti_3_1: {gpu_count: 3, canonical_slots: [2, 5, 8]}
+    a6000_2_1: {gpu_count: 2, canonical_slots: [0, 1]}
   rtx_2080_ti:
     global_slots: 11
     expected_name_pattern: RTX 2080 Ti

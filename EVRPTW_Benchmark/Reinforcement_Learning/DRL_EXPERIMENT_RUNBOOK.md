@@ -18,6 +18,36 @@ launcher 会检查 GPU 数量与型号、branch/commit、真实数据索引、�
 
 ## 四台服务器
 
+推荐直接使用已冻结的四个 server bundle。每个目录都包含独立
+`jobs.jsonl`、任务摘要以及 nohup launcher：
+
+```text
+scripts/2080ti_4_1  # 第一台 4×2080Ti，13 个 full training jobs
+scripts/2080ti_4_2  # 第二台 4×2080Ti，13 个 full training jobs
+scripts/2080ti_3_1  # 3×2080Ti，10 个 full training jobs
+scripts/a6000_2_1   # 2×A6000，12 个 Cus1000 full training jobs
+```
+
+分别在对应服务器执行：
+
+```bash
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_4_1/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_4_2/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_3_1/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/a6000_2_1/pilot.sh
+```
+
+这些入口默认 nohup/setsid 离线运行；同目录的 `status.sh` 和
+`logs.sh` 用于查看进度。通过 pilot gate 后使用 `full.sh`，中断恢复
+使用 `resume.sh`，训练全部完成后使用 `evaluate.sh`。
+
+如果四台机器不共享 `EVRPTW_OUTPUT_ROOT`，构建 pilot gate 前必须汇总
+四台 pilot 产物；执行 evaluation 前也必须把
+`assignment_summary.json` 中列出的外部 checkpoint 复制到相同的相对
+输出位置。runner 会在 evaluation 启动前硬检查 checkpoint，缺失时不会开跑。
+
+以下旧入口继续兼容。
+
 两台 4×2080Ti 分别使用不同的 `SERVER_INDEX`：
 
 ```bash

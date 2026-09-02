@@ -151,7 +151,7 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
         path = dataset / job[index_key]
         if not path.is_file():
             raise FileNotFoundError(f"dataset index is missing for {job['job_id']}: {path}")
-    return {
+    context = {
         "repo": repo,
         "dataset": dataset,
         "output": output,
@@ -160,6 +160,18 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
         "free_bytes": free,
         "conda_env": os.environ["EVRPTW_CONDA_ENV"],
     }
+    if args.mode == "evaluate" and not args.dry_run:
+        missing_checkpoints = [
+            str(checkpoint_dir(job, context) / "checkpoint_selected.pt")
+            for job in jobs
+            if not (checkpoint_dir(job, context) / "checkpoint_selected.pt").is_file()
+        ]
+        if missing_checkpoints:
+            raise FileNotFoundError(
+                "evaluation checkpoint dependencies are missing; sync the listed "
+                f"training outputs first: {missing_checkpoints[:5]}"
+            )
+    return context
 
 
 def output_dir(job: dict[str, Any], context: dict[str, Any]) -> Path:

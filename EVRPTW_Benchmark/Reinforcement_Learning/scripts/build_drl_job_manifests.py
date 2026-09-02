@@ -14,8 +14,35 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = ROOT / "configs" / "drl_experiment_protocol_v1.yaml"
 DEFAULT_MANIFEST_DIR = ROOT / "manifests"
+DEFAULT_SERVER_SCRIPT_DIR = ROOT / "scripts"
 METHOD_ORDER = ("am_evrptw", "evrptw_rl", "drl_ts", "terran")
 SEEN_SCALES = ("Cus100", "Cus500", "Cus1000")
+SERVER_SPECS = {
+    "2080ti_4_1": {
+        "hardware": "2080ti",
+        "canonical_slots": (0, 3, 6, 9),
+        "gpu_count": 4,
+        "gpu_name_pattern": "RTX 2080 Ti",
+    },
+    "2080ti_4_2": {
+        "hardware": "2080ti",
+        "canonical_slots": (1, 4, 7, 10),
+        "gpu_count": 4,
+        "gpu_name_pattern": "RTX 2080 Ti",
+    },
+    "2080ti_3_1": {
+        "hardware": "2080ti",
+        "canonical_slots": (2, 5, 8),
+        "gpu_count": 3,
+        "gpu_name_pattern": "RTX 2080 Ti",
+    },
+    "a6000_2_1": {
+        "hardware": "a6000",
+        "canonical_slots": (0, 1),
+        "gpu_count": 2,
+        "gpu_name_pattern": "RTX A6000",
+    },
+}
 
 
 def load_protocol(path: Path) -> dict[str, Any]:
@@ -30,6 +57,13 @@ def load_protocol(path: Path) -> dict[str, Any]:
     disabled = set(protocol.get("disabled_tracks", []))
     if {"E_to_R", "R_to_Inject_to_R"}.difference(disabled):
         raise ValueError("E->R and R->Inject->R must remain disabled")
+    deployment = protocol.get("hardware", {}).get("deployment", {})
+    for server_id, spec in SERVER_SPECS.items():
+        frozen = deployment.get(server_id, {})
+        if int(frozen.get("gpu_count", -1)) != int(spec["gpu_count"]):
+            raise ValueError(f"hardware deployment GPU count drifted for {server_id}")
+        if tuple(frozen.get("canonical_slots", ())) != tuple(spec["canonical_slots"]):
+            raise ValueError(f"hardware deployment slots drifted for {server_id}")
     return protocol
 
 
@@ -374,6 +408,261 @@ def validate_jobs(
         raise ValueError("scale transfer must contain paired control and Cus2000")
 
 
+def build_server_bundles(
+    jobs2080: list[dict[str, Any]],
+    jobsa6000: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Project canonical hardware queues onto four physical servers.
+
+    The two four-GPU and one three-GPU 2080 Ti servers receive interleaved
+    canonical slots.  This keeps the frozen global queue unchanged while
+    balancing the 36 non-Cus1000 training jobs at 13/13/10.
+    """
+
+    sources = jobs2080 + jobsa6000
+    bundles: dict[str, list[dict[str, Any]]] = {
+        server_id: [] for server_id in SERVER_SPECS
+    }
+    canonical_locations: dict[tuple[str, int], tuple[str, int]] = {}
+    for server_id, spec in SERVER_SPECS.items():
+        for local, canonical in enumerate(spec["canonical_slots"]):
+            key = (str(spec["hardware"]), int(canonical))
+            if key in canonical_locations:
+                raise ValueError(f"duplicate physical ownership for {key}")
+            canonical_locations[key] = (server_id, local)
+    training_locations: dict[str, tuple[str, int]] = {}
+    for source in sources:
+        if source["kind"] != "train":
+            continue
+        training_locations[source["job_id"]] = canonical_locations[
+            (str(source["hardware"]), int(source["global_slot"]))
+        ]
+    for source in sources:
+        canonical_slot = int(source["global_slot"])
+        destination = canonical_locations[(str(source["hardware"]), canonical_slot)]
+        dependency = source.get("checkpoint_job_id")
+        if dependency in training_locations:
+            colocated = training_locations[str(dependency)]
+            if (
+                SERVER_SPECS[colocated[0]]["hardware"]
+                == str(source["hardware"])
+            ):
+                destination = colocated
+        server_id, local_slot = destination
+        job = dict(source)
+        job["canonical_global_slot"] = canonical_slot
+        job["assigned_server"] = server_id
+        job["global_slot"] = local_slot
+        bundles[server_id].append(job)
+    for server_id, selected in bundles.items():
+        by_local: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for job in selected:
+            by_local[int(job["global_slot"])].append(job)
+        for local_slot, queue in by_local.items():
+            for position, job in enumerate(
+                sorted(queue, key=lambda row: int(row["queue_position"]))
+            ):
+                job["queue_position"] = position
+        bundles[server_id] = sorted(
+            selected,
+            key=lambda row: (int(row["global_slot"]), int(row["queue_position"])),
+        )
+    canonical_ids = {job["job_id"] for job in jobs2080 + jobsa6000}
+    assigned_ids = [
+        job["job_id"] for jobs in bundles.values() for job in jobs
+    ]
+    if len(assigned_ids) != len(set(assigned_ids)):
+        raise ValueError("server bundles overlap")
+    if set(assigned_ids) != canonical_ids:
+        missing = sorted(canonical_ids.difference(assigned_ids))
+        extra = sorted(set(assigned_ids).difference(canonical_ids))
+        raise ValueError(f"server bundle coverage mismatch: missing={missing[:5]} extra={extra[:5]}")
+    return bundles
+
+
+def _assignment_summary(
+    server_id: str,
+    jobs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    train_ids = {job["job_id"] for job in jobs if job["kind"] == "train"}
+    dependencies = {
+        job["checkpoint_job_id"]
+        for job in jobs
+        if job["kind"] in {"eval", "transfer"}
+    }
+    return {
+        "schema": "drl_server_assignment_v1",
+        "protocol_id": jobs[0]["protocol_id"],
+        "server_id": server_id,
+        "hardware": SERVER_SPECS[server_id]["hardware"],
+        "gpu_count": SERVER_SPECS[server_id]["gpu_count"],
+        "canonical_slots": list(SERVER_SPECS[server_id]["canonical_slots"]),
+        "job_count": len(jobs),
+        "counts_by_run_mode": dict(sorted(Counter(job["run_mode"] for job in jobs).items())),
+        "counts_by_kind": dict(sorted(Counter(job["kind"] for job in jobs).items())),
+        "full_training_jobs": sum(job["kind"] == "train" for job in jobs),
+        "counts_by_local_gpu": {
+            str(slot): dict(
+                sorted(
+                    Counter(
+                        job["run_mode"]
+                        for job in jobs
+                        if int(job["global_slot"]) == slot
+                    ).items()
+                )
+            )
+            for slot in range(int(SERVER_SPECS[server_id]["gpu_count"]))
+        },
+        "external_checkpoint_job_ids": sorted(dependencies.difference(train_ids)),
+    }
+
+
+def _env_script(server_id: str) -> str:
+    spec = SERVER_SPECS[server_id]
+    slots = ",".join(str(index) for index in range(int(spec["gpu_count"])))
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+REPO_DEFAULT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+export EVRPTW_REPO_ROOT="${{EVRPTW_REPO_ROOT:-$REPO_DEFAULT}}"
+export EVRPTW_DATASET_ROOT="${{EVRPTW_DATASET_ROOT:-$EVRPTW_REPO_ROOT/EVRPTW_Dataset/Instances_v2/us_11city}}"
+export EVRPTW_OUTPUT_ROOT="${{EVRPTW_OUTPUT_ROOT:-$EVRPTW_REPO_ROOT/EVRPTW_Benchmark/results/DRL_protocol_v1}}"
+export EVRPTW_CONDA_ENV="${{EVRPTW_CONDA_ENV:-maojie}}"
+export DRL_MANIFEST="$SCRIPT_DIR/jobs.jsonl"
+export DRL_SLOTS="{slots}"
+export DRL_LOCAL_GPU_COUNT="{spec['gpu_count']}"
+export DRL_GPU_NAME_PATTERN="{spec['gpu_name_pattern']}"
+export DRL_SERVER_ID="{server_id}"
+"""
+
+
+def _run_script() -> str:
+    return """#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/env.sh"
+exec bash "$SCRIPT_DIR/../drl_job_runner.sh" "$@"
+"""
+
+
+def _start_script() -> str:
+    return """#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/env.sh"
+MODE="${1:?usage: start.sh pilot|full|resume|evaluate [runner options]}"
+case "$MODE" in pilot|full|resume|evaluate) ;; *) echo "invalid mode: $MODE" >&2; exit 2 ;; esac
+LOG_DIR="$EVRPTW_OUTPUT_ROOT/launcher_logs/$DRL_SERVER_ID"
+mkdir -p "$LOG_DIR"
+PID_FILE="$LOG_DIR/$MODE.pid"
+if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  echo "$DRL_SERVER_ID/$MODE is already running with pid $(cat "$PID_FILE")" >&2
+  exit 3
+fi
+STAMP="$(date +%Y%m%dT%H%M%S)"
+LOG_FILE="$LOG_DIR/${MODE}_${STAMP}.log"
+nohup setsid bash "$SCRIPT_DIR/run.sh" "$@" >"$LOG_FILE" 2>&1 < /dev/null &
+PID=$!
+printf '%s\\n' "$PID" >"$PID_FILE"
+printf '%s\\n' "$LOG_FILE" >"$LOG_DIR/current.log.path"
+echo "started: server=$DRL_SERVER_ID mode=$MODE pid=$PID"
+echo "log: $LOG_FILE"
+"""
+
+
+def _status_script() -> str:
+    return """#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/env.sh"
+LOG_DIR="$EVRPTW_OUTPUT_ROOT/launcher_logs/$DRL_SERVER_ID"
+for MODE in pilot full resume evaluate; do
+  PID_FILE="$LOG_DIR/$MODE.pid"
+  if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    echo "$MODE: running pid=$(cat "$PID_FILE")"
+  fi
+done
+bash "$SCRIPT_DIR/run.sh" status --skip-gpu-preflight "$@"
+"""
+
+
+def _logs_script() -> str:
+    return """#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/env.sh"
+PATH_FILE="$EVRPTW_OUTPUT_ROOT/launcher_logs/$DRL_SERVER_ID/current.log.path"
+[[ -f "$PATH_FILE" ]] || { echo "no launcher log has been created" >&2; exit 2; }
+exec tail -n "${LINES:-100}" -F "$(cat "$PATH_FILE")"
+"""
+
+
+def _mode_script(mode: str) -> str:
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+exec bash "$SCRIPT_DIR/start.sh" {mode} "$@"
+"""
+
+
+def _readme(server_id: str, summary: dict[str, Any]) -> str:
+    return f"""# {server_id} DRL queue
+
+Hardware: {summary['gpu_count']} × {SERVER_SPECS[server_id]['gpu_name_pattern']}
+
+Assigned jobs: {summary['job_count']} total; pilot={summary['counts_by_run_mode'].get('pilot', 0)},
+full={summary['counts_by_run_mode'].get('full', 0)},
+evaluate={summary['counts_by_run_mode'].get('evaluate', 0)}.
+
+From the repository root, activate the `maojie` environment and run:
+
+```bash
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/{server_id}/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/{server_id}/status.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/{server_id}/logs.sh
+```
+
+`pilot.sh`, `full.sh`, `resume.sh`, and `evaluate.sh` detach with nohup.
+`run.sh MODE` is the foreground/debug entrypoint. Environment paths may be
+overridden before launch; committed defaults are repository-relative.
+
+Before evaluation, copy every checkpoint listed in
+`assignment_summary.json.external_checkpoint_job_ids` into the same relative
+`EVRPTW_OUTPUT_ROOT` location on this server. A shared output filesystem also
+satisfies this requirement.
+"""
+
+
+def write_server_bundles(
+    root: Path,
+    bundles: dict[str, list[dict[str, Any]]],
+    *,
+    check: bool,
+) -> None:
+    for server_id, jobs in bundles.items():
+        directory = root / server_id
+        summary = _assignment_summary(server_id, jobs)
+        files = {
+            "jobs.jsonl": (_serialize(jobs), False),
+            "assignment_summary.json": (
+                json.dumps(summary, sort_keys=True, indent=2) + "\n",
+                False,
+            ),
+            "env.sh": (_env_script(server_id), True),
+            "run.sh": (_run_script(), True),
+            "start.sh": (_start_script(), True),
+            "status.sh": (_status_script(), True),
+            "logs.sh": (_logs_script(), True),
+            "pilot.sh": (_mode_script("pilot"), True),
+            "full.sh": (_mode_script("full"), True),
+            "resume.sh": (_mode_script("resume"), True),
+            "evaluate.sh": (_mode_script("evaluate"), True),
+            "README.md": (_readme(server_id, summary), False),
+        }
+        for name, (content, executable) in files.items():
+            _write_or_check(directory / name, content, check, executable=executable)
+
+
 def validate_dataset(protocol: dict[str, Any], dataset_root: Path) -> None:
     for scale, spec in protocol["scales"].items():
         train = pd.read_parquet(dataset_root / spec["train_index"])
@@ -404,10 +693,18 @@ def _serialize(jobs: list[dict[str, Any]]) -> str:
     return "".join(json.dumps(job, sort_keys=True) + "\n" for job in jobs)
 
 
-def _write_or_check(path: Path, content: str, check: bool) -> None:
+def _write_or_check(
+    path: Path,
+    content: str,
+    check: bool,
+    *,
+    executable: bool = False,
+) -> None:
     if check:
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             raise SystemExit(f"manifest is stale: {path}")
+        if executable and not path.stat().st_mode & 0o111:
+            raise SystemExit(f"generated launcher is not executable: {path}")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -416,6 +713,8 @@ def _write_or_check(path: Path, content: str, check: bool) -> None:
         stream.write(content)
         temporary = Path(stream.name)
     temporary.replace(path)
+    if executable:
+        path.chmod(0o755)
 
 
 def parse_args() -> argparse.Namespace:
@@ -423,6 +722,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_MANIFEST_DIR)
     parser.add_argument("--dataset-root", type=Path)
+    parser.add_argument("--server-script-dir", type=Path, default=DEFAULT_SERVER_SCRIPT_DIR)
     parser.add_argument("--check", action="store_true")
     return parser.parse_args()
 
@@ -433,11 +733,13 @@ def main() -> None:
     if args.dataset_root:
         validate_dataset(protocol, args.dataset_root)
     jobs2080, jobsa6000 = build_manifests(protocol)
+    bundles = build_server_bundles(jobs2080, jobsa6000)
     _write_or_check(
         args.output_dir / "drl_2080ti_jobs_v1.jsonl",
         _serialize(jobs2080),
         args.check,
     )
+    write_server_bundles(args.server_script_dir, bundles, check=args.check)
     _write_or_check(
         args.output_dir / "drl_a6000_jobs_v1.jsonl",
         _serialize(jobsa6000),
@@ -452,6 +754,15 @@ def main() -> None:
                 "full_training_jobs": sum(
                     job["kind"] == "train" for job in jobs2080 + jobsa6000
                 ),
+                "servers": {
+                    server_id: {
+                        "jobs": len(jobs),
+                        "full_training_jobs": sum(
+                            job["kind"] == "train" for job in jobs
+                        ),
+                    }
+                    for server_id, jobs in bundles.items()
+                },
             },
             sort_keys=True,
         )

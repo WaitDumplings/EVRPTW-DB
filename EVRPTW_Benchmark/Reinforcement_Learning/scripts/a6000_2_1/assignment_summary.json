@@ -1,0 +1,74 @@
+{
+  "canonical_slots": [
+    0,
+    1
+  ],
+  "counts_by_kind": {
+    "eval": 120,
+    "pilot": 4,
+    "train": 12,
+    "transfer": 48
+  },
+  "counts_by_local_gpu": {
+    "0": {
+      "evaluate": 90,
+      "full": 6,
+      "pilot": 2
+    },
+    "1": {
+      "evaluate": 78,
+      "full": 6,
+      "pilot": 2
+    }
+  },
+  "counts_by_run_mode": {
+    "evaluate": 168,
+    "full": 12,
+    "pilot": 4
+  },
+  "external_checkpoint_job_ids": [
+    "train__R__am_evrptw__Cus100__seed1234",
+    "train__R__am_evrptw__Cus100__seed2345",
+    "train__R__am_evrptw__Cus100__seed3456",
+    "train__R__am_evrptw__Cus500__seed1234",
+    "train__R__am_evrptw__Cus500__seed2345",
+    "train__R__am_evrptw__Cus500__seed3456",
+    "train__R__am_evrptw__Cus50__seed1234",
+    "train__R__am_evrptw__Cus50__seed2345",
+    "train__R__am_evrptw__Cus50__seed3456",
+    "train__R__drl_ts__Cus100__seed1234",
+    "train__R__drl_ts__Cus100__seed2345",
+    "train__R__drl_ts__Cus100__seed3456",
+    "train__R__drl_ts__Cus500__seed1234",
+    "train__R__drl_ts__Cus500__seed2345",
+    "train__R__drl_ts__Cus500__seed3456",
+    "train__R__drl_ts__Cus50__seed1234",
+    "train__R__drl_ts__Cus50__seed2345",
+    "train__R__drl_ts__Cus50__seed3456",
+    "train__R__evrptw_rl__Cus100__seed1234",
+    "train__R__evrptw_rl__Cus100__seed2345",
+    "train__R__evrptw_rl__Cus100__seed3456",
+    "train__R__evrptw_rl__Cus500__seed1234",
+    "train__R__evrptw_rl__Cus500__seed2345",
+    "train__R__evrptw_rl__Cus500__seed3456",
+    "train__R__evrptw_rl__Cus50__seed1234",
+    "train__R__evrptw_rl__Cus50__seed2345",
+    "train__R__evrptw_rl__Cus50__seed3456",
+    "train__R__terran__Cus100__seed1234",
+    "train__R__terran__Cus100__seed2345",
+    "train__R__terran__Cus100__seed3456",
+    "train__R__terran__Cus500__seed1234",
+    "train__R__terran__Cus500__seed2345",
+    "train__R__terran__Cus500__seed3456",
+    "train__R__terran__Cus50__seed1234",
+    "train__R__terran__Cus50__seed2345",
+    "train__R__terran__Cus50__seed3456"
+  ],
+  "full_training_jobs": 12,
+  "gpu_count": 2,
+  "hardware": "a6000",
+  "job_count": 184,
+  "protocol_id": "drl_experiment_protocol_v1",
+  "schema": "drl_server_assignment_v1",
+  "server_id": "a6000_2_1"
+}

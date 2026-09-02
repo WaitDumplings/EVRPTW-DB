@@ -49,6 +49,45 @@ def test_2080_server_partitions_are_disjoint_and_complete() -> None:
     assert set.union(*partitions) == {job["job_id"] for job in jobs2080}
 
 
+def test_physical_server_bundles_are_disjoint_complete_and_balanced() -> None:
+    _, jobs2080, jobsa6000 = _jobs()
+    bundles = MODULE.build_server_bundles(jobs2080, jobsa6000)
+    assert set(bundles) == set(MODULE.SERVER_SPECS)
+    assigned = [job["job_id"] for jobs in bundles.values() for job in jobs]
+    canonical = [job["job_id"] for job in jobs2080 + jobsa6000]
+    assert len(assigned) == len(set(assigned))
+    assert set(assigned) == set(canonical)
+    assert [
+        sum(job["kind"] == "train" for job in bundles[server])
+        for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1", "a6000_2_1")
+    ] == [13, 13, 10, 12]
+    assert [
+        sum(job["run_mode"] == "pilot" for job in bundles[server])
+        for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1", "a6000_2_1")
+    ] == [3, 3, 2, 4]
+    for server, jobs in bundles.items():
+        gpu_count = MODULE.SERVER_SPECS[server]["gpu_count"]
+        assert {job["assigned_server"] for job in jobs} == {server}
+        assert {job["global_slot"] for job in jobs} == set(range(gpu_count))
+        assert all(
+            job["canonical_global_slot"]
+            in MODULE.SERVER_SPECS[server]["canonical_slots"]
+            for job in jobs
+            if job["kind"] in {"train", "pilot"}
+        )
+    locations = {
+        job["job_id"]: (server, job["global_slot"], job["hardware"])
+        for server, jobs in bundles.items()
+        for job in jobs
+        if job["kind"] == "train"
+    }
+    for server, jobs in bundles.items():
+        for job in jobs:
+            dependency = job.get("checkpoint_job_id")
+            if dependency in locations and locations[dependency][2] == job["hardware"]:
+                assert (server, job["global_slot"]) == locations[dependency][:2]
+
+
 def test_scientific_boundaries_are_structural() -> None:
     protocol, jobs2080, jobsa6000 = _jobs()
     jobs = jobs2080 + jobsa6000
