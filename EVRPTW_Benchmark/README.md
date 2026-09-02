@@ -7,7 +7,15 @@ Exact/Gurobi_Solver
 MetaHeuristics/VNS_TS_Solver
 MetaHeuristics/ALNS_Solver
 Reinforcement_Learning/TERRAN
+Reinforcement_Learning/AM_EVRPTW
+Reinforcement_Learning/EVRPTW_RL
+Reinforcement_Learning/DRL_TS
 ```
+
+The learning baselines are being standardized under
+[`Reinforcement_Learning/BASELINE_IMPLEMENTATION_PLAN.md`](Reinforcement_Learning/BASELINE_IMPLEMENTATION_PLAN.md).
+Their common transition, charging, masking, and evaluation semantics are frozen
+in [`Reinforcement_Learning/CHARGING_ADAPTER_CONTRACT.md`](Reinforcement_Learning/CHARGING_ADAPTER_CONTRACT.md).
 
 Exact and metaheuristic runners consume the current CLE-backed Stage-2
 `view_index.parquet` plus its `materialized/families` store. The frozen input

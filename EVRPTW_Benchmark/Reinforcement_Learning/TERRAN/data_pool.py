@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -10,9 +10,59 @@ GENERATOR_ROOT = REPO_ROOT / "EVRPTW_Dataset_Generator"
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(GENERATOR_ROOT))
 
-from evrptw_core.schema import EVRPTWInstance
 from evrptw_core.io import load_instances
-from evrptw_hierarchy.generation.generator import HierarchyDatasetGenerator
+from evrptw_core.schema import EVRPTWInstance
+
+from ..common import Stage2TaskPool
+
+
+@dataclass
+class Stage2TERRANPool:
+    """No-regeneration sampler over frozen Stage-2 view records."""
+
+    dataset_path: str | Path
+    family_root: str | Path | None = None
+    scale: str | int | None = None
+    split_ids: str | None = "train"
+    track_ids: str | None = "train"
+    city_slugs: str | None = None
+    seed: int = 1234
+    cache_size: int = 4
+
+    def __post_init__(self) -> None:
+        self.pool = Stage2TaskPool(
+            dataset_path=self.dataset_path,
+            family_root=self.family_root,
+            scale=self.scale,
+            split_ids=self.split_ids,
+            track_ids=self.track_ids,
+            city_slugs=self.city_slugs,
+            seed=self.seed,
+            cache_size=self.cache_size,
+        )
+        self.sample_count = 0
+        self.region_pool_status = f"stage2_frozen:{Path(self.dataset_path)}"
+
+    def sample(self) -> EVRPTWInstance:
+        self.sample_count += 1
+        return self.pool.sample(1)[0]
+
+    def usage_summary(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "region_id": "stage2_frozen",
+                "sampled_days": self.sample_count,
+                "customer_exposure_rate": "",
+                "recent_mean_jaccard_distance": "",
+                "cluster_exposure_entropy": "",
+                "region_pool_status": self.region_pool_status,
+                "dataset_size": len(self.pool),
+                "sample_mode": "random_with_replacement",
+            }
+        ]
+
+    def close(self, terminate: bool = False) -> None:
+        del terminate
 
 
 @dataclass
@@ -119,9 +169,7 @@ class FixedDatasetInstancePool:
             raise ValueError(f"Unsupported dataset reward scale mode: {mode}")
         if not values:
             scale = 1.0
-        elif mode.endswith("_mean"):
-            scale = float(np.mean(values))
-        elif mode.endswith("_sum"):
+        elif mode.endswith(("_mean", "_sum")):
             scale = float(np.mean(values))
         elif mode.endswith("_median"):
             scale = float(np.median(values))
@@ -168,6 +216,15 @@ class OnlineInstancePool:
     region_pool_replacement_policy: str = "cycle"
 
     def __post_init__(self) -> None:
+        try:
+            from evrptw_hierarchy.generation.generator import (
+                HierarchyDatasetGenerator,
+            )
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "the retired online evrptw_hierarchy generator is unavailable; "
+                "use stage2_dataset_path for canonical TERRAN training"
+            ) from exc
         path = Path(self.config_path)
         if not path.is_absolute():
             path = GENERATOR_ROOT / path
@@ -195,7 +252,7 @@ class OnlineInstancePool:
                         f"precomputed_pool_insufficient:{pool_path}:"
                         f"{len(self.generator.boards)}<{int(self.num_regions)}"
                     )
-            except Exception as exc:  # Optional acceleration path; training must remain robust.
+            except Exception as exc:  # noqa: BLE001 - optional retired legacy path
                 self.region_pool_status = f"precomputed_pool_failed:{pool_source}:{exc}"
 
         if not loaded_precomputed:
@@ -236,4 +293,8 @@ class OnlineInstancePool:
         return rows
 
 
-__all__ = ["FixedDatasetInstancePool", "OnlineInstancePool"]
+__all__ = [
+    "FixedDatasetInstancePool",
+    "OnlineInstancePool",
+    "Stage2TERRANPool",
+]

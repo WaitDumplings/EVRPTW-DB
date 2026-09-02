@@ -37,21 +37,47 @@ The action passed to `step` is an integer array with shape `(n_traj,)`. The
 current feasibility mask is available in `obs["action_mask"]` and
 `info["action_mask"]`.
 
-## Battery And Charging
+## Canonical Travel, Energy, And Charging
+
+Canonical runs consume the matrices exported by Stage 2:
+
+- `running_time_shortest_matrix_s` for travel time;
+- `running_time_path_energy_kwh` for energy;
+- `distance_matrix_km` for the distance objective.
+
+The environment deliberately does not infer time from a single average speed
+or infer running-time-path energy from objective distance.  The compatibility
+mode `matrix_mode="legacy_derived"` is diagnostic only and is not admissible in
+benchmark tables.
 
 The environment keeps legacy DRL compatibility by exposing
 `obs["current_battery"]` as the consumed battery fraction since the last full
 charge. `obs["remaining_battery"]` is also provided for models that prefer
 remaining capacity.
 
-Charging station actions perform full charging. The default benchmark mode is
-`charging_mode="fixed_full"`, so every station visit pays the same full-charge
-duration. This matches the generator and exact-solver semantics. For ablations,
-`charging_mode="proportional_full"` is also available:
+Two additional observations support paper-faithful adapters without changing
+the canonical transition contract:
+
+- `obs["remaining_demand"]` is a per-node vector whose customer entries become
+  zero after service;
+- `obs["remaining_vehicle_ratio"]` is a nonbinding fleet-budget observation
+  based on the canonical upper bound of one vehicle per customer.  It exists
+  only for architectures whose original global context included the number of
+  available vehicles; canonical feasibility never rejects an action because
+  of this value.
+
+Charging station actions perform immediate full charging.  Canonical mode is
+`charging_mode="station_power_full"`; it uses the per-station effective power
+exported by Stage 2 and the exported derating factor:
 
 ```text
-charge_time = consumed_kWh / battery_capacity_kWh * full_charge_time_s
+charge_time_s = 3600 * energy_added_kWh /
+                (station_power_kW * charging_power_derating_factor)
 ```
+
+The generator has already capped station power by the reference vehicle's
+AC/DC intake limit.  Legacy fixed-duration modes are retained only for
+diagnostic replay and are not canonical benchmark settings.
 
 ## Route Export
 

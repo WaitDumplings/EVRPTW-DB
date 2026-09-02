@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Any
 
 from .trainer import load_config, train_from_config
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train TERRAN on online EVRPTW Cus15 instances.")
+    parser = argparse.ArgumentParser(
+        description="Train TERRAN on canonical Stage-2 or explicit legacy data."
+    )
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--device", type=str, default=None)
@@ -21,6 +22,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
     parser.add_argument("--service-territory-pool-size", "--mother-board-pool-size", dest="mother_board_pool_size", type=int, default=None)
     parser.add_argument("--train-dataset-path", type=str, default=None, help="Fixed train split bundle or directory, e.g. EVRPTW_Dataset/dataset_v1/dataset/train/Cus15")
+    parser.add_argument("--stage2-dataset-path", type=str, default=None)
+    parser.add_argument("--stage2-family-root", type=str, default=None)
+    parser.add_argument("--stage2-scale", type=str, default=None)
+    parser.add_argument("--stage2-split-ids", type=str, default=None)
+    parser.add_argument("--stage2-track-ids", type=str, default=None)
+    parser.add_argument("--stage2-city-slugs", type=str, default=None)
+    parser.add_argument("--num-customers", type=int, default=None)
+    parser.add_argument("--num-charging-stations", type=int, default=None)
     parser.add_argument("--train-sample-mode", type=str, default=None, choices=["shuffle_cycle", "cycle", "random"])
     parser.add_argument("--territory-pool-path", "--region-pool-path", dest="territory_pool_path", type=str, default=None)
     parser.add_argument("--territory-pool-shuffle", "--region-pool-shuffle", dest="territory_pool_shuffle", action="store_true")
@@ -57,6 +66,22 @@ def main() -> None:
         overrides["data"]["mother_board_pool_size"] = args.mother_board_pool_size
     if args.train_dataset_path is not None:
         overrides["data"]["train_dataset_path"] = args.train_dataset_path
+    if args.stage2_dataset_path is not None:
+        overrides["data"]["stage2_dataset_path"] = args.stage2_dataset_path
+    if args.stage2_family_root is not None:
+        overrides["data"]["stage2_family_root"] = args.stage2_family_root
+    if args.stage2_scale is not None:
+        overrides["data"]["stage2_scale"] = args.stage2_scale
+    if args.stage2_split_ids is not None:
+        overrides["data"]["stage2_split_ids"] = args.stage2_split_ids
+    if args.stage2_track_ids is not None:
+        overrides["data"]["stage2_track_ids"] = args.stage2_track_ids
+    if args.stage2_city_slugs is not None:
+        overrides["data"]["stage2_city_slugs"] = args.stage2_city_slugs
+    if args.num_customers is not None:
+        overrides["data"]["num_customers"] = args.num_customers
+    if args.num_charging_stations is not None:
+        overrides["data"]["num_charging_stations"] = args.num_charging_stations
     if args.train_sample_mode is not None:
         overrides["data"]["train_sample_mode"] = args.train_sample_mode
     if args.territory_pool_path is not None:

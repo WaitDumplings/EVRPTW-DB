@@ -4,6 +4,11 @@ TERRAN is the reinforcement-learning baseline package for EVRPTW-DB. It uses the
 shared `EVRPTW_Env` Gymnasium-style environment and keeps POMO-style parallel
 rollouts through the environment's `n_traj` dimension.
 
+Canonical benchmark runs consume frozen Stage-2 views, use directed distance
+as the objective-facing reward, retain configured auxiliary shaping, and replay
+all reported routes through the shared verifier. See
+[`ADAPTATION.md`](ADAPTATION.md) for the method boundary.
+
 ## Components
 
 - `models/`: migrated TERRAN attention backbone, actor, and critic.
@@ -13,6 +18,7 @@ rollouts through the environment's `n_traj` dimension.
 - `pbrs.py`: optional potential-based reward shaping switches.
 - `train.py`: PPO-style TERRAN training entry point.
 - `eval.py`: fixed-dataset best-of-`n_traj` sample evaluation.
+- `eval_stage2.py`: canonical Stage-2 evaluation with independent verification.
 - `prepare_eval_data.py`: fixed Cus15 eval-set generation.
 - `smoke_test_terran.py`: verifies the model and environment interface on a
   pickle instance.
@@ -108,3 +114,33 @@ EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/scripts/train_cus15_4gpu.sh
 
 EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/scripts/eval_cus15.sh
 ```
+
+## Canonical Stage-2 example
+
+```bash
+PYTHONPATH=EVRPTW_Core:EVRPTW_Dataset_Generator/src \
+python -m EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train \
+  --config stage2_cus100_terran.yaml \
+  --seed 1234 \
+  --stage2-dataset-path EVRPTW_Dataset/Instances_v2/us_10city_release \
+  --stage2-scale Cus100 \
+  --stage2-split-ids train \
+  --stage2-track-ids train \
+  --num-customers 100 \
+  --num-charging-stations 20
+
+PYTHONPATH=EVRPTW_Core:EVRPTW_Dataset_Generator/src \
+python -m EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.eval_stage2 \
+  --dataset-path EVRPTW_Dataset/Instances_v2/us_10city_release \
+  --checkpoint EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/checkpoints/Cus_100_CS_20/TERRAN/seed_1234/checkpoint_final.pt \
+  --scale Cus100 \
+  --split-ids test \
+  --track-ids test1_new_seed \
+  --decode-mode sample \
+  --candidates 50 \
+  --output-dir EVRPTW_Benchmark/results/TERRAN/Cus100/test1
+```
+
+For Cus500 and Cus1000, change `--stage2-scale`, `--num-customers`, and
+`--num-charging-stations` together. The released fixed-CS convention is
+Cus100/20, Cus500/50, and Cus1000/50.

@@ -6,7 +6,7 @@ try:
     from numba import njit
 
     NUMBA_AVAILABLE = True
-except Exception:  # pragma: no cover - exercised only without numba installed.
+except ImportError:  # pragma: no cover - exercised only without numba installed.
     njit = None
     NUMBA_AVAILABLE = False
 
@@ -18,10 +18,27 @@ if NUMBA_AVAILABLE:
         battery_used_kwh: float,
         battery_capacity_kwh: float,
         full_charge_time_s: float,
-        fixed_full_charge: bool,
+        station_node: int,
+        station_start: int,
+        charging_power_kw: np.ndarray,
+        charging_power_derating_factor: float,
+        station_power_full: bool,
+        legacy_fixed_full: bool,
     ) -> float:
-        if fixed_full_charge:
+        if legacy_fixed_full:
             return full_charge_time_s
+        if station_power_full:
+            station_offset = station_node - station_start
+            usable_power_kw = (
+                charging_power_kw[station_offset]
+                * charging_power_derating_factor
+            )
+            energy_added_kwh = battery_used_kwh
+            if energy_added_kwh < 0.0:
+                energy_added_kwh = 0.0
+            elif energy_added_kwh > battery_capacity_kwh:
+                energy_added_kwh = battery_capacity_kwh
+            return 3600.0 * energy_added_kwh / usable_power_kw
         ratio = battery_used_kwh / max(battery_capacity_kwh, 1e-12)
         if ratio < 0.0:
             ratio = 0.0
@@ -57,8 +74,11 @@ if NUMBA_AVAILABLE:
         stop_to_depot_time_s: np.ndarray,
         battery_capacity_kwh: float,
         full_charge_time_s: float,
+        charging_power_kw: np.ndarray,
+        charging_power_derating_factor: float,
         working_end_s: float,
-        fixed_full_charge: bool,
+        station_power_full: bool,
+        legacy_fixed_full: bool,
     ) -> bool:
         if start == 0:
             return True
@@ -74,7 +94,12 @@ if NUMBA_AVAILABLE:
                 battery_at_first,
                 battery_capacity_kwh,
                 full_charge_time_s,
-                fixed_full_charge,
+                first,
+                station_start,
+                charging_power_kw,
+                charging_power_derating_factor,
+                station_power_full,
+                legacy_fixed_full,
             )
             stop_plan = stop_to_depot_time_s[first]
             if not np.isfinite(stop_plan):
@@ -108,8 +133,11 @@ if NUMBA_AVAILABLE:
         battery_capacity_kwh: float,
         cargo_capacity_cm3: float,
         full_charge_time_s: float,
+        charging_power_kw: np.ndarray,
+        charging_power_derating_factor: float,
         working_end_s: float,
-        fixed_full_charge: bool,
+        station_power_full: bool,
+        legacy_fixed_full: bool,
     ) -> np.ndarray:
         mask = np.zeros((n_traj, num_nodes), dtype=np.bool_)
         for t in range(n_traj):
@@ -120,9 +148,7 @@ if NUMBA_AVAILABLE:
             start = int(last[t])
             all_served = served_customers[t] == num_customers
             if all_served:
-                if start == 0:
-                    mask[t, 0] = True
-                elif _direct_depot_feasible_jit(
+                if start == 0 or _direct_depot_feasible_jit(
                     start,
                     current_time_s[t],
                     battery_used_kwh[t],
@@ -161,8 +187,7 @@ if NUMBA_AVAILABLE:
                 ready = tw_s[customer, 0]
                 due = tw_s[customer, 1]
                 service_start = arrival
-                if ready > service_start:
-                    service_start = ready
+                service_start = max(service_start, ready)
                 service_departure = service_start + service_time_s[customer]
                 if service_start > due + 1e-9 or service_departure > working_end_s + 1e-9:
                     continue
@@ -177,8 +202,11 @@ if NUMBA_AVAILABLE:
                     stop_to_depot_time_s,
                     battery_capacity_kwh,
                     full_charge_time_s,
+                    charging_power_kw,
+                    charging_power_derating_factor,
                     working_end_s,
-                    fixed_full_charge,
+                    station_power_full,
+                    legacy_fixed_full,
                 ):
                     mask[t, customer] = True
 
@@ -193,7 +221,12 @@ if NUMBA_AVAILABLE:
                     battery_after,
                     battery_capacity_kwh,
                     full_charge_time_s,
-                    fixed_full_charge,
+                    station,
+                    station_start,
+                    charging_power_kw,
+                    charging_power_derating_factor,
+                    station_power_full,
+                    legacy_fixed_full,
                 )
                 if departure > working_end_s + 1e-9:
                     continue
@@ -208,8 +241,11 @@ if NUMBA_AVAILABLE:
                     stop_to_depot_time_s,
                     battery_capacity_kwh,
                     full_charge_time_s,
+                    charging_power_kw,
+                    charging_power_derating_factor,
                     working_end_s,
-                    fixed_full_charge,
+                    station_power_full,
+                    legacy_fixed_full,
                 ):
                     mask[t, station] = True
         return mask
@@ -239,8 +275,11 @@ def compute_action_mask_jit(
     battery_capacity_kwh: float,
     cargo_capacity_cm3: float,
     full_charge_time_s: float,
+    charging_power_kw: np.ndarray,
+    charging_power_derating_factor: float,
     working_end_s: float,
-    fixed_full_charge: bool,
+    station_power_full: bool,
+    legacy_fixed_full: bool,
 ) -> np.ndarray:
     if not NUMBA_AVAILABLE:
         raise RuntimeError("numba is not available")
@@ -267,8 +306,11 @@ def compute_action_mask_jit(
         float(battery_capacity_kwh),
         float(cargo_capacity_cm3),
         float(full_charge_time_s),
+        charging_power_kw,
+        float(charging_power_derating_factor),
         float(working_end_s),
-        bool(fixed_full_charge),
+        bool(station_power_full),
+        bool(legacy_fixed_full),
     )
 
 

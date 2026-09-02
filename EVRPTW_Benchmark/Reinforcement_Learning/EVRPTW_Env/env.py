@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import heapq
 import math
-from pathlib import Path
 import sys
-from typing import Any, Optional
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, ClassVar
 
 import numpy as np
-
 from gymnasium import Env, spaces
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -43,7 +42,7 @@ class EVRPTWVectorEnv(Env):
     action recharges to full and resets battery used to zero.
     """
 
-    metadata = {"render_modes": []}
+    metadata: ClassVar[dict[str, list[str]]] = {"render_modes": []}
 
     def __init__(
         self,
@@ -53,7 +52,8 @@ class EVRPTWVectorEnv(Env):
         invalid_action_penalty: float = -10.0,
         success_bonus: float = 0.0,
         max_steps_factor: int = 4,
-        charging_mode: str = "fixed_full",
+        charging_mode: str = "station_power_full",
+        matrix_mode: str = "canonical",
         normalize_reward: bool = True,
         reward_distance_scale_km: float | None = None,
         reward_distance_scale_mode: str = "single_customer_repair_median",
@@ -61,8 +61,10 @@ class EVRPTWVectorEnv(Env):
         super().__init__()
         if reward_mode not in {"distance", "distance_success"}:
             raise ValueError(f"Unsupported reward_mode: {reward_mode}")
-        if charging_mode not in {"proportional_full", "fixed_full"}:
+        if charging_mode not in {"station_power_full", "legacy_proportional_full", "legacy_fixed_full"}:
             raise ValueError(f"Unsupported charging_mode: {charging_mode}")
+        if matrix_mode not in {"canonical", "legacy_derived"}:
+            raise ValueError(f"Unsupported matrix_mode: {matrix_mode}")
 
         self.instance: EVRPTWInstance | None = None
         self.n_traj = int(n_traj)
@@ -71,6 +73,7 @@ class EVRPTWVectorEnv(Env):
         self.success_bonus = float(success_bonus)
         self.max_steps_factor = int(max_steps_factor)
         self.charging_mode = charging_mode
+        self.matrix_mode = matrix_mode
         self.normalize_reward = bool(normalize_reward)
         self.reward_distance_scale_km_override = reward_distance_scale_km
         self.reward_distance_scale_mode = str(reward_distance_scale_mode)
@@ -113,19 +116,21 @@ class EVRPTWVectorEnv(Env):
             ]
         )
 
-        self.speed_kmh = float(
-            instance.speed_profile.get("effective_speed_kmh")
-            or instance.vehicle.get("design_speed_kmh")
-            or 40.0
-        )
-        self.speed_km_per_s = max(self.speed_kmh / 3600.0, 1e-12)
-        self.travel_time_s = self.distance_km / self.speed_km_per_s
-
         self.battery_capacity_kwh = float(instance.vehicle.get("battery_capacity_kwh", 100.0))
-        self.energy_per_km = float(instance.vehicle.get("consumption_kwh_per_km", 0.404))
-        self.energy_kwh = self.distance_km * self.energy_per_km
         self.cargo_capacity_cm3 = float(instance.vehicle.get("cargo_capacity_cm3", np.inf))
         self.full_charge_time_s = float(instance.vehicle.get("full_charge_time_s", 0.0))
+        self.travel_time_s, self.travel_time_source = self._resolve_travel_time_matrix(instance)
+        self.energy_kwh, self.energy_source = self._resolve_energy_matrix(instance)
+        self.charging_power_kw, self.charging_power_source = self._resolve_charging_power(instance)
+        charging_policy = instance.raw.get("charging_policy", {})
+        self.charging_power_derating_factor = float(
+            charging_policy.get(
+                "charging_power_derating_factor",
+                instance.vehicle.get("charging_power_derating_factor", 1.0),
+            )
+        )
+        if not 0.0 < self.charging_power_derating_factor <= 1.0:
+            raise ValueError("charging_power_derating_factor must be in (0, 1]")
         self.working_start_s = float(instance.working_start_s)
         self.working_end_s = float(instance.working_end_s)
         self.horizon_s = max(float(self.working_end_s - self.working_start_s), 1.0)
@@ -180,12 +185,33 @@ class EVRPTWVectorEnv(Env):
             "demand": spaces.Box(0.0, np.inf, shape=(n,), dtype=np.float32),
             "time_window": spaces.Box(0.0, np.inf, shape=(n, 2), dtype=np.float32),
             "service_time": spaces.Box(0.0, np.inf, shape=(n,), dtype=np.float32),
+            "charging_power": spaces.Box(0.0, np.inf, shape=(n,), dtype=np.float32),
+            "remaining_demand": spaces.Box(
+                0.0,
+                np.inf,
+                shape=(self.n_traj, n),
+                dtype=np.float32,
+            ),
             "action_mask": spaces.MultiBinary([self.n_traj, n]),
             "last_node_idx": spaces.MultiDiscrete([n] * self.n_traj),
             "current_load": spaces.Box(0.0, np.inf, shape=(self.n_traj,), dtype=np.float32),
             "current_battery": spaces.Box(0.0, np.inf, shape=(self.n_traj,), dtype=np.float32),
-            "remaining_battery": spaces.Box(0.0, np.inf, shape=(self.n_traj,), dtype=np.float32),
+            # Canonical rollouts never expose a negative value.  The open
+            # lower bound supports the DRL-TS Stage-1 training wrapper, which
+            # deliberately measures and penalizes temporary energy deficits.
+            "remaining_battery": spaces.Box(
+                -np.inf,
+                np.inf,
+                shape=(self.n_traj,),
+                dtype=np.float32,
+            ),
             "current_time": spaces.Box(0.0, np.inf, shape=(self.n_traj,), dtype=np.float32),
+            "remaining_vehicle_ratio": spaces.Box(
+                0.0,
+                1.0,
+                shape=(self.n_traj,),
+                dtype=np.float32,
+            ),
             "visited_customers_ratio": spaces.Box(0.0, 1.0, shape=(self.n_traj, 1), dtype=np.float32),
             "visited_customers_raio": spaces.Box(0.0, 1.0, shape=(self.n_traj, 1), dtype=np.float32),
             "remain_feasible_customers_ratio": spaces.Box(0.0, 1.0, shape=(self.n_traj, 1), dtype=np.float32),
@@ -279,7 +305,6 @@ class EVRPTWVectorEnv(Env):
         self._append_route_node(traj_idx, destination)
 
         if self._is_customer(destination):
-            customer_idx = destination - 1
             ready, _ = self.tw_s[destination]
             self.current_time_s[traj_idx] = max(self.current_time_s[traj_idx], float(ready))
             self.current_time_s[traj_idx] += float(self.service_time_s[destination])
@@ -288,7 +313,9 @@ class EVRPTWVectorEnv(Env):
             self.served_customers[traj_idx] += 1
             self.route_has_customer[traj_idx] = True
         elif self._is_station(destination):
-            self.current_time_s[traj_idx] += self._charge_time_s(self.battery_used_kwh[traj_idx])
+            self.current_time_s[traj_idx] += self._charge_time_s(
+                self.battery_used_kwh[traj_idx], destination
+            )
             self.battery_used_kwh[traj_idx] = 0.0
             self.visited[traj_idx, destination] = True
         elif destination == 0:
@@ -332,9 +359,7 @@ class EVRPTWVectorEnv(Env):
             all_served = self.served_customers[t] == self.num_customers
 
             if all_served:
-                if start == 0:
-                    mask[t, 0] = True
-                elif self._direct_depot_feasible(t):
+                if start == 0 or self._direct_depot_feasible(t):
                     mask[t, 0] = True
                 continue
 
@@ -378,7 +403,7 @@ class EVRPTWVectorEnv(Env):
         if battery_after > self.battery_capacity_kwh + 1e-9:
             return False
         arrival = float(self.current_time_s[traj_idx] + self.travel_time_s[start, station])
-        departure = arrival + self._charge_time_s(battery_after)
+        departure = arrival + self._charge_time_s(battery_after, station)
         if departure > self.working_end_s + 1e-9:
             return False
         return self._can_return_to_depot(station, departure, 0.0)
@@ -400,7 +425,7 @@ class EVRPTWVectorEnv(Env):
             if battery_at_first > self.battery_capacity_kwh + 1e-9:
                 continue
             time_at_first = current_time_s + self.travel_time_s[start, first]
-            depart_first = time_at_first + self._charge_time_s(battery_at_first)
+            depart_first = time_at_first + self._charge_time_s(battery_at_first, first)
             stop_plan = self._shortest_stop_time(first, 0)
             if stop_plan is None:
                 continue
@@ -417,11 +442,11 @@ class EVRPTWVectorEnv(Env):
                 energy = float(self.energy_kwh[i, j])
                 if energy > self.battery_capacity_kwh + 1e-9:
                     continue
-                charge_time = self._charge_time_s(energy) if self._is_station(j) else 0.0
+                charge_time = self._charge_time_s(energy, j) if self._is_station(j) else 0.0
                 adjacency[i].append((j, float(self.travel_time_s[i, j]) + charge_time))
         return adjacency
 
-    def _shortest_stop_time(self, start: int, target: int) -> Optional[float]:
+    def _shortest_stop_time(self, start: int, target: int) -> float | None:
         heap: list[tuple[float, int]] = [(0.0, int(start))]
         dist = {int(start): 0.0}
         while heap:
@@ -437,11 +462,33 @@ class EVRPTWVectorEnv(Env):
                     heapq.heappush(heap, (cand, nxt))
         return None
 
-    def _charge_time_s(self, battery_used_kwh: float) -> float:
-        if self.charging_mode == "fixed_full":
+    def _charge_time_s(self, battery_used_kwh: float, station_node: int) -> float:
+        if self.charging_mode == "legacy_fixed_full":
             return self.full_charge_time_s
-        used_ratio = max(0.0, min(float(battery_used_kwh) / max(self.battery_capacity_kwh, 1e-12), 1.0))
-        return used_ratio * self.full_charge_time_s
+        if self.charging_mode == "legacy_proportional_full":
+            used_ratio = max(
+                0.0,
+                min(
+                    float(battery_used_kwh)
+                    / max(self.battery_capacity_kwh, 1e-12),
+                    1.0,
+                ),
+            )
+            return used_ratio * self.full_charge_time_s
+        if not self._is_station(station_node):
+            raise ValueError(f"charging target is not a station: {station_node}")
+        station_offset = int(station_node) - self.station_start
+        usable_power_kw = (
+            float(self.charging_power_kw[station_offset])
+            * self.charging_power_derating_factor
+        )
+        if usable_power_kw <= 0.0 or not math.isfinite(usable_power_kw):
+            raise ValueError("station charging power must be finite and positive")
+        energy_added_kwh = max(
+            0.0,
+            min(float(battery_used_kwh), self.battery_capacity_kwh),
+        )
+        return 3600.0 * energy_added_kwh / usable_power_kw
 
     def _make_observation(self) -> dict[str, np.ndarray]:
         action_mask = self._compute_action_mask()
@@ -453,10 +500,26 @@ class EVRPTWVectorEnv(Env):
         demand_norm = (self.demand_cm3 / max(self.cargo_capacity_cm3, 1e-12)).astype(np.float32)
         tw_norm = ((self.tw_s - self.working_start_s) / self.horizon_s).astype(np.float32)
         service_norm = (self.service_time_s / self.horizon_s).astype(np.float32)
+        charging_power = np.zeros(self.num_nodes, dtype=np.float32)
+        if self.num_stations:
+            power_scale = max(float(np.max(self.charging_power_kw)), 1e-12)
+            charging_power[self.station_start :] = (
+                self.charging_power_kw / power_scale
+            ).astype(np.float32)
         current_battery = (self.battery_used_kwh / max(self.battery_capacity_kwh, 1e-12)).astype(np.float32)
         remaining = (1.0 - current_battery).astype(np.float32)
         current_load = (self.load_cm3 / max(self.cargo_capacity_cm3, 1e-12)).astype(np.float32)
         current_time = ((self.current_time_s - self.working_start_s) / self.horizon_s).astype(np.float32)
+        remaining_demand = np.broadcast_to(
+            demand_norm,
+            (self.n_traj, self.num_nodes),
+        ).copy()
+        remaining_demand[self.visited] = 0.0
+        remaining_vehicle_ratio = np.maximum(
+            0.0,
+            (self.num_customers - self.vehicle_count.astype(np.float32))
+            / max(float(self.num_customers), 1.0),
+        )
 
         return {
             "cus_loc": coords[self.customer_start:self.station_start].astype(np.float32),
@@ -465,12 +528,15 @@ class EVRPTWVectorEnv(Env):
             "demand": demand_norm,
             "time_window": tw_norm,
             "service_time": service_norm,
+            "charging_power": charging_power,
+            "remaining_demand": remaining_demand,
             "action_mask": action_mask,
             "last_node_idx": self.last.copy(),
             "current_load": current_load,
             "current_battery": current_battery,
             "remaining_battery": remaining,
             "current_time": current_time,
+            "remaining_vehicle_ratio": remaining_vehicle_ratio,
             # Model-facing state is normalized; physical capacities stay in
             # self.battery_capacity_kwh / self.cargo_capacity_cm3 for dynamics.
             "battery_capacity": np.array([1.0], dtype=np.float32),
@@ -490,6 +556,9 @@ class EVRPTWVectorEnv(Env):
             "success": success.copy(),
             "served_customers": self.served_customers.copy(),
             "invalid_action": self.invalid_action.copy(),
+            "travel_time_source": self.travel_time_source,
+            "energy_source": self.energy_source,
+            "charging_power_source": self.charging_power_source,
             "routes": self.get_routes(),
             "route_sequence": [merge_route_sequences(routes) for routes in self.get_routes()],
         }
@@ -517,6 +586,88 @@ class EVRPTWVectorEnv(Env):
 
     def _is_station(self, node: int) -> bool:
         return self.station_start <= int(node) < self.num_nodes
+
+    def _resolve_travel_time_matrix(
+        self, instance: EVRPTWInstance
+    ) -> tuple[np.ndarray, str]:
+        matrix = instance.shortest_time_matrix_s
+        source = "EVRPTWInstance.shortest_time_matrix_s"
+        if matrix is None:
+            matrix = instance.raw.get("running_time_shortest_matrix_s")
+            source = "raw.running_time_shortest_matrix_s"
+        if matrix is None:
+            if self.matrix_mode == "canonical":
+                raise ValueError(
+                    "canonical RL evaluation requires running_time_shortest_matrix_s"
+                )
+            speed_kmh = float(
+                instance.speed_profile.get("effective_speed_kmh")
+                or instance.vehicle.get("design_speed_kmh")
+                or 40.0
+            )
+            matrix = self.distance_km / max(speed_kmh / 3600.0, 1e-12)
+            source = "legacy_distance_divided_by_scalar_speed"
+        return self._validate_terminal_matrix(matrix, "travel time"), source
+
+    def _resolve_energy_matrix(
+        self, instance: EVRPTWInstance
+    ) -> tuple[np.ndarray, str]:
+        matrix = instance.energy_matrix_kwh
+        source = "EVRPTWInstance.energy_matrix_kwh"
+        if matrix is None:
+            matrix = instance.raw.get("running_time_path_energy_kwh")
+            source = "raw.running_time_path_energy_kwh"
+        if matrix is None:
+            if self.matrix_mode == "canonical":
+                raise ValueError(
+                    "canonical RL evaluation requires running_time_path_energy_kwh"
+                )
+            rate = float(
+                instance.vehicle.get(
+                    "consumption_kwh_per_km",
+                    instance.vehicle.get(
+                        "specific_energy_consumption_kwh_per_km", 0.404
+                    ),
+                )
+            )
+            matrix = self.distance_km * rate
+            source = "legacy_objective_distance_times_consumption"
+        return self._validate_terminal_matrix(matrix, "energy"), source
+
+    def _resolve_charging_power(
+        self, instance: EVRPTWInstance
+    ) -> tuple[np.ndarray, str]:
+        raw_power = instance.raw.get("charging_power_kw")
+        source = "raw.charging_power_kw"
+        if raw_power is None:
+            raw_power = instance.cs_activation.get("charging_power_kw")
+            source = "cs_activation.charging_power_kw"
+        if raw_power is None:
+            if self.num_stations == 0:
+                return np.zeros(0, dtype=np.float64), "no_charging_stations"
+            if self.charging_mode == "station_power_full":
+                raise ValueError(
+                    "canonical RL evaluation requires per-station charging_power_kw"
+                )
+            return np.ones(self.num_stations, dtype=np.float64), "legacy_unused"
+        power = np.asarray(raw_power, dtype=np.float64)
+        if power.shape != (self.num_stations,):
+            raise ValueError(
+                "charging_power_kw must have shape "
+                f"{(self.num_stations,)}, got {power.shape}"
+            )
+        if np.any(~np.isfinite(power)) or np.any(power <= 0.0):
+            raise ValueError("charging_power_kw must contain finite positive values")
+        return power, source
+
+    def _validate_terminal_matrix(self, value: Any, label: str) -> np.ndarray:
+        matrix = np.asarray(value, dtype=np.float64)
+        expected = (self.num_nodes, self.num_nodes)
+        if matrix.shape != expected:
+            raise ValueError(f"{label} matrix must have shape {expected}, got {matrix.shape}")
+        if np.any(~np.isfinite(matrix)) or np.any(matrix < -1e-9):
+            raise ValueError(f"{label} matrix must contain finite non-negative values")
+        return matrix
 
 
 __all__ = ["EVRPTWVectorEnv", "Transition"]

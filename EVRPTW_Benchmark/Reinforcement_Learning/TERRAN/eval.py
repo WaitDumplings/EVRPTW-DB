@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import argparse
 import csv
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT))
 
 from evrptw_core.io import iter_instances
+
 from .env_factory import make_terran_env
 from .models import Agent
 from .rollout import rollout_eval_batch
@@ -38,7 +38,7 @@ def _eval_instance_batches(
         if max_count is not None and seen >= max_count:
             break
         batch.append(instance)
-        seen += 1
+        seen += 1  # noqa: SIM113 - count is checked before accepting each item
         if len(batch) >= max(1, int(batch_size)):
             yield batch
             batch = []
@@ -110,7 +110,16 @@ def main() -> None:
         args.limit,
         args.eval_num_batches,
     ):
-        envs = [make_terran_env(instance=instance, n_traj=args.n_traj, info_level=env_info_level) for instance in instances]
+        eval_env_cfg = dict(cfg.get("env", {}) or {})
+        eval_env_cfg["info_level"] = env_info_level
+        envs = [
+            make_terran_env(
+                instance=instance,
+                n_traj=args.n_traj,
+                **eval_env_cfg,
+            )
+            for instance in instances
+        ]
         batch_rows = rollout_eval_batch(
             agent,
             envs,

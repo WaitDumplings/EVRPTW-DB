@@ -22,7 +22,8 @@ env:
   use_jit_mask: true
   normalize_reward: true
   reward_distance_scale_mode: dataset_single_customer_repair_median
-  charging_mode: fixed_full
+  charging_mode: legacy_fixed_full
+  matrix_mode: legacy_derived
 
 model:
   embedding_dim: 256

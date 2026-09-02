@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sys
-from typing import Any, Callable
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT))
 
+from evrptw_core.io import load_instance
 from gymnasium import Wrapper
 
-from evrptw_core.io import load_instance
-from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import EVRPTWVectorEnv, EVRPTWVectorEnvFast
+from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
+    EVRPTWVectorEnv,
+    EVRPTWVectorEnvFast,
+)
+
 from .pbrs import PotentialRewardConfig, PotentialRewardWrapper
 
 
@@ -71,4 +76,4 @@ def make_terran_env(
     return env
 
 
-__all__ = ["make_terran_env", "OnlineInstanceResetWrapper"]
+__all__ = ["OnlineInstanceResetWrapper", "make_terran_env"]

@@ -1,0 +1,71 @@
+run_name: TERRAN
+dataset_name: EVRPTW-DB-Stage2
+
+data:
+  stage2_dataset_path: null
+  stage2_family_root: null
+  stage2_scale: Cus100
+  stage2_split_ids: train
+  stage2_track_ids: train
+  stage2_city_slugs: null
+  stage2_cache_size: 4
+  num_customers: 100
+  num_charging_stations: 20
+
+env:
+  use_fast_env: true
+  use_jit_mask: true
+  normalize_reward: true
+  reward_distance_scale_mode: single_customer_repair_median
+  charging_mode: station_power_full
+  matrix_mode: canonical
+
+model:
+  embedding_dim: 256
+  tanh_clipping: 15.0
+  n_encode_layers: 3
+  use_graph_token: false
+  use_dynamic_embedding: false
+
+training:
+  epochs: 300
+  num_envs_per_gpu: 64
+  n_traj: 50
+  rollout_steps: 450
+  ppo_step_chunk_size: 64
+  ppo_update_epochs: 3
+  num_minibatches: 4
+  gamma: 0.99
+  clip_coef: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  checkpoint_interval: 25
+  gradient_accumulation_steps: 1
+  debug: false
+  profile_timing: false
+
+pbrs:
+  use_customer_pbrs: true
+  use_repair_distance_pbrs: true
+  use_feasible_ratio_pbrs: false
+  use_terminal_heuristic: true
+  customer_pbrs_mode: progress
+  customer_pbrs_coef: 1.0
+  customer_progress_budget: 0.5
+  customer_progress_mix: 0.5
+  repair_progress_coef: 0.5
+  success_bonus: 0.1
+  failure_penalty: 0.5
+  annealing:
+    enabled: true
+    start_scale: 1.0
+    end_scale: 0.2
+    start_epoch: 1
+    end_epoch: 300
+    schedule: cosine
+
+evaluation:
+  eval_interval: 0

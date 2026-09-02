@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from evrptw_core.io import iter_instances
 
 from .async_instances import AsyncInstancePool
-from .data_pool import FixedDatasetInstancePool, OnlineInstancePool
+from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
 from .models import Agent
 from .pbrs import PotentialRewardConfig
@@ -208,12 +208,24 @@ def make_envs(cfg: dict[str, Any], seed: int):
     data_cfg = cfg["data"]
     train_cfg = cfg["training"]
     num_envs = int(train_cfg.get("num_envs_per_gpu", 128))
+    stage2_dataset_path = data_cfg.get("stage2_dataset_path")
     train_dataset_path = (
         data_cfg.get("train_dataset_path")
         or data_cfg.get("instance_dataset_path")
         or data_cfg.get("fixed_train_path")
     )
-    if train_dataset_path not in (None, ""):
+    if stage2_dataset_path not in (None, ""):
+        pool = Stage2TERRANPool(
+            dataset_path=_resolve_repo_path(stage2_dataset_path),
+            family_root=_resolve_repo_path(data_cfg.get("stage2_family_root")),
+            scale=data_cfg.get("stage2_scale", data_cfg.get("num_customers")),
+            split_ids=data_cfg.get("stage2_split_ids", "train"),
+            track_ids=data_cfg.get("stage2_track_ids", "train"),
+            city_slugs=data_cfg.get("stage2_city_slugs"),
+            seed=seed,
+            cache_size=int(data_cfg.get("stage2_cache_size", 4)),
+        )
+    elif train_dataset_path not in (None, ""):
         pool = FixedDatasetInstancePool(
             dataset_path=train_dataset_path,
             num_customers=int(data_cfg.get("num_customers", 15)),
