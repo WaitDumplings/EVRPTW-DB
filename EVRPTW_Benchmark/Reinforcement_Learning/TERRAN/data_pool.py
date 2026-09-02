@@ -14,6 +14,7 @@ from evrptw_core.io import load_instances
 from evrptw_core.schema import EVRPTWInstance
 
 from ..common import Stage2TaskPool
+from ..common.data_pass import seeded_pass_order
 
 
 @dataclass
@@ -28,6 +29,7 @@ class Stage2TERRANPool:
     city_slugs: str | None = None
     seed: int = 1234
     cache_size: int = 4
+    completed_data_passes: int = 0
 
     def __post_init__(self) -> None:
         self.pool = Stage2TaskPool(
@@ -40,12 +42,20 @@ class Stage2TERRANPool:
             seed=self.seed,
             cache_size=self.cache_size,
         )
-        self.sample_count = 0
+        self.sample_count = int(self.completed_data_passes) * len(self.pool)
+        self._order = seeded_pass_order(
+            len(self.pool), self.seed, int(self.completed_data_passes) + 1
+        )
         self.region_pool_status = f"stage2_frozen:{Path(self.dataset_path)}"
 
     def sample(self) -> EVRPTWInstance:
+        offset = self.sample_count % len(self.pool)
+        if self.sample_count and offset == 0:
+            data_pass = self.sample_count // len(self.pool) + 1
+            self._order = seeded_pass_order(len(self.pool), self.seed, data_pass)
+        task = self.pool.tasks[int(self._order[offset])]
         self.sample_count += 1
-        return self.pool.sample(1)[0]
+        return self.pool.instance(task)
 
     def usage_summary(self) -> list[dict[str, Any]]:
         return [
@@ -57,7 +67,7 @@ class Stage2TERRANPool:
                 "cluster_exposure_entropy": "",
                 "region_pool_status": self.region_pool_status,
                 "dataset_size": len(self.pool),
-                "sample_mode": "random_with_replacement",
+                "sample_mode": "seeded_shuffle_cycle_without_replacement",
             }
         ]
 

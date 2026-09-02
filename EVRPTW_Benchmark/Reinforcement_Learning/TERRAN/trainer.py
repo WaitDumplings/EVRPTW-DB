@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from evrptw_core.io import iter_instances
 
 from .async_instances import AsyncInstancePool
+from ..common.data_pass import DataPassState
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
 from .models import Agent
@@ -224,6 +225,7 @@ def make_envs(cfg: dict[str, Any], seed: int):
             city_slugs=data_cfg.get("stage2_city_slugs"),
             seed=seed,
             cache_size=int(data_cfg.get("stage2_cache_size", 4)),
+            completed_data_passes=int(data_cfg.get("stage2_completed_data_passes", 0)),
         )
     elif train_dataset_path not in (None, ""):
         pool = FixedDatasetInstancePool(
@@ -554,10 +556,23 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     debug_log_every = max(1, int(train_cfg.get("debug_log_every", 1)))
     profile_timing = bool(train_cfg.get("profile_timing", False))
     ppo_step_chunk_size = int(train_cfg.get("ppo_step_chunk_size", 0) or 0)
+    protocol_cfg = cfg.get("protocol", {})
+    start_epoch = 1
+    resume_checkpoint = protocol_cfg.get("resume_checkpoint")
+    if resume_checkpoint:
+        payload = torch.load(resume_checkpoint, map_location=device, weights_only=False)
+        agent.load_state_dict(payload["model_state_dict"])
+        optimizer.load_state_dict(payload["optimizer_state_dict"])
+        start_epoch = int(payload["epoch"]) + 1
 
-    out_root = REPO_ROOT / "EVRPTW_Benchmark/Reinforcement_Learning/TERRAN"
-    ckpt_dir = out_root / "checkpoints" / f"Cus_{num_customers}_CS_{num_cs}" / run_name / f"seed_{seed}"
-    log_dir = out_root / "logs" / f"Cus_{num_customers}_CS_{num_cs}" / run_name / f"seed_{seed}"
+    if cfg.get("output_dir"):
+        out_root = Path(cfg["output_dir"])
+        ckpt_dir = out_root / "checkpoints"
+        log_dir = out_root / "logs"
+    else:
+        out_root = REPO_ROOT / "EVRPTW_Benchmark/Reinforcement_Learning/TERRAN"
+        ckpt_dir = out_root / "checkpoints" / f"Cus_{num_customers}_CS_{num_cs}" / run_name / f"seed_{seed}"
+        log_dir = out_root / "logs" / f"Cus_{num_customers}_CS_{num_cs}" / run_name / f"seed_{seed}"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "train_log.csv"
@@ -621,11 +636,14 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "eval_status",
     ]
 
-    with log_path.open("w", newline="", encoding="utf-8") as f, eval_log_path.open("w", newline="", encoding="utf-8") as ef, debug_log_path.open("w", encoding="utf-8") as df:
+    log_mode = "a" if start_epoch > 1 else "w"
+    needs_header = log_mode == "w" or not log_path.exists()
+    with log_path.open(log_mode, newline="", encoding="utf-8") as f, eval_log_path.open(log_mode, newline="", encoding="utf-8") as ef, debug_log_path.open(log_mode, encoding="utf-8") as df:
         writer = csv.DictWriter(f, fieldnames=train_fields)
         eval_writer = csv.DictWriter(ef, fieldnames=eval_fields)
-        writer.writeheader()
-        eval_writer.writeheader()
+        if needs_header:
+            writer.writeheader()
+            eval_writer.writeheader()
         _debug_log(
             debug_enabled,
             df,
@@ -640,7 +658,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             f"eval_info_level={eval_cfg.get('eval_info_level', 'light')} "
             f"pbrs_annealing={cfg.get('pbrs', {}).get('annealing', {})}",
         )
-        for epoch in range(1, epochs + 1):
+        for epoch in range(start_epoch, epochs + 1):
+            epoch_seed = seed + epoch * 100_000
+            torch.manual_seed(epoch_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(epoch_seed)
             epoch_start = time.perf_counter()
             pbrs_scale = pbrs_scale_for_epoch(cfg, epoch, epochs)
             set_pbrs_reward_scale(envs, pbrs_scale)
@@ -670,8 +692,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             total_steps = int(batch.actions.size(0))
             chunk_size = ppo_step_chunk_size if ppo_step_chunk_size > 0 else total_steps
             chunk_size = max(1, min(chunk_size, total_steps))
+            epoch_rng = np.random.default_rng(epoch_seed + 17)
             for _ in range(ppo_epochs):
-                np.random.shuffle(env_order)
+                epoch_rng.shuffle(env_order)
                 split_indices = [indices for indices in np.array_split(env_order, minibatches) if indices.size > 0]
                 for group_start in range(0, len(split_indices), gradient_accumulation_steps):
                     accum_group = split_indices[group_start : group_start + gradient_accumulation_steps]
@@ -808,6 +831,31 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             f.flush()
             if epoch % checkpoint_interval == 0 or epoch == epochs:
                 save_checkpoint(ckpt_dir / f"checkpoint_epoch_{epoch:04d}.pt", agent, optimizer, cfg, epoch, seed)
+            protocol_epochs = int(protocol_cfg.get("epochs_per_pass", 0) or 0)
+            if (
+                protocol_cfg
+                and protocol_epochs > 0
+                and epoch % protocol_epochs == 0
+            ):
+                latest = out_root / "checkpoint_latest.pt"
+                save_checkpoint(
+                    latest,
+                    agent,
+                    optimizer,
+                    cfg,
+                    epoch,
+                    seed,
+                )
+                completed = epoch // protocol_epochs
+                state = DataPassState(
+                    protocol_id=str(protocol_cfg["protocol_id"]),
+                    completed_data_passes=completed,
+                    instances_seen=int(pool.sample_count),
+                    customer_exposures=int(pool.sample_count) * num_customers,
+                    optimizer_steps=epoch * ppo_epochs * math.ceil(num_minibatches / gradient_accumulation_steps),
+                    last_checkpoint=str(latest),
+                )
+                state.atomic_write(out_root / "data_pass_state.json")
     save_checkpoint(ckpt_dir / "checkpoint_final.pt", agent, optimizer, cfg, epochs, seed)
     close_pool = getattr(pool, "close", None)
     if callable(close_pool):

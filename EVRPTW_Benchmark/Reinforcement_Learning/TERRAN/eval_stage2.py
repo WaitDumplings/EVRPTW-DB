@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_distance
+from EVRPTW_Benchmark.Reinforcement_Learning.common.candidate_protocol import independent_candidate_batch
 
 from ..common import Stage2TaskPool
 from .env_factory import make_terran_env
@@ -29,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--city-slugs")
     parser.add_argument("--decode-mode", choices=("sample", "greedy"), default="sample")
     parser.add_argument("--candidates", type=int, default=50)
+    parser.add_argument("--candidate-chunk-size", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--seed", type=int, default=1234)
@@ -83,27 +85,41 @@ def main() -> None:
     with routes_path.open("w", encoding="utf-8") as route_stream:
         for batch_start in range(0, len(instances), args.batch_size):
             batch_instances = instances[batch_start : batch_start + args.batch_size]
-            envs = [
-                make_terran_env(
-                    instance=instance,
-                    n_traj=args.candidates,
-                    reward_mode="distance",
-                    charging_mode="station_power_full",
-                    matrix_mode="canonical",
-                    info_level="full",
+            def solve_one(instance, candidate_seed):
+                envs = [
+                    make_terran_env(
+                        instance=instance,
+                        n_traj=1,
+                        reward_mode="distance",
+                        charging_mode="station_power_full",
+                        matrix_mode="canonical",
+                        info_level="full",
+                    )
+                ]
+                single_rows = rollout_eval_batch(
+                    agent,
+                    envs,
+                    decode_mode=args.decode_mode,
+                    max_steps=max(env.unwrapped.max_steps for env in envs),
+                    device=args.device,
+                    seed=candidate_seed,
+                    include_routes=True,
+                    return_final_info=True,
                 )
-                for instance in batch_instances
-            ]
-            result_rows = rollout_eval_batch(
-                agent,
-                envs,
-                decode_mode=args.decode_mode,
-                max_steps=max(env.unwrapped.max_steps for env in envs),
-                device=args.device,
-                seed=args.seed + batch_start,
-                include_routes=True,
-                return_final_info=True,
+                result = single_rows[0]
+                return result.pop("_final_info"), float(result["runtime_s"])
+            candidate_batch = independent_candidate_batch(
+                batch_instances,
+                candidate_count=args.candidates,
+                candidate_chunk_size=args.candidate_chunk_size,
+                base_seed=args.seed,
+                instance_offset=batch_start,
+                solve_one=solve_one,
             )
+            result_rows = [
+                {"_final_info": info, "runtime_s": candidate_batch.runtime_s / max(len(batch_instances), 1)}
+                for info in candidate_batch.infos
+            ]
             for instance, result in zip(batch_instances, result_rows):
                 selected, routes, verification = select_min_verified_distance(
                     instance, result.pop("_final_info")

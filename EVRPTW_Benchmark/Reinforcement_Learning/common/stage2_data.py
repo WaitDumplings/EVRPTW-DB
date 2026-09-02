@@ -24,6 +24,7 @@ from EVRPTW_Benchmark.MetaHeuristics.benchmark_common import (
 from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
     EVRPTWVectorEnvFast,
 )
+from .data_pass import pass_batches
 
 
 def _csv_set(value: str | None) -> set[str] | None:
@@ -89,6 +90,21 @@ class Stage2TaskPool:
         tasks = self.tasks if limit is None else self.tasks[: int(limit)]
         for task in tasks:
             yield self.instance(task)
+
+    def data_pass_batches(
+        self,
+        data_pass: int,
+        physical_batch_size: int,
+    ) -> Iterable[list[EVRPTWInstance]]:
+        """Yield every filtered view exactly once in a deterministic shuffle."""
+
+        for tasks in pass_batches(
+            self.tasks,
+            seed=self.seed,
+            data_pass=data_pass,
+            physical_batch_size=physical_batch_size,
+        ):
+            yield [self.instance(task) for task in tasks]
 
 
 def make_envs(

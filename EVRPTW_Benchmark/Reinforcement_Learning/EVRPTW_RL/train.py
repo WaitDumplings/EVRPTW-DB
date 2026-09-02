@@ -12,6 +12,8 @@ import torch
 from scipy.stats import ttest_rel
 
 from ..common import Stage2TaskPool, make_envs
+from ..common.protocol_entrypoints import run_evrptw_rl
+from ..common.training_protocol import add_data_pass_arguments
 from .model import EVRPTWRLPolicy
 from .rollout import rollout
 
@@ -50,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-dir", type=Path, required=True)
+    add_data_pass_arguments(parser)
     return parser.parse_args()
 
 
@@ -93,6 +96,9 @@ def main() -> None:
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
+    if args.data_passes is not None:
+        run_evrptw_rl(args, pool, policy, optimizer)
+        return
     ema_cost: float | None = None
     baseline_instances = pool.sample(args.baseline_eval_size)
     history_path = args.output_dir / "train_history.jsonl"

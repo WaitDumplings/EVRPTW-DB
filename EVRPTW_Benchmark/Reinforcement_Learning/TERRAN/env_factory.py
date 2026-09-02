@@ -26,8 +26,12 @@ class OnlineInstanceResetWrapper(Wrapper):
     def __init__(self, env, instance_sampler: Callable[[], Any]):
         super().__init__(env)
         self.instance_sampler = instance_sampler
+        self._bootstrap_pending = True
 
     def reset(self, **kwargs: Any):
+        if self._bootstrap_pending:
+            self._bootstrap_pending = False
+            return self.env.reset(**kwargs)
         options = dict(kwargs.pop("options", {}) or {})
         options["instance"] = self.instance_sampler()
         return self.env.reset(options=options, **kwargs)

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Any
+
+from ..common.training_protocol import add_data_pass_arguments
+from .protocol import configure_protocol, finalize_protocol
 
 from .trainer import load_config, train_from_config
 
@@ -55,6 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-async-instance-prefetch", action="store_true")
     parser.add_argument("--async-instance-workers", type=int, default=None)
     parser.add_argument("--async-instance-queue-batches", type=int, default=None)
+    parser.add_argument("--output-dir", type=Path)
+    add_data_pass_arguments(parser)
     return parser.parse_args()
 
 
@@ -150,7 +156,9 @@ def main() -> None:
         overrides = {}
     else:
         overrides = {key: value for key, value in overrides.items() if value}
+    overrides, protocol_meta = configure_protocol(args, overrides)
     ckpt = train_from_config(cfg, seed=args.seed, device=args.device, overrides=overrides)
+    finalize_protocol(args, ckpt, protocol_meta)
     print(f"Saved final checkpoint: {ckpt}")
 
 

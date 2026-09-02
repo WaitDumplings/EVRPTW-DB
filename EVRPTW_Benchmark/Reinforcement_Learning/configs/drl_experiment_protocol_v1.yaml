@@ -1,0 +1,134 @@
+protocol_id: drl_experiment_protocol_v1
+representation: R
+objective: verified_directed_road_total_distance
+target_branch: drl-benchmark-adapters
+
+seeds: [1234, 2345, 3456]
+
+training:
+  full_data_passes: 100
+  pilot_data_passes: 1
+  validation_every_passes: 5
+  validation_views: 500
+  checkpoint_selection:
+    - maximize: complete_and_feasible_rate
+    - minimize: mean_verified_distance_km
+  checkpoint_selection_uses_test_metrics: false
+
+scales:
+  Cus50:
+    customer_count: 50
+    train_views: 100000
+    train_index: generation_plan/compatibility_cus50/train/view_index.parquet
+    validation_index: generation_plan/compatibility_cus50/val/view_index.parquet
+    tests:
+      T1:
+        track_id: test1_new_seed
+        expected_views: 500
+        index: generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet
+  Cus100:
+    customer_count: 100
+    train_views: 50000
+    train_index: generation_plan/core/train/view_index.parquet
+    validation_index: generation_plan/core/val/view_index.parquet
+    tests: &core_tests
+      T1:
+        track_id: test1_new_seed
+        expected_views: 500
+        index: generation_plan/core/test/test1_new_seed/view_index.parquet
+      T2:
+        track_id: test2_heldout_locations
+        expected_views: 500
+        index: generation_plan/core/test/test2_heldout_locations/view_index.parquet
+      T3:
+        track_id: test3_heldout_city
+        expected_views: 500
+        index: generation_plan/core/test/test3_heldout_city/view_index.parquet
+  Cus500:
+    customer_count: 500
+    train_views: 10000
+    train_index: generation_plan/core/train/view_index.parquet
+    validation_index: generation_plan/core/val/view_index.parquet
+    tests: *core_tests
+  Cus1000:
+    customer_count: 1000
+    train_views: 5000
+    train_index: generation_plan/core/train/view_index.parquet
+    validation_index: generation_plan/core/val/view_index.parquet
+    tests: *core_tests
+
+scale_transfer:
+  source_scale: Cus1000
+  index: generation_plan/scalability_cus2000/test/unseen_scale_same_cities/view_index.parquet
+  track_id: unseen_scale_same_cities
+  cohorts:
+    paired_Cus1000:
+      scale: Cus1000
+      expected_views: 500
+    zero_shot_Cus2000:
+      scale: Cus2000
+      expected_views: 500
+  train_cus2000: false
+
+decoding:
+  greedy:
+    decode_type: greedy
+    candidates: 1
+    candidate_chunk_size: 1
+  best_of_50:
+    decode_type: sampling
+    candidates: 50
+    candidate_chunk_size: 5
+    candidate_seed_scheme: splitmix64_v1
+
+methods:
+  am_evrptw:
+    label: AM-EVRPTW
+    train_module: EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.train
+    eval_module: EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.eval
+    physical_batch: {Cus50: 8, Cus100: 8, Cus500: 2, Cus1000: 1}
+    effective_batch: {Cus50: 8, Cus100: 8, Cus500: 2, Cus1000: 1}
+  evrptw_rl:
+    label: EVRPTW-RL
+    train_module: EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.train
+    eval_module: EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.eval
+    physical_batch: {Cus50: 16, Cus100: 16, Cus500: 2, Cus1000: 1}
+    effective_batch: {Cus50: 16, Cus100: 16, Cus500: 2, Cus1000: 1}
+  drl_ts:
+    label: DRL-TS
+    train_module: EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.train
+    eval_module: EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.eval
+    physical_batch: {Cus50: 16, Cus100: 8, Cus500: 1, Cus1000: 1}
+    effective_batch: {Cus50: 16, Cus100: 8, Cus500: 1, Cus1000: 1}
+    soft_stage_fraction: 0.5
+  terran:
+    label: TERRAN
+    train_module: EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train
+    eval_module: EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.eval_stage2
+    config: stage2_cus100_terran.yaml
+    physical_batch: {Cus50: 8, Cus100: 8, Cus500: 1, Cus1000: 1}
+    effective_batch: {Cus50: 8, Cus100: 8, Cus500: 1, Cus1000: 1}
+
+hardware:
+  rtx_2080_ti:
+    global_slots: 11
+    expected_name_pattern: RTX 2080 Ti
+    memory_gate_gib: 9.5
+  rtx_a6000:
+    global_slots: 2
+    expected_name_pattern: RTX A6000
+
+pilot:
+  optimization_scale: Cus100
+  memory_scales: [Cus500, Cus1000]
+  seed: 1234
+  validation_limit: 8
+  best_of_50_equality_limit: 2
+  required_methods: [am_evrptw, evrptw_rl, drl_ts, terran]
+
+disabled_tracks:
+  - E_to_R
+  - R_to_Inject_to_R
+excluded_methods:
+  - edge_direct_h
+  - lehd

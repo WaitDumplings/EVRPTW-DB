@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_distance
+from EVRPTW_Benchmark.Reinforcement_Learning.common.candidate_protocol import independent_candidate_batch
 
 from ..common import Stage2TaskPool, make_envs
 from .model import DRLTSPolicy
@@ -35,6 +36,7 @@ def parse_args() -> argparse.Namespace:
         default="greedy",
     )
     parser.add_argument("--candidates", type=int, default=1)
+    parser.add_argument("--candidate-chunk-size", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--seed", type=int, default=1234)
@@ -92,23 +94,29 @@ def main() -> None:
     with routes_path.open("w", encoding="utf-8") as route_stream:
         for batch_start in range(0, len(instances), args.batch_size):
             batch_instances = instances[batch_start : batch_start + args.batch_size]
-            envs = make_envs(
+            def solve_one(instance, candidate_seed):
+                envs = make_envs([instance], n_traj=1, info_level="full")
+                with torch.no_grad():
+                    single = rollout(
+                        policy,
+                        envs,
+                        decode_type=args.decode_type,
+                        max_steps=max(env.unwrapped.max_steps for env in envs),
+                        seed=candidate_seed,
+                        soft_constraints=False,
+                        incomplete_penalty=float(
+                            model_args.get("incomplete_penalty", 100.0)
+                        ),
+                    )
+                return single.infos[0], single.runtime_s
+            result = independent_candidate_batch(
                 batch_instances,
-                n_traj=args.candidates,
-                info_level="full",
+                candidate_count=args.candidates,
+                candidate_chunk_size=args.candidate_chunk_size,
+                base_seed=args.seed,
+                instance_offset=batch_start,
+                solve_one=solve_one,
             )
-            with torch.no_grad():
-                result = rollout(
-                    policy,
-                    envs,
-                    decode_type=args.decode_type,
-                    max_steps=max(env.unwrapped.max_steps for env in envs),
-                    seed=args.seed + batch_start,
-                    soft_constraints=False,
-                    incomplete_penalty=float(
-                        model_args.get("incomplete_penalty", 100.0)
-                    ),
-                )
             for instance, info in zip(batch_instances, result.infos):
                 selected, routes, verification = select_min_verified_distance(
                     instance, info

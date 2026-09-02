@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import torch
 from scipy.stats import ttest_rel
+from ..common.protocol_entrypoints import run_am
+from ..common.training_protocol import add_data_pass_arguments
 
 from .data import Stage2TaskPool, make_envs
 from .model import AMEVRPTWPolicy
@@ -66,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-dir", type=Path, required=True)
+    add_data_pass_arguments(parser)
     return parser.parse_args()
 
 
@@ -94,6 +97,9 @@ def main() -> None:
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
+    if args.data_passes is not None:
+        run_am(args, pool, policy, optimizer)
+        return
     history_path = args.output_dir / "train_history.jsonl"
 
     for epoch in range(args.epochs):
