@@ -11,6 +11,9 @@ Scope: AM-EVRPTW, EVRPTW-RL, DRL-TS, and TERRAN at Cus50/Cus100/Cus500
 > The measurements below remain provenance for the previous horizon only. Batch
 > candidates, especially TERRAN Cus500 (450 to 600 steps), require a new memory
 > and throughput pilot before any full job is approved.
+>
+> The replacement measurement is recorded in
+> `RTX2080TI_ROLLOUT_BUDGET_PILOT_V2.md`.
 
 ## Selection discipline
 
