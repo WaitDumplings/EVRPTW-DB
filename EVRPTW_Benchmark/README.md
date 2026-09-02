@@ -16,6 +16,9 @@ The learning baselines are being standardized under
 [`Reinforcement_Learning/BASELINE_IMPLEMENTATION_PLAN.md`](Reinforcement_Learning/BASELINE_IMPLEMENTATION_PLAN.md).
 Their common transition, charging, masking, and evaluation semantics are frozen
 in [`Reinforcement_Learning/CHARGING_ADAPTER_CONTRACT.md`](Reinforcement_Learning/CHARGING_ADAPTER_CONTRACT.md).
+The complete learning experiment matrix, thirteen-GPU allocation, and required
+three-class launch-script contract are specified in
+[`Reinforcement_Learning/DRL_EXPERIMENT_AND_GPU_SCRIPT_DIRECTIVE.md`](Reinforcement_Learning/DRL_EXPERIMENT_AND_GPU_SCRIPT_DIRECTIVE.md).
 
 Exact and metaheuristic runners consume the current CLE-backed Stage-2
 `view_index.parquet` plus its `materialized/families` store. The frozen input
