@@ -8,6 +8,11 @@ seeds: [1234, 2345, 3456]
 training:
   full_data_passes: 100
   pilot_data_passes: 1
+  rollout_steps_by_scale:
+    Cus50: 80
+    Cus100: 140
+    Cus500: 600
+    Cus1000: 1200
   validation_every_passes: 5
   validation_views: 500
   checkpoint_selection:

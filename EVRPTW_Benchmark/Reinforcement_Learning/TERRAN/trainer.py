@@ -596,6 +596,14 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "num_envs",
         "n_traj",
         "rollout_steps",
+        "trajectory_count",
+        "mean_trajectory_steps",
+        "trajectory_steps_p50",
+        "trajectory_steps_p90",
+        "trajectory_steps_p99",
+        "trajectory_steps_max",
+        "rollout_budget_exhausted_count",
+        "rollout_budget_exhausted_rate",
         "num_minibatches",
         "gradient_accumulation_steps",
         "effective_instances_per_optimizer_step",
@@ -685,6 +693,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             )
             environment_transitions = int(batch.valid.sum().item())
             environment_transitions_total += environment_transitions
+            trajectory_steps = batch.trajectory_steps.detach().cpu().numpy().reshape(-1)
+            trajectory_count = int(trajectory_steps.size)
+            rollout_budget_exhausted_count = int(
+                batch.rollout_budget_exhausted.sum().detach().cpu()
+            )
             returns = compute_returns(batch.rewards, batch.dones, gamma=gamma)
             advantages = returns - batch.values
             valid = batch.valid
@@ -810,6 +823,18 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "n_traj": int(train_cfg.get("n_traj", 50)),
                     "rollout_steps": rollout_steps,
                     "num_minibatches": minibatches,
+                    "trajectory_count": trajectory_count,
+                    "mean_trajectory_steps": float(trajectory_steps.mean()),
+                    "trajectory_steps_p50": float(np.quantile(trajectory_steps, 0.50)),
+                    "trajectory_steps_p90": float(np.quantile(trajectory_steps, 0.90)),
+                    "trajectory_steps_p99": float(np.quantile(trajectory_steps, 0.99)),
+                    "trajectory_steps_max": int(trajectory_steps.max()),
+                    "rollout_budget_exhausted_count": (
+                        rollout_budget_exhausted_count
+                    ),
+                    "rollout_budget_exhausted_rate": (
+                        rollout_budget_exhausted_count / trajectory_count
+                    ),
                     "gradient_accumulation_steps": gradient_accumulation_steps,
                     "effective_instances_per_optimizer_step": int(np.ceil(num_envs / max(minibatches, 1))) * gradient_accumulation_steps,
                     "pbrs_scale": pbrs_scale,

@@ -122,6 +122,34 @@ def test_full_gate_rejects_missing_or_failed_report(tmp_path: Path) -> None:
         raise AssertionError("failed pilot gate was accepted")
 
 
+def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    common = {
+        "train_index": "train.parquet",
+        "validation_index": "val.parquet",
+        "data_passes": 20,
+        "training_rollout_steps": 140,
+        "physical_batch_size": 4,
+        "effective_batch_size": 4,
+        "validation_views": 500,
+        "validation_every_passes": 5,
+        "protocol_id": "rollout-budget-test",
+        "run_mode": "full",
+    }
+    for method, module in (
+        ("am_evrptw", "EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.train"),
+        ("terran", "EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train"),
+    ):
+        job = _job(f"train__R__{method}__Cus100__seed1234")
+        job.update(common)
+        job.update({"method": method, "train_module": module})
+        command = RUNTIME.training_command(
+            job, context, tmp_path / method, resume=False
+        )
+        index = command.index("--training-rollout-steps")
+        assert command[index + 1] == "140"
+
+
 def test_resume_only_marks_jobs_with_complete_resume_evidence(tmp_path: Path) -> None:
     job = _job()
     output = tmp_path / "job"

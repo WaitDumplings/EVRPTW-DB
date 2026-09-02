@@ -23,6 +23,8 @@ class EVRPTWRLRollout:
     infos: list[dict[str, Any]]
     runtime_s: float
     environment_transitions: int
+    trajectory_steps: torch.Tensor
+    rollout_budget_exhausted: torch.Tensor
 
 
 def _normalized_travel_time(envs: Sequence[Any]) -> np.ndarray:
@@ -58,6 +60,7 @@ def rollout(
     travel_time = _normalized_travel_time(envs)
     done = np.zeros((batch_size, n_traj), dtype=bool)
     environment_transitions = 0
+    trajectory_steps = np.zeros_like(done, dtype=np.int64)
     station_visits = np.zeros((batch_size, n_traj), dtype=np.int64)
     log_likelihood = torch.zeros(batch_size, n_traj, device=policy.device)
     start = time.perf_counter()
@@ -72,6 +75,7 @@ def rollout(
             else distribution.sample()
         )
         environment_transitions += int(np.count_nonzero(~done))
+        trajectory_steps += (~done).astype(np.int64)
         active = torch.as_tensor(~done, device=policy.device)
         log_likelihood = log_likelihood + distribution.log_prob(actions) * active
         action_array = actions.detach().cpu().numpy().astype(np.int64)
@@ -122,4 +126,10 @@ def rollout(
         infos=infos,
         runtime_s=float(time.perf_counter() - start),
         environment_transitions=environment_transitions,
+        trajectory_steps=torch.as_tensor(
+            trajectory_steps, device=policy.device
+        ),
+        rollout_budget_exhausted=torch.as_tensor(
+            ~done, device=policy.device
+        ),
     )

@@ -7,6 +7,7 @@ import torch
 
 from .protocol_trainers import train_reinforce_data_passes
 from .stage2_data import make_envs
+from .training_protocol import require_training_rollout_steps
 
 
 def _max_steps(envs: list[Any]) -> int:
@@ -16,7 +17,9 @@ def _max_steps(envs: list[Any]) -> int:
 def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..AM_EVRPTW.rollout import rollout
 
-    def solve(active, instances, decode_type, seed):
+    training_rollout_steps = require_training_rollout_steps(args)
+
+    def solve(active, instances, decode_type, seed, max_steps=None):
         envs = make_envs(
             instances,
             n_traj=args.samples_per_instance if decode_type == "sampling" else 1,
@@ -26,7 +29,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             active,
             envs,
             decode_type=decode_type,
-            max_steps=_max_steps(envs),
+            max_steps=_max_steps(envs) if max_steps is None else int(max_steps),
             seed=seed,
             incomplete_penalty_km=args.incomplete_penalty_km,
         )
@@ -44,10 +47,10 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         policy=policy,
         optimizer=optimizer,
         make_actor=lambda instances, _soft, seed: solve(
-            policy, instances, "sampling", seed
+            policy, instances, "sampling", seed, training_rollout_steps
         ),
         make_baseline=lambda active, instances, _soft, seed: solve(
-            active, instances, "greedy", seed
+            active, instances, "greedy", seed, training_rollout_steps
         ),
         training_cost=lambda result: result.cost_km,
         objective_distance=objective,
@@ -62,7 +65,9 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
 def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..EVRPTW_RL.rollout import rollout
 
-    def solve(active, instances, decode_type, seed):
+    training_rollout_steps = require_training_rollout_steps(args)
+
+    def solve(active, instances, decode_type, seed, max_steps=None):
         envs = make_envs(
             instances,
             n_traj=args.samples_per_instance if decode_type == "sampling" else 1,
@@ -72,7 +77,7 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             active,
             envs,
             decode_type=decode_type,
-            max_steps=_max_steps(envs),
+            max_steps=_max_steps(envs) if max_steps is None else int(max_steps),
             seed=seed,
             station_visit_penalty=args.station_visit_penalty,
             incomplete_penalty=args.incomplete_penalty,
@@ -85,10 +90,10 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         policy=policy,
         optimizer=optimizer,
         make_actor=lambda instances, _soft, seed: solve(
-            policy, instances, "sampling", seed
+            policy, instances, "sampling", seed, training_rollout_steps
         ),
         make_baseline=lambda active, instances, _soft, seed: solve(
-            active, instances, "greedy", seed
+            active, instances, "greedy", seed, training_rollout_steps
         ),
         training_cost=lambda result: result.training_cost,
         objective_distance=lambda result: result.objective_distance_km,
@@ -104,7 +109,9 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..DRL_TS.rollout import rollout
     from ..DRL_TS.soft_env import DRLTSSoftConstraintEnv
 
-    def solve(active, instances, soft, decode_type, seed):
+    training_rollout_steps = require_training_rollout_steps(args)
+
+    def solve(active, instances, soft, decode_type, seed, max_steps=None):
         n_traj = args.samples_per_instance if decode_type == "sampling" else 1
         if soft:
             envs = [
@@ -128,7 +135,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             active,
             envs,
             decode_type=decode_type,
-            max_steps=_max_steps(envs),
+            max_steps=_max_steps(envs) if max_steps is None else int(max_steps),
             seed=seed,
             soft_constraints=soft,
             capacity_penalty=args.capacity_penalty,
@@ -144,10 +151,10 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         policy=policy,
         optimizer=optimizer,
         make_actor=lambda instances, soft, seed: solve(
-            policy, instances, soft, "sampling", seed
+            policy, instances, soft, "sampling", seed, training_rollout_steps
         ),
         make_baseline=lambda active, instances, soft, seed: solve(
-            active, instances, soft, "greedy", seed
+            active, instances, soft, "greedy", seed, training_rollout_steps
         ),
         training_cost=lambda result: result.training_cost,
         objective_distance=lambda result: result.objective_distance_km,

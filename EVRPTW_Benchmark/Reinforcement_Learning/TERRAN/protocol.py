@@ -13,7 +13,11 @@ import numpy as np
 import torch
 
 from ..common import Stage2TaskPool
-from ..common.training_protocol import atomic_json, require_registered_batches
+from ..common.training_protocol import (
+    atomic_json,
+    require_registered_batches,
+    require_training_rollout_steps,
+)
 from ..common.data_pass import DataPassState
 
 
@@ -38,6 +42,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         environment_transitions = int(state.environment_transitions)
         optimizer_steps = int(state.optimizer_steps)
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
+    training_rollout_steps = require_training_rollout_steps(args)
     if physical != effective:
         raise ValueError("TERRAN v1 registers equal physical/effective batches")
     pool = Stage2TaskPool(
@@ -64,6 +69,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         {
             "epochs": epochs,
             "num_envs_per_gpu": physical,
+            "rollout_steps": training_rollout_steps,
             "checkpoint_interval": max(
                 1, epochs_per_pass * int(args.validation_every_passes)
             ),
@@ -77,6 +83,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "epochs_per_pass": epochs_per_pass,
         "physical_batch_size": physical,
         "effective_batch_size": effective,
+        "training_rollout_steps": training_rollout_steps,
         "pilot_partial": args.max_batches_per_pass is not None,
         "completed_data_passes": completed,
         "environment_transitions": environment_transitions,

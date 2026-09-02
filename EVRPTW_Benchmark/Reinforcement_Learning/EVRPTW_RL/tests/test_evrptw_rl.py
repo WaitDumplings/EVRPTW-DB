@@ -74,3 +74,15 @@ def test_rollout_reinforce_update_and_shared_verifier() -> None:
     )
     routes = greedy.infos[0]["routes"][0]
     assert validate_routes(_instance(), routes)["passed"]
+
+
+def test_evrptw_rl_rollout_reports_training_budget_exhaustion() -> None:
+    result = rollout(
+        _policy(),
+        [EVRPTWVectorEnv(_instance(), n_traj=2)],
+        decode_type="sampling",
+        max_steps=1,
+        seed=37,
+    )
+    assert result.trajectory_steps.tolist() == [[1, 1]]
+    assert result.rollout_budget_exhausted.tolist() == [[True, True]]

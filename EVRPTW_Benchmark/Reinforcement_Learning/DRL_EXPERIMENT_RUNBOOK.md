@@ -69,6 +69,20 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_2xa6000.sh pilot
 
 每张 GPU 内串行、GPU 之间并行。一个 job 失败只停止所属 GPU 队列；其余 GPU 完成在途队列。`SIGINT/SIGTERM` 会传给所有子进程组。
 
+训练 rollout 使用所有方法共享的按规模预算：Cus50=80、Cus100=140、
+Cus500=600、Cus1000=1200。该预算只限制 sampling actor 和训练 baseline，
+validation、T1/T2/T3 与 scale-transfer evaluation 继续使用环境的完整动态
+horizon，避免把训练预算耗尽误报为最终求解失败。
+
+每个 REINFORCE data pass 以及每个 TERRAN epoch 都记录：
+
+- 实际 trajectory steps 的 mean/P50/P90/P99/max；
+- `rollout_budget_exhausted_count`；
+- `rollout_budget_exhausted_rate`。
+
+这些字段用于审核预算是否过紧；修改预算后必须重新跑 batch/memory pilot，旧的
+RTX 2080 Ti 吞吐与 wall-time 外推不再视为当前配置证据。
+
 ## Pilot 与 full 边界
 
 收集四台服务器的 pilot 输出及 evidence 后构建放行报告：

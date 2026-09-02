@@ -17,6 +17,7 @@ from .stage2_data import Stage2TaskPool
 
 def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-passes", type=int)
+    parser.add_argument("--training-rollout-steps", type=int)
     parser.add_argument("--physical-batch-size", type=int)
     parser.add_argument("--effective-batch-size", type=int)
     parser.add_argument("--validation-dataset-path", type=Path)
@@ -37,6 +38,16 @@ def require_registered_batches(args: argparse.Namespace, legacy_batch: int) -> t
     if effective % physical:
         raise ValueError("effective batch size must be a multiple of physical batch size")
     return physical, effective
+
+
+def require_training_rollout_steps(args: argparse.Namespace) -> int:
+    value = getattr(args, "training_rollout_steps", None)
+    if value is None:
+        raise ValueError("protocol mode requires --training-rollout-steps")
+    value = int(value)
+    if value <= 0:
+        raise ValueError("training rollout steps must be positive")
+    return value
 
 
 def grouped_batches(
@@ -165,6 +176,7 @@ __all__ = [
     "load_state",
     "make_validation_pool",
     "require_registered_batches",
+    "require_training_rollout_steps",
     "validation_key",
     "verified_validation",
 ]

@@ -6,6 +6,12 @@ Environment: `maojie`, PyTorch 2.5.1+cu121
 Dataset: released Stage-2 v7 training/validation artifacts  
 Scope: AM-EVRPTW, EVRPTW-RL, DRL-TS, and TERRAN at Cus50/Cus100/Cus500
 
+> Superseded for launch: the scale-aware training rollout budgets were changed to
+> Cus50=80, Cus100=140, Cus500=600, and Cus1000=1200 after this calibration.
+> The measurements below remain provenance for the previous horizon only. Batch
+> candidates, especially TERRAN Cus500 (450 to 600 steps), require a new memory
+> and throughput pilot before any full job is approved.
+
 ## Selection discipline
 
 - Calibration used training views only. No T1/T2/T3 metric was read.

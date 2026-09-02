@@ -60,6 +60,8 @@ class RolloutBatch:
     entropies: torch.Tensor
     final_infos: list[dict[str, Any]]
     timings: dict[str, float]
+    trajectory_steps: torch.Tensor
+    rollout_budget_exhausted: torch.Tensor
 
 
 def reset_envs(envs, seed: int | None = None):
@@ -147,6 +149,10 @@ def collect_rollout(agent, envs, rollout_steps: int, decode_mode: str, device: s
         valid=torch.stack(valid_steps, dim=0),
         entropies=torch.stack(entropy_steps, dim=0),
         final_infos=infos,
+        trajectory_steps=torch.stack(valid_steps, dim=0).sum(dim=0),
+        rollout_budget_exhausted=tensor_from_array(
+            ~done, device
+        ).bool(),
         timings={
             "rollout_total_time_s": float(total_time_s),
             "rollout_reset_time_s": float(reset_time_s),

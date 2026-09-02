@@ -54,6 +54,11 @@ def load_protocol(path: Path) -> dict[str, Any]:
         raise ValueError("test metrics cannot select checkpoints")
     if protocol.get("scale_transfer", {}).get("train_cus2000"):
         raise ValueError("Cus2000 training is forbidden")
+    rollout_steps = protocol.get("training", {}).get("rollout_steps_by_scale", {})
+    if set(rollout_steps) != set(protocol.get("scales", {})):
+        raise ValueError("training rollout-step budgets must cover every training scale")
+    if any(int(value) <= 0 for value in rollout_steps.values()):
+        raise ValueError("training rollout-step budgets must be positive")
     disabled = set(protocol.get("disabled_tracks", []))
     if {"E_to_R", "R_to_Inject_to_R"}.difference(disabled):
         raise ValueError("E->R and R->Inject->R must remain disabled")
@@ -149,6 +154,9 @@ def _train_job(
             "validation_index": protocol["scales"][scale]["validation_index"],
             "train_views_per_pass": protocol["scales"][scale]["train_views"],
             "data_passes": int(passes),
+            "training_rollout_steps": int(
+                protocol["training"]["rollout_steps_by_scale"][scale]
+            ),
             "validation_every_passes": int(
                 protocol["training"]["validation_every_passes"]
             ),

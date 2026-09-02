@@ -114,6 +114,25 @@ def test_am_greedy_rollout_exports_a_finite_distance() -> None:
     assert validate_routes(_instance(), result.infos[0]["routes"][0])["passed"]
 
 
+def test_am_rollout_reports_training_budget_exhaustion() -> None:
+    policy = AMEVRPTWPolicy(
+        embedding_dim=32,
+        hidden_dim=32,
+        n_encode_layers=1,
+        n_heads=4,
+    )
+    result = rollout(
+        policy,
+        [EVRPTWVectorEnv(_instance(), n_traj=2)],
+        decode_type="sampling",
+        max_steps=1,
+        seed=19,
+        incomplete_penalty_km=10_000.0,
+    )
+    assert result.trajectory_steps.tolist() == [[1, 1]]
+    assert result.rollout_budget_exhausted.tolist() == [[True, True]]
+
+
 def test_am_reinforce_update_runs_through_complete_rollout() -> None:
     policy = AMEVRPTWPolicy(
         embedding_dim=32,

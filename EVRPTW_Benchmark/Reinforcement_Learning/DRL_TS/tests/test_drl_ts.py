@@ -92,3 +92,16 @@ def test_rollout_has_gradient_and_hard_result_passes_verifier() -> None:
         soft_constraints=False,
     )
     assert validate_routes(_instance(), greedy.infos[0]["routes"][0])["passed"]
+
+
+def test_drl_ts_rollout_reports_training_budget_exhaustion() -> None:
+    result = rollout(
+        _policy(),
+        [EVRPTWVectorEnvFast(_instance(), n_traj=2, use_jit_mask=False)],
+        decode_type="sampling",
+        max_steps=1,
+        seed=41,
+        soft_constraints=False,
+    )
+    assert result.trajectory_steps.tolist() == [[1, 1]]
+    assert result.rollout_budget_exhausted.tolist() == [[True, True]]

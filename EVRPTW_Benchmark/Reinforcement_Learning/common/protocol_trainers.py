@@ -157,6 +157,8 @@ def train_reinforce_data_passes(
         sums = {"loss": 0.0, "cost": 0.0, "distance": 0.0, "feasible": 0.0}
         instances_seen = 0
         transition_count = 0
+        trajectory_steps: list[int] = []
+        rollout_budget_exhausted_count = 0
         complete_pass = args.max_batches_per_pass is None
         batches = pool.data_pass_batches(data_pass, physical)
         for group_index, batch_group in enumerate(
@@ -193,6 +195,12 @@ def train_reinforce_data_passes(
                 sums["distance"] += float(objective_distance(actor).mean().detach().cpu()) * count
                 sums["feasible"] += float(feasible(actor).float().mean().detach().cpu()) * count
                 transition_count += int(actor.environment_transitions)
+                trajectory_steps.extend(
+                    actor.trajectory_steps.detach().cpu().reshape(-1).tolist()
+                )
+                rollout_budget_exhausted_count += int(
+                    actor.rollout_budget_exhausted.sum().detach().cpu()
+                )
             torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
             optimizer.step()
             optimizer_steps += 1
@@ -272,6 +280,8 @@ def train_reinforce_data_passes(
         if not selected_checkpoint.exists() and args.pilot_mode:
             shutil.copy2(checkpoint, selected_checkpoint)
 
+        observed_steps = np.asarray(trajectory_steps, dtype=np.int64)
+        trajectory_count = int(observed_steps.size)
         row = {
             "schema": "drl_data_pass_history_v1",
             "method": method,
@@ -285,6 +295,17 @@ def train_reinforce_data_passes(
             "environment_transitions": transition_count,
             "environment_transitions_total": environment_transitions_total + transition_count,
             "physical_batch_size": physical,
+            "training_rollout_steps": int(args.training_rollout_steps),
+            "trajectory_count": trajectory_count,
+            "mean_trajectory_steps": float(observed_steps.mean()),
+            "trajectory_steps_p50": float(np.quantile(observed_steps, 0.50)),
+            "trajectory_steps_p90": float(np.quantile(observed_steps, 0.90)),
+            "trajectory_steps_p99": float(np.quantile(observed_steps, 0.99)),
+            "trajectory_steps_max": int(observed_steps.max()),
+            "rollout_budget_exhausted_count": rollout_budget_exhausted_count,
+            "rollout_budget_exhausted_rate": (
+                rollout_budget_exhausted_count / trajectory_count
+            ),
             "effective_batch_size": effective,
             "mean_loss": sums["loss"] / instances_seen,
             "mean_training_cost": sums["cost"] / instances_seen,
@@ -317,6 +338,7 @@ def train_reinforce_data_passes(
         "protocol_id": args.protocol_id,
         "requested_data_passes": int(args.data_passes),
         "completed_data_passes": int(state.completed_data_passes),
+        "training_rollout_steps": int(args.training_rollout_steps),
         "instances_seen": int(
             state.instances_seen
             if args.max_batches_per_pass is None

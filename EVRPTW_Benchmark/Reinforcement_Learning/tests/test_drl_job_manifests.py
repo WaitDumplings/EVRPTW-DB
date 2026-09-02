@@ -108,6 +108,20 @@ def test_candidate_budget_is_matched_across_methods() -> None:
     assert {job["candidate_count"] for job in evaluations if job["decode_budget"] == "best_of_50"} == {50}
 
 
+def test_training_rollout_budget_is_scale_aware_and_method_invariant() -> None:
+    protocol, jobs2080, jobsa6000 = _jobs()
+    expected = {"Cus50": 80, "Cus100": 140, "Cus500": 600, "Cus1000": 1200}
+    assert protocol["training"]["rollout_steps_by_scale"] == expected
+    training_jobs = [
+        job for job in jobs2080 + jobsa6000 if job["kind"] in {"pilot", "train"}
+    ]
+    assert training_jobs
+    assert all(
+        job["training_rollout_steps"] == expected[job["scale"]]
+        for job in training_jobs
+    )
+
+
 def test_rtx2080ti_batches_and_pilot_stress_depth_are_frozen() -> None:
     protocol, jobs2080, jobsa6000 = _jobs()
     expected = {

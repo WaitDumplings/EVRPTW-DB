@@ -23,7 +23,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.pbrs import (
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import protocol as terran_protocol
 from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import DataPassState
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import (
-    rollout_eval_batch,
+    collect_rollout, rollout_eval_batch,
 )
 
 
@@ -53,6 +53,28 @@ def test_canonical_terran_rollout_passes_shared_verifier() -> None:
     )
     routes = json.loads(rows[0]["routes_json"])
     assert validate_routes(_instance(), routes)["passed"]
+
+
+def test_terran_rollout_reports_training_budget_exhaustion() -> None:
+    agent = Agent(
+        embedding_dim=32,
+        tanh_clipping=10.0,
+        n_encode_layers=1,
+        device="cpu",
+    )
+    env = make_terran_env(
+        instance=_instance(),
+        n_traj=2,
+        charging_mode="station_power_full",
+        matrix_mode="canonical",
+        info_level="full",
+        use_jit_mask=False,
+    )
+    result = collect_rollout(
+        agent, [env], rollout_steps=1, decode_mode="sample", device="cpu", seed=42
+    )
+    assert result.trajectory_steps.tolist() == [[1, 1]]
+    assert result.rollout_budget_exhausted.tolist() == [[True, True]]
 
 
 def test_pbrs_keeps_distance_as_named_base_reward() -> None:
@@ -110,9 +132,12 @@ def test_protocol_resume_carries_exact_optimizer_step_count(
         num_envs_per_gpu=10,
         physical_batch_size=10,
         effective_batch_size=10,
+        training_rollout_steps=140,
         seed=1234,
         max_batches_per_pass=None,
         validation_every_passes=5,
     )
     configured, _ = terran_protocol.configure_protocol(args, {})
     assert configured["protocol"]["optimizer_steps"] == 7
+    assert configured["training"]["rollout_steps"] == 140
+    assert configured["protocol"]["training_rollout_steps"] == 140
