@@ -14,6 +14,14 @@ training:
     - maximize: complete_and_feasible_rate
     - minimize: mean_verified_distance_km
   checkpoint_selection_uses_test_metrics: false
+  batch_calibration:
+    hardware: rtx_2080_ti_11gb
+    data_scope: train_only
+    test_metrics_observed: false
+    seeds: [1234, 2345, 3456]
+    selection_rule: largest_stress_tested_batch_with_oom_margin
+    allocated_memory_gate_gib: 9.5
+    identical_within_method_scale_across_seeds_and_servers: true
 
 scales:
   Cus50:
@@ -86,28 +94,28 @@ methods:
     label: AM-EVRPTW
     train_module: EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.train
     eval_module: EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.eval
-    physical_batch: {Cus50: 8, Cus100: 8, Cus500: 2, Cus1000: 1}
-    effective_batch: {Cus50: 8, Cus100: 8, Cus500: 2, Cus1000: 1}
+    physical_batch: {Cus50: 400, Cus100: 100, Cus500: 6, Cus1000: 1}
+    effective_batch: {Cus50: 400, Cus100: 100, Cus500: 6, Cus1000: 1}
   evrptw_rl:
     label: EVRPTW-RL
     train_module: EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.train
     eval_module: EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.eval
-    physical_batch: {Cus50: 16, Cus100: 16, Cus500: 2, Cus1000: 1}
-    effective_batch: {Cus50: 16, Cus100: 16, Cus500: 2, Cus1000: 1}
+    physical_batch: {Cus50: 120, Cus100: 32, Cus500: 2, Cus1000: 1}
+    effective_batch: {Cus50: 120, Cus100: 32, Cus500: 2, Cus1000: 1}
   drl_ts:
     label: DRL-TS
     train_module: EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.train
     eval_module: EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.eval
-    physical_batch: {Cus50: 16, Cus100: 8, Cus500: 1, Cus1000: 1}
-    effective_batch: {Cus50: 16, Cus100: 8, Cus500: 1, Cus1000: 1}
+    physical_batch: {Cus50: 80, Cus100: 24, Cus500: 1, Cus1000: 1}
+    effective_batch: {Cus50: 80, Cus100: 24, Cus500: 1, Cus1000: 1}
     soft_stage_fraction: 0.5
   terran:
     label: TERRAN
     train_module: EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train
     eval_module: EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.eval_stage2
     config: stage2_cus100_terran.yaml
-    physical_batch: {Cus50: 8, Cus100: 8, Cus500: 1, Cus1000: 1}
-    effective_batch: {Cus50: 8, Cus100: 8, Cus500: 1, Cus1000: 1}
+    physical_batch: {Cus50: 400, Cus100: 200, Cus500: 50, Cus1000: 1}
+    effective_batch: {Cus50: 400, Cus100: 200, Cus500: 50, Cus1000: 1}
 
 hardware:
   deployment:
@@ -127,6 +135,11 @@ pilot:
   optimization_scale: Cus100
   memory_scales: [Cus500, Cus1000]
   seed: 1234
+  short_optimization_batches: 4
+  rtx2080ti_memory_batches: 8
+  a6000_memory_batches: 1
+  full_runtime_budget_approved: false
+  full_runtime_budget_review_reason: pending_formal_pilot_wall_time_review
   validation_limit: 8
   best_of_50_equality_limit: 2
   required_methods: [am_evrptw, evrptw_rl, drl_ts, terran]

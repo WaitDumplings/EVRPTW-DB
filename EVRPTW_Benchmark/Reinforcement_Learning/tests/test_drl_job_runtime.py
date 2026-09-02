@@ -120,3 +120,19 @@ def test_full_gate_rejects_missing_or_failed_report(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("failed pilot gate was accepted")
+
+
+def test_resume_only_marks_jobs_with_complete_resume_evidence(tmp_path: Path) -> None:
+    job = _job()
+    output = tmp_path / "job"
+    output.mkdir()
+    assert not RUNTIME.should_resume_job(job, output, True)
+    (output / "data_pass_state.json").write_text("{}")
+    try:
+        RUNTIME.should_resume_job(job, output, True)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("partial resume evidence was accepted")
+    (output / "checkpoint_latest.pt").write_bytes(b"checkpoint")
+    assert RUNTIME.should_resume_job(job, output, True)

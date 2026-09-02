@@ -26,6 +26,16 @@ def build_report(output_root: Path, evidence_root: Path, protocol: dict[str, Any
     checks: list[dict[str, Any]] = []
     methods = protocol["pilot"]["required_methods"]
     gate_bytes = int(float(protocol["hardware"]["rtx_2080_ti"]["memory_gate_gib"]) * 1024**3)
+    checks.append(
+        {
+            "method": "global",
+            "check": "full_runtime_budget_approved",
+            "passed": bool(protocol["pilot"].get("full_runtime_budget_approved")),
+            "artifact": str(
+                ROOT / "configs" / "drl_experiment_protocol_v1.yaml"
+            ),
+        }
+    )
     for method in methods:
         for scale, stage in (("Cus100", "short_optimization"), ("Cus500", "memory"), ("Cus1000", "memory")):
             directory = _latest(output_root, method, scale, stage)

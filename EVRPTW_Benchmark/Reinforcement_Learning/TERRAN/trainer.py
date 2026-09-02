@@ -560,6 +560,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     environment_transitions_total = int(
         protocol_cfg.get("environment_transitions", 0) or 0
     )
+    optimizer_steps_total = int(protocol_cfg.get("optimizer_steps", 0) or 0)
     start_epoch = 1
     resume_checkpoint = protocol_cfg.get("resume_checkpoint")
     if resume_checkpoint:
@@ -740,6 +741,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         group_entropy += weighted_entropy / group_size
                     torch.nn.utils.clip_grad_norm_(agent.parameters(), float(train_cfg.get("max_grad_norm", 1.0)))
                     optimizer.step()
+                    optimizer_steps_total += 1
                     losses.append((group_policy, group_value, group_entropy))
             if profile_timing:
                 _sync_cuda(device)
@@ -803,9 +805,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "samples_seen": pool.sample_count,
                     "environment_transitions": environment_transitions,
                     "environment_transitions_total": environment_transitions_total,
-                    "optimizer_steps_total": epoch
-                    * ppo_epochs
-                    * math.ceil(num_minibatches / gradient_accumulation_steps),
+                    "optimizer_steps_total": optimizer_steps_total,
                     "num_envs": num_envs,
                     "n_traj": int(train_cfg.get("n_traj", 50)),
                     "rollout_steps": rollout_steps,
@@ -865,7 +865,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     completed_data_passes=completed,
                     instances_seen=int(pool.sample_count),
                     customer_exposures=int(pool.sample_count) * num_customers,
-                    optimizer_steps=epoch * ppo_epochs * math.ceil(num_minibatches / gradient_accumulation_steps),
+                    optimizer_steps=optimizer_steps_total,
                     environment_transitions=environment_transitions_total,
                     last_checkpoint=str(latest),
                 )

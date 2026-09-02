@@ -264,7 +264,13 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(out),
         ]
     if job["run_mode"] == "pilot":
-        command.extend(["--pilot-mode", "--max-batches-per-pass", "1"])
+        command.extend(
+            [
+                "--pilot-mode",
+                "--max-batches-per-pass",
+                str(job["max_batches_per_pass"]),
+            ]
+        )
     if resume:
         command.append("--resume")
     return command
@@ -336,12 +342,26 @@ def job_complete(job: dict[str, Any], out: Path) -> bool:
     return (out / "summary.csv").is_file() and (out / "routes.jsonl").is_file()
 
 
+def should_resume_job(job: dict[str, Any], out: Path, requested: bool) -> bool:
+    if not requested or job["kind"] not in {"train", "pilot"}:
+        return False
+    state = (out / "data_pass_state.json").is_file()
+    checkpoint = (out / "checkpoint_latest.pt").is_file()
+    if state != checkpoint:
+        raise RuntimeError(
+            f"incomplete resume evidence for {job['job_id']}: "
+            f"state={state} checkpoint={checkpoint}"
+        )
+    return state and checkpoint
+
+
 def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume: bool, dry_run: bool) -> bool:
     out = output_dir(job, context)
     out.mkdir(parents=True, exist_ok=True)
     if job_complete(job, out):
         return True
-    command = command_for(job, context, out, resume)
+    resume_this_job = should_resume_job(job, out, resume)
+    command = command_for(job, context, out, resume_this_job)
     provenance = {
         "schema": "drl_job_provenance_v1",
         "job": job,
@@ -352,6 +372,8 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         if (context["dataset"] / "release_manifest.json").exists()
         else "unavailable",
         "conda_env": context["conda_env"],
+        "resume_requested": bool(resume),
+        "resumed_from_checkpoint": bool(resume_this_job),
         "started_at": time.time(),
     }
     atomic_json(out / "provenance.json", provenance)

@@ -74,12 +74,25 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_2xa6000.sh pilot
 收集四台服务器的 pilot 输出及 evidence 后构建放行报告：
 
 ```bash
+python EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_pilot_checks.py \
+  --output-root "$EVRPTW_OUTPUT_ROOT" \
+  --dataset-root "$EVRPTW_DATASET_ROOT"
+
 python EVRPTW_Benchmark/Reinforcement_Learning/scripts/build_drl_pilot_gate.py \
   --output-root "$EVRPTW_OUTPUT_ROOT" \
   --evidence-root "$EVRPTW_OUTPUT_ROOT/pilot_evidence"
 ```
 
-只有 `$EVRPTW_OUTPUT_ROOT/pilot_gate_report.json` 的 `passed=true` 时，`full` 才会启动。否则 runner 硬停止。放行后把对应命令中的 `pilot` 替换为 `full`。中断后的同一完整训练队列用 `resume`；已具有通过 result、selected checkpoint 和 verifier summary 的 job 不会重跑。
+当前候选 100 data passes 尚未通过运行时间审核，协议中的
+`pilot.full_runtime_budget_approved=false` 会使 gate 保持 STOP。必须先审核
+pilot 的逐方法 wall-time estimate，统一冻结一个全局 data-pass 数，生成新的
+clean commit，并显式批准 runtime budget；不得按 method/scale/seed 单独改动。
+
+只有 `$EVRPTW_OUTPUT_ROOT/pilot_gate_report.json` 的 `passed=true` 时，
+`full` 才会启动。否则 runner 硬停止。放行后把对应命令中的 `pilot`
+替换为 `full`。中断后的同一完整训练队列用 `resume`；已具有通过
+result、selected checkpoint 和 verifier summary 的 job 不会重跑，从未启动的
+后续 job 会按 fresh job 启动。
 
 查看状态时使用对应目录的 `status.sh`。仅检查命令与队列、不用 GPU
 时，可用前台入口 `run.sh pilot --dry-run --skip-gpu-preflight`。

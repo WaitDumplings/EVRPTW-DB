@@ -167,6 +167,14 @@ def _train_job(
             "requires_pilot_gate": run_mode == "full",
         }
     )
+    if run_mode == "pilot":
+        if pilot_kind == "short_optimization":
+            pilot_batches = protocol["pilot"]["short_optimization_batches"]
+        elif hardware == "2080ti":
+            pilot_batches = protocol["pilot"]["rtx2080ti_memory_batches"]
+        else:
+            pilot_batches = protocol["pilot"]["a6000_memory_batches"]
+        job["max_batches_per_pass"] = int(pilot_batches)
     return job
 
 

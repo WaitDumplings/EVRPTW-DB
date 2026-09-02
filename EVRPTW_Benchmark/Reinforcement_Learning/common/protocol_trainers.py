@@ -137,7 +137,12 @@ def train_reinforce_data_passes(
         else []
     )
     best_key = tuple(resume_extra.get("best_validation_key", [-math.inf, -math.inf]))
-    baseline_probe_instances = list(pool.first(limit=min(64, len(pool))))
+    baseline_probe_size = max(
+        0, int(getattr(args, "baseline_eval_size", 64))
+    )
+    baseline_probe_instances = list(
+        pool.first(limit=min(baseline_probe_size, len(pool)))
+    )
     ema_cost = resume_extra.get("ema_cost")
     optimizer_steps = int(state.optimizer_steps)
     environment_transitions_total = int(state.environment_transitions)

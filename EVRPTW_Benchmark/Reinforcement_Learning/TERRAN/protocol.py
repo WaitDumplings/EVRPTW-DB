@@ -24,6 +24,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         raise ValueError("TERRAN protocol mode requires Stage-2 data and --output-dir")
     completed = 0
     environment_transitions = 0
+    optimizer_steps = 0
     resume_checkpoint = None
     if args.resume:
         state_path = Path(args.output_dir) / "data_pass_state.json"
@@ -35,6 +36,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         state = DataPassState.load(state_path, protocol_id=args.protocol_id)
         completed = int(state.completed_data_passes)
         environment_transitions = int(state.environment_transitions)
+        optimizer_steps = int(state.optimizer_steps)
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
     if physical != effective:
         raise ValueError("TERRAN v1 registers equal physical/effective batches")
@@ -78,6 +80,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "pilot_partial": args.max_batches_per_pass is not None,
         "completed_data_passes": completed,
         "environment_transitions": environment_transitions,
+        "optimizer_steps": optimizer_steps,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
     }
     return configured, {

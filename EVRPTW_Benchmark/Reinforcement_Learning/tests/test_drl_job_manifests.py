@@ -106,3 +106,33 @@ def test_candidate_budget_is_matched_across_methods() -> None:
     ]
     assert {job["candidate_count"] for job in evaluations if job["decode_budget"] == "greedy"} == {1}
     assert {job["candidate_count"] for job in evaluations if job["decode_budget"] == "best_of_50"} == {50}
+
+
+def test_rtx2080ti_batches_and_pilot_stress_depth_are_frozen() -> None:
+    protocol, jobs2080, jobsa6000 = _jobs()
+    expected = {
+        "am_evrptw": {"Cus50": 400, "Cus100": 100, "Cus500": 6},
+        "evrptw_rl": {"Cus50": 120, "Cus100": 32, "Cus500": 2},
+        "drl_ts": {"Cus50": 80, "Cus100": 24, "Cus500": 1},
+        "terran": {"Cus50": 400, "Cus100": 200, "Cus500": 50},
+    }
+    for method, scales in expected.items():
+        for scale, batch in scales.items():
+            cfg = protocol["methods"][method]
+            assert cfg["physical_batch"][scale] == batch
+            assert cfg["effective_batch"][scale] == batch
+
+    pilots2080 = [job for job in jobs2080 if job["kind"] == "pilot"]
+    assert {
+        job["max_batches_per_pass"]
+        for job in pilots2080
+        if job["stage"] == "short_optimization"
+    } == {4}
+    assert {
+        job["max_batches_per_pass"]
+        for job in pilots2080
+        if job["stage"] == "memory"
+    } == {8}
+    pilots_a6000 = [job for job in jobsa6000 if job["kind"] == "pilot"]
+    assert {job["max_batches_per_pass"] for job in pilots_a6000} == {1}
+    assert protocol["pilot"]["full_runtime_budget_approved"] is False
