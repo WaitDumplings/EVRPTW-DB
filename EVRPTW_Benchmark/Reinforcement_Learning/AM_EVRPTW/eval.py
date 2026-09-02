@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
-from EVRPTW_Benchmark.Exact.Gurobi_Solver.route_validator import validate_routes
+from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_distance
 
 from .data import Stage2TaskPool, make_envs
 from .model import AMEVRPTWPolicy
@@ -97,14 +97,15 @@ def main() -> None:
                     incomplete_penalty_km=args.incomplete_penalty_km,
                 )
             for instance, info in zip(batch_instances, result.infos):
-                selected = _best_index(info)
-                routes = info["routes"][selected]
-                verification = validate_routes(instance, routes)
+                selected, routes, verification = select_min_verified_distance(
+                    instance, info
+                )
                 row = {
                     "instance_id": instance.instance_id,
                     "solver": "AM-EVRPTW",
                     "decode_type": args.decode_type,
                     "candidate_count": args.candidates,
+                    "selected_traj_idx": selected,
                     "environment_success": bool(info["success"][selected]),
                     "verifier_passed": bool(verification["passed"]),
                     "objective_distance_km": float(

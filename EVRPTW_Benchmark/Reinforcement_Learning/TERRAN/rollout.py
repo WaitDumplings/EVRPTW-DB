@@ -229,6 +229,7 @@ def rollout_eval_batch(
     device: str | torch.device,
     seed: int | None = None,
     include_routes: bool = False,
+    return_final_info: bool = False,
 ):
     if not envs:
         return []
@@ -252,5 +253,7 @@ def rollout_eval_batch(
         row = select_best_trajectory(info, include_routes=include_routes)
         row["runtime_s"] = per_instance_runtime
         row["batch_runtime_s"] = float(elapsed)
+        if return_final_info:
+            row["_final_info"] = info
         rows.append(row)
     return rows

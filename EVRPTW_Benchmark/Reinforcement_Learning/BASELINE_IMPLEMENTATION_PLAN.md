@@ -34,9 +34,9 @@ verification.
    canonical environment and reporting contract without changing its model
    architecture or auxiliary shaping. Canonical Stage-2 training and verified
    evaluation are implemented; legacy configurations remain explicitly marked.
-5. **Edge-DIRECT (conditional).** Add only after the four required baselines are
-   reproducible.  Its heterogeneous setting must be restricted explicitly to
-   the benchmark's homogeneous special case.
+5. **Edge-DIRECT-H.** Retain the directed time-window and edge-enhanced encoders
+   plus a documented one-class vehicle decoder for the benchmark's homogeneous
+   unlimited-fleet special case.
 
 LEHD is intentionally excluded: its supervised labels and Random Re-Construct
 procedure require a new EVRP-TW algorithm rather than a data/state/mask adapter.
@@ -49,26 +49,23 @@ procedure require a new EVRP-TW algorithm rather than a data/state/mask adapter.
 | `evrptw_rl` | Lin, Ghaddar, and Nathwani, *Deep Reinforcement Learning for the Electric Vehicle Routing Problem with Time Windows* | IEEE T-ITS 2022 | <https://doi.org/10.1109/TITS.2021.3105232> | Paper-guided reimplementation unless an author repository is subsequently verified |
 | `drl_ts` | Chen et al., *Deep Reinforcement Learning with Two-Stage Training Strategy for Practical Electric Vehicle Routing Problem with Time Windows* | PPSN 2022 | <https://doi.org/10.1007/978-3-031-14714-2_25> | Publisher: source available on request; no public author repository verified; paper-guided reimplementation |
 | `terran` | TERRAN | Existing project method | Project paper and repository history | Existing code; canonical-adapter migration required |
-| `edge_direct` | Mozhdehi, Mohammadizadeh, and Wang, *Edge-DIRECT* | Canadian AI 2024 | <https://arxiv.org/abs/2407.01615> | No public author repository verified; conditional for the homogeneous track |
+| `edge_direct_h` | Mozhdehi, Mohammadizadeh, and Wang, *Edge-DIRECT* | Canadian AI 2024 | <https://arxiv.org/abs/2407.01615> | Paper-guided homogeneous-fleet special case; no public author repository verified |
 
 Downloaded PDFs are working materials and are not committed.  The source URLs,
 code commit, license, and method-specific adaptation decisions are committed.
 
-## Conditional Edge-DIRECT decision
+## Edge-DIRECT homogeneous-fleet decision
 
-Edge-DIRECT is not part of the required four-method implementation. Its three
-signature components are a time-window reachability graph, edge-enhanced
-attention over travel-time/energy features, and a vehicle-selection decoder for
-a finite heterogeneous fleet. The first two transfer naturally. The third does
-not: under the canonical homogeneous unlimited-fleet task, selecting among
-identical vehicles is unidentifiable and collapses to a constant distribution.
+Edge-DIRECT's three signature components are a time-window reachability graph,
+edge-enhanced attention over travel-time/energy features, and a vehicle decoder
+for a finite heterogeneous fleet. Under the canonical homogeneous unlimited
+fleet, vehicle identity is unidentifiable and the choice distribution collapses
+to one class.
 
-Therefore Edge-DIRECT may enter the table only after a separately registered
-homogeneous-special-case contract is approved. That contract must retain the
-vehicle decoder as a documented degenerate one-class module or omit it and name
-the result as an ablation; it must not silently describe a newly designed fleet
-controller as the published method. No such result is required for the core
-benchmark table.
+The implemented `Edge-DIRECT-H` freezes that special case: it retains a learned
+vehicle-context module with one admissible vehicle class and zero vehicle-choice
+log-probability. It is never labeled as the full heterogeneous method. The
+objective-facing travel-time reward is adapted to canonical directed distance.
 
 ## Per-method acceptance checklist
 

@@ -361,7 +361,7 @@ class EVRPTWVectorEnv(Env):
             if all_served:
                 if start == 0 or self._direct_depot_feasible(t):
                     mask[t, 0] = True
-                continue
+                # Fall through so a charging-assisted return remains available.
 
             if start != 0 and self.route_has_customer[t] and self._direct_depot_feasible(t):
                 mask[t, 0] = True

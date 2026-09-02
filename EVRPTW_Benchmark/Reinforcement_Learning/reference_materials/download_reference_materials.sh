@@ -16,11 +16,36 @@ download_pdf() {
   fi
   printf 'download: %s\n' "${output}"
   curl --fail --location --retry 3 --retry-delay 2 \
+    --user-agent "Mozilla/5.0 EVRPTW-DB research audit" \
     --output "${output}.partial" "${url}"
   if [[ "$(LC_ALL=C head -c 4 "${output}.partial")" != "%PDF" ]]; then
     rm -f "${output}.partial"
     printf 'error: source did not return a PDF: %s\n' "${url}" >&2
     exit 1
+  fi
+  mv "${output}.partial" "${output}"
+}
+
+download_pdf_optional() {
+  local url="$1"
+  local output="$2"
+  local label="$3"
+  if [[ -s "${output}" ]]; then
+    printf 'reuse: %s\n' "${output}"
+    return
+  fi
+  printf 'download (optional): %s\n' "${output}"
+  if ! curl --fail --location --retry 3 --retry-delay 2 \
+    --user-agent "Mozilla/5.0 EVRPTW-DB research audit" \
+    --output "${output}.partial" "${url}"; then
+    rm -f "${output}.partial"
+    printf 'warning: %s was not publicly downloadable; supply its local source path\n' "${label}" >&2
+    return
+  fi
+  if [[ "$(LC_ALL=C head -c 4 "${output}.partial")" != "%PDF" ]]; then
+    rm -f "${output}.partial"
+    printf 'warning: %s endpoint did not return a PDF; supply its local source path\n' "${label}" >&2
+    return
   fi
   mv "${output}.partial" "${output}"
 }
@@ -42,16 +67,24 @@ copy_optional_pdf() {
 }
 
 download_pdf \
-  "https://openreview.net/pdf?id=ByxBFsRqYm" \
+  "https://arxiv.org/pdf/1803.08475" \
   "${PAPER_DIR}/01_attention_model_iclr2019.pdf"
 
 download_pdf \
   "https://repositorio.ie.edu/server/api/core/bitstreams/ed7554eb-ec96-41fe-ab6d-7386243eec6f/content" \
   "${PAPER_DIR}/02_evrptw_rl_tits2022.pdf"
 
-download_pdf \
-  "https://link.springer.com/content/pdf/10.1007/978-3-031-14714-2_25.pdf" \
-  "${PAPER_DIR}/03_drl_ts_ppsn2022.pdf"
+if [[ -n "${DRL_TS_PAPER_SOURCE:-}" ]]; then
+  copy_optional_pdf \
+    "${DRL_TS_PAPER_SOURCE}" \
+    "${PAPER_DIR}/03_drl_ts_ppsn2022.pdf" \
+    "DRL-TS manuscript"
+else
+  download_pdf_optional \
+    "https://link.springer.com/content/pdf/10.1007/978-3-031-14714-2_25.pdf" \
+    "${PAPER_DIR}/03_drl_ts_ppsn2022.pdf" \
+    "DRL-TS manuscript"
+fi
 
 copy_optional_pdf \
   "${TERRAN_PAPER_SOURCE:-}" \
@@ -59,7 +92,7 @@ copy_optional_pdf \
   "TERRAN manuscript"
 
 download_pdf \
-  "https://assets.pubpub.org/day222wb/XinWang-01716776157945.pdf" \
+  "https://arxiv.org/pdf/2407.01615" \
   "${PAPER_DIR}/05_edge_direct_canadian_ai2024.pdf"
 
 AM_REPO="${REPO_DIR}/attention-learn-to-route"

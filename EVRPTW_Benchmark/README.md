@@ -10,6 +10,7 @@ Reinforcement_Learning/TERRAN
 Reinforcement_Learning/AM_EVRPTW
 Reinforcement_Learning/EVRPTW_RL
 Reinforcement_Learning/DRL_TS
+Reinforcement_Learning/EDGE_DIRECT
 ```
 
 The learning baselines are being standardized under

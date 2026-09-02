@@ -158,7 +158,7 @@ if NUMBA_AVAILABLE:
                     working_end_s,
                 ):
                     mask[t, 0] = True
-                continue
+                # Fall through so a charging-assisted return remains available.
 
             if (
                 start != 0

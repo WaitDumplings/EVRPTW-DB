@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
     EVRPTWVectorEnv,
     EVRPTWVectorEnvFast,
 )
+from EVRPTW_Benchmark.Exact.Gurobi_Solver.route_validator import validate_routes
 
 
 def canonical_instance(*, include_matrices: bool = True) -> EVRPTWInstance:
@@ -75,6 +77,33 @@ def canonical_instance(*, include_matrices: bool = True) -> EVRPTWInstance:
     )
 
 
+def charging_return_instance() -> EVRPTWInstance:
+    instance = canonical_instance()
+    distance = np.asarray(
+        [[0.0, 6.0, 4.0], [6.0, 0.0, 3.0], [4.0, 3.0, 0.0]],
+        dtype=np.float32,
+    )
+    travel_time = np.asarray(
+        [[0.0, 600.0, 400.0], [600.0, 0.0, 300.0], [400.0, 300.0, 0.0]],
+        dtype=np.float32,
+    )
+    energy = np.asarray(
+        [[0.0, 6.0, 4.0], [6.0, 0.0, 3.0], [4.0, 3.0, 0.0]],
+        dtype=np.float32,
+    )
+    return replace(
+        instance,
+        instance_id="charging_return_contract_test",
+        distance_matrix_km=distance,
+        shortest_time_matrix_s=travel_time,
+        energy_matrix_kwh=energy,
+        vehicle={
+            **instance.vehicle,
+            "specific_energy_consumption_kwh_per_km": 1.0,
+        },
+    )
+
+
 def test_canonical_env_uses_exported_time_and_energy_matrices() -> None:
     env = EVRPTWVectorEnv(canonical_instance(), n_traj=1)
     assert env.travel_time_source == "EVRPTWInstance.shortest_time_matrix_s"
@@ -117,3 +146,31 @@ def test_fast_and_reference_masks_follow_same_canonical_contract() -> None:
 def test_canonical_mode_rejects_missing_matrices() -> None:
     with pytest.raises(ValueError, match="running_time_shortest_matrix_s"):
         EVRPTWVectorEnv(canonical_instance(include_matrices=False), n_traj=1)
+
+
+@pytest.mark.parametrize("env_cls", [EVRPTWVectorEnv, EVRPTWVectorEnvFast])
+def test_last_customer_can_return_through_charging_station(env_cls) -> None:
+    instance = charging_return_instance()
+    kwargs = {"use_jit_mask": True} if env_cls is EVRPTWVectorEnvFast else {}
+    env = env_cls(instance, n_traj=1, **kwargs)
+    obs, _ = env.reset(seed=11)
+    assert bool(obs["action_mask"][0, 1])
+
+    obs, _, terminated, truncated, _ = env.step(np.asarray([1], dtype=np.int64))
+    assert not bool(terminated[0])
+    assert not bool(truncated[0])
+    assert not bool(obs["action_mask"][0, 0])
+    assert bool(obs["action_mask"][0, 2])
+
+    obs, _, terminated, truncated, _ = env.step(np.asarray([2], dtype=np.int64))
+    assert not bool(terminated[0])
+    assert not bool(truncated[0])
+    assert bool(obs["action_mask"][0, 0])
+
+    _, _, terminated, truncated, info = env.step(np.asarray([0], dtype=np.int64))
+    assert bool(terminated[0])
+    assert not bool(truncated[0])
+    routes = info["routes"][0]
+    assert routes == [[0, 1, 2, 0]]
+    verification = validate_routes(instance, routes)
+    assert verification["passed"], verification["violations"]

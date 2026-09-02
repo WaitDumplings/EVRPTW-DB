@@ -15,33 +15,27 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_distance
 
-from ..common import Stage2TaskPool, make_envs
-from .model import DRLTSPolicy
+from .data import Stage2TaskPool, make_envs
+from .model import EdgeDirectHomogeneousPolicy
 from .rollout import rollout
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate DRL-TS.")
+    parser = argparse.ArgumentParser(description="Evaluate Edge-DIRECT-H.")
     parser.add_argument("--dataset-path", type=Path, required=True)
     parser.add_argument("--family-root", type=Path)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--scale", default="Cus100")
-    parser.add_argument("--split-ids", default="test")
-    parser.add_argument("--track-ids", default="test1_new_seed")
+    parser.add_argument("--split-ids")
+    parser.add_argument("--track-ids")
     parser.add_argument("--city-slugs")
-    parser.add_argument(
-        "--decode-type",
-        choices=("greedy", "sampling"),
-        default="greedy",
-    )
+    parser.add_argument("--decode-type", choices=("greedy", "sampling"), default="greedy")
     parser.add_argument("--candidates", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--incomplete-penalty-km", type=float, default=10_000.0)
     parser.add_argument("--seed", type=int, default=1234)
-    parser.add_argument(
-        "--device",
-        default="cuda" if torch.cuda.is_available() else "cpu",
-    )
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args()
 
@@ -61,17 +55,14 @@ def main() -> None:
     args = parse_args()
     if args.decode_type == "greedy" and args.candidates != 1:
         raise ValueError("greedy evaluation has exactly one candidate")
-    checkpoint = torch.load(
-        args.checkpoint,
-        map_location=args.device,
-        weights_only=False,
-    )
+    checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
+    if checkpoint.get("method") != "Edge-DIRECT-H":
+        raise ValueError("checkpoint is not an Edge-DIRECT-H checkpoint")
     model_args = checkpoint.get("args", {})
-    policy = DRLTSPolicy(
+    policy = EdgeDirectHomogeneousPolicy(
         embedding_dim=int(model_args.get("embedding_dim", 128)),
-        n_encode_layers=int(model_args.get("n_encode_layers", 2)),
+        n_encode_layers=int(model_args.get("n_encode_layers", 3)),
         n_heads=int(model_args.get("n_heads", 8)),
-        nearest_neighbors=int(model_args.get("nearest_neighbors", 10)),
         tanh_clipping=float(model_args.get("tanh_clipping", 10.0)),
     ).to(args.device)
     policy.load_state_dict(checkpoint["model"])
@@ -92,11 +83,7 @@ def main() -> None:
     with routes_path.open("w", encoding="utf-8") as route_stream:
         for batch_start in range(0, len(instances), args.batch_size):
             batch_instances = instances[batch_start : batch_start + args.batch_size]
-            envs = make_envs(
-                batch_instances,
-                n_traj=args.candidates,
-                info_level="full",
-            )
+            envs = make_envs(batch_instances, n_traj=args.candidates, info_level="full")
             with torch.no_grad():
                 result = rollout(
                     policy,
@@ -104,10 +91,7 @@ def main() -> None:
                     decode_type=args.decode_type,
                     max_steps=max(env.unwrapped.max_steps for env in envs),
                     seed=args.seed + batch_start,
-                    soft_constraints=False,
-                    incomplete_penalty=float(
-                        model_args.get("incomplete_penalty", 100.0)
-                    ),
+                    incomplete_penalty_km=args.incomplete_penalty_km,
                 )
             for instance, info in zip(batch_instances, result.infos):
                 selected, routes, verification = select_min_verified_distance(
@@ -115,29 +99,22 @@ def main() -> None:
                 )
                 row = {
                     "instance_id": instance.instance_id,
-                    "solver": "DRL-TS",
+                    "solver": "Edge-DIRECT-H",
+                    "objective": "min_directed_road_distance_km",
                     "decode_type": args.decode_type,
                     "candidate_count": args.candidates,
                     "selected_traj_idx": selected,
                     "environment_success": bool(info["success"][selected]),
                     "verifier_passed": bool(verification["passed"]),
-                    "objective_distance_km": float(
-                        verification["objective_distance_km"]
-                    ),
+                    "objective_distance_km": float(verification["objective_distance_km"]),
                     "vehicle_count": len(routes),
-                    "charging_visit_count": int(
-                        verification["charging_visit_count"]
-                    ),
+                    "charging_visit_count": int(verification["charging_visit_count"]),
                     "runtime_s": result.runtime_s / max(len(batch_instances), 1),
                 }
                 rows.append(row)
                 route_stream.write(
                     json.dumps(
-                        {
-                            **row,
-                            "routes": routes,
-                            "violations": verification["violations"],
-                        },
+                        {**row, "routes": routes, "violations": verification["violations"]},
                         sort_keys=True,
                     )
                     + "\n"

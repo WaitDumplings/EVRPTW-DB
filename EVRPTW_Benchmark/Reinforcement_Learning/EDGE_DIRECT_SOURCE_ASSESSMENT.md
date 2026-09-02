@@ -26,7 +26,7 @@ No public author-maintained code repository was found in the source search.
    would replace it with total directed-road distance while retaining the
    architecture and other state features.
 
-## Why implementation remains conditional
+## Homogeneous-fleet resolution
 
 EVRPTW-B's canonical task has a homogeneous fleet and no hard fleet-size limit.
 Consequently, the published heterogeneous vehicle-selection distribution has
@@ -35,12 +35,15 @@ and a sequential route-construction environment starts a fresh vehicle at each
 depot return. This is not a reader/mask-only mismatch; it removes one of the
 paper's three main architectural contributions.
 
-The reviewer-safe choices are therefore:
+The reviewer-safe choices were:
 
 - retain a one-class vehicle decoder and label the implementation explicitly as
   the homogeneous special case; or
 - remove the vehicle decoder and label the result as an Edge-DIRECT ablation,
   not Edge-DIRECT itself.
 
-Until that naming choice is frozen, this method is optional and cannot block
-AM-EVRPTW, EVRPTW-RL, DRL-TS, or TERRAN experiments.
+The first choice is now frozen and implemented as `EDGE_DIRECT/`: the learned
+vehicle-context module is retained with one admissible homogeneous class and
+zero categorical log-probability. The method is named **Edge-DIRECT-H** and is
+not represented as a full reproduction of heterogeneous vehicle selection.
+Its objective-facing term is the requested canonical directed-road distance.

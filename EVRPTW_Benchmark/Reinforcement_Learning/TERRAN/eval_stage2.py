@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from EVRPTW_Benchmark.Exact.Gurobi_Solver.route_validator import validate_routes
+from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_distance
 
 from ..common import Stage2TaskPool
 from .env_factory import make_terran_env
@@ -102,16 +102,19 @@ def main() -> None:
                 device=args.device,
                 seed=args.seed + batch_start,
                 include_routes=True,
+                return_final_info=True,
             )
             for instance, result in zip(batch_instances, result_rows):
-                routes = json.loads(result["routes_json"])
-                verification = validate_routes(instance, routes)
+                selected, routes, verification = select_min_verified_distance(
+                    instance, result.pop("_final_info")
+                )
                 row = {
                     "instance_id": instance.instance_id,
                     "solver": "TERRAN",
                     "decode_mode": args.decode_mode,
                     "candidate_count": args.candidates,
-                    "environment_success": bool(result["feasible"]),
+                    "selected_traj_idx": selected,
+                    "environment_success": bool(verification["passed"]),
                     "verifier_passed": bool(verification["passed"]),
                     "objective_distance_km": float(
                         verification["objective_distance_km"]
