@@ -6,6 +6,12 @@ Hardware: 4 x NVIDIA GeForce RTX 2080 Ti, 11,264 MiB each
 Environment: `maojie`, PyTorch 2.5.1+cu121
 Dataset: released Stage-2 v7 train/validation artifacts
 
+> Historical runtime evidence: the 100-full-pass extrapolation below is
+> permanently retained, but it is no longer the active training protocol.
+> The active candidate uses a fixed 500,000 customer-exposure budget per
+> method/scale/seed job; see
+> `FIXED_EPOCH_TRAINING_BUDGET_V1.md`.
+
 ## Scope
 
 This pilot revalidates the frozen scale-aware training rollout budgets:

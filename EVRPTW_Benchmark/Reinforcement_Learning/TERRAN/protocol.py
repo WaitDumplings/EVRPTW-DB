@@ -22,7 +22,7 @@ from ..common.data_pass import DataPassState
 
 
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int] | None]:
-    if args.data_passes is None:
+    if getattr(args, "training_epochs", None) is None and args.data_passes is None:
         return overrides, None
     if args.stage2_dataset_path is None or args.output_dir is None:
         raise ValueError("TERRAN protocol mode requires Stage-2 data and --output-dir")
@@ -53,14 +53,29 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         track_ids=args.stage2_track_ids or "train",
         seed=args.seed,
     )
-    if len(pool) % physical:
-        raise ValueError(f"TERRAN pass size {len(pool)} is not divisible by {physical}")
-    epochs_per_pass = len(pool) // physical
-    epochs = int(args.data_passes) * epochs_per_pass
-    if args.max_batches_per_pass is not None:
-        if not args.pilot_mode:
-            raise ValueError("partial passes are pilot-only")
-        epochs = int(args.max_batches_per_pass)
+    fixed_epochs = getattr(args, "training_epochs", None) is not None
+    if fixed_epochs:
+        if args.data_passes is not None or args.max_batches_per_pass is not None:
+            raise ValueError("fixed TERRAN epochs cannot be combined with data-pass options")
+        epochs = int(args.training_epochs)
+        if epochs <= 0:
+            raise ValueError("--training-epochs must be positive")
+        if epochs * physical > len(pool):
+            raise ValueError("fixed training budget exceeds the no-replacement training pool")
+        if int(args.validation_checkpoints) != 1:
+            raise ValueError("fixed-epoch protocol currently requires one final validation checkpoint")
+        epochs_per_pass = epochs
+        total_passes = 1
+    else:
+        if len(pool) % physical:
+            raise ValueError(f"TERRAN pass size {len(pool)} is not divisible by {physical}")
+        epochs_per_pass = len(pool) // physical
+        total_passes = int(args.data_passes)
+        epochs = total_passes * epochs_per_pass
+        if args.max_batches_per_pass is not None:
+            if not args.pilot_mode:
+                raise ValueError("partial passes are pilot-only")
+            epochs = int(args.max_batches_per_pass)
     configured = dict(overrides)
     configured.setdefault("training", {})
     configured.setdefault("data", {})
@@ -70,21 +85,25 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             "epochs": epochs,
             "num_envs_per_gpu": physical,
             "rollout_steps": training_rollout_steps,
-            "checkpoint_interval": max(
-                1, epochs_per_pass * int(args.validation_every_passes)
+            "checkpoint_interval": (
+                epochs
+                if fixed_epochs
+                else max(1, epochs_per_pass * int(args.validation_every_passes))
             ),
         }
     )
     configured["output_dir"] = str(Path(args.output_dir).resolve())
     configured["protocol"] = {
         "protocol_id": args.protocol_id,
-        "data_passes": int(args.data_passes),
+        "budget_mode": "fixed_training_epochs" if fixed_epochs else "complete_data_passes",
+        "training_epochs": epochs if fixed_epochs else None,
+        "data_passes": total_passes,
         "views_per_pass": len(pool),
         "epochs_per_pass": epochs_per_pass,
         "physical_batch_size": physical,
         "effective_batch_size": effective,
         "training_rollout_steps": training_rollout_steps,
-        "pilot_partial": args.max_batches_per_pass is not None,
+        "pilot_partial": bool(getattr(args, "pilot_mode", False)),
         "completed_data_passes": completed,
         "environment_transitions": environment_transitions,
         "optimizer_steps": optimizer_steps,
@@ -122,8 +141,14 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
     if meta is None:
         return
     output = Path(args.output_dir)
-    checkpoints = sorted(final_checkpoint.parent.glob("checkpoint_epoch_*.pt"))
-    if final_checkpoint not in checkpoints:
+    fixed_epochs = getattr(args, "training_epochs", None) is not None
+    total_passes = 1 if fixed_epochs else int(args.data_passes)
+    checkpoints = (
+        [final_checkpoint]
+        if fixed_epochs
+        else sorted(final_checkpoint.parent.glob("checkpoint_epoch_*.pt"))
+    )
+    if final_checkpoint not in checkpoints and not fixed_epochs:
         checkpoints.append(final_checkpoint)
     records: list[tuple[tuple[float, float], Path, dict[str, Any]]] = []
     history_path = output / "validation_history.jsonl"
@@ -131,8 +156,8 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
         if checkpoint.name.startswith("checkpoint_epoch_"):
             epoch = int(checkpoint.stem.rsplit("_", 1)[1])
         else:
-            epoch = int(args.data_passes) * meta["epochs_per_pass"]
-        data_pass = max(1, min(int(args.data_passes), epoch // meta["epochs_per_pass"]))
+            epoch = total_passes * meta["epochs_per_pass"]
+        data_pass = max(1, min(total_passes, epoch // meta["epochs_per_pass"]))
         validation_dir = output / "validation" / f"pass_{data_pass:03d}"
         command = [
             sys.executable,
@@ -194,9 +219,13 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             optimizer_steps = int(float(rows[-1].get("optimizer_steps_total", 0)))
             wall_time_s = sum(float(row["epoch_wall_time_s"]) for row in rows)
     expected = (
-        int(args.max_batches_per_pass) * meta["physical_batch_size"]
-        if args.max_batches_per_pass is not None
-        else int(args.data_passes) * meta["views_per_pass"]
+        int(args.training_epochs) * meta["physical_batch_size"]
+        if fixed_epochs
+        else (
+            int(args.max_batches_per_pass) * meta["physical_batch_size"]
+            if args.max_batches_per_pass is not None
+            else int(args.data_passes) * meta["views_per_pass"]
+        )
     )
     if samples_seen != expected:
         raise RuntimeError(f"TERRAN exposure mismatch: {samples_seen} != {expected}")
@@ -204,11 +233,15 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
         output / "training_result.json",
         {
             "schema": "drl_training_result_v1",
-            "status": "pilot_partial" if args.max_batches_per_pass is not None else "passed",
+            "status": "pilot_partial" if getattr(args, "pilot_mode", False) else "passed",
             "method": "TERRAN",
             "protocol_id": args.protocol_id,
-            "requested_data_passes": int(args.data_passes),
-            "completed_data_passes": 0 if args.max_batches_per_pass is not None else int(args.data_passes),
+            "budget_mode": "fixed_training_epochs" if fixed_epochs else "complete_data_passes",
+            "requested_training_epochs": int(args.training_epochs) if fixed_epochs else None,
+            "completed_training_epochs": int(args.training_epochs) if fixed_epochs else None,
+            "requested_data_passes": int(args.data_passes) if args.data_passes is not None else None,
+            "completed_data_passes": 1 if fixed_epochs else (0 if args.max_batches_per_pass is not None else int(args.data_passes)),
+            "training_rollout_steps": int(args.training_rollout_steps),
             "instances_seen": samples_seen,
             "customer_exposures": samples_seen * int(str(args.stage2_scale).removeprefix("Cus")),
             "environment_transitions": environment_transitions,

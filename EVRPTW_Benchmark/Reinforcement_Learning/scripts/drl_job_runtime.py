@@ -206,8 +206,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             job["scale"].removeprefix("Cus"),
             "--num-envs-per-gpu",
             str(job["physical_batch_size"]),
-            "--data-passes",
-            str(job["data_passes"]),
+            "--training-epochs",
+            str(job["training_epochs"]),
             "--training-rollout-steps",
             str(job["training_rollout_steps"]),
             "--physical-batch-size",
@@ -220,8 +220,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(dataset / "materialized" / "families"),
             "--validation-limit",
             str(job["validation_views"]),
-            "--validation-every-passes",
-            str(job["validation_every_passes"]),
+            "--validation-checkpoints",
+            str(job["validation_checkpoints"]),
             "--protocol-id",
             job["protocol_id"],
             "--output-dir",
@@ -246,8 +246,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(job["seed"]),
             "--device",
             "cuda",
-            "--data-passes",
-            str(job["data_passes"]),
+            "--training-epochs",
+            str(job["training_epochs"]),
             "--training-rollout-steps",
             str(job["training_rollout_steps"]),
             "--physical-batch-size",
@@ -260,21 +260,15 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(dataset / "materialized" / "families"),
             "--validation-limit",
             str(job["validation_views"]),
-            "--validation-every-passes",
-            str(job["validation_every_passes"]),
+            "--validation-checkpoints",
+            str(job["validation_checkpoints"]),
             "--protocol-id",
             job["protocol_id"],
             "--output-dir",
             str(out),
         ]
     if job["run_mode"] == "pilot":
-        command.extend(
-            [
-                "--pilot-mode",
-                "--max-batches-per-pass",
-                str(job["max_batches_per_pass"]),
-            ]
-        )
+        command.append("--pilot-mode")
     if resume:
         command.append("--resume")
     return command

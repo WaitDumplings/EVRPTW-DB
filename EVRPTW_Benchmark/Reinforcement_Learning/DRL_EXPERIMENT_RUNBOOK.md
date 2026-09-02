@@ -43,7 +43,7 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/a6000_2_1/pilot.sh
 
 如果四台机器不共享 `EVRPTW_OUTPUT_ROOT`，构建 pilot gate 前必须汇总
 四台 pilot 产物。正式训练结束后，把全部 `checkpoint_selected.pt`、
-`training_result.json`、`validation_summary.json`、data-pass state 和
+`training_result.json`、`validation_summary.json`、atomic training state 和
 provenance 汇总到中央测试服务器，再单独冻结测试服务器的 evaluation 分配。
 
 以下旧入口继续兼容。
@@ -83,6 +83,34 @@ horizon，避免把训练预算耗尽误报为最终求解失败。
 这些字段用于审核预算是否过紧；修改预算后必须重新跑 batch/memory pilot，旧的
 RTX 2080 Ti 吞吐与 wall-time 外推不再视为当前配置证据。
 
+## 固定训练预算
+
+正式训练不再遍历全部 train views，也不再用 full-data pass 计量。每个
+`method × scale × seed` job 固定目标为 500,000 customer exposures：
+
+```text
+target_environments = 500000 / customer_count
+training_epochs = ceil(target_environments / physical_batch_size)
+actual_environments = training_epochs * physical_batch_size
+```
+
+每个 epoch 从按 `seed` 确定性打乱的 train pool 中读取一个 physical batch；同一
+job 内不放回抽样。当前预算只使用各 scale train pool 的约 10%，因此不会遍历
+整个训练集。不同方法的 physical batch 不同，所以 epoch 数不同，但总 customer
+exposure 相同（除向上取整产生的不足 1% 差异）：
+
+| Method | Cus50 | Cus100 | Cus500 | Cus1000 |
+|---|---:|---:|---:|---:|
+| AM-EVRPTW | 25 | 50 | 167 | 500 |
+| EVRPTW-RL | 84 | 157 | 500 | 500 |
+| DRL-TS | 125 | 209 | 1000 | 500 |
+| TERRAN | 25 | 25 | 20 | 500 |
+
+表中数值是 `training_epochs`。正式 job 结束时执行一次 500-view validation 并选择
+checkpoint；T1/T2/T3 和 Cus2000 仍不参与训练或 checkpoint selection。中断前若
+fixed-budget job 尚未原子提交完成状态，该 job 会从同一 seed 的确定性抽样序列
+开头重跑；不会从未经提交的中间 epoch 继续。
+
 ## Pilot 与 full 边界
 
 收集四台服务器的 pilot 输出及 evidence 后构建放行报告：
@@ -97,10 +125,11 @@ python EVRPTW_Benchmark/Reinforcement_Learning/scripts/build_drl_pilot_gate.py \
   --evidence-root "$EVRPTW_OUTPUT_ROOT/pilot_evidence"
 ```
 
-当前候选 100 data passes 尚未通过运行时间审核，协议中的
-`pilot.full_runtime_budget_approved=false` 会使 gate 保持 STOP。必须先审核
-pilot 的逐方法 wall-time estimate，统一冻结一个全局 data-pass 数，生成新的
-clean commit，并显式批准 runtime budget；不得按 method/scale/seed 单独改动。
+协议中的 `pilot.full_runtime_budget_approved=false` 仍会使 gate 保持 STOP。
+固定 500,000 customer-exposure 预算已经替代候选 100 full-data passes，但仍须
+审核逐方法 wall-time、rollout-cap telemetry 和 RTX A6000 Cus1000 pilot，生成
+新的 clean commit，并显式批准 runtime budget；不得按 method/scale/seed 单独
+增加 exposure 预算。
 
 只有 `$EVRPTW_OUTPUT_ROOT/pilot_gate_report.json` 的 `passed=true` 时，
 `full` 才会启动。否则 runner 硬停止。放行后把对应命令中的 `pilot`

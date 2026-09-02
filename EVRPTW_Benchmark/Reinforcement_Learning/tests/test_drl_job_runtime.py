@@ -127,12 +127,12 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
     common = {
         "train_index": "train.parquet",
         "validation_index": "val.parquet",
-        "data_passes": 20,
+        "training_epochs": 25,
         "training_rollout_steps": 140,
         "physical_batch_size": 4,
         "effective_batch_size": 4,
         "validation_views": 500,
-        "validation_every_passes": 5,
+        "validation_checkpoints": 1,
         "protocol_id": "rollout-budget-test",
         "run_mode": "full",
     }
@@ -148,6 +148,9 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         )
         index = command.index("--training-rollout-steps")
         assert command[index + 1] == "140"
+        epoch_index = command.index("--training-epochs")
+        assert command[epoch_index + 1] == "25"
+        assert "--data-passes" not in command
 
 
 def test_resume_only_marks_jobs_with_complete_resume_evidence(tmp_path: Path) -> None:

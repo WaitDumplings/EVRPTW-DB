@@ -96,7 +96,7 @@ def main() -> None:
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
-    if args.data_passes is not None:
+    if args.data_passes is not None or args.training_epochs is not None:
         run_evrptw_rl(args, pool, policy, optimizer)
         return
     ema_cost: float | None = None

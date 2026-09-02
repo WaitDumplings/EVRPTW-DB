@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -122,6 +123,25 @@ def test_training_rollout_budget_is_scale_aware_and_method_invariant() -> None:
     )
 
 
+def test_fixed_customer_exposure_budget_is_derived_from_num_env_times_epochs() -> None:
+    protocol, jobs2080, jobsa6000 = _jobs()
+    target = protocol["training"]["target_customer_exposures_per_job"]
+    assert target == 500_000
+    training = [job for job in jobs2080 + jobsa6000 if job["kind"] == "train"]
+    for job in training:
+        customers = protocol["scales"][job["scale"]]["customer_count"]
+        batch = job["physical_batch_size"]
+        expected_environments = math.ceil(target / customers)
+        expected_epochs = math.ceil(expected_environments / batch)
+        assert job["budget_mode"] == "fixed_training_epochs"
+        assert job["target_environments"] == expected_environments
+        assert job["training_epochs"] == expected_epochs
+        assert job["actual_environments"] == expected_epochs * batch
+        assert job["actual_customer_exposures"] >= target
+        assert job["actual_customer_exposures"] < target + batch * customers
+        assert "data_passes" not in job
+
+
 def test_rtx2080ti_batches_and_pilot_stress_depth_are_frozen() -> None:
     protocol, jobs2080, jobsa6000 = _jobs()
     expected = {
@@ -138,15 +158,15 @@ def test_rtx2080ti_batches_and_pilot_stress_depth_are_frozen() -> None:
 
     pilots2080 = [job for job in jobs2080 if job["kind"] == "pilot"]
     assert {
-        job["max_batches_per_pass"]
+        job["training_epochs"]
         for job in pilots2080
         if job["stage"] == "short_optimization"
     } == {4}
     assert {
-        job["max_batches_per_pass"]
+        job["training_epochs"]
         for job in pilots2080
         if job["stage"] == "memory"
     } == {8}
     pilots_a6000 = [job for job in jobsa6000 if job["kind"] == "pilot"]
-    assert {job["max_batches_per_pass"] for job in pilots_a6000} == {1}
+    assert {job["training_epochs"] for job in pilots_a6000} == {1}
     assert protocol["pilot"]["full_runtime_budget_approved"] is False

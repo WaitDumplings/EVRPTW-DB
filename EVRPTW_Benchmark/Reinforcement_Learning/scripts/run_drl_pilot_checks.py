@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -91,7 +92,10 @@ def main() -> None:
         write(evidence / f"{method}__best50_equality.json", {"passed": equal, "candidate_count": 50, "chunk_sizes": [50, 5]})
         write(evidence / f"{method}__data_pass_resume.json", {
             "passed": resume_passed,
-            "contract": "incomplete pass is replayed from seeded shuffle; state commits at complete-pass boundary",
+            "contract": (
+                "an incomplete fixed-epoch job is replayed from its seeded shuffle; "
+                "state commits only after the complete fixed budget"
+            ),
             "automated_test": "common/tests/test_data_pass.py",
         })
         result = json.loads((cus100 / "training_result.json").read_text(encoding="utf-8"))
@@ -102,13 +106,19 @@ def main() -> None:
             measured = int(history[-1]["instances_seen"])
         else:
             measured = int(result["instances_seen"])
-        views = int(protocol["scales"]["Cus100"]["train_views"])
-        passes = int(protocol["training"]["full_data_passes"])
-        estimate = elapsed / max(measured, 1) * views * passes
+        customer_count = int(protocol["scales"]["Cus100"]["customer_count"])
+        target_exposures = int(protocol["training"]["target_customer_exposures_per_job"])
+        target_environments = math.ceil(target_exposures / customer_count)
+        physical_batch = int(protocol["methods"][method]["physical_batch"]["Cus100"])
+        training_epochs = math.ceil(target_environments / physical_batch)
+        actual_environments = training_epochs * physical_batch
+        estimate = elapsed / max(measured, 1) * actual_environments
         write(evidence / f"{method}__wall_time_estimate.json", {
             "passed": estimate > 0,
             "measured_instances": measured,
             "measured_wall_time_s": elapsed,
+            "training_epochs": training_epochs,
+            "actual_environments": actual_environments,
             "estimated_full_wall_time_s": estimate,
             "extrapolation_only": True,
         })

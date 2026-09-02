@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -59,6 +60,13 @@ def load_protocol(path: Path) -> dict[str, Any]:
         raise ValueError("training rollout-step budgets must cover every training scale")
     if any(int(value) <= 0 for value in rollout_steps.values()):
         raise ValueError("training rollout-step budgets must be positive")
+    training = protocol.get("training", {})
+    if training.get("budget_mode") != "fixed_customer_exposures":
+        raise ValueError("formal training must use fixed_customer_exposures")
+    if int(training.get("target_customer_exposures_per_job", 0)) <= 0:
+        raise ValueError("target customer exposures must be positive")
+    if int(training.get("validation_checkpoints", 0)) <= 0:
+        raise ValueError("validation checkpoints must be positive")
     disabled = set(protocol.get("disabled_tracks", []))
     if {"E_to_R", "R_to_Inject_to_R"}.difference(disabled):
         raise ValueError("E->R and R->Inject->R must remain disabled")
@@ -129,11 +137,21 @@ def _train_job(
     suffix = f"__{pilot_kind}" if pilot_kind else ""
     job_id = f"{prefix}__R__{method}__{scale}__seed{seed}{suffix}"
     method_cfg = protocol["methods"][method]
-    passes = (
-        protocol["training"]["pilot_data_passes"]
-        if run_mode == "pilot"
-        else protocol["training"]["full_data_passes"]
-    )
+    customer_count = int(protocol["scales"][scale]["customer_count"])
+    physical_batch = int(method_cfg["physical_batch"][scale])
+    if run_mode == "pilot":
+        if pilot_kind == "short_optimization":
+            training_epochs = int(protocol["pilot"]["short_optimization_batches"])
+        elif hardware == "2080ti":
+            training_epochs = int(protocol["pilot"]["rtx2080ti_memory_batches"])
+        else:
+            training_epochs = int(protocol["pilot"]["a6000_memory_batches"])
+        target_environments = training_epochs * physical_batch
+    else:
+        target_exposures = int(protocol["training"]["target_customer_exposures_per_job"])
+        target_environments = int(math.ceil(target_exposures / customer_count))
+        training_epochs = int(math.ceil(target_environments / physical_batch))
+    actual_environments = training_epochs * physical_batch
     job = _base_job(
         protocol,
         job_id=job_id,
@@ -153,19 +171,24 @@ def _train_job(
             "train_index": protocol["scales"][scale]["train_index"],
             "validation_index": protocol["scales"][scale]["validation_index"],
             "train_views_per_pass": protocol["scales"][scale]["train_views"],
-            "data_passes": int(passes),
+            "budget_mode": "fixed_training_epochs",
+            "training_epochs": training_epochs,
+            "target_environments": target_environments,
+            "actual_environments": actual_environments,
+            "target_customer_exposures": target_environments * customer_count,
+            "actual_customer_exposures": actual_environments * customer_count,
             "training_rollout_steps": int(
                 protocol["training"]["rollout_steps_by_scale"][scale]
             ),
-            "validation_every_passes": int(
-                protocol["training"]["validation_every_passes"]
+            "validation_checkpoints": int(
+                protocol["training"]["validation_checkpoints"]
             ),
             "validation_views": int(
                 protocol["pilot"]["validation_limit"]
                 if run_mode == "pilot"
                 else protocol["training"]["validation_views"]
             ),
-            "physical_batch_size": int(method_cfg["physical_batch"][scale]),
+            "physical_batch_size": physical_batch,
             "effective_batch_size": int(method_cfg["effective_batch"][scale]),
             "memory_gate_gib": (
                 float(protocol["hardware"]["rtx_2080_ti"]["memory_gate_gib"])
@@ -175,14 +198,6 @@ def _train_job(
             "requires_pilot_gate": run_mode == "full",
         }
     )
-    if run_mode == "pilot":
-        if pilot_kind == "short_optimization":
-            pilot_batches = protocol["pilot"]["short_optimization_batches"]
-        elif hardware == "2080ti":
-            pilot_batches = protocol["pilot"]["rtx2080ti_memory_batches"]
-        else:
-            pilot_batches = protocol["pilot"]["a6000_memory_batches"]
-        job["max_batches_per_pass"] = int(pilot_batches)
     return job
 
 

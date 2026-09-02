@@ -17,6 +17,7 @@ from .stage2_data import Stage2TaskPool
 
 def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-passes", type=int)
+    parser.add_argument("--training-epochs", type=int)
     parser.add_argument("--training-rollout-steps", type=int)
     parser.add_argument("--physical-batch-size", type=int)
     parser.add_argument("--effective-batch-size", type=int)
@@ -24,6 +25,7 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--validation-family-root", type=Path)
     parser.add_argument("--validation-limit", type=int, default=500)
     parser.add_argument("--validation-every-passes", type=int, default=5)
+    parser.add_argument("--validation-checkpoints", type=int, default=1)
     parser.add_argument("--protocol-id", default="legacy_cli_defaults")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--max-batches-per-pass", type=int)

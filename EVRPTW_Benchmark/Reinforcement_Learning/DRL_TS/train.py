@@ -127,7 +127,7 @@ def main() -> None:
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
-    if args.data_passes is not None:
+    if args.data_passes is not None or args.training_epochs is not None:
         run_drl_ts(args, pool, policy, optimizer)
         return
     baseline_instances = pool.sample(args.baseline_eval_size)

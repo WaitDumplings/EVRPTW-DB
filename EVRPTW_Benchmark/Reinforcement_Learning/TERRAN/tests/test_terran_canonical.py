@@ -99,6 +99,44 @@ def test_pbrs_keeps_distance_as_named_base_reward() -> None:
     assert env.unwrapped.objective_distance_km[0] > 0.0
 
 
+def test_fixed_epoch_protocol_does_not_expand_to_a_full_data_pass(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class Pool:
+        def __len__(self) -> int:
+            return 5_000
+
+    monkeypatch.setattr(terran_protocol, "Stage2TaskPool", lambda **_kwargs: Pool())
+    args = SimpleNamespace(
+        training_epochs=25,
+        data_passes=None,
+        stage2_dataset_path=Path("train.parquet"),
+        stage2_family_root=Path("families"),
+        stage2_scale="Cus100",
+        stage2_split_ids="train",
+        stage2_track_ids="train",
+        output_dir=tmp_path,
+        resume=False,
+        protocol_id="fixed-epoch-test",
+        num_envs_per_gpu=200,
+        physical_batch_size=200,
+        effective_batch_size=200,
+        training_rollout_steps=140,
+        seed=1234,
+        max_batches_per_pass=None,
+        validation_every_passes=5,
+        validation_checkpoints=1,
+        pilot_mode=False,
+    )
+    configured, meta = terran_protocol.configure_protocol(args, {})
+    assert configured["training"]["epochs"] == 25
+    assert configured["training"]["checkpoint_interval"] == 25
+    assert configured["protocol"]["budget_mode"] == "fixed_training_epochs"
+    assert configured["protocol"]["epochs_per_pass"] == 25
+    assert configured["protocol"]["views_per_pass"] == 5_000
+    assert meta is not None and meta["physical_batch_size"] == 200
+
+
 def test_protocol_resume_carries_exact_optimizer_step_count(
     tmp_path: Path, monkeypatch
 ) -> None:

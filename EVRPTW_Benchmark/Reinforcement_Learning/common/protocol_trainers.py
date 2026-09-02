@@ -94,18 +94,34 @@ def train_reinforce_data_passes(
     legacy_batch_size: int,
     soft_stage_fraction: float = 0.0,
 ) -> None:
-    """Run the frozen corpus-pass protocol for the three REINFORCE baselines.
+    """Run a fixed-batch protocol for the three REINFORCE baselines.
 
-    State is committed only after a complete pass and its checkpoint.  An
-    interrupted pass is intentionally replayed from its deterministic shuffle
-    on resume, avoiding ambiguous mid-batch optimizer state.
+    Formal fixed-epoch jobs take a deterministic prefix of a seeded shuffle and
+    never need to traverse the full training index. The legacy complete-pass
+    mode remains available for old explicit CLI invocations.
     """
 
-    if args.data_passes is None or args.data_passes <= 0:
-        raise ValueError("protocol mode requires a positive --data-passes")
+    fixed_epochs = getattr(args, "training_epochs", None)
+    if fixed_epochs is not None:
+        fixed_epochs = int(fixed_epochs)
+        if fixed_epochs <= 0:
+            raise ValueError("--training-epochs must be positive")
+        if args.data_passes is not None:
+            raise ValueError("choose --training-epochs or --data-passes, not both")
+        total_passes = 1
+    else:
+        if args.data_passes is None or args.data_passes <= 0:
+            raise ValueError("protocol mode requires --training-epochs or --data-passes")
+        total_passes = int(args.data_passes)
     if args.max_batches_per_pass is not None and not args.pilot_mode:
         raise ValueError("--max-batches-per-pass is allowed only with --pilot-mode")
+    if fixed_epochs is not None and args.max_batches_per_pass is not None:
+        raise ValueError("--training-epochs cannot be combined with --max-batches-per-pass")
+    if fixed_epochs is not None and int(args.validation_checkpoints) != 1:
+        raise ValueError("fixed-epoch protocol currently requires one final validation checkpoint")
     physical, effective = require_registered_batches(args, legacy_batch_size)
+    if fixed_epochs is not None and fixed_epochs * physical > len(pool):
+        raise ValueError("fixed training budget exceeds the no-replacement training pool")
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     state = load_state(output, args.protocol_id, args.resume)
@@ -151,23 +167,30 @@ def train_reinforce_data_passes(
         torch.cuda.reset_peak_memory_stats(args.device)
 
     first_pass = state.completed_data_passes + 1
-    for data_pass in range(first_pass, int(args.data_passes) + 1):
+    for data_pass in range(first_pass, total_passes + 1):
         pass_started = time.perf_counter()
-        soft = bool(soft_stage_fraction and data_pass <= int(args.data_passes * soft_stage_fraction))
+        soft = bool(soft_stage_fraction and data_pass <= int(total_passes * soft_stage_fraction))
+        training_stage = "soft" if soft else "hard"
+        if fixed_epochs is not None and soft_stage_fraction:
+            training_stage = "mixed"
         sums = {"loss": 0.0, "cost": 0.0, "distance": 0.0, "feasible": 0.0}
         instances_seen = 0
         transition_count = 0
         trajectory_steps: list[int] = []
         rollout_budget_exhausted_count = 0
-        complete_pass = args.max_batches_per_pass is None
+        complete_pass = fixed_epochs is not None or args.max_batches_per_pass is None
+        max_batches = fixed_epochs if fixed_epochs is not None else args.max_batches_per_pass
         batches = pool.data_pass_batches(data_pass, physical)
         for group_index, batch_group in enumerate(
             grouped_batches(
                 batches,
                 effective_batch_size=effective,
-                max_batches=args.max_batches_per_pass,
+                max_batches=max_batches,
             )
         ):
+            group_soft = soft
+            if fixed_epochs is not None and soft_stage_fraction:
+                group_soft = group_index < int(fixed_epochs * soft_stage_fraction)
             group_size = sum(len(batch) for batch in batch_group)
             optimizer.zero_grad(set_to_none=True)
             for sub_index, instances in enumerate(batch_group):
@@ -175,7 +198,7 @@ def train_reinforce_data_passes(
                 torch.manual_seed(rollout_seed)
                 if torch.cuda.is_available():
                     torch.cuda.manual_seed_all(rollout_seed)
-                actor = make_actor(instances, soft, rollout_seed)
+                actor = make_actor(instances, group_soft, rollout_seed)
                 actor_cost = training_cost(actor)
                 if method == "EVRPTW-RL" and optimizer_steps < int(args.ema_warmup_steps):
                     observed = float(actor_cost.mean().detach().cpu())
@@ -183,7 +206,7 @@ def train_reinforce_data_passes(
                     baseline_cost = torch.full_like(actor_cost, float(ema_cost))
                 else:
                     with torch.no_grad():
-                        baseline_result = make_baseline(baseline, instances, soft, rollout_seed)
+                        baseline_result = make_baseline(baseline, instances, group_soft, rollout_seed)
                     baseline_cost = training_cost(baseline_result)
                 advantage = (actor_cost - baseline_cost).detach()
                 loss = (advantage * actor.log_likelihood).mean()
@@ -209,7 +232,13 @@ def train_reinforce_data_passes(
 
         if instances_seen == 0:
             raise RuntimeError("data pass yielded no training instances")
-        if complete_pass and instances_seen != len(pool):
+        if fixed_epochs is not None:
+            expected_instances = fixed_epochs * physical
+            if instances_seen != expected_instances:
+                raise RuntimeError(
+                    f"incomplete fixed-epoch budget: {instances_seen} != {expected_instances}"
+                )
+        elif complete_pass and instances_seen != len(pool):
             raise RuntimeError(f"incomplete data pass: {instances_seen} != {len(pool)}")
 
         # Keep each method's rollout-baseline update, but never use a test set.
@@ -241,7 +270,7 @@ def train_reinforce_data_passes(
             validation_instances
             and (
                 data_pass % int(args.validation_every_passes) == 0
-                or data_pass == int(args.data_passes)
+                or data_pass == total_passes
             )
         )
         if should_validate:
@@ -288,7 +317,9 @@ def train_reinforce_data_passes(
             "protocol_id": args.protocol_id,
             "data_pass": data_pass,
             "pass_complete": complete_pass,
-            "training_stage": "soft" if soft else "hard",
+            "budget_mode": "fixed_training_epochs" if fixed_epochs is not None else "complete_data_passes",
+            "training_epochs": fixed_epochs,
+            "training_stage": training_stage,
             "instances_seen": instances_seen,
             "customer_exposures": instances_seen * _customer_count(args.scale),
             "optimizer_steps_total": optimizer_steps,
@@ -333,23 +364,17 @@ def train_reinforce_data_passes(
 
     terminal = {
         "schema": "drl_training_result_v1",
-        "status": "pilot_partial" if args.max_batches_per_pass is not None else "passed",
+        "status": "pilot_partial" if args.pilot_mode else "passed",
         "method": method,
         "protocol_id": args.protocol_id,
-        "requested_data_passes": int(args.data_passes),
+        "budget_mode": "fixed_training_epochs" if fixed_epochs is not None else "complete_data_passes",
+        "requested_training_epochs": fixed_epochs,
+        "completed_training_epochs": fixed_epochs if fixed_epochs is not None else None,
+        "requested_data_passes": int(args.data_passes) if args.data_passes is not None else None,
         "completed_data_passes": int(state.completed_data_passes),
         "training_rollout_steps": int(args.training_rollout_steps),
-        "instances_seen": int(
-            state.instances_seen
-            if args.max_batches_per_pass is None
-            else state.instances_seen + instances_seen
-        ),
-        "customer_exposures": int(
-            state.customer_exposures
-            if args.max_batches_per_pass is None
-            else state.customer_exposures
-            + instances_seen * _customer_count(args.scale)
-        ),
+        "instances_seen": int(state.instances_seen),
+        "customer_exposures": int(state.customer_exposures),
         "optimizer_steps": int(optimizer_steps),
         "environment_transitions": int(environment_transitions_total),
         "selected_checkpoint": str(selected_checkpoint if selected_checkpoint.exists() else checkpoint),
