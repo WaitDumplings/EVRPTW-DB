@@ -5,48 +5,32 @@
     8
   ],
   "counts_by_kind": {
-    "eval": 32,
     "pilot": 2,
     "train": 10
   },
   "counts_by_local_gpu": {
     "0": {
-      "evaluate": 11,
       "full": 4,
       "pilot": 1
     },
     "1": {
-      "evaluate": 10,
       "full": 3,
       "pilot": 1
     },
     "2": {
-      "evaluate": 11,
       "full": 3
     }
   },
   "counts_by_run_mode": {
-    "evaluate": 32,
     "full": 10,
     "pilot": 2
   },
-  "external_checkpoint_job_ids": [
-    "train__R__am_evrptw__Cus1000__seed1234",
-    "train__R__am_evrptw__Cus1000__seed2345",
-    "train__R__am_evrptw__Cus1000__seed3456",
-    "train__R__drl_ts__Cus1000__seed1234",
-    "train__R__drl_ts__Cus1000__seed2345",
-    "train__R__evrptw_rl__Cus1000__seed1234",
-    "train__R__evrptw_rl__Cus1000__seed2345",
-    "train__R__evrptw_rl__Cus1000__seed3456",
-    "train__R__terran__Cus1000__seed2345",
-    "train__R__terran__Cus1000__seed3456"
-  ],
   "full_training_jobs": 10,
   "gpu_count": 3,
   "hardware": "2080ti",
-  "job_count": 44,
+  "job_count": 12,
   "protocol_id": "drl_experiment_protocol_v1",
+  "purpose": "checkpoint_generation_only",
   "schema": "drl_server_assignment_v1",
   "server_id": "2080ti_3_1"
 }

@@ -2,8 +2,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
-MODE="${1:?usage: start.sh pilot|full|resume|evaluate [runner options]}"
-case "$MODE" in pilot|full|resume|evaluate) ;; *) echo "invalid mode: $MODE" >&2; exit 2 ;; esac
+MODE="${1:?usage: start.sh pilot|full|resume [runner options]}"
+case "$MODE" in pilot|full|resume) ;; *) echo "invalid mode: $MODE" >&2; exit 2 ;; esac
 LOG_DIR="$EVRPTW_OUTPUT_ROOT/launcher_logs/$DRL_SERVER_ID"
 mkdir -p "$LOG_DIR"
 PID_FILE="$LOG_DIR/$MODE.pid"

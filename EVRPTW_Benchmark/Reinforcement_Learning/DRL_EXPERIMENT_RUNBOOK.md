@@ -18,8 +18,8 @@ launcher 会检查 GPU 数量与型号、branch/commit、真实数据索引、�
 
 ## 四台服务器
 
-推荐直接使用已冻结的四个 server bundle。每个目录都包含独立
-`jobs.jsonl`、任务摘要以及 nohup launcher：
+推荐直接使用已冻结的四个 checkpoint server bundle。每个目录都包含
+独立 `jobs.jsonl`、任务摘要以及 nohup launcher：
 
 ```text
 scripts/2080ti_4_1  # 第一台 4×2080Ti，13 个 full training jobs
@@ -39,12 +39,12 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/a6000_2_1/pilot.sh
 
 这些入口默认 nohup/setsid 离线运行；同目录的 `status.sh` 和
 `logs.sh` 用于查看进度。通过 pilot gate 后使用 `full.sh`，中断恢复
-使用 `resume.sh`，训练全部完成后使用 `evaluate.sh`。
+使用 `resume.sh`。四个目录不包含 evaluation job。
 
 如果四台机器不共享 `EVRPTW_OUTPUT_ROOT`，构建 pilot gate 前必须汇总
-四台 pilot 产物；执行 evaluation 前也必须把
-`assignment_summary.json` 中列出的外部 checkpoint 复制到相同的相对
-输出位置。runner 会在 evaluation 启动前硬检查 checkpoint，缺失时不会开跑。
+四台 pilot 产物。正式训练结束后，把全部 `checkpoint_selected.pt`、
+`training_result.json`、`validation_summary.json`、data-pass state 和
+provenance 汇总到中央测试服务器，再单独冻结测试服务器的 evaluation 分配。
 
 以下旧入口继续兼容。
 
@@ -81,19 +81,12 @@ python EVRPTW_Benchmark/Reinforcement_Learning/scripts/build_drl_pilot_gate.py \
 
 只有 `$EVRPTW_OUTPUT_ROOT/pilot_gate_report.json` 的 `passed=true` 时，`full` 才会启动。否则 runner 硬停止。放行后把对应命令中的 `pilot` 替换为 `full`。中断后的同一完整训练队列用 `resume`；已具有通过 result、selected checkpoint 和 verifier summary 的 job 不会重跑。
 
-评估在训练全部完成后运行：
+查看状态时使用对应目录的 `status.sh`。仅检查命令与队列、不用 GPU
+时，可用前台入口 `run.sh pilot --dry-run --skip-gpu-preflight`。
 
-```bash
-# 三台 2080Ti 服务器：greedy
-SERVER_INDEX=0 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_4x2080ti.sh evaluate
-SERVER_INDEX=1 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_4x2080ti.sh evaluate
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_3x2080ti.sh evaluate
-
-# A6000：best-of-50 与 Cus1000/Cus2000 paired transfer
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_2xa6000.sh evaluate
-```
-
-查看状态时使用相同 launcher 的 `status` 模式。仅检查命令与队列、不用 GPU 时追加 `--dry-run --skip-gpu-preflight`。
+全局 manifests 仍保留冻结的 evaluation 定义，但不会被这四个
+checkpoint-only server bundle 调度。中央测试服务器的 GPU 拓扑确定后，再
+从全局 manifests 生成独立 test bundle。
 
 ## 汇总
 

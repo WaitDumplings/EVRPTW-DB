@@ -412,14 +412,18 @@ def build_server_bundles(
     jobs2080: list[dict[str, Any]],
     jobsa6000: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Project canonical hardware queues onto four physical servers.
+    """Project checkpoint-producing queues onto four physical servers.
 
     The two four-GPU and one three-GPU 2080 Ti servers receive interleaved
     canonical slots.  This keeps the frozen global queue unchanged while
     balancing the 36 non-Cus1000 training jobs at 13/13/10.
     """
 
-    sources = jobs2080 + jobsa6000
+    sources = [
+        job
+        for job in jobs2080 + jobsa6000
+        if job["kind"] in {"pilot", "train"}
+    ]
     bundles: dict[str, list[dict[str, Any]]] = {
         server_id: [] for server_id in SERVER_SPECS
     }
@@ -430,24 +434,9 @@ def build_server_bundles(
             if key in canonical_locations:
                 raise ValueError(f"duplicate physical ownership for {key}")
             canonical_locations[key] = (server_id, local)
-    training_locations: dict[str, tuple[str, int]] = {}
-    for source in sources:
-        if source["kind"] != "train":
-            continue
-        training_locations[source["job_id"]] = canonical_locations[
-            (str(source["hardware"]), int(source["global_slot"]))
-        ]
     for source in sources:
         canonical_slot = int(source["global_slot"])
         destination = canonical_locations[(str(source["hardware"]), canonical_slot)]
-        dependency = source.get("checkpoint_job_id")
-        if dependency in training_locations:
-            colocated = training_locations[str(dependency)]
-            if (
-                SERVER_SPECS[colocated[0]]["hardware"]
-                == str(source["hardware"])
-            ):
-                destination = colocated
         server_id, local_slot = destination
         job = dict(source)
         job["canonical_global_slot"] = canonical_slot
@@ -467,7 +456,7 @@ def build_server_bundles(
             selected,
             key=lambda row: (int(row["global_slot"]), int(row["queue_position"])),
         )
-    canonical_ids = {job["job_id"] for job in jobs2080 + jobsa6000}
+    canonical_ids = {job["job_id"] for job in sources}
     assigned_ids = [
         job["job_id"] for jobs in bundles.values() for job in jobs
     ]
@@ -484,12 +473,6 @@ def _assignment_summary(
     server_id: str,
     jobs: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    train_ids = {job["job_id"] for job in jobs if job["kind"] == "train"}
-    dependencies = {
-        job["checkpoint_job_id"]
-        for job in jobs
-        if job["kind"] in {"eval", "transfer"}
-    }
     return {
         "schema": "drl_server_assignment_v1",
         "protocol_id": jobs[0]["protocol_id"],
@@ -513,7 +496,7 @@ def _assignment_summary(
             )
             for slot in range(int(SERVER_SPECS[server_id]["gpu_count"]))
         },
-        "external_checkpoint_job_ids": sorted(dependencies.difference(train_ids)),
+        "purpose": "checkpoint_generation_only",
     }
 
 
@@ -550,8 +533,8 @@ def _start_script() -> str:
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
-MODE="${1:?usage: start.sh pilot|full|resume|evaluate [runner options]}"
-case "$MODE" in pilot|full|resume|evaluate) ;; *) echo "invalid mode: $MODE" >&2; exit 2 ;; esac
+MODE="${1:?usage: start.sh pilot|full|resume [runner options]}"
+case "$MODE" in pilot|full|resume) ;; *) echo "invalid mode: $MODE" >&2; exit 2 ;; esac
 LOG_DIR="$EVRPTW_OUTPUT_ROOT/launcher_logs/$DRL_SERVER_ID"
 mkdir -p "$LOG_DIR"
 PID_FILE="$LOG_DIR/$MODE.pid"
@@ -576,7 +559,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 LOG_DIR="$EVRPTW_OUTPUT_ROOT/launcher_logs/$DRL_SERVER_ID"
-for MODE in pilot full resume evaluate; do
+for MODE in pilot full resume; do
   PID_FILE="$LOG_DIR/$MODE.pid"
   if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     echo "$MODE: running pid=$(cat "$PID_FILE")"
@@ -610,9 +593,9 @@ def _readme(server_id: str, summary: dict[str, Any]) -> str:
 
 Hardware: {summary['gpu_count']} × {SERVER_SPECS[server_id]['gpu_name_pattern']}
 
-Assigned jobs: {summary['job_count']} total; pilot={summary['counts_by_run_mode'].get('pilot', 0)},
-full={summary['counts_by_run_mode'].get('full', 0)},
-evaluate={summary['counts_by_run_mode'].get('evaluate', 0)}.
+Assigned checkpoint jobs: {summary['job_count']} total;
+pilot={summary['counts_by_run_mode'].get('pilot', 0)},
+full={summary['counts_by_run_mode'].get('full', 0)}.
 
 From the repository root, activate the `maojie` environment and run:
 
@@ -622,14 +605,13 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/{server_id}/status.sh
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/{server_id}/logs.sh
 ```
 
-`pilot.sh`, `full.sh`, `resume.sh`, and `evaluate.sh` detach with nohup.
+`pilot.sh`, `full.sh`, and `resume.sh` detach with nohup.
 `run.sh MODE` is the foreground/debug entrypoint. Environment paths may be
 overridden before launch; committed defaults are repository-relative.
 
-Before evaluation, copy every checkpoint listed in
-`assignment_summary.json.external_checkpoint_job_ids` into the same relative
-`EVRPTW_OUTPUT_ROOT` location on this server. A shared output filesystem also
-satisfies this requirement.
+These four bundles intentionally contain no T1/T2/T3, best-of-50, or Cus2000
+test jobs. Collect their `checkpoint_selected.pt`, validation, training result,
+and provenance artifacts on the future central test server.
 """
 
 
@@ -656,7 +638,6 @@ def write_server_bundles(
             "pilot.sh": (_mode_script("pilot"), True),
             "full.sh": (_mode_script("full"), True),
             "resume.sh": (_mode_script("resume"), True),
-            "evaluate.sh": (_mode_script("evaluate"), True),
             "README.md": (_readme(server_id, summary), False),
         }
         for name, (content, executable) in files.items():
