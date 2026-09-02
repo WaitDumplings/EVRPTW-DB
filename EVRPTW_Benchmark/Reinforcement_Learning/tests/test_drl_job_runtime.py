@@ -58,6 +58,9 @@ def test_one_job_run_and_valid_resume_skip(tmp_path: Path) -> None:
     job["test_command"] = _artifact_command(output)
     assert RUNTIME.run_job(job, context, 0, False, False)
     assert RUNTIME.job_complete(job, output)
+    result = json.loads((output / "job_result.json").read_text())
+    assert result["peak_cpu_memory_bytes"] >= 0
+    assert result["peak_gpu_memory_bytes"] >= 0
     job["test_command"] = _artifact_command(output, exit_code=19)
     assert RUNTIME.run_job(job, context, 0, True, False)
 

@@ -24,6 +24,7 @@ class DRLTSRollout:
     energy_violation: torch.Tensor
     infos: list[dict[str, Any]]
     runtime_s: float
+    environment_transitions: int
 
 
 def normalized_edge_matrices(
@@ -75,6 +76,7 @@ def rollout(
     n_traj = int(envs[0].unwrapped.n_traj)
     state = policy.initial_state(batch_size, n_traj)
     done = np.zeros((batch_size, n_traj), dtype=bool)
+    environment_transitions = 0
     log_likelihood = torch.zeros(batch_size, n_traj, device=policy.device)
     started = time.perf_counter()
 
@@ -87,6 +89,7 @@ def rollout(
             if decode_type == "greedy"
             else distribution.sample()
         )
+        environment_transitions += int(np.count_nonzero(~done))
         active = torch.as_tensor(~done, device=policy.device)
         log_likelihood = log_likelihood + distribution.log_prob(actions) * active
         action_array = actions.detach().cpu().numpy().astype(np.int64)
@@ -179,6 +182,7 @@ def rollout(
         ).float(),
         infos=infos,
         runtime_s=float(time.perf_counter() - started),
+        environment_transitions=environment_transitions,
     )
 
 

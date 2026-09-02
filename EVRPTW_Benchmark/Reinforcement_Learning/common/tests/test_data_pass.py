@@ -27,6 +27,7 @@ def test_atomic_state_resume_and_protocol_guard(tmp_path) -> None:
         instances_seen=30,
         customer_exposures=3000,
         optimizer_steps=9,
+        environment_transitions=4567,
         last_checkpoint="checkpoint_pass_0003.pt",
     )
     state.atomic_write(path)
@@ -37,6 +38,16 @@ def test_atomic_state_resume_and_protocol_guard(tmp_path) -> None:
         assert "protocol mismatch" in str(exc)
     else:
         raise AssertionError("protocol mismatch must reject resume")
+
+
+def test_old_state_without_transition_counter_remains_loadable(tmp_path) -> None:
+    path = tmp_path / "data_pass_state.json"
+    path.write_text(
+        '{"protocol_id":"v1","completed_data_passes":2,"instances_seen":20,'
+        '"customer_exposures":2000,"optimizer_steps":6,"last_checkpoint":"x.pt"}'
+    )
+    state = DataPassState.load(path, protocol_id="v1")
+    assert state.environment_transitions == 0
 
 
 def test_pass_order_rejects_zero_based_pass() -> None:

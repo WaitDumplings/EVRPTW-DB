@@ -23,6 +23,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     if args.stage2_dataset_path is None or args.output_dir is None:
         raise ValueError("TERRAN protocol mode requires Stage-2 data and --output-dir")
     completed = 0
+    environment_transitions = 0
     resume_checkpoint = None
     if args.resume:
         state_path = Path(args.output_dir) / "data_pass_state.json"
@@ -33,6 +34,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             )
         state = DataPassState.load(state_path, protocol_id=args.protocol_id)
         completed = int(state.completed_data_passes)
+        environment_transitions = int(state.environment_transitions)
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
     if physical != effective:
         raise ValueError("TERRAN v1 registers equal physical/effective batches")
@@ -75,6 +77,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "effective_batch_size": effective,
         "pilot_partial": args.max_batches_per_pass is not None,
         "completed_data_passes": completed,
+        "environment_transitions": environment_transitions,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
     }
     return configured, {
@@ -168,6 +171,8 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
     atomic_json(output / "validation_summary.json", selected_summary)
     train_log = output / "logs" / "train_log.csv"
     samples_seen = 0
+    environment_transitions = 0
+    optimizer_steps = 0
     wall_time_s = 0.0
     peak_gpu = int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else 0
     if train_log.exists():
@@ -175,6 +180,8 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             rows = list(csv.DictReader(stream))
         if rows:
             samples_seen = int(float(rows[-1]["samples_seen"]))
+            environment_transitions = int(float(rows[-1].get("environment_transitions_total", 0)))
+            optimizer_steps = int(float(rows[-1].get("optimizer_steps_total", 0)))
             wall_time_s = sum(float(row["epoch_wall_time_s"]) for row in rows)
     expected = (
         int(args.max_batches_per_pass) * meta["physical_batch_size"]
@@ -194,6 +201,8 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             "completed_data_passes": 0 if args.max_batches_per_pass is not None else int(args.data_passes),
             "instances_seen": samples_seen,
             "customer_exposures": samples_seen * int(str(args.stage2_scale).removeprefix("Cus")),
+            "environment_transitions": environment_transitions,
+            "optimizer_steps": optimizer_steps,
             "selected_checkpoint": str(output / "checkpoint_selected.pt"),
             "peak_gpu_memory_bytes": peak_gpu,
             "completed_at": time.time(),

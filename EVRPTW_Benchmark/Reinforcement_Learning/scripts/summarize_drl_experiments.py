@@ -21,7 +21,23 @@ def collect(output_root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         if job["kind"] in {"train", "pilot"}:
             training = directory / "training_result.json"
             payload = json.loads(training.read_text(encoding="utf-8")) if training.exists() else {}
-            training_rows.append({**{key: job.get(key) for key in ("job_id", "method", "scale", "seed", "kind")}, **payload, "job_status": result.get("status")})
+            training_rows.append(
+                {
+                    **{
+                        key: job.get(key)
+                        for key in ("job_id", "method", "scale", "seed", "kind")
+                    },
+                    **payload,
+                    "job_status": result.get("status"),
+                    "job_wall_time_s": result.get("wall_time_s"),
+                    "job_peak_cpu_memory_bytes": result.get(
+                        "peak_cpu_memory_bytes"
+                    ),
+                    "job_peak_gpu_memory_bytes": result.get(
+                        "peak_gpu_memory_bytes"
+                    ),
+                }
+            )
             continue
         summary = directory / "summary.csv"
         if not summary.exists():
@@ -29,6 +45,9 @@ def collect(output_root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         frame = pd.read_csv(summary)
         for key in ("job_id", "method", "scale", "seed", "kind", "test_id", "decode_budget"):
             frame[key] = job.get(key)
+        frame["job_wall_time_s"] = result.get("wall_time_s")
+        frame["job_peak_cpu_memory_bytes"] = result.get("peak_cpu_memory_bytes")
+        frame["job_peak_gpu_memory_bytes"] = result.get("peak_gpu_memory_bytes")
         instance_frames.append(frame)
     instances = pd.concat(instance_frames, ignore_index=True) if instance_frames else pd.DataFrame()
     return instances, pd.DataFrame(training_rows)
@@ -52,6 +71,9 @@ def aggregate(instances: pd.DataFrame) -> pd.DataFrame:
                 "mean_verified_distance_km_conditional": feasible["objective_distance_km"].mean() if len(feasible) else None,
                 "mean_vehicle_count_conditional": feasible["vehicle_count"].mean() if len(feasible) else None,
                 "mean_inference_wall_time_s": frame["runtime_s"].mean(),
+                "job_wall_time_s": frame["job_wall_time_s"].max(),
+                "peak_cpu_memory_bytes": frame["job_peak_cpu_memory_bytes"].max(),
+                "peak_gpu_memory_bytes": frame["job_peak_gpu_memory_bytes"].max(),
             }
         )
     return pd.DataFrame(rows)

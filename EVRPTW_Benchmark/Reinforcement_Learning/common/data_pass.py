@@ -50,6 +50,7 @@ class DataPassState:
     instances_seen: int = 0
     customer_exposures: int = 0
     optimizer_steps: int = 0
+    environment_transitions: int = 0
     last_checkpoint: str | None = None
 
     @classmethod

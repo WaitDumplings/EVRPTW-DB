@@ -140,6 +140,7 @@ def train_reinforce_data_passes(
     baseline_probe_instances = list(pool.first(limit=min(64, len(pool))))
     ema_cost = resume_extra.get("ema_cost")
     optimizer_steps = int(state.optimizer_steps)
+    environment_transitions_total = int(state.environment_transitions)
     run_started = time.perf_counter()
     if str(args.device).startswith("cuda"):
         torch.cuda.reset_peak_memory_stats(args.device)
@@ -186,7 +187,7 @@ def train_reinforce_data_passes(
                 sums["cost"] += float(actor_cost.mean().detach().cpu()) * count
                 sums["distance"] += float(objective_distance(actor).mean().detach().cpu()) * count
                 sums["feasible"] += float(feasible(actor).float().mean().detach().cpu()) * count
-                transition_count += int(actor.log_likelihood.numel())
+                transition_count += int(actor.environment_transitions)
             torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
             optimizer.step()
             optimizer_steps += 1
@@ -276,7 +277,8 @@ def train_reinforce_data_passes(
             "instances_seen": instances_seen,
             "customer_exposures": instances_seen * _customer_count(args.scale),
             "optimizer_steps_total": optimizer_steps,
-            "environment_trajectories": transition_count,
+            "environment_transitions": transition_count,
+            "environment_transitions_total": environment_transitions_total + transition_count,
             "physical_batch_size": physical,
             "effective_batch_size": effective,
             "mean_loss": sums["loss"] / instances_seen,
@@ -291,11 +293,13 @@ def train_reinforce_data_passes(
         }
         append_jsonl(output / "train_history.jsonl", row)
         print(json.dumps(row, sort_keys=True), flush=True)
+        environment_transitions_total += transition_count
         if complete_pass:
             state.completed_data_passes = data_pass
             state.instances_seen += instances_seen
             state.customer_exposures += instances_seen * _customer_count(args.scale)
             state.optimizer_steps = optimizer_steps
+            state.environment_transitions = environment_transitions_total
             state.last_checkpoint = str(checkpoint)
             state.atomic_write(output / "data_pass_state.json")
         else:
@@ -308,6 +312,19 @@ def train_reinforce_data_passes(
         "protocol_id": args.protocol_id,
         "requested_data_passes": int(args.data_passes),
         "completed_data_passes": int(state.completed_data_passes),
+        "instances_seen": int(
+            state.instances_seen
+            if args.max_batches_per_pass is None
+            else state.instances_seen + instances_seen
+        ),
+        "customer_exposures": int(
+            state.customer_exposures
+            if args.max_batches_per_pass is None
+            else state.customer_exposures
+            + instances_seen * _customer_count(args.scale)
+        ),
+        "optimizer_steps": int(optimizer_steps),
+        "environment_transitions": int(environment_transitions_total),
         "selected_checkpoint": str(selected_checkpoint if selected_checkpoint.exists() else checkpoint),
         "peak_gpu_memory_bytes": _peak_gpu_bytes(args.device),
         "wall_time_s": time.perf_counter() - run_started,

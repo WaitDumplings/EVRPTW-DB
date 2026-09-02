@@ -27,6 +27,41 @@ CHILD_LOCK = threading.Lock()
 OVERFLOW_LOCK = threading.Lock()
 
 
+def process_rss_bytes(pid: int) -> int:
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError):
+        pass
+    return 0
+
+
+def process_gpu_memory_bytes(pid: int) -> int:
+    try:
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return 0
+    total_mib = 0
+    for line in output.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) == 2 and fields[0].isdigit() and int(fields[0]) == pid:
+            try:
+                total_mib += int(fields[1])
+            except ValueError:
+                continue
+    return total_mib * 1024 * 1024
+
+
 def atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
@@ -318,6 +353,16 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         process = subprocess.Popen(command, cwd=context["repo"], env=env, text=True, stdout=stdout, stderr=stderr, start_new_session=True)
         with CHILD_LOCK:
             CHILDREN[local_gpu] = process
+        peak_cpu_memory_bytes = 0
+        peak_gpu_memory_bytes = 0
+        while process.poll() is None:
+            peak_cpu_memory_bytes = max(
+                peak_cpu_memory_bytes, process_rss_bytes(process.pid)
+            )
+            peak_gpu_memory_bytes = max(
+                peak_gpu_memory_bytes, process_gpu_memory_bytes(process.pid)
+            )
+            time.sleep(0.5)
         returncode = process.wait()
         with CHILD_LOCK:
             CHILDREN.pop(local_gpu, None)
@@ -337,6 +382,8 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         "status": "passed" if passed else "failed",
         "returncode": returncode,
         "wall_time_s": time.perf_counter() - started,
+        "peak_cpu_memory_bytes": peak_cpu_memory_bytes,
+        "peak_gpu_memory_bytes": peak_gpu_memory_bytes,
         "completed_at": time.time(),
         "failure_reason": "OOM_UNCHANGED_CONFIG" if oom else None,
         "overflow_manifest": str(overflow_manifest) if overflow_manifest else None,

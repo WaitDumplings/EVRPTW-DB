@@ -557,6 +557,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     profile_timing = bool(train_cfg.get("profile_timing", False))
     ppo_step_chunk_size = int(train_cfg.get("ppo_step_chunk_size", 0) or 0)
     protocol_cfg = cfg.get("protocol", {})
+    environment_transitions_total = int(
+        protocol_cfg.get("environment_transitions", 0) or 0
+    )
     start_epoch = 1
     resume_checkpoint = protocol_cfg.get("resume_checkpoint")
     if resume_checkpoint:
@@ -586,6 +589,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "value_loss",
         "entropy",
         "samples_seen",
+        "environment_transitions",
+        "environment_transitions_total",
+        "optimizer_steps_total",
         "num_envs",
         "n_traj",
         "rollout_steps",
@@ -676,6 +682,8 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 seed=seed + epoch * 100_000,
                 profile_timing=profile_timing,
             )
+            environment_transitions = int(batch.valid.sum().item())
+            environment_transitions_total += environment_transitions
             returns = compute_returns(batch.rewards, batch.dones, gamma=gamma)
             advantages = returns - batch.values
             valid = batch.valid
@@ -793,6 +801,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "value_loss": float(loss_arr[:, 1].mean()),
                     "entropy": float(loss_arr[:, 2].mean()),
                     "samples_seen": pool.sample_count,
+                    "environment_transitions": environment_transitions,
+                    "environment_transitions_total": environment_transitions_total,
+                    "optimizer_steps_total": epoch
+                    * ppo_epochs
+                    * math.ceil(num_minibatches / gradient_accumulation_steps),
                     "num_envs": num_envs,
                     "n_traj": int(train_cfg.get("n_traj", 50)),
                     "rollout_steps": rollout_steps,
@@ -853,6 +866,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     instances_seen=int(pool.sample_count),
                     customer_exposures=int(pool.sample_count) * num_customers,
                     optimizer_steps=epoch * ppo_epochs * math.ceil(num_minibatches / gradient_accumulation_steps),
+                    environment_transitions=environment_transitions_total,
                     last_checkpoint=str(latest),
                 )
                 state.atomic_write(out_root / "data_pass_state.json")
