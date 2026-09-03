@@ -14,7 +14,7 @@ def test_server_env_resolves_repo_root_and_relative_dataset_override() -> None:
     environment.update(
         {
             "SERVER_SCRIPT_DIR": str(SCRIPT_ROOT / "2080ti_4_1"),
-            "EVRPTW_DATASET_ROOT": "../EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city",
+            "EVRPTW_DATASET_ROOT": "EVRPTW_Dataset/Instances_v2/us_11city",
         }
     )
     command = (
@@ -27,6 +27,25 @@ def test_server_env_resolves_repo_root_and_relative_dataset_override() -> None:
     ).splitlines()
     assert output[0] == str(REPO)
     assert output[1] == str(
-        (REPO / "../EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city").resolve()
+        (REPO / "EVRPTW_Dataset/Instances_v2/us_11city").resolve()
     )
     assert output[2] == str(REPO / "EVRPTW_Benchmark/results/DRL_rq_v1")
+
+
+def test_dataset_resolver_finds_frozen_release_inside_repository(tmp_path: Path) -> None:
+    release = (
+        tmp_path
+        / "EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
+    )
+    marker = release / "generation_plan/core/train/view_index.parquet"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    environment = os.environ.copy()
+    environment.pop("EVRPTW_DATASET_ROOT", None)
+    command = (
+        f"source {SCRIPT_ROOT / 'dataset_root.sh'}; "
+        f'resolve_evrptw_dataset_root "{tmp_path}"'
+    )
+    output = subprocess.check_output(
+        ["bash", "-c", command], env=environment, text=True
+    ).strip()

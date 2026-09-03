@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${EVRPTW_REPO_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
-DATASET_ROOT="${EVRPTW_DATASET_ROOT:-$REPO_ROOT/EVRPTW_Dataset/Instances_v2/us_11city}"
+source "$SCRIPT_DIR/dataset_root.sh"
+DATASET_ROOT="$(resolve_evrptw_dataset_root "$REPO_ROOT")"
 OUTPUT_ROOT="${EVRPTW_OUTPUT_ROOT:-$REPO_ROOT/EVRPTW_Benchmark/results/DRL_rq_v1}"
 ARTIFACT_ROOT="$OUTPUT_ROOT/artifacts"
 RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v4_cus1000_b2_val100"
