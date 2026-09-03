@@ -2,7 +2,7 @@
 
 These four bundles generate training checkpoints only. All defaults are derived
 from the checked-out repository; no machine-specific absolute data path is
-embedded. Dataset discovery is relative to the checked-out repository. The launcher checks, in order, an explicit repository-relative `EVRPTW_DATASET_ROOT`, `EVRPTW_Dataset/Instances_v2/us_11city`, and the frozen `EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823` directory. Standalone artifact preparation and all server launchers use the same resolver. No server-specific absolute path or sibling-checkout dependency is committed.
+embedded. Dataset discovery defaults to the archive restore tree relative to the checked-out repository: `../../../evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city`. The canonical and frozen v7 directory names are supported below that restore root. Standalone artifact preparation and all server launchers use the same resolver; no server-specific absolute path is committed.
 
 Activate the `maojie` environment and run exactly one pilot launcher on each
 server:
@@ -65,9 +65,9 @@ job on one A6000, not an enforced timeout. With 12 jobs and two A6000 GPUs, the
 idealized training-only queue is six waves, or about 12 days. A6000 pilot
 evidence is still mandatory before `full` can be authorized.
 
-For a non-canonical directory name under this repository, an explicit portable
-override is also accepted:
+If the restore directory has a different relative location, override only its
+root; the dataset remains below `EVRPTW_Dataset`:
 
 ```bash
-export EVRPTW_DATASET_ROOT="EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
+export EVRPTW_RESTORE_ROOT="../../../evrptw_runtime"
 ```

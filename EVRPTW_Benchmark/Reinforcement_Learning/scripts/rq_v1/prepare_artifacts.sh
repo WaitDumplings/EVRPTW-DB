@@ -23,13 +23,16 @@ for required in "$TRAIN_CORE" "$TRAIN_CUS50" "$FAMILY_METRICS"; do
 done
 [[ -d "$FAMILY_ROOT" ]] || { echo "Missing materialized family root: $FAMILY_ROOT" >&2; exit 2; }
 
-if [[ -f "$MARKER" ]] && python - "$MARKER" <<'PY'
+if [[ -f "$MARKER" ]] && python - "$MARKER" "$DATASET_ROOT" <<'PY'
 import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 d = json.loads(p.read_text())
 paths = [pathlib.Path(item) for item in d.get("required_artifacts", [])]
 valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v4_cus1000_b2_val100"
-raise SystemExit(0 if valid_budget and paths and all(path.is_file() for path in paths) else 1)
+valid_dataset = pathlib.Path(d.get("dataset_root", "")).resolve() == pathlib.Path(sys.argv[2]).resolve()
+raise SystemExit(
+    0 if valid_budget and valid_dataset and paths and all(path.is_file() for path in paths) else 1
+)
 PY
 then
   echo "RQ artifacts already complete: $MARKER"
@@ -106,14 +109,15 @@ for support in Random-10%-support Coverage-10%-support; do
   done
 done
 
-python - "$MARKER" "${REQUIRED[@]}" <<'PY'
+python - "$MARKER" "$DATASET_ROOT" "${REQUIRED[@]}" <<'PY'
 import json, os, pathlib, sys, tempfile
 target = pathlib.Path(sys.argv[1])
 payload = {
     "schema": "drl_rq_artifact_preparation_v2",
     "runtime_budget_id": "drl_rq_runtime_budget_v4_cus1000_b2_val100",
     "status": "passed",
-    "required_artifacts": sys.argv[2:],
+    "dataset_root": sys.argv[2],
+    "required_artifacts": sys.argv[3:],
     "validation_or_test_used_for_selection": False,
     "file_hash_validation_performed": False,
 }

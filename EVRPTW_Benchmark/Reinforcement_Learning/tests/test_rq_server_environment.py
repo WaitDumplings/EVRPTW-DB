@@ -32,20 +32,23 @@ def test_server_env_resolves_repo_root_and_relative_dataset_override() -> None:
     assert output[2] == str(REPO / "EVRPTW_Benchmark/results/DRL_rq_v1")
 
 
-def test_dataset_resolver_finds_frozen_release_inside_repository(tmp_path: Path) -> None:
-    release = (
-        tmp_path
-        / "EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
-    )
+def test_dataset_resolver_finds_release_below_relative_restore_root(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    release = tmp_path / "runtime/EVRPTW_Dataset/Instances_v2/us_11city"
     marker = release / "generation_plan/core/train/view_index.parquet"
     marker.parent.mkdir(parents=True)
     marker.touch()
     environment = os.environ.copy()
     environment.pop("EVRPTW_DATASET_ROOT", None)
+    environment["EVRPTW_RESTORE_ROOT"] = "../runtime"
     command = (
         f"source {SCRIPT_ROOT / 'dataset_root.sh'}; "
-        f'resolve_evrptw_dataset_root "{tmp_path}"'
+        f'resolve_evrptw_dataset_root "{repo}"'
     )
     output = subprocess.check_output(
         ["bash", "-c", command], env=environment, text=True
     ).strip()
+    assert output == str(release)
