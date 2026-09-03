@@ -6,7 +6,7 @@ Assigned checkpoint jobs: 16 total;
 pilot=4,
 full=12.
 
-From the repository root, activate the `maojie` environment and run:
+From the repository root, activate any Python environment containing the project's required dependencies and run:
 
 ```bash
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/a6000_2_1/pilot.sh

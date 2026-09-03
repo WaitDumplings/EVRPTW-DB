@@ -566,7 +566,6 @@ REPO_DEFAULT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 export EVRPTW_REPO_ROOT="${{EVRPTW_REPO_ROOT:-$REPO_DEFAULT}}"
 export EVRPTW_DATASET_ROOT="${{EVRPTW_DATASET_ROOT:-$EVRPTW_REPO_ROOT/EVRPTW_Dataset/Instances_v2/us_11city}}"
 export EVRPTW_OUTPUT_ROOT="${{EVRPTW_OUTPUT_ROOT:-$EVRPTW_REPO_ROOT/EVRPTW_Benchmark/results/DRL_protocol_v1}}"
-export EVRPTW_CONDA_ENV="${{EVRPTW_CONDA_ENV:-maojie}}"
 export DRL_MANIFEST="$SCRIPT_DIR/jobs.jsonl"
 export DRL_SLOTS="{slots}"
 export DRL_LOCAL_GPU_COUNT="{spec['gpu_count']}"
@@ -653,7 +652,7 @@ Assigned checkpoint jobs: {summary['job_count']} total;
 pilot={summary['counts_by_run_mode'].get('pilot', 0)},
 full={summary['counts_by_run_mode'].get('full', 0)}.
 
-From the repository root, activate the `maojie` environment and run:
+From the repository root, activate any Python environment containing the project's required dependencies and run:
 
 ```bash
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/{server_id}/pilot.sh

@@ -19,7 +19,6 @@ REQUIRED_ENV = (
     "EVRPTW_REPO_ROOT",
     "EVRPTW_DATASET_ROOT",
     "EVRPTW_OUTPUT_ROOT",
-    "EVRPTW_CONDA_ENV",
 )
 STOP = threading.Event()
 CHILDREN: dict[int, subprocess.Popen[str]] = {}
@@ -113,11 +112,7 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
     output = Path(os.environ["EVRPTW_OUTPUT_ROOT"]).resolve()
     if not (repo / ".git").exists() or not dataset.is_dir():
         raise RuntimeError("repository or dataset root does not exist")
-    expected_env = os.environ["EVRPTW_CONDA_ENV"]
-    if Path(sys.prefix).name != expected_env:
-        raise RuntimeError(
-            f"wrong Python environment: {Path(sys.prefix).name}; expected {expected_env}"
-        )
+    active_python_env = os.environ.get("CONDA_DEFAULT_ENV") or Path(sys.prefix).name
     output.mkdir(parents=True, exist_ok=True)
     probe = output / f".write_probe_{os.getpid()}"
     probe.write_text("ok", encoding="utf-8")
@@ -158,7 +153,10 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
         "branch": branch,
         "commit": commit,
         "free_bytes": free,
-        "conda_env": os.environ["EVRPTW_CONDA_ENV"],
+        "conda_env": active_python_env,
+        "configured_conda_env": os.environ.get("EVRPTW_CONDA_ENV"),
+        "python_executable": sys.executable,
+        "python_prefix": sys.prefix,
     }
     if args.mode == "evaluate" and not args.dry_run:
         missing_checkpoints = [

@@ -301,11 +301,10 @@ Required environment variables:
 EVRPTW_REPO_ROOT
 EVRPTW_DATASET_ROOT
 EVRPTW_OUTPUT_ROOT
-EVRPTW_CONDA_ENV
 ```
 
 No machine-specific absolute path may be committed.  Each wrapper must verify
-the expected GPU count and model, repository branch/commit, Python environment,
+the expected GPU count and model, repository branch/commit, usable Python environment,
 dataset indices, writable output root, and available disk space before launch.
 
 ## 7. Resume, failure, and provenance contract
