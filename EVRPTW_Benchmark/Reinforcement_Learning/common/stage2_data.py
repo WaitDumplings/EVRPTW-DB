@@ -25,6 +25,8 @@ from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
     EVRPTWVectorEnvFast,
 )
 from .data_pass import pass_batches
+from .euclidean import euclidean_instance, load_euclidean_manifest
+from .training_stream import read_stream_view_ids
 
 
 def _csv_set(value: str | None) -> set[str] | None:
@@ -45,6 +47,8 @@ class Stage2TaskPool:
     city_slugs: str | None = None
     seed: int = 1234
     cache_size: int = 4
+    representation: str = "G"
+    euclidean_manifest: str | Path | None = None
 
     def __post_init__(self) -> None:
         tasks = read_stage2_tasks(self.dataset_path, family_root=self.family_root)
@@ -62,6 +66,16 @@ class Stage2TaskPool:
         ]
         if not self.tasks:
             raise ValueError("no Stage-2 views match the requested learning-data filters")
+        self.representation = str(self.representation).upper()
+        if self.representation not in {"E", "G"}:
+            raise ValueError("representation must be E or G")
+        if self.representation == "E" and self.euclidean_manifest is None:
+            raise ValueError("E representation requires a Euclidean calibration manifest")
+        self._euclidean = (
+            load_euclidean_manifest(self.euclidean_manifest)
+            if self.representation == "E"
+            else None
+        )
         terminal_counts = {task.terminal_count for task in self.tasks}
         if len(terminal_counts) != 1:
             raise ValueError(
@@ -69,6 +83,7 @@ class Stage2TaskPool:
             )
         self.rng = np.random.default_rng(int(self.seed))
         self._cache: OrderedDict[str, EVRPTWInstance] = OrderedDict()
+        self._task_by_view_id = {task.view_id: task for task in self.tasks}
 
     def __len__(self) -> int:
         return len(self.tasks)
@@ -77,6 +92,8 @@ class Stage2TaskPool:
         cached = self._cache.pop(task.view_id, None)
         if cached is None:
             cached = load_stage2_instance(task)
+            if self._euclidean is not None:
+                cached = euclidean_instance(cached, self._euclidean)
         self._cache[task.view_id] = cached
         while len(self._cache) > max(0, int(self.cache_size)):
             self._cache.popitem(last=False)
@@ -105,6 +122,31 @@ class Stage2TaskPool:
             physical_batch_size=physical_batch_size,
         ):
             yield [self.instance(task) for task in tasks]
+
+    def stream_batches(
+        self,
+        stream_path: str | Path,
+        physical_batch_size: int,
+        *,
+        start: int = 0,
+        stop: int | None = None,
+    ) -> Iterable[list[EVRPTWInstance]]:
+        """Consume an explicit method-independent training ID stream."""
+
+        if int(physical_batch_size) <= 0:
+            raise ValueError("physical_batch_size must be positive")
+        view_ids = read_stream_view_ids(stream_path, start=start, stop=stop)
+        missing = sorted(set(view_ids).difference(self._task_by_view_id))
+        if missing:
+            raise ValueError(
+                f"training stream contains {len(missing)} IDs outside the filtered pool: "
+                f"{missing[:3]}"
+            )
+        for offset in range(0, len(view_ids), int(physical_batch_size)):
+            yield [
+                self.instance(self._task_by_view_id[view_id])
+                for view_id in view_ids[offset : offset + int(physical_batch_size)]
+            ]
 
 
 def make_envs(

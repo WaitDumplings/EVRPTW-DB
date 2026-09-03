@@ -226,6 +226,13 @@ def make_envs(cfg: dict[str, Any], seed: int):
             seed=seed,
             cache_size=int(data_cfg.get("stage2_cache_size", 4)),
             completed_data_passes=int(data_cfg.get("stage2_completed_data_passes", 0)),
+            training_stream_path=_resolve_repo_path(
+                data_cfg.get("stage2_training_stream_path")
+            ),
+            representation=str(data_cfg.get("stage2_training_representation", "G")),
+            euclidean_manifest=_resolve_repo_path(
+                data_cfg.get("stage2_euclidean_manifest")
+            ),
         )
     elif train_dataset_path not in (None, ""):
         pool = FixedDatasetInstancePool(
@@ -519,6 +526,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     cfg = deep_update(cfg, overrides or {})
     set_seed(seed)
     train_cfg = cfg["training"]
+    training_started = time.perf_counter()
     eval_cfg = cfg.get("evaluation", {})
     model_cfg = cfg.get("model", {})
     run_name = str(cfg.get("run_name", "TERRAN"))
@@ -582,6 +590,16 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     log_path = log_dir / "train_log.csv"
     eval_log_path = log_dir / "eval_log.csv"
     debug_log_path = log_dir / "debug_log.txt"
+    exposure_checkpoints = tuple(int(value) for value in protocol_cfg.get("exposure_checkpoints", []))
+    gpu_hour_checkpoints = tuple(float(value) for value in protocol_cfg.get("gpu_hour_checkpoints", []))
+    saved_exposure = {
+        value for value in exposure_checkpoints
+        if (ckpt_dir / f"checkpoint_customer_exposure_{value}.pt").is_file()
+    }
+    saved_gpu_hours = {
+        value for value in gpu_hour_checkpoints
+        if (ckpt_dir / f"checkpoint_gpu_hours_{value:g}.pt").is_file()
+    }
 
     train_fields = [
         "epoch",
@@ -869,6 +887,36 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             f.flush()
             if epoch % checkpoint_interval == 0 or epoch == epochs:
                 save_checkpoint(ckpt_dir / f"checkpoint_epoch_{epoch:04d}.pt", agent, optimizer, cfg, epoch, seed)
+            observed_exposure = int(pool.sample_count) * num_customers
+            observed_gpu_hours = (time.perf_counter() - training_started) / 3600.0
+            schedules = (
+                ("customer_exposure", exposure_checkpoints, saved_exposure, observed_exposure),
+                ("gpu_hours", gpu_hour_checkpoints, saved_gpu_hours, observed_gpu_hours),
+            )
+            for axis, thresholds, saved, observed in schedules:
+                for requested in thresholds:
+                    if requested in saved or observed < requested:
+                        continue
+                    suffix = str(requested) if axis == "customer_exposure" else f"{requested:g}"
+                    snapshot = ckpt_dir / f"checkpoint_{axis}_{suffix}.pt"
+                    save_checkpoint(snapshot, agent, optimizer, cfg, epoch, seed)
+                    saved.add(requested)
+                    with (log_dir / "checkpoint_events.jsonl").open("a", encoding="utf-8") as events:
+                        events.write(
+                            json.dumps(
+                                {
+                                    "schema": "drl_training_checkpoint_event_v1",
+                                    "axis": axis,
+                                    "requested": requested,
+                                    "observed_customer_exposures": observed_exposure,
+                                    "observed_gpu_hours": observed_gpu_hours,
+                                    "epoch": epoch,
+                                    "path": str(snapshot),
+                                },
+                                sort_keys=True,
+                            )
+                            + "\n"
+                        )
             protocol_epochs = int(protocol_cfg.get("epochs_per_pass", 0) or 0)
             if (
                 protocol_cfg

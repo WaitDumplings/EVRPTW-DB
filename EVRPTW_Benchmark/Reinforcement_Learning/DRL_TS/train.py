@@ -115,6 +115,8 @@ def main() -> None:
         track_ids=args.track_ids,
         city_slugs=args.city_slugs,
         seed=args.seed,
+        representation=args.training_representation,
+        euclidean_manifest=args.euclidean_manifest,
     )
     policy = DRLTSPolicy(
         embedding_dim=args.embedding_dim,

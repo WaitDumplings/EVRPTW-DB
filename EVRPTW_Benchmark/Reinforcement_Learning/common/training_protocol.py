@@ -19,6 +19,12 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-passes", type=int)
     parser.add_argument("--training-epochs", type=int)
     parser.add_argument("--training-rollout-steps", type=int)
+    parser.add_argument("--training-stream-path", type=Path)
+    parser.add_argument("--customer-exposure-budget", type=int)
+    parser.add_argument("--exposure-checkpoints", default="")
+    parser.add_argument("--gpu-hour-checkpoints", default="")
+    parser.add_argument("--training-representation", choices=("E", "G"), default="G")
+    parser.add_argument("--euclidean-manifest", type=Path)
     parser.add_argument("--physical-batch-size", type=int)
     parser.add_argument("--effective-batch-size", type=int)
     parser.add_argument("--validation-dataset-path", type=Path)
@@ -50,6 +56,24 @@ def require_training_rollout_steps(args: argparse.Namespace) -> int:
     if value <= 0:
         raise ValueError("training rollout steps must be positive")
     return value
+
+
+def parse_int_checkpoints(value: str | None) -> tuple[int, ...]:
+    if not value:
+        return ()
+    parsed = tuple(sorted({int(item) for item in str(value).split(",") if item.strip()}))
+    if any(item <= 0 for item in parsed):
+        raise ValueError("exposure checkpoints must be positive integers")
+    return parsed
+
+
+def parse_float_checkpoints(value: str | None) -> tuple[float, ...]:
+    if not value:
+        return ()
+    parsed = tuple(sorted({float(item) for item in str(value).split(",") if item.strip()}))
+    if any(not math.isfinite(item) or item <= 0.0 for item in parsed):
+        raise ValueError("GPU-hour checkpoints must be finite and positive")
+    return parsed
 
 
 def grouped_batches(
@@ -94,6 +118,8 @@ def make_validation_pool(
         split_ids="val",
         track_ids="validation",
         seed=int(seed) + 900_000,
+        representation=getattr(args, "training_representation", "G"),
+        euclidean_manifest=getattr(args, "euclidean_manifest", None),
     )
 
 
@@ -177,6 +203,8 @@ __all__ = [
     "grouped_batches",
     "load_state",
     "make_validation_pool",
+    "parse_float_checkpoints",
+    "parse_int_checkpoints",
     "require_registered_batches",
     "require_training_rollout_steps",
     "validation_key",

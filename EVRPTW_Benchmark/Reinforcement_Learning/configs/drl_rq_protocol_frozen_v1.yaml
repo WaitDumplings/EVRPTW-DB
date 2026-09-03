@@ -1,0 +1,115 @@
+protocol_id: drl_rq_protocol_frozen_v1
+status: method_frozen_formal_launch_blocked
+formal_launch_allowed: false
+supersedes_as_formal_candidate: drl_experiment_protocol_v1
+historical_evidence_relabelled: false
+
+methods: [am_evrptw, evrptw_rl, drl_ts, terran]
+seeds: [1234, 2345, 3456]
+training_scales: [Cus50, Cus100, Cus500, Cus1000]
+evaluation_only_scales: [Cus2000]
+training_rollout_steps:
+  Cus50: 80
+  Cus100: 140
+  Cus500: 600
+  Cus1000: 1200
+
+research_questions:
+  RQ1:
+    title: Scale
+    main_training_runs: 48
+    same_scale: [Cus50, Cus100, Cus500, Cus1000]
+    cross_scale_to_cus2000: [Cus100, Cus500, Cus1000]
+    reference_title: Reference Availability and Stability of Best-Observed Solutions
+    canonical_lower_bound_available: false
+    canonical_optimality_gap_available: false
+    primary_quality_reference: verified_posthoc_bks
+    gurobi_bound_semantics: copy_limited_milp_diagnostic_only
+  RQ2:
+    title: Training-support coverage
+    scale: Cus100
+    methods: [am_evrptw, terran]
+    support_conditions:
+      - Random-10%-support
+      - Coverage-10%-support
+      - Full-support
+    optional_support_conditions: [Random-1%-support]
+    additional_core_training_runs: 12
+    support_unit: parent_family
+    selection_uses_validation_or_test: false
+  RQ3:
+    title: Euclidean-to-directed-road transfer
+    scale: Cus100
+    conditions: [E_to_G, G_to_G]
+    additional_core_training_runs: 12
+    graph_injection_enabled: false
+
+core_training_run_count: 72
+train_cus2000: false
+energy_relaxed_directed_vrptw_model: excluded
+
+bks:
+  eligibility: common_verifier_complete_feasible_only
+  contributors: [gurobi, alns, vns_ts, am_evrptw, evrptw_rl, drl_ts, terran]
+  posthoc_only: true
+  checkpoint_selection_use: forbidden
+  provenance_fields: [instance_id, objective, method, seed, decoding_or_budget, solution_id]
+
+ev_integrity:
+  name: Route-level infinite-battery counterfactual
+  reoptimizes_routes: false
+  preserves_customer_order: true
+  removes_consecutive_charging_blocks: true
+  disables_battery_only_during_counterfactual_replay: true
+  prohibited_claims:
+    - infinite_battery_optimum
+    - optimal_battery_ablation
+    - globally_necessary_charging_visit
+
+training_fairness:
+  primary: customer_exposure_matched
+  secondary: gpu_hour_matched
+  sampling: stratified_deterministic_with_replacement
+  shared_stream_within_scale_seed: true
+  test_used_for_checkpoint_selection: false
+  statistical_unit: parent_family
+  wall_clock_checkpoints_h: [6, 12, 24]
+  exposure_checkpoints: null
+  customer_exposure_budget_by_scale: null
+  logical_batch_by_scale: null
+  physical_microbatch_by_method_scale: null
+
+euclidean:
+  distance: symmetric_straight_line_from_fixed_coordinates
+  energy: same_rho_times_euclidean_distance
+  speed_groups: [weekday, weekend]
+  speed_calibration: aggregate_ratio_on_preregistered_training_only_od_pairs
+  shared_across_training_cities: true
+  validation_or_test_calibration: forbidden
+  manifest_required: true
+
+formal_launch_gates:
+  G1:
+    requirement: customer_exposure_budget_for_every_scale
+    status: PILOT_REQUIRED
+  G2:
+    requirement: shared_deterministic_stratified_with_replacement_id_stream
+    status: IMPLEMENTATION_REQUIRED
+  G3:
+    requirement: exposure_and_gpu_hour_checkpoints
+    status: IMPLEMENTATION_REQUIRED
+  G4:
+    requirement: common_logical_batch_for_every_scale
+    status: PILOT_REQUIRED
+  G5:
+    requirement: per_method_physical_microbatch_and_oom_policy
+    status: PILOT_REQUIRED
+  G6:
+    requirement: rtx_a6000_cus1000_memory_and_runtime_pilot
+    status: PILOT_REQUIRED
+  G7:
+    requirement: euclidean_distance_time_energy_generation_manifest
+    status: IMPLEMENTATION_REQUIRED
+  G8:
+    requirement: parent_family_clustered_paired_bootstrap_aggregation
+    status: IMPLEMENTATION_REQUIRED

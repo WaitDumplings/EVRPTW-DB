@@ -175,7 +175,10 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
 
 
 def output_dir(job: dict[str, Any], context: dict[str, Any]) -> Path:
-    root = context["output"] / job["representation"] / job["method"] / job["scale"] / f"seed_{job['seed']}" / context["commit"]
+    root = context["output"] / job["representation"]
+    if job.get("condition"):
+        root = root / str(job["condition"])
+    root = root / job["method"] / job["scale"] / f"seed_{job['seed']}" / context["commit"]
     if job["kind"] in {"eval", "transfer"}:
         root = root / job["test_id"] / job["decode_budget"]
     elif job["kind"] == "pilot":
@@ -269,6 +272,29 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
         ]
     if job["run_mode"] == "pilot":
         command.append("--pilot-mode")
+    if job.get("training_stream_path"):
+        command.extend(
+            [
+                "--training-stream-path",
+                str(context["repo"] / job["training_stream_path"]),
+                "--customer-exposure-budget",
+                str(job["customer_exposure_budget"]),
+                "--exposure-checkpoints",
+                ",".join(str(value) for value in job.get("exposure_checkpoints", [])),
+                "--gpu-hour-checkpoints",
+                ",".join(str(value) for value in job.get("gpu_hour_checkpoints", [])),
+            ]
+        )
+    command.extend(
+        ["--training-representation", str(job.get("training_representation", "G"))]
+    )
+    if job.get("euclidean_manifest"):
+        command.extend(
+            [
+                "--euclidean-manifest",
+                str(context["repo"] / job["euclidean_manifest"]),
+            ]
+        )
     if resume:
         command.append("--resume")
     return command
@@ -444,10 +470,22 @@ def handle_signal(signum: int, _frame: Any) -> None:
             pass
 
 
-def require_pilot_gate(context: dict[str, Any]) -> None:
+def require_pilot_gate(context: dict[str, Any], jobs: list[dict[str, Any]] | None = None) -> None:
     report = context["output"] / "pilot_gate_report.json"
     if not report.exists() or not json.loads(report.read_text(encoding="utf-8")).get("passed"):
         raise RuntimeError(f"full mode is blocked until the pilot gate passes: {report}")
+    rq_jobs = [job for job in (jobs or []) if job.get("formal_gate_file")]
+    for gate_name in sorted({str(job["formal_gate_file"]) for job in rq_jobs}):
+        gate_path = context["repo"] / gate_name
+        if not gate_path.is_file():
+            raise RuntimeError(f"formal RQ launch gate is missing: {gate_path}")
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        statuses = gate.get("formal_launch_gates", {})
+        all_pass = set(statuses) == {f"G{index}" for index in range(1, 9)} and all(
+            value == "PASS" for value in statuses.values()
+        )
+        if not gate.get("formal_launch_allowed") or not all_pass:
+            raise RuntimeError(f"formal 72-run launch remains blocked by G1-G8: {gate_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -477,7 +515,7 @@ def main() -> None:
         print(json.dumps({"jobs": len(rows), "completed": sum(row["complete"] for row in rows), "rows": rows}, sort_keys=True))
         return
     if args.mode in {"full", "resume"}:
-        require_pilot_gate(context)
+        require_pilot_gate(context, jobs)
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
     by_slot = {slot: [job for job in jobs if int(job["global_slot"]) == slot] for slot in slots}

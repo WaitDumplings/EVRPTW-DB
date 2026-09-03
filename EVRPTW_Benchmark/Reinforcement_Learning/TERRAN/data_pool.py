@@ -15,6 +15,7 @@ from evrptw_core.schema import EVRPTWInstance
 
 from ..common import Stage2TaskPool
 from ..common.data_pass import seeded_pass_order
+from ..common.training_stream import read_stream_view_ids
 
 
 @dataclass
@@ -30,6 +31,9 @@ class Stage2TERRANPool:
     seed: int = 1234
     cache_size: int = 4
     completed_data_passes: int = 0
+    training_stream_path: str | Path | None = None
+    representation: str = "G"
+    euclidean_manifest: str | Path | None = None
 
     def __post_init__(self) -> None:
         self.pool = Stage2TaskPool(
@@ -41,14 +45,37 @@ class Stage2TERRANPool:
             city_slugs=self.city_slugs,
             seed=self.seed,
             cache_size=self.cache_size,
+            representation=self.representation,
+            euclidean_manifest=self.euclidean_manifest,
         )
-        self.sample_count = int(self.completed_data_passes) * len(self.pool)
-        self._order = seeded_pass_order(
-            len(self.pool), self.seed, int(self.completed_data_passes) + 1
+        self._stream_view_ids = (
+            read_stream_view_ids(self.training_stream_path)
+            if self.training_stream_path is not None
+            else None
         )
+        self._task_by_view_id = {task.view_id: task for task in self.pool.tasks}
+        if self._stream_view_ids is not None:
+            missing = sorted(set(self._stream_view_ids).difference(self._task_by_view_id))
+            if missing:
+                raise ValueError(
+                    f"TERRAN training stream contains IDs outside its pool: {missing[:3]}"
+                )
+            self.sample_count = 0
+            self._order = None
+        else:
+            self.sample_count = int(self.completed_data_passes) * len(self.pool)
+            self._order = seeded_pass_order(
+                len(self.pool), self.seed, int(self.completed_data_passes) + 1
+            )
         self.region_pool_status = f"stage2_frozen:{Path(self.dataset_path)}"
 
     def sample(self) -> EVRPTWInstance:
+        if self._stream_view_ids is not None:
+            if self.sample_count >= len(self._stream_view_ids):
+                raise RuntimeError("TERRAN exhausted the registered training ID stream")
+            view_id = self._stream_view_ids[self.sample_count]
+            self.sample_count += 1
+            return self.pool.instance(self._task_by_view_id[view_id])
         offset = self.sample_count % len(self.pool)
         if self.sample_count and offset == 0:
             data_pass = self.sample_count // len(self.pool) + 1
@@ -67,7 +94,11 @@ class Stage2TERRANPool:
                 "cluster_exposure_entropy": "",
                 "region_pool_status": self.region_pool_status,
                 "dataset_size": len(self.pool),
-                "sample_mode": "seeded_shuffle_cycle_without_replacement",
+                "sample_mode": (
+                    "registered_stratified_stream_with_replacement"
+                    if self._stream_view_ids is not None
+                    else "seeded_shuffle_cycle_without_replacement"
+                ),
             }
         ]
 

@@ -18,6 +18,8 @@ from .training_protocol import (
     grouped_batches,
     load_state,
     make_validation_pool,
+    parse_float_checkpoints,
+    parse_int_checkpoints,
     require_registered_batches,
     validation_key,
     verified_validation,
@@ -78,6 +80,61 @@ def _load_checkpoint(
     return payload
 
 
+def _save_registered_snapshots(
+    *,
+    output: Path,
+    method: str,
+    args: Any,
+    data_pass: int,
+    policy: torch.nn.Module,
+    baseline: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    observed_exposure: int,
+    observed_gpu_hours: float,
+    exposure_checkpoints: tuple[int, ...],
+    gpu_hour_checkpoints: tuple[float, ...],
+    saved_exposure: set[int],
+    saved_gpu_hours: set[float],
+) -> None:
+    schedules = (
+        ("customer_exposure", exposure_checkpoints, saved_exposure, observed_exposure),
+        ("gpu_hours", gpu_hour_checkpoints, saved_gpu_hours, observed_gpu_hours),
+    )
+    for axis, thresholds, saved, observed in schedules:
+        for requested in thresholds:
+            if requested in saved or observed < requested:
+                continue
+            suffix = str(requested) if axis == "customer_exposure" else f"{requested:g}"
+            snapshot = output / f"checkpoint_{axis}_{suffix}.pt"
+            _save_checkpoint(
+                snapshot,
+                method=method,
+                data_pass=data_pass,
+                policy=policy,
+                baseline=baseline,
+                optimizer=optimizer,
+                args=args,
+                extra={
+                    "checkpoint_axis": axis,
+                    "requested_checkpoint": requested,
+                    "observed_customer_exposures": int(observed_exposure),
+                    "observed_gpu_hours": float(observed_gpu_hours),
+                },
+            )
+            saved.add(requested)
+            append_jsonl(
+                output / "checkpoint_events.jsonl",
+                {
+                    "schema": "drl_training_checkpoint_event_v1",
+                    "axis": axis,
+                    "requested": requested,
+                    "observed_customer_exposures": int(observed_exposure),
+                    "observed_gpu_hours": float(observed_gpu_hours),
+                    "path": str(snapshot),
+                },
+            )
+
+
 def train_reinforce_data_passes(
     *,
     method: str,
@@ -120,8 +177,21 @@ def train_reinforce_data_passes(
     if fixed_epochs is not None and int(args.validation_checkpoints) != 1:
         raise ValueError("fixed-epoch protocol currently requires one final validation checkpoint")
     physical, effective = require_registered_batches(args, legacy_batch_size)
-    if fixed_epochs is not None and fixed_epochs * effective > len(pool):
+    stream_path = getattr(args, "training_stream_path", None)
+    expected_fixed_instances = fixed_epochs * effective if fixed_epochs is not None else None
+    if (
+        fixed_epochs is not None
+        and stream_path is None
+        and expected_fixed_instances > len(pool)
+    ):
         raise ValueError("fixed training budget exceeds the no-replacement training pool")
+    if stream_path is not None and fixed_epochs is None:
+        raise ValueError("an explicit training stream requires --training-epochs")
+    if stream_path is not None:
+        customer_budget = getattr(args, "customer_exposure_budget", None)
+        expected_budget = int(expected_fixed_instances) * _customer_count(args.scale)
+        if customer_budget is None or int(customer_budget) != expected_budget:
+            raise ValueError("explicit training stream requires an exact customer-exposure budget")
     microbatches_per_epoch = effective // physical
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -165,6 +235,16 @@ def train_reinforce_data_passes(
     starting_optimizer_steps = optimizer_steps
     environment_transitions_total = int(state.environment_transitions)
     run_started = time.perf_counter()
+    exposure_checkpoints = parse_int_checkpoints(getattr(args, "exposure_checkpoints", ""))
+    gpu_hour_checkpoints = parse_float_checkpoints(getattr(args, "gpu_hour_checkpoints", ""))
+    saved_exposure = {
+        value for value in exposure_checkpoints
+        if (output / f"checkpoint_customer_exposure_{value}.pt").is_file()
+    }
+    saved_gpu_hours = {
+        value for value in gpu_hour_checkpoints
+        if (output / f"checkpoint_gpu_hours_{value:g}.pt").is_file()
+    }
     if str(args.device).startswith("cuda"):
         torch.cuda.reset_peak_memory_stats(args.device)
 
@@ -186,7 +266,16 @@ def train_reinforce_data_passes(
             if fixed_epochs is not None
             else args.max_batches_per_pass
         )
-        batches = pool.data_pass_batches(data_pass, physical)
+        batches = (
+            pool.stream_batches(
+                stream_path,
+                physical,
+                start=0,
+                stop=expected_fixed_instances,
+            )
+            if stream_path is not None
+            else pool.data_pass_batches(data_pass, physical)
+        )
         for group_index, batch_group in enumerate(
             grouped_batches(
                 batches,
@@ -247,6 +336,21 @@ def train_reinforce_data_passes(
             optimizer_steps += 1
             if method == "EVRPTW-RL" and optimizer_steps == int(args.ema_warmup_steps):
                 baseline.load_state_dict(policy.state_dict())
+            _save_registered_snapshots(
+                output=output,
+                method=method,
+                args=args,
+                data_pass=state.completed_data_passes,
+                policy=policy,
+                baseline=baseline,
+                optimizer=optimizer,
+                observed_exposure=instances_seen * _customer_count(args.scale),
+                observed_gpu_hours=(time.perf_counter() - run_started) / 3600.0,
+                exposure_checkpoints=exposure_checkpoints,
+                gpu_hour_checkpoints=gpu_hour_checkpoints,
+                saved_exposure=saved_exposure,
+                saved_gpu_hours=saved_gpu_hours,
+            )
             if fixed_epochs is not None:
                 epoch_steps = np.asarray(group_trajectory_steps, dtype=np.int64)
                 append_jsonl(
@@ -365,7 +469,10 @@ def train_reinforce_data_passes(
             "protocol_id": args.protocol_id,
             "data_pass": data_pass,
             "pass_complete": complete_pass,
-            "budget_mode": "fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes",
+            "budget_mode": (
+                "fixed_customer_exposure" if stream_path is not None else
+                ("fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes")
+            ),
             "training_epochs": fixed_epochs,
             "logical_environments_per_epoch": effective if fixed_epochs is not None else None,
             "training_stage": training_stage,
@@ -416,7 +523,10 @@ def train_reinforce_data_passes(
         "status": "pilot_partial" if args.pilot_mode else "passed",
         "method": method,
         "protocol_id": args.protocol_id,
-        "budget_mode": "fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes",
+        "budget_mode": (
+            "fixed_customer_exposure" if stream_path is not None else
+            ("fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes")
+        ),
         "requested_training_epochs": fixed_epochs,
         "completed_training_epochs": fixed_epochs if fixed_epochs is not None else None,
         "logical_environments_per_epoch": effective if fixed_epochs is not None else None,
@@ -425,8 +535,11 @@ def train_reinforce_data_passes(
         "training_rollout_steps": int(args.training_rollout_steps),
         "instances_seen": int(state.instances_seen),
         "customer_exposures": int(state.customer_exposures),
+        "training_stream_path": str(stream_path) if stream_path is not None else None,
         "optimizer_steps": int(optimizer_steps),
         "environment_transitions": int(environment_transitions_total),
+        "saved_exposure_checkpoints": sorted(saved_exposure),
+        "saved_gpu_hour_checkpoints": sorted(saved_gpu_hours),
         "selected_checkpoint": str(selected_checkpoint if selected_checkpoint.exists() else checkpoint),
         "peak_gpu_memory_bytes": _peak_gpu_bytes(args.device),
         "wall_time_s": time.perf_counter() - run_started,

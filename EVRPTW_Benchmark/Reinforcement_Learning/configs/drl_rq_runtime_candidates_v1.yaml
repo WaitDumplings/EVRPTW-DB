@@ -1,0 +1,35 @@
+schema: drl_rq_runtime_candidates_v1
+status: pilot_candidates_not_formally_frozen
+protocol_id: drl_rq_protocol_frozen_v1
+
+seeds: [1234, 2345, 3456]
+rollout_steps: {Cus50: 80, Cus100: 140, Cus500: 600, Cus1000: 1200}
+
+# These values are inputs to G1/G4/G5/G6 pilots, not accepted formal settings.
+candidate_customer_exposure_budget:
+  Cus50: 500000
+  Cus100: 500000
+  Cus500: 500000
+  Cus1000: 1000000
+candidate_logical_batch:
+  Cus50: 400
+  Cus100: 200
+  Cus500: 50
+  Cus1000: 1
+physical_batch_caps:
+  am_evrptw: {Cus50: 400, Cus100: 100, Cus500: 6, Cus1000: 1}
+  evrptw_rl: {Cus50: 120, Cus100: 32, Cus500: 2, Cus1000: 1}
+  drl_ts: {Cus50: 80, Cus100: 24, Cus500: 1, Cus1000: 1}
+  terran: {Cus50: 400, Cus100: 200, Cus500: 50, Cus1000: 1}
+
+pilot:
+  logical_updates: 2
+  validation_views: 8
+formal_candidate:
+  validation_views: 500
+  exposure_checkpoints_fraction: [0.25, 0.50, 1.00]
+  gpu_hour_checkpoints: [6, 12, 24]
+
+artifacts_relative_root: EVRPTW_Benchmark/results/DRL_rq_v1/artifacts
+output_relative_root: EVRPTW_Benchmark/results/DRL_rq_v1
+file_hash_validation_performed: false

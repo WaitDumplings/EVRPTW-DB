@@ -28,6 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-ids", default="test")
     parser.add_argument("--track-ids", default="test1_new_seed")
     parser.add_argument("--city-slugs")
+    parser.add_argument("--representation", choices=("E", "G"), default="G")
+    parser.add_argument("--euclidean-manifest", type=Path)
     parser.add_argument("--decode-mode", choices=("sample", "greedy"), default="sample")
     parser.add_argument("--candidates", type=int, default=50)
     parser.add_argument("--candidate-chunk-size", type=int, default=1)
@@ -77,6 +79,8 @@ def main() -> None:
         track_ids=args.track_ids,
         city_slugs=args.city_slugs,
         seed=args.seed,
+        representation=args.representation,
+        euclidean_manifest=args.euclidean_manifest,
     )
     instances = list(pool.first(limit=args.limit))
     args.output_dir.mkdir(parents=True, exist_ok=True)

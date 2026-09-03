@@ -15,10 +15,13 @@ import torch
 from ..common import Stage2TaskPool
 from ..common.training_protocol import (
     atomic_json,
+    parse_float_checkpoints,
+    parse_int_checkpoints,
     require_registered_batches,
     require_training_rollout_steps,
 )
 from ..common.data_pass import DataPassState
+from ..common.training_stream import read_stream_view_ids
 
 
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int] | None]:
@@ -52,16 +55,31 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         split_ids=args.stage2_split_ids or "train",
         track_ids=args.stage2_track_ids or "train",
         seed=args.seed,
+        representation=getattr(args, "training_representation", "G"),
+        euclidean_manifest=getattr(args, "euclidean_manifest", None),
     )
     fixed_epochs = getattr(args, "training_epochs", None) is not None
+    stream_path = getattr(args, "training_stream_path", None)
     if fixed_epochs:
         if args.data_passes is not None or args.max_batches_per_pass is not None:
             raise ValueError("fixed TERRAN epochs cannot be combined with data-pass options")
         epochs = int(args.training_epochs)
         if epochs <= 0:
             raise ValueError("--training-epochs must be positive")
-        if epochs * physical > len(pool):
+        if stream_path is None and epochs * physical > len(pool):
             raise ValueError("fixed training budget exceeds the no-replacement training pool")
+        if stream_path is not None:
+            expected_instances = epochs * effective
+            if len(read_stream_view_ids(stream_path)) != expected_instances:
+                raise ValueError("TERRAN training stream length does not match its budget")
+            expected_exposures = expected_instances * int(
+                str(args.stage2_scale).removeprefix("Cus")
+            )
+            if (
+                args.customer_exposure_budget is None
+                or int(args.customer_exposure_budget) != expected_exposures
+            ):
+                raise ValueError("TERRAN explicit stream requires an exact exposure budget")
         if int(args.validation_checkpoints) != 1:
             raise ValueError("fixed-epoch protocol currently requires one final validation checkpoint")
         epochs_per_pass = epochs
@@ -95,7 +113,10 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     configured["output_dir"] = str(Path(args.output_dir).resolve())
     configured["protocol"] = {
         "protocol_id": args.protocol_id,
-        "budget_mode": "fixed_logical_epochs" if fixed_epochs else "complete_data_passes",
+        "budget_mode": (
+            "fixed_customer_exposure" if stream_path is not None else
+            ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")
+        ),
         "training_epochs": epochs if fixed_epochs else None,
         "logical_environments_per_epoch": physical if fixed_epochs else None,
         "data_passes": total_passes,
@@ -109,6 +130,9 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "environment_transitions": environment_transitions,
         "optimizer_steps": optimizer_steps,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
+        "training_stream_path": str(stream_path) if stream_path is not None else None,
+        "exposure_checkpoints": list(parse_int_checkpoints(getattr(args, "exposure_checkpoints", ""))),
+        "gpu_hour_checkpoints": list(parse_float_checkpoints(getattr(args, "gpu_hour_checkpoints", ""))),
     }
     return configured, {
         "views_per_pass": len(pool),
@@ -191,6 +215,9 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
         ]
         if args.validation_family_root:
             command.extend(["--family-root", str(args.validation_family_root)])
+        command.extend(["--representation", str(args.training_representation)])
+        if args.euclidean_manifest:
+            command.extend(["--euclidean-manifest", str(args.euclidean_manifest)])
         subprocess.run(command, check=True)
         summary = _validation_summary(validation_dir / "summary.csv", data_pass)
         with history_path.open("a", encoding="utf-8") as stream:
@@ -237,7 +264,10 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             "status": "pilot_partial" if getattr(args, "pilot_mode", False) else "passed",
             "method": "TERRAN",
             "protocol_id": args.protocol_id,
-            "budget_mode": "fixed_logical_epochs" if fixed_epochs else "complete_data_passes",
+            "budget_mode": (
+                "fixed_customer_exposure" if getattr(args, "training_stream_path", None) is not None else
+                ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")
+            ),
             "requested_training_epochs": int(args.training_epochs) if fixed_epochs else None,
             "completed_training_epochs": int(args.training_epochs) if fixed_epochs else None,
             "logical_environments_per_epoch": meta["effective_batch_size"] if fixed_epochs else None,
@@ -248,6 +278,15 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             "customer_exposures": samples_seen * int(str(args.stage2_scale).removeprefix("Cus")),
             "environment_transitions": environment_transitions,
             "optimizer_steps": optimizer_steps,
+            "training_stream_path": str(args.training_stream_path) if args.training_stream_path else None,
+            "saved_exposure_checkpoint_files": [
+                str(path)
+                for path in sorted(final_checkpoint.parent.glob("checkpoint_customer_exposure_*.pt"))
+            ],
+            "saved_gpu_hour_checkpoint_files": [
+                str(path)
+                for path in sorted(final_checkpoint.parent.glob("checkpoint_gpu_hours_*.pt"))
+            ],
             "selected_checkpoint": str(output / "checkpoint_selected.pt"),
             "peak_gpu_memory_bytes": peak_gpu,
             "completed_at": time.time(),

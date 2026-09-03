@@ -84,6 +84,15 @@ def main() -> None:
         overrides["data"]["stage2_track_ids"] = args.stage2_track_ids
     if args.stage2_city_slugs is not None:
         overrides["data"]["stage2_city_slugs"] = args.stage2_city_slugs
+    if args.training_stream_path is not None:
+        overrides["data"]["stage2_training_stream_path"] = str(
+            args.training_stream_path
+        )
+    overrides["data"]["stage2_training_representation"] = args.training_representation
+    if args.euclidean_manifest is not None:
+        overrides["data"]["stage2_euclidean_manifest"] = str(
+            args.euclidean_manifest
+        )
     if args.num_customers is not None:
         overrides["data"]["num_customers"] = args.num_customers
     if args.num_charging_stations is not None:
