@@ -6,8 +6,17 @@ target_branch: drl-benchmark-adapters
 seeds: [1234, 2345, 3456]
 
 training:
-  budget_mode: fixed_customer_exposures
-  target_customer_exposures_per_job: 500000
+  budget_mode: fixed_logical_epochs
+  logical_epochs_by_scale:
+    Cus50: 100
+    Cus100: 200
+    Cus500: 500
+    Cus1000: 1000
+  environments_per_epoch_by_scale:
+    Cus50: 100
+    Cus100: 25
+    Cus500: 2
+    Cus1000: 1
   validation_checkpoints: 1
   rollout_steps_by_scale:
     Cus50: 80

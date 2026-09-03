@@ -120,8 +120,9 @@ def train_reinforce_data_passes(
     if fixed_epochs is not None and int(args.validation_checkpoints) != 1:
         raise ValueError("fixed-epoch protocol currently requires one final validation checkpoint")
     physical, effective = require_registered_batches(args, legacy_batch_size)
-    if fixed_epochs is not None and fixed_epochs * physical > len(pool):
+    if fixed_epochs is not None and fixed_epochs * effective > len(pool):
         raise ValueError("fixed training budget exceeds the no-replacement training pool")
+    microbatches_per_epoch = effective // physical
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     state = load_state(output, args.protocol_id, args.resume)
@@ -161,6 +162,7 @@ def train_reinforce_data_passes(
     )
     ema_cost = resume_extra.get("ema_cost")
     optimizer_steps = int(state.optimizer_steps)
+    starting_optimizer_steps = optimizer_steps
     environment_transitions_total = int(state.environment_transitions)
     run_started = time.perf_counter()
     if str(args.device).startswith("cuda"):
@@ -179,7 +181,11 @@ def train_reinforce_data_passes(
         trajectory_steps: list[int] = []
         rollout_budget_exhausted_count = 0
         complete_pass = fixed_epochs is not None or args.max_batches_per_pass is None
-        max_batches = fixed_epochs if fixed_epochs is not None else args.max_batches_per_pass
+        max_batches = (
+            fixed_epochs * microbatches_per_epoch
+            if fixed_epochs is not None
+            else args.max_batches_per_pass
+        )
         batches = pool.data_pass_batches(data_pass, physical)
         for group_index, batch_group in enumerate(
             grouped_batches(
@@ -188,10 +194,15 @@ def train_reinforce_data_passes(
                 max_batches=max_batches,
             )
         ):
+            logical_epoch_started = time.perf_counter()
             group_soft = soft
             if fixed_epochs is not None and soft_stage_fraction:
                 group_soft = group_index < int(fixed_epochs * soft_stage_fraction)
             group_size = sum(len(batch) for batch in batch_group)
+            group_sums = {key: 0.0 for key in sums}
+            group_transitions = 0
+            group_trajectory_steps: list[int] = []
+            group_exhausted = 0
             optimizer.zero_grad(set_to_none=True)
             for sub_index, instances in enumerate(batch_group):
                 rollout_seed = int(args.seed) + data_pass * 10_000_000 + group_index * 1000 + sub_index
@@ -213,27 +224,64 @@ def train_reinforce_data_passes(
                 (loss * (len(instances) / max(group_size, 1))).backward()
                 count = len(instances)
                 instances_seen += count
-                sums["loss"] += float(loss.detach().cpu()) * count
-                sums["cost"] += float(actor_cost.mean().detach().cpu()) * count
-                sums["distance"] += float(objective_distance(actor).mean().detach().cpu()) * count
-                sums["feasible"] += float(feasible(actor).float().mean().detach().cpu()) * count
-                transition_count += int(actor.environment_transitions)
-                trajectory_steps.extend(
-                    actor.trajectory_steps.detach().cpu().reshape(-1).tolist()
-                )
-                rollout_budget_exhausted_count += int(
-                    actor.rollout_budget_exhausted.sum().detach().cpu()
-                )
+                metrics = {
+                    "loss": float(loss.detach().cpu()) * count,
+                    "cost": float(actor_cost.mean().detach().cpu()) * count,
+                    "distance": float(objective_distance(actor).mean().detach().cpu()) * count,
+                    "feasible": float(feasible(actor).float().mean().detach().cpu()) * count,
+                }
+                for key, value in metrics.items():
+                    sums[key] += value
+                    group_sums[key] += value
+                actor_transitions = int(actor.environment_transitions)
+                actor_steps = actor.trajectory_steps.detach().cpu().reshape(-1).tolist()
+                actor_exhausted = int(actor.rollout_budget_exhausted.sum().detach().cpu())
+                transition_count += actor_transitions
+                group_transitions += actor_transitions
+                trajectory_steps.extend(actor_steps)
+                group_trajectory_steps.extend(actor_steps)
+                rollout_budget_exhausted_count += actor_exhausted
+                group_exhausted += actor_exhausted
             torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
             optimizer.step()
             optimizer_steps += 1
             if method == "EVRPTW-RL" and optimizer_steps == int(args.ema_warmup_steps):
                 baseline.load_state_dict(policy.state_dict())
+            if fixed_epochs is not None:
+                epoch_steps = np.asarray(group_trajectory_steps, dtype=np.int64)
+                append_jsonl(
+                    output / "logical_epoch_history.jsonl",
+                    {
+                        "schema": "drl_logical_epoch_history_v1",
+                        "method": method,
+                        "protocol_id": args.protocol_id,
+                        "logical_epoch": group_index + 1,
+                        "training_stage": "soft" if group_soft else "hard",
+                        "instances_seen": group_size,
+                        "customer_exposures": group_size * _customer_count(args.scale),
+                        "physical_microbatches": len(batch_group),
+                        "physical_batch_size": physical,
+                        "effective_batch_size": effective,
+                        "optimizer_steps_total": optimizer_steps,
+                        "environment_transitions": group_transitions,
+                        "mean_loss": group_sums["loss"] / group_size,
+                        "mean_training_cost": group_sums["cost"] / group_size,
+                        "mean_objective_distance_km": group_sums["distance"] / group_size,
+                        "mean_environment_feasible_rate": group_sums["feasible"] / group_size,
+                        "mean_trajectory_steps": float(epoch_steps.mean()),
+                        "rollout_budget_exhausted_rate": group_exhausted / max(epoch_steps.size, 1),
+                        "epoch_wall_time_s": time.perf_counter() - logical_epoch_started,
+                    },
+                )
 
         if instances_seen == 0:
             raise RuntimeError("data pass yielded no training instances")
         if fixed_epochs is not None:
-            expected_instances = fixed_epochs * physical
+            if optimizer_steps - starting_optimizer_steps != fixed_epochs:
+                raise RuntimeError(
+                    "logical epoch count does not match optimizer update count"
+                )
+            expected_instances = fixed_epochs * effective
             if instances_seen != expected_instances:
                 raise RuntimeError(
                     f"incomplete fixed-epoch budget: {instances_seen} != {expected_instances}"
@@ -317,8 +365,9 @@ def train_reinforce_data_passes(
             "protocol_id": args.protocol_id,
             "data_pass": data_pass,
             "pass_complete": complete_pass,
-            "budget_mode": "fixed_training_epochs" if fixed_epochs is not None else "complete_data_passes",
+            "budget_mode": "fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes",
             "training_epochs": fixed_epochs,
+            "logical_environments_per_epoch": effective if fixed_epochs is not None else None,
             "training_stage": training_stage,
             "instances_seen": instances_seen,
             "customer_exposures": instances_seen * _customer_count(args.scale),
@@ -367,9 +416,10 @@ def train_reinforce_data_passes(
         "status": "pilot_partial" if args.pilot_mode else "passed",
         "method": method,
         "protocol_id": args.protocol_id,
-        "budget_mode": "fixed_training_epochs" if fixed_epochs is not None else "complete_data_passes",
+        "budget_mode": "fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes",
         "requested_training_epochs": fixed_epochs,
         "completed_training_epochs": fixed_epochs if fixed_epochs is not None else None,
+        "logical_environments_per_epoch": effective if fixed_epochs is not None else None,
         "requested_data_passes": int(args.data_passes) if args.data_passes is not None else None,
         "completed_data_passes": int(state.completed_data_passes),
         "training_rollout_steps": int(args.training_rollout_steps),

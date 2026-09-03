@@ -85,31 +85,33 @@ RTX 2080 Ti 吞吐与 wall-time 外推不再视为当前配置证据。
 
 ## 固定训练预算
 
-正式训练不再遍历全部 train views，也不再用 full-data pass 计量。每个
-`method × scale × seed` job 固定目标为 500,000 customer exposures：
+正式训练不遍历全部 train views，也不使用 full-data pass 计量。epoch 是跨模型
+一致的 logical epoch，而不是某个模型恰好能装入显存的 physical batch：
 
 ```text
-target_environments = 500000 / customer_count
-training_epochs = ceil(target_environments / physical_batch_size)
-actual_environments = training_epochs * physical_batch_size
+logical environments = logical epochs × environments per logical epoch
+customer exposures = logical environments × customer count
 ```
 
-每个 epoch 从按 `seed` 确定性打乱的 train pool 中读取一个 physical batch；同一
-job 内不放回抽样。当前预算只使用各 scale train pool 的约 10%，因此不会遍历
-整个训练集。不同方法的 physical batch 不同，所以 epoch 数不同，但总 customer
-exposure 相同（除向上取整产生的不足 1% 差异）：
+同一 scale 的四个模型使用相同 epoch 数、每 epoch 环境数和 exposure。每个
+logical epoch 从按 `seed` 确定性打乱的 train pool 中无放回取样；如果 logical
+batch 超过某模型的安全 physical batch，就拆成可整除的 micro-batches、累计梯度，
+最后只做一次 optimizer update。
 
-| Method | Cus50 | Cus100 | Cus500 | Cus1000 |
+| Scale | Logical epochs | Environments / epoch | Total environments | Customer exposures |
 |---|---:|---:|---:|---:|
-| AM-EVRPTW | 25 | 50 | 167 | 500 |
-| EVRPTW-RL | 84 | 157 | 500 | 500 |
-| DRL-TS | 125 | 209 | 1000 | 500 |
-| TERRAN | 25 | 25 | 20 | 500 |
+| Cus50 | 100 | 100 | 10,000 | 500,000 |
+| Cus100 | 200 | 25 | 5,000 | 500,000 |
+| Cus500 | 500 | 2 | 1,000 | 500,000 |
+| Cus1000 | 1,000 | 1 | 1,000 | 1,000,000 |
 
-表中数值是 `training_epochs`。正式 job 结束时执行一次 500-view validation 并选择
-checkpoint；T1/T2/T3 和 Cus2000 仍不参与训练或 checkpoint selection。中断前若
-fixed-budget job 尚未原子提交完成状态，该 job 会从同一 seed 的确定性抽样序列
-开头重跑；不会从未经提交的中间 epoch 继续。
+Cus50/Cus100/Cus500 都使用约10%的 train pool。Cus1000 的1,000 epochs 对应
+1,000个训练环境，即20%的 train pool；这是显式的 scale-specific 预算，不应描述
+为四个 scale 完全相同的 exposure。
+
+正式 job 结束时执行一次500-view validation并选择 checkpoint；T1/T2/T3 和
+Cus2000 不参与训练或 checkpoint selection。中断前若 fixed-budget job 尚未原子
+提交完成状态，该 job 从同一 seed 的确定性抽样序列开头重跑。
 
 ## Pilot 与 full 边界
 
@@ -126,7 +128,7 @@ python EVRPTW_Benchmark/Reinforcement_Learning/scripts/build_drl_pilot_gate.py \
 ```
 
 协议中的 `pilot.full_runtime_budget_approved=false` 仍会使 gate 保持 STOP。
-固定 500,000 customer-exposure 预算已经替代候选 100 full-data passes，但仍须
+统一 logical-epoch 预算已经替代候选 100 full-data passes，但仍须
 审核逐方法 wall-time、rollout-cap telemetry 和 RTX A6000 Cus1000 pilot，生成
 新的 clean commit，并显式批准 runtime budget；不得按 method/scale/seed 单独
 增加 exposure 预算。

@@ -6,6 +6,10 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import (
     seeded_pass_order,
 )
 
+from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
+    grouped_batches,
+)
+
 
 def test_each_pass_is_complete_unique_and_deterministic() -> None:
     rows = list(range(23))
@@ -17,6 +21,24 @@ def test_each_pass_is_complete_unique_and_deterministic() -> None:
     assert flat != [item for batch in second for item in batch]
     assert sorted(flat) == rows
     assert len(flat) == len(set(flat)) == len(rows)
+
+
+def test_microbatches_form_exact_logical_epochs_without_extra_rows() -> None:
+    rows = list(range(1_000))
+    physical = pass_batches(
+        rows, seed=1234, data_pass=1, physical_batch_size=50
+    )
+    logical = list(
+        grouped_batches(
+            physical,
+            effective_batch_size=100,
+            max_batches=3 * 2,
+        )
+    )
+    assert len(logical) == 3
+    assert [sum(map(len, group)) for group in logical] == [100, 100, 100]
+    selected = [row for group in logical for batch in group for row in batch]
+    assert len(selected) == len(set(selected)) == 300
 
 
 def test_atomic_state_resume_and_protocol_guard(tmp_path) -> None:

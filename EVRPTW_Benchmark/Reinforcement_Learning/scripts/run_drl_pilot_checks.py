@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import subprocess
 import sys
 from pathlib import Path
@@ -106,18 +105,18 @@ def main() -> None:
             measured = int(history[-1]["instances_seen"])
         else:
             measured = int(result["instances_seen"])
-        customer_count = int(protocol["scales"]["Cus100"]["customer_count"])
-        target_exposures = int(protocol["training"]["target_customer_exposures_per_job"])
-        target_environments = math.ceil(target_exposures / customer_count)
-        physical_batch = int(protocol["methods"][method]["physical_batch"]["Cus100"])
-        training_epochs = math.ceil(target_environments / physical_batch)
-        actual_environments = training_epochs * physical_batch
+        training_epochs = int(protocol["training"]["logical_epochs_by_scale"]["Cus100"])
+        logical_batch = int(
+            protocol["training"]["environments_per_epoch_by_scale"]["Cus100"]
+        )
+        actual_environments = training_epochs * logical_batch
         estimate = elapsed / max(measured, 1) * actual_environments
         write(evidence / f"{method}__wall_time_estimate.json", {
             "passed": estimate > 0,
             "measured_instances": measured,
             "measured_wall_time_s": elapsed,
             "training_epochs": training_epochs,
+            "logical_environments_per_epoch": logical_batch,
             "actual_environments": actual_environments,
             "estimated_full_wall_time_s": estimate,
             "extrapolation_only": True,

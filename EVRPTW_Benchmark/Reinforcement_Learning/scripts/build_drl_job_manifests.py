@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -61,10 +60,17 @@ def load_protocol(path: Path) -> dict[str, Any]:
     if any(int(value) <= 0 for value in rollout_steps.values()):
         raise ValueError("training rollout-step budgets must be positive")
     training = protocol.get("training", {})
-    if training.get("budget_mode") != "fixed_customer_exposures":
-        raise ValueError("formal training must use fixed_customer_exposures")
-    if int(training.get("target_customer_exposures_per_job", 0)) <= 0:
-        raise ValueError("target customer exposures must be positive")
+    if training.get("budget_mode") != "fixed_logical_epochs":
+        raise ValueError("formal training must use fixed_logical_epochs")
+    logical_epochs = training.get("logical_epochs_by_scale", {})
+    environments_per_epoch = training.get("environments_per_epoch_by_scale", {})
+    scale_ids = set(protocol.get("scales", {}))
+    if set(logical_epochs) != scale_ids or set(environments_per_epoch) != scale_ids:
+        raise ValueError("logical epoch budgets must cover every training scale")
+    if any(int(value) <= 0 for value in logical_epochs.values()):
+        raise ValueError("logical epoch counts must be positive")
+    if any(int(value) <= 0 for value in environments_per_epoch.values()):
+        raise ValueError("environments per logical epoch must be positive")
     if int(training.get("validation_checkpoints", 0)) <= 0:
         raise ValueError("validation checkpoints must be positive")
     disabled = set(protocol.get("disabled_tracks", []))
@@ -123,6 +129,15 @@ def _append_round_robin(
         queues[slot].append(job)
 
 
+def _largest_divisor_at_most(value: int, limit: int) -> int:
+    if value <= 0 or limit <= 0:
+        raise ValueError("batch values must be positive")
+    for candidate in range(min(value, limit), 0, -1):
+        if value % candidate == 0:
+            return candidate
+    raise AssertionError("one always divides a positive integer")
+
+
 def _train_job(
     protocol: dict[str, Any],
     *,
@@ -138,20 +153,28 @@ def _train_job(
     job_id = f"{prefix}__R__{method}__{scale}__seed{seed}{suffix}"
     method_cfg = protocol["methods"][method]
     customer_count = int(protocol["scales"][scale]["customer_count"])
-    physical_batch = int(method_cfg["physical_batch"][scale])
+    calibrated_physical_cap = int(method_cfg["physical_batch"][scale])
     if run_mode == "pilot":
+        physical_batch = calibrated_physical_cap
+        effective_batch = int(method_cfg["effective_batch"][scale])
         if pilot_kind == "short_optimization":
             training_epochs = int(protocol["pilot"]["short_optimization_batches"])
         elif hardware == "2080ti":
             training_epochs = int(protocol["pilot"]["rtx2080ti_memory_batches"])
         else:
             training_epochs = int(protocol["pilot"]["a6000_memory_batches"])
-        target_environments = training_epochs * physical_batch
+        environments_per_epoch = effective_batch
     else:
-        target_exposures = int(protocol["training"]["target_customer_exposures_per_job"])
-        target_environments = int(math.ceil(target_exposures / customer_count))
-        training_epochs = int(math.ceil(target_environments / physical_batch))
-    actual_environments = training_epochs * physical_batch
+        training_epochs = int(protocol["training"]["logical_epochs_by_scale"][scale])
+        environments_per_epoch = int(
+            protocol["training"]["environments_per_epoch_by_scale"][scale]
+        )
+        physical_batch = _largest_divisor_at_most(
+            environments_per_epoch, calibrated_physical_cap
+        )
+        effective_batch = environments_per_epoch
+    target_environments = training_epochs * environments_per_epoch
+    actual_environments = target_environments
     job = _base_job(
         protocol,
         job_id=job_id,
@@ -171,8 +194,10 @@ def _train_job(
             "train_index": protocol["scales"][scale]["train_index"],
             "validation_index": protocol["scales"][scale]["validation_index"],
             "train_views_per_pass": protocol["scales"][scale]["train_views"],
-            "budget_mode": "fixed_training_epochs",
+            "budget_mode": "fixed_logical_epochs",
             "training_epochs": training_epochs,
+            "logical_environments_per_epoch": environments_per_epoch,
+            "calibrated_physical_batch_cap": calibrated_physical_cap,
             "target_environments": target_environments,
             "actual_environments": actual_environments,
             "target_customer_exposures": target_environments * customer_count,
@@ -189,7 +214,7 @@ def _train_job(
                 else protocol["training"]["validation_views"]
             ),
             "physical_batch_size": physical_batch,
-            "effective_batch_size": int(method_cfg["effective_batch"][scale]),
+            "effective_batch_size": effective_batch,
             "memory_gate_gib": (
                 float(protocol["hardware"]["rtx_2080_ti"]["memory_gate_gib"])
                 if hardware == "2080ti" and scale == "Cus500"

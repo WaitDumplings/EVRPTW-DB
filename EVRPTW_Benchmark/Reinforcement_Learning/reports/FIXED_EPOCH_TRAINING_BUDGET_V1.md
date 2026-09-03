@@ -5,6 +5,11 @@ Dataset: released Stage-2 v7 train/validation artifacts
 Hardware checked here: 4 × NVIDIA GeForce RTX 2080 Ti, 11,264 MiB each
 Status: implementation and RTX 2080 Ti smoke PASS; full launch remains gated
 
+> Superseded for formal launch: this report permanently preserves the first
+> fixed-exposure implementation and its timing evidence. Formal manifests now
+> use reviewer-facing logical epochs shared across methods; see
+> `LOGICAL_EPOCH_TRAINING_BUDGET_V2.md`.
+
 ## Decision
 
 Formal training no longer traverses every train view and no longer uses a

@@ -8,9 +8,8 @@ Dataset: released Stage-2 v7 train/validation artifacts
 
 > Historical runtime evidence: the 100-full-pass extrapolation below is
 > permanently retained, but it is no longer the active training protocol.
-> The active candidate uses a fixed 500,000 customer-exposure budget per
-> method/scale/seed job; see
-> `FIXED_EPOCH_TRAINING_BUDGET_V1.md`.
+> The active candidate uses reviewer-facing logical epochs shared across methods;
+> see `LOGICAL_EPOCH_TRAINING_BUDGET_V2.md`.
 
 ## Scope
 

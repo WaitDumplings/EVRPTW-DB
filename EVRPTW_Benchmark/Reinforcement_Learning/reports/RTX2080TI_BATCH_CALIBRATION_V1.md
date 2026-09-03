@@ -15,8 +15,8 @@ Scope: AM-EVRPTW, EVRPTW-RL, DRL-TS, and TERRAN at Cus50/Cus100/Cus500
 > The replacement measurement is recorded in
 > `RTX2080TI_ROLLOUT_BUDGET_PILOT_V2.md`.
 > The full-data-pass runtime language is also historical: formal manifests now
-> use the fixed 500,000 customer-exposure budget documented in
-> `FIXED_EPOCH_TRAINING_BUDGET_V1.md`.
+> use the logical-epoch budget documented in
+> `LOGICAL_EPOCH_TRAINING_BUDGET_V2.md`.
 
 ## Selection discipline
 

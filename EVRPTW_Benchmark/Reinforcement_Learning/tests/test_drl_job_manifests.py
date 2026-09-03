@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import math
 from collections import Counter
 from pathlib import Path
 
@@ -123,22 +122,45 @@ def test_training_rollout_budget_is_scale_aware_and_method_invariant() -> None:
     )
 
 
-def test_fixed_customer_exposure_budget_is_derived_from_num_env_times_epochs() -> None:
+def test_logical_epoch_budget_is_method_invariant_within_each_scale() -> None:
     protocol, jobs2080, jobsa6000 = _jobs()
-    target = protocol["training"]["target_customer_exposures_per_job"]
-    assert target == 500_000
+    expected_epochs = {
+        "Cus50": 100,
+        "Cus100": 200,
+        "Cus500": 500,
+        "Cus1000": 1000,
+    }
+    expected_environments = {
+        "Cus50": 100,
+        "Cus100": 25,
+        "Cus500": 2,
+        "Cus1000": 1,
+    }
+    expected_exposures = {
+        "Cus50": 500_000,
+        "Cus100": 500_000,
+        "Cus500": 500_000,
+        "Cus1000": 1_000_000,
+    }
     training = [job for job in jobs2080 + jobsa6000 if job["kind"] == "train"]
     for job in training:
         customers = protocol["scales"][job["scale"]]["customer_count"]
-        batch = job["physical_batch_size"]
-        expected_environments = math.ceil(target / customers)
-        expected_epochs = math.ceil(expected_environments / batch)
-        assert job["budget_mode"] == "fixed_training_epochs"
-        assert job["target_environments"] == expected_environments
-        assert job["training_epochs"] == expected_epochs
-        assert job["actual_environments"] == expected_epochs * batch
-        assert job["actual_customer_exposures"] >= target
-        assert job["actual_customer_exposures"] < target + batch * customers
+        scale = job["scale"]
+        logical_batch = expected_environments[scale]
+        assert job["budget_mode"] == "fixed_logical_epochs"
+        assert job["training_epochs"] == expected_epochs[scale]
+        assert job["logical_environments_per_epoch"] == logical_batch
+        assert job["effective_batch_size"] == logical_batch
+        assert logical_batch % job["physical_batch_size"] == 0
+        assert (
+            job["physical_batch_size"]
+            <= job["calibrated_physical_batch_cap"]
+        )
+        assert job["actual_environments"] == expected_epochs[scale] * logical_batch
+        assert job["actual_customer_exposures"] == expected_exposures[scale]
+        assert job["actual_customer_exposures"] == (
+            job["actual_environments"] * customers
+        )
         assert "data_passes" not in job
 
 
