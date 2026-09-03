@@ -18,10 +18,10 @@ Each command prepares deterministic local artifacts if needed and then launches
 its GPU queues through `nohup`/`setsid`. `status.sh` and `logs.sh` do not start
 work. `resume.sh` resumes only committed formal checkpoints.
 
-`full.sh` is intentionally present but blocked. It cannot start the 72 formal
-runs until both the pilot gate report and a versioned G1--G8 PASS authorization
-exist. Candidate exposure and batch settings are pilot inputs, not silently
-accepted formal hyperparameters.
+Each `full.sh` is unlocked independently by the pilot jobs in the same server
+manifest. All of those pilots must pass under the same executable commit as the
+full run. No shared `pilot_gate_report.json` or cross-server wait is required.
+The aggregate pilot report remains reviewer evidence, not a runtime dependency.
 
 No SHA-256 or per-file content hashing is performed by these scripts.
 

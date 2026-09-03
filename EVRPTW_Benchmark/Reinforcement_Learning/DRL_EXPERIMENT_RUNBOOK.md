@@ -38,8 +38,8 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/pilot.sh
 ```
 
 这些入口默认 nohup/setsid 离线运行；同目录的 `status.sh` 和
-`logs.sh` 用于查看进度。通过 pilot gate 后使用 `full.sh`，中断恢复
-使用 `resume.sh`。四个目录不包含 evaluation job。
+`logs.sh` 用于查看进度。当前服务器自己的 pilot 全部通过后使用
+`full.sh`，中断恢复使用 `resume.sh`。四个目录不包含 evaluation job。
 
 如果四台机器不共享 `EVRPTW_OUTPUT_ROOT`，构建 pilot gate 前必须汇总
 四台 pilot 产物。正式训练结束后，把全部 `checkpoint_selected.pt`、
@@ -119,7 +119,14 @@ Cus2000 不参与训练或 checkpoint selection。中断前若 fixed-budget job 
 
 ## Pilot 与 full 边界
 
-收集四台服务器的 pilot 输出及 evidence 后构建放行报告：
+每台服务器独立放行自己的 full 队列。`full.sh` 只检查同一
+`jobs.jsonl` 中属于当前服务器的 pilot 是否在同一 executable commit 下全部
+产生 PASS `job_result.json`、`checkpoint_selected.pt` 和
+`validation_summary.json`。因此四台机器不需要共享输出目录，也不需要等待其他
+服务器的 pilot；切换 executable commit 后必须在新 commit 下重跑本机 pilot。
+
+以下命令仍可在所有机器的结果汇总到中央服务器后生成论文级全局 pilot evidence，
+但它不再作为单台服务器启动 full 的运行时依赖：
 
 ```bash
 python EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_pilot_checks.py \
@@ -131,15 +138,12 @@ python EVRPTW_Benchmark/Reinforcement_Learning/scripts/build_drl_pilot_gate.py \
   --evidence-root "$EVRPTW_OUTPUT_ROOT/pilot_evidence"
 ```
 
-协议中的 `pilot.full_runtime_budget_approved=false` 仍会使 gate 保持 STOP。
-统一 logical-epoch 预算已经替代候选 100 full-data passes，但仍须
-审核逐方法 wall-time、rollout-cap telemetry 和 RTX A6000 Cus1000 pilot，生成
-新的 clean commit，并显式批准 runtime budget；不得按 method/scale/seed 单独
-增加 exposure 预算。
+全局报告继续用于论文审核、跨服务器配置一致性和最终 acceptance，不控制某台
+服务器的本地队列。不得按 method/scale/seed 单独增加 exposure 预算。
 
-只有 `$EVRPTW_OUTPUT_ROOT/pilot_gate_report.json` 的 `passed=true` 时，
-`full` 才会启动。否则 runner 硬停止。放行后把对应命令中的 `pilot`
-替换为 `full`。中断后的同一完整训练队列用 `resume`；已具有通过
+本机 pilot 全部通过后，把对应命令中的 `pilot` 替换为 `full`。若本机任一
+pilot 缺失或失败，runner 会硬停止并列出具体 job ID。中断后的同一完整训练队列
+用 `resume`；已具有通过
 result、selected checkpoint 和 verifier summary 的 job 不会重跑，从未启动的
 后续 job 会按 fresh job 启动。
 

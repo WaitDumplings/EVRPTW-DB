@@ -104,22 +104,45 @@ def test_signal_is_propagated_to_child_process_groups(monkeypatch) -> None:
     assert RUNTIME.STOP.is_set()
 
 
-def test_full_gate_rejects_missing_or_failed_report(tmp_path: Path) -> None:
+def test_full_gate_requires_only_this_servers_commit_scoped_pilots(
+    tmp_path: Path,
+) -> None:
     context = _context(tmp_path)
     context["output"].mkdir(parents=True)
+    pilot = _job("pilot__G__am_evrptw__Cus100__seed1234")
+    pilot["kind"] = "pilot"
+    pilot["stage"] = "runtime_memory"
+    output = RUNTIME.output_dir(pilot, context)
     try:
-        RUNTIME.require_pilot_gate(context)
+        RUNTIME.require_server_local_pilots(context, [pilot])
+    except RuntimeError as error:
+        assert pilot["job_id"] in str(error)
+    else:
+        raise AssertionError("missing local pilot was accepted")
+
+    output.mkdir(parents=True)
+    (output / "checkpoint_selected.pt").write_bytes(b"checkpoint")
+    (output / "validation_summary.json").write_text("{}")
+    (output / "job_result.json").write_text(json.dumps({"status": "failed"}))
+    try:
+        RUNTIME.require_server_local_pilots(context, [pilot])
     except RuntimeError:
         pass
     else:
-        raise AssertionError("missing pilot gate was accepted")
-    (context["output"] / "pilot_gate_report.json").write_text(json.dumps({"passed": False}))
+        raise AssertionError("failed local pilot was accepted")
+
+    (output / "job_result.json").write_text(json.dumps({"status": "passed"}))
+    RUNTIME.require_server_local_pilots(context, [pilot])
+
+
+def test_full_gate_rejects_a_manifest_without_local_pilots(tmp_path: Path) -> None:
+    context = _context(tmp_path)
     try:
-        RUNTIME.require_pilot_gate(context)
-    except RuntimeError:
-        pass
+        RUNTIME.require_server_local_pilots(context, [])
+    except RuntimeError as error:
+        assert "no pilot jobs" in str(error)
     else:
-        raise AssertionError("failed pilot gate was accepted")
+        raise AssertionError("manifest without local pilots was accepted")
 
 
 def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path: Path) -> None:

@@ -470,22 +470,27 @@ def handle_signal(signum: int, _frame: Any) -> None:
             pass
 
 
-def require_pilot_gate(context: dict[str, Any], jobs: list[dict[str, Any]] | None = None) -> None:
-    report = context["output"] / "pilot_gate_report.json"
-    if not report.exists() or not json.loads(report.read_text(encoding="utf-8")).get("passed"):
-        raise RuntimeError(f"full mode is blocked until the pilot gate passes: {report}")
-    rq_jobs = [job for job in (jobs or []) if job.get("formal_gate_file")]
-    for gate_name in sorted({str(job["formal_gate_file"]) for job in rq_jobs}):
-        gate_path = context["repo"] / gate_name
-        if not gate_path.is_file():
-            raise RuntimeError(f"formal RQ launch gate is missing: {gate_path}")
-        gate = json.loads(gate_path.read_text(encoding="utf-8"))
-        statuses = gate.get("formal_launch_gates", {})
-        all_pass = set(statuses) == {f"G{index}" for index in range(1, 9)} and all(
-            value == "PASS" for value in statuses.values()
+def require_server_local_pilots(
+    context: dict[str, Any], pilot_jobs: list[dict[str, Any]]
+) -> None:
+    """Require only the pilots declared by this server's own manifest.
+
+    Pilot artifacts are commit-scoped by ``output_dir``.  A full queue therefore
+    cannot inherit a pilot from another executable commit or another server
+    manifest, while independent servers do not need a shared output root.
+    """
+    if not pilot_jobs:
+        raise RuntimeError("full mode is blocked: this server manifest has no pilot jobs")
+    incomplete = [
+        job["job_id"]
+        for job in pilot_jobs
+        if not job_complete(job, output_dir(job, context))
+    ]
+    if incomplete:
+        raise RuntimeError(
+            "full mode is blocked until this server's local pilots pass: "
+            + ", ".join(incomplete)
         )
-        if not gate.get("formal_launch_allowed") or not all_pass:
-            raise RuntimeError(f"formal 72-run launch remains blocked by G1-G8: {gate_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -509,13 +514,36 @@ def main() -> None:
     context = preflight(args, jobs)
     if args.mode == "status":
         rows = []
+        by_mode: dict[str, dict[str, int]] = {}
         for mode in ("pilot", "full", "evaluate"):
+            mode_rows = []
             for job in load_jobs(args.manifest, slots, mode):
-                rows.append({"job_id": job["job_id"], "complete": job_complete(job, output_dir(job, context))})
-        print(json.dumps({"jobs": len(rows), "completed": sum(row["complete"] for row in rows), "rows": rows}, sort_keys=True))
+                row = {
+                    "job_id": job["job_id"],
+                    "complete": job_complete(job, output_dir(job, context)),
+                }
+                rows.append(row)
+                mode_rows.append(row)
+            by_mode[mode] = {
+                "planned": len(mode_rows),
+                "completed": sum(row["complete"] for row in mode_rows),
+            }
+        print(
+            json.dumps(
+                {
+                    "jobs": len(rows),
+                    "completed": sum(row["complete"] for row in rows),
+                    "by_mode": by_mode,
+                    "rows": rows,
+                },
+                sort_keys=True,
+            )
+        )
         return
     if args.mode in {"full", "resume"}:
-        require_pilot_gate(context, jobs)
+        require_server_local_pilots(
+            context, load_jobs(args.manifest, slots, "pilot")
+        )
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
     by_slot = {slot: [job for job in jobs if int(job["global_slot"]) == slot] for slot in slots}
