@@ -13,7 +13,10 @@ not replace TERRAN with a new neural baseline. The following remain unchanged:
   terminal auxiliary shaping.
 
 PBRS settings are part of the method configuration and are recorded in every
-checkpoint. They are not used as cross-method evaluation scores.
+checkpoint. They are not used as cross-method evaluation scores. The reference
+`rollout.py` contains expert-provider and route-boundary collection hooks, but
+its trainer/configs do not activate them; those dormant extensions are outside
+the formal Stage-2 TERRAN path and are not claimed as migrated components.
 
 ## Canonical benchmark adaptations
 
@@ -40,3 +43,18 @@ is retained when enabled, and the checkpoint records each coefficient and its
 annealing schedule. Final benchmark ordering ignores shaped return: only
 complete routes accepted by the common verifier are ranked by physical
 distance in kilometres.
+
+Formal Stage-2 training binds the registered `training.rollout_steps` value to
+an environment truncation. If that horizon is reached before every customer is
+served and the route has returned to the depot, the enabled terminal heuristic
+adds
+
+```text
+-failure_penalty * (remaining_customers / num_customers)
+```
+
+to the final training transition (and applies the recorded PBRS annealing scale).
+A trajectory completing exactly on the horizon receives the configured success
+bonus instead. This shaping is not used for fixed-set benchmark evaluation.
+Charging stations remain reusable after the vehicle leaves them; only an
+immediate self-loop to the current station is masked.

@@ -18,7 +18,7 @@ def _tensor(value: Any, device: torch.device) -> torch.Tensor:
 
 
 class DirectedGraphAttentionLayer(nn.Module):
-    """Multi-head attention restricted to the paper's time-window graph."""
+    """Scaled-dot-product attention on the published time-window graph."""
 
     def __init__(self, embedding_dim: int, n_heads: int) -> None:
         super().__init__()
@@ -95,7 +95,7 @@ class EdgeDirectFixedContext:
 
 
 class EdgeDirectHomogeneousPolicy(nn.Module):
-    """Edge-DIRECT-H: the paper architecture's homogeneous-fleet special case.
+    """Experimental Edge-DIRECT-H homogeneous-fleet adapter.
 
     EVRPTW-DB has an unlimited homogeneous fleet, so the heterogeneous vehicle
     decoder has one admissible class.  It remains an explicit learned module,

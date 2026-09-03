@@ -26,6 +26,43 @@ from .training_protocol import (
 )
 
 
+def paper_ema_baseline_due(method: str, optimizer_steps: int, args: Any) -> bool:
+    """Return whether the method is still in its published EMA warmup."""
+
+    step = int(optimizer_steps)
+    if step < 0:
+        raise ValueError("optimizer_steps cannot be negative")
+    if method == "AM-EVRPTW":
+        warmup_steps = int(args.steps_per_epoch) * int(args.baseline_warmup_epochs)
+        return step < warmup_steps
+    if method == "EVRPTW-RL":
+        return step < int(args.ema_warmup_steps)
+    return False
+
+
+def paper_baseline_eval_due(method: str, optimizer_steps: int, args: Any) -> bool:
+    """Return whether the publication's rollout-baseline comparison is due.
+
+    training_epochs in the benchmark protocol counts optimizer updates, not
+    the much larger paper epochs. Consequently the schedule is expressed in
+    optimizer steps: AM uses its published 2,500 batches per epoch, while
+    EVRPTW-RL uses its published post-warmup 100-step interval. DRL-TS is not
+    assigned a schedule here because the full manuscript/source is unavailable.
+    """
+
+    step = int(optimizer_steps)
+    if step <= 0:
+        return False
+    if method == "AM-EVRPTW":
+        interval = int(args.steps_per_epoch)
+        return interval > 0 and step % interval == 0
+    if method == "EVRPTW-RL":
+        warmup = int(args.ema_warmup_steps)
+        interval = int(args.baseline_eval_interval)
+        return step > warmup and interval > 0 and step % interval == 0
+    return False
+
+
 def _customer_count(scale: str) -> int:
     value = str(scale).lower().removeprefix("cus")
     if not value.isdigit() or int(value) <= 0:
@@ -71,7 +108,10 @@ def _load_checkpoint(
     optimizer: torch.optim.Optimizer,
     protocol_id: str,
 ) -> dict[str, Any]:
-    payload = torch.load(path, map_location=policy.device, weights_only=False)
+    policy_device = getattr(policy, "device", None)
+    if policy_device is None:
+        policy_device = next(policy.parameters()).device
+    payload = torch.load(path, map_location=policy_device, weights_only=False)
     if payload.get("protocol_id") != protocol_id:
         raise ValueError("checkpoint protocol does not match requested protocol")
     policy.load_state_dict(payload["model"])
@@ -174,8 +214,22 @@ def train_reinforce_data_passes(
         raise ValueError("--max-batches-per-pass is allowed only with --pilot-mode")
     if fixed_epochs is not None and args.max_batches_per_pass is not None:
         raise ValueError("--training-epochs cannot be combined with --max-batches-per-pass")
-    if fixed_epochs is not None and int(args.validation_checkpoints) != 1:
-        raise ValueError("fixed-epoch protocol currently requires one final validation checkpoint")
+    validation_every_epochs = int(
+        getattr(args, "validation_every_epochs", None)
+        or fixed_epochs
+        or 1
+    )
+    if validation_every_epochs <= 0:
+        raise ValueError("--validation-every-epochs must be positive")
+    if fixed_epochs is not None:
+        expected_validation_checkpoints = (
+            fixed_epochs + validation_every_epochs - 1
+        ) // validation_every_epochs
+        if int(args.validation_checkpoints) != expected_validation_checkpoints:
+            raise ValueError(
+                "fixed-epoch validation checkpoint count does not match "
+                "--validation-every-epochs"
+            )
     physical, effective = require_registered_batches(args, legacy_batch_size)
     stream_path = getattr(args, "training_stream_path", None)
     expected_fixed_instances = fixed_epochs * effective if fixed_epochs is not None else None
@@ -198,6 +252,7 @@ def train_reinforce_data_passes(
     state = load_state(output, args.protocol_id, args.resume)
     checkpoint = output / "checkpoint_latest.pt"
     selected_checkpoint = output / "checkpoint_selected.pt"
+    best_checkpoint = output / "best.ckpt"
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
@@ -223,6 +278,15 @@ def train_reinforce_data_passes(
         if validation_pool is not None
         else []
     )
+    completed_logical_epochs = (
+        int(resume_extra.get("logical_epoch", 0))
+        if fixed_epochs is not None
+        else 0
+    )
+    if fixed_epochs is not None and not 0 <= completed_logical_epochs <= fixed_epochs:
+        raise ValueError("resume checkpoint has an invalid logical epoch")
+    if fixed_epochs is not None and completed_logical_epochs and stream_path is None:
+        raise ValueError("fixed-epoch resume requires an explicit training stream")
     best_key = tuple(resume_extra.get("best_validation_key", [-math.inf, -math.inf]))
     baseline_probe_size = max(
         0, int(getattr(args, "baseline_eval_size", 64))
@@ -230,10 +294,14 @@ def train_reinforce_data_passes(
     baseline_probe_instances = list(
         pool.first(limit=min(baseline_probe_size, len(pool)))
     )
+    baseline_eval_count = int(resume_extra.get("baseline_eval_count", 0))
+    baseline_update_count = int(resume_extra.get("baseline_update_count", 0))
     ema_cost = resume_extra.get("ema_cost")
     optimizer_steps = int(state.optimizer_steps)
     starting_optimizer_steps = optimizer_steps
     environment_transitions_total = int(state.environment_transitions)
+    starting_state_instances = int(state.instances_seen)
+    starting_state_exposures = int(state.customer_exposures)
     run_started = time.perf_counter()
     exposure_checkpoints = parse_int_checkpoints(getattr(args, "exposure_checkpoints", ""))
     gpu_hour_checkpoints = parse_float_checkpoints(getattr(args, "gpu_hour_checkpoints", ""))
@@ -261,8 +329,13 @@ def train_reinforce_data_passes(
         trajectory_steps: list[int] = []
         rollout_budget_exhausted_count = 0
         complete_pass = fixed_epochs is not None or args.max_batches_per_pass is None
+        remaining_fixed_epochs = (
+            fixed_epochs - completed_logical_epochs
+            if fixed_epochs is not None
+            else None
+        )
         max_batches = (
-            fixed_epochs * microbatches_per_epoch
+            remaining_fixed_epochs * microbatches_per_epoch
             if fixed_epochs is not None
             else args.max_batches_per_pass
         )
@@ -270,7 +343,7 @@ def train_reinforce_data_passes(
             pool.stream_batches(
                 stream_path,
                 physical,
-                start=0,
+                start=completed_logical_epochs * effective,
                 stop=expected_fixed_instances,
             )
             if stream_path is not None
@@ -284,9 +357,12 @@ def train_reinforce_data_passes(
             )
         ):
             logical_epoch_started = time.perf_counter()
+            logical_epoch = completed_logical_epochs + group_index + 1
             group_soft = soft
             if fixed_epochs is not None and soft_stage_fraction:
-                group_soft = group_index < int(fixed_epochs * soft_stage_fraction)
+                group_soft = logical_epoch <= int(
+                    fixed_epochs * soft_stage_fraction
+                )
             group_size = sum(len(batch) for batch in batch_group)
             group_sums = {key: 0.0 for key in sums}
             group_transitions = 0
@@ -294,15 +370,21 @@ def train_reinforce_data_passes(
             group_exhausted = 0
             optimizer.zero_grad(set_to_none=True)
             for sub_index, instances in enumerate(batch_group):
-                rollout_seed = int(args.seed) + data_pass * 10_000_000 + group_index * 1000 + sub_index
+                rollout_seed = int(args.seed) + data_pass * 10_000_000 + logical_epoch * 1000 + sub_index
                 torch.manual_seed(rollout_seed)
                 if torch.cuda.is_available():
                     torch.cuda.manual_seed_all(rollout_seed)
                 actor = make_actor(instances, group_soft, rollout_seed)
                 actor_cost = training_cost(actor)
-                if method == "EVRPTW-RL" and optimizer_steps < int(args.ema_warmup_steps):
+                use_ema = paper_ema_baseline_due(method, optimizer_steps, args)
+                if use_ema:
                     observed = float(actor_cost.mean().detach().cpu())
-                    ema_cost = observed if ema_cost is None else args.ema_decay * ema_cost + (1.0 - args.ema_decay) * observed
+                    ema_cost = (
+                        observed
+                        if ema_cost is None
+                        else args.ema_decay * ema_cost
+                        + (1.0 - args.ema_decay) * observed
+                    )
                     baseline_cost = torch.full_like(actor_cost, float(ema_cost))
                 else:
                     with torch.no_grad():
@@ -336,6 +418,61 @@ def train_reinforce_data_passes(
             optimizer_steps += 1
             if method == "EVRPTW-RL" and optimizer_steps == int(args.ema_warmup_steps):
                 baseline.load_state_dict(policy.state_dict())
+            baseline_updated = False
+            paired_t_pvalue: float | None = None
+            if baseline_probe_instances and paper_baseline_eval_due(
+                method, optimizer_steps, args
+            ):
+                policy.eval()
+                actor_costs = []
+                baseline_costs = []
+                for probe_index, instance in enumerate(baseline_probe_instances):
+                    probe_seed = (
+                        int(args.seed)
+                        + 700_000
+                        + optimizer_steps * 10_000
+                        + probe_index
+                    )
+                    with torch.no_grad():
+                        actor_result = make_baseline(
+                            policy, [instance], False, probe_seed
+                        )
+                        baseline_result = make_baseline(
+                            baseline, [instance], False, probe_seed
+                        )
+                    actor_costs.append(
+                        float(training_cost(actor_result).mean().cpu())
+                    )
+                    baseline_costs.append(
+                        float(training_cost(baseline_result).mean().cpu())
+                    )
+                test = ttest_rel(actor_costs, baseline_costs, alternative="less")
+                paired_t_pvalue = float(test.pvalue)
+                baseline_updated = bool(
+                    np.mean(actor_costs) < np.mean(baseline_costs)
+                    and np.isfinite(test.pvalue)
+                    and paired_t_pvalue < float(args.baseline_alpha)
+                )
+                baseline_eval_count += 1
+                if baseline_updated:
+                    baseline.load_state_dict(policy.state_dict())
+                    baseline_update_count += 1
+                    baseline_probe_instances = list(
+                        pool.sample(min(baseline_probe_size, len(pool)))
+                    )
+                append_jsonl(
+                    output / "baseline_history.jsonl",
+                    {
+                        "schema": "drl_rollout_baseline_event_v1",
+                        "method": method,
+                        "optimizer_step": optimizer_steps,
+                        "probe_instances": len(actor_costs),
+                        "paired_t_pvalue": paired_t_pvalue,
+                        "baseline_updated": baseline_updated,
+                        "schedule_source": "publication",
+                    },
+                )
+                policy.train()
             _save_registered_snapshots(
                 output=output,
                 method=method,
@@ -344,7 +481,9 @@ def train_reinforce_data_passes(
                 policy=policy,
                 baseline=baseline,
                 optimizer=optimizer,
-                observed_exposure=instances_seen * _customer_count(args.scale),
+                observed_exposure=(
+                    starting_state_instances + instances_seen
+                ) * _customer_count(args.scale),
                 observed_gpu_hours=(time.perf_counter() - run_started) / 3600.0,
                 exposure_checkpoints=exposure_checkpoints,
                 gpu_hour_checkpoints=gpu_hour_checkpoints,
@@ -359,7 +498,7 @@ def train_reinforce_data_passes(
                         "schema": "drl_logical_epoch_history_v1",
                         "method": method,
                         "protocol_id": args.protocol_id,
-                        "logical_epoch": group_index + 1,
+                        "logical_epoch": logical_epoch,
                         "training_stage": "soft" if group_soft else "hard",
                         "instances_seen": group_size,
                         "customer_exposures": group_size * _customer_count(args.scale),
@@ -374,18 +513,95 @@ def train_reinforce_data_passes(
                         "mean_environment_feasible_rate": group_sums["feasible"] / group_size,
                         "mean_trajectory_steps": float(epoch_steps.mean()),
                         "rollout_budget_exhausted_rate": group_exhausted / max(epoch_steps.size, 1),
+                        "baseline_eval_due": paired_t_pvalue is not None,
+                        "paired_t_pvalue": paired_t_pvalue,
+                        "baseline_updated": baseline_updated,
                         "epoch_wall_time_s": time.perf_counter() - logical_epoch_started,
                     },
                 )
+                validation_due = bool(
+                    validation_instances
+                    and (
+                        logical_epoch % validation_every_epochs == 0
+                        or logical_epoch == fixed_epochs
+                    )
+                )
+                if validation_due:
+                    policy.eval()
+                    validation = verified_validation(
+                        validation_instances,
+                        lambda instance, seed: validation_solve(
+                            policy, instance, seed
+                        ),
+                        seed=int(args.seed) + logical_epoch * 100_000,
+                    )
+                    validation.update(
+                        {
+                            "logical_epoch": logical_epoch,
+                            "split": "validation",
+                        }
+                    )
+                    append_jsonl(output / "validation_history.jsonl", validation)
+                    is_best = validation_key(validation) > tuple(best_key)
+                    if is_best:
+                        best_key = validation_key(validation)
+                    extra = {
+                        "logical_epoch": logical_epoch,
+                        "best_validation_key": list(best_key),
+                        "ema_cost": ema_cost,
+                        "baseline_eval_count": baseline_eval_count,
+                        "baseline_update_count": baseline_update_count,
+                        "pilot_partial_pass": logical_epoch < fixed_epochs,
+                    }
+                    epoch_checkpoint = (
+                        output / f"checkpoint_epoch_{logical_epoch:04d}.pt"
+                    )
+                    _save_checkpoint(
+                        epoch_checkpoint,
+                        method=method,
+                        data_pass=(
+                            data_pass
+                            if logical_epoch == fixed_epochs
+                            else state.completed_data_passes
+                        ),
+                        policy=policy,
+                        baseline=baseline,
+                        optimizer=optimizer,
+                        args=args,
+                        extra=extra,
+                    )
+                    shutil.copy2(epoch_checkpoint, checkpoint)
+                    if is_best:
+                        shutil.copy2(epoch_checkpoint, selected_checkpoint)
+                        shutil.copy2(epoch_checkpoint, best_checkpoint)
+                        atomic_json(output / "validation_summary.json", validation)
+                    state.completed_data_passes = (
+                        data_pass if logical_epoch == fixed_epochs else 0
+                    )
+                    state.instances_seen = starting_state_instances + instances_seen
+                    state.customer_exposures = (
+                        starting_state_exposures
+                        + instances_seen * _customer_count(args.scale)
+                    )
+                    state.optimizer_steps = optimizer_steps
+                    state.environment_transitions = (
+                        environment_transitions_total + transition_count
+                    )
+                    state.last_checkpoint = str(checkpoint)
+                    state.atomic_write(output / "data_pass_state.json")
+                    policy.train()
 
         if instances_seen == 0:
             raise RuntimeError("data pass yielded no training instances")
         if fixed_epochs is not None:
-            if optimizer_steps - starting_optimizer_steps != fixed_epochs:
+            if (
+                optimizer_steps - starting_optimizer_steps
+                != fixed_epochs - completed_logical_epochs
+            ):
                 raise RuntimeError(
                     "logical epoch count does not match optimizer update count"
                 )
-            expected_instances = fixed_epochs * effective
+            expected_instances = (fixed_epochs - completed_logical_epochs) * effective
             if instances_seen != expected_instances:
                 raise RuntimeError(
                     f"incomplete fixed-epoch budget: {instances_seen} != {expected_instances}"
@@ -393,11 +609,13 @@ def train_reinforce_data_passes(
         elif complete_pass and instances_seen != len(pool):
             raise RuntimeError(f"incomplete data pass: {instances_seen} != {len(pool)}")
 
-        # Keep each method's rollout-baseline update, but never use a test set.
+        # Legacy complete-data-pass mode has no publication-equivalent update
+        # unit, so retain its historical pass-end comparison. Fixed-update
+        # protocol runs use the paper schedules inside the optimizer loop.
         baseline_updated = False
         paired_t_pvalue: float | None = None
         baseline_probe = baseline_probe_instances
-        if baseline_probe:
+        if fixed_epochs is None and baseline_probe:
             actor_costs = []
             baseline_costs = []
             for index, instance in enumerate(baseline_probe):
@@ -416,10 +634,16 @@ def train_reinforce_data_passes(
             )
             if baseline_updated:
                 baseline.load_state_dict(policy.state_dict())
+                baseline_update_count += 1
+                baseline_probe_instances = list(
+                    pool.sample(min(baseline_probe_size, len(pool)))
+                )
+            baseline_eval_count += 1
 
         validation: dict[str, Any] | None = None
         should_validate = bool(
-            validation_instances
+            fixed_epochs is None
+            and validation_instances
             and (
                 data_pass % int(args.validation_every_passes) == 0
                 or data_pass == total_passes
@@ -443,7 +667,10 @@ def train_reinforce_data_passes(
         extra = {
             "best_validation_key": list(best_key),
             "ema_cost": ema_cost,
+            "baseline_eval_count": baseline_eval_count,
+            "baseline_update_count": baseline_update_count,
             "pilot_partial_pass": not complete_pass,
+            "logical_epoch": fixed_epochs if fixed_epochs is not None else None,
         }
         _save_checkpoint(
             checkpoint,
@@ -457,6 +684,7 @@ def train_reinforce_data_passes(
         )
         if is_best:
             shutil.copy2(checkpoint, selected_checkpoint)
+            shutil.copy2(checkpoint, best_checkpoint)
             atomic_json(output / "validation_summary.json", validation)
         if not selected_checkpoint.exists() and args.pilot_mode:
             shutil.copy2(checkpoint, selected_checkpoint)
@@ -509,14 +737,58 @@ def train_reinforce_data_passes(
         environment_transitions_total += transition_count
         if complete_pass:
             state.completed_data_passes = data_pass
-            state.instances_seen += instances_seen
-            state.customer_exposures += instances_seen * _customer_count(args.scale)
+            state.instances_seen = starting_state_instances + instances_seen
+            state.customer_exposures = (
+                starting_state_exposures
+                + instances_seen * _customer_count(args.scale)
+            )
             state.optimizer_steps = optimizer_steps
             state.environment_transitions = environment_transitions_total
             state.last_checkpoint = str(checkpoint)
             state.atomic_write(output / "data_pass_state.json")
         else:
             break
+
+    final_validation_limit = int(
+        getattr(args, "final_validation_limit", 0) or 0
+    )
+    final_validation_path = output / "validation_final_audit.json"
+    if fixed_epochs is not None and final_validation_limit > 0:
+        if validation_pool is None or not best_checkpoint.is_file():
+            raise RuntimeError(
+                "final validation audit requires a validation pool and best.ckpt"
+            )
+        _load_checkpoint(
+            best_checkpoint,
+            policy=policy,
+            baseline=baseline,
+            optimizer=optimizer,
+            protocol_id=args.protocol_id,
+        )
+        policy.eval()
+        final_validation = verified_validation(
+            validation_pool.first(limit=final_validation_limit),
+            lambda instance, seed: validation_solve(policy, instance, seed),
+            seed=int(args.seed) + 999_000_000,
+        )
+        if int(final_validation["instances"]) != final_validation_limit:
+            raise RuntimeError(
+                "final validation audit did not consume the registered view count: "
+                f"{final_validation['instances']} != {final_validation_limit}"
+            )
+        selected_summary = json.loads(
+            (output / "validation_summary.json").read_text(encoding="utf-8")
+        )
+        final_validation.update(
+            {
+                "schema": "drl_final_validation_audit_v1",
+                "split": "validation",
+                "selection_checkpoint": str(best_checkpoint),
+                "selection_logical_epoch": selected_summary.get("logical_epoch"),
+                "selection_changed": False,
+            }
+        )
+        atomic_json(final_validation_path, final_validation)
 
     terminal = {
         "schema": "drl_training_result_v1",
@@ -537,14 +809,29 @@ def train_reinforce_data_passes(
         "customer_exposures": int(state.customer_exposures),
         "training_stream_path": str(stream_path) if stream_path is not None else None,
         "optimizer_steps": int(optimizer_steps),
+        "baseline_eval_count": baseline_eval_count,
+        "baseline_update_count": baseline_update_count,
         "environment_transitions": int(environment_transitions_total),
         "saved_exposure_checkpoints": sorted(saved_exposure),
         "saved_gpu_hour_checkpoints": sorted(saved_gpu_hours),
         "selected_checkpoint": str(selected_checkpoint if selected_checkpoint.exists() else checkpoint),
+        "best_checkpoint": str(best_checkpoint if best_checkpoint.exists() else selected_checkpoint),
+        "validation_every_epochs": (
+            validation_every_epochs if fixed_epochs is not None else None
+        ),
+        "validation_checkpoints": int(args.validation_checkpoints),
+        "final_validation_limit": final_validation_limit,
+        "final_validation_audit": (
+            str(final_validation_path) if final_validation_limit > 0 else None
+        ),
         "peak_gpu_memory_bytes": _peak_gpu_bytes(args.device),
         "wall_time_s": time.perf_counter() - run_started,
     }
     atomic_json(output / "training_result.json", terminal)
 
 
-__all__ = ["train_reinforce_data_passes"]
+__all__ = [
+    "paper_baseline_eval_due",
+    "paper_ema_baseline_due",
+    "train_reinforce_data_passes",
+]

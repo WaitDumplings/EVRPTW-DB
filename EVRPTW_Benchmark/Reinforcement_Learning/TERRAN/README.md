@@ -1,8 +1,10 @@
 # TERRAN
 
-TERRAN is the reinforcement-learning baseline package for EVRPTW-DB. It uses the
-shared `EVRPTW_Env` Gymnasium-style environment and keeps POMO-style parallel
-rollouts through the environment's `n_traj` dimension.
+TERRAN is the reinforcement-learning baseline package for EVRPTW-DB. Its
+user-designated method reference is the CaliRoute implementation at
+`/data/Maojie/AAAI/CaliRoute/EVRPTW_Benchmark/Reinforcement_Learning/TERRAN`.
+It uses the shared `EVRPTW_Env` Gymnasium-style environment and keeps POMO-style
+parallel rollouts through the environment's `n_traj` dimension.
 
 Canonical benchmark runs consume frozen Stage-2 views, use directed distance
 as the objective-facing reward, retain configured auxiliary shaping, and replay
@@ -59,13 +61,18 @@ the shared environment:
   workload potential using the same gamma potential-difference form.
 - `use_feasible_ratio_pbrs`: feasible-unserved-customer ratio potential from
   the action mask. This is optional and disabled in the default PBRS configs.
-- `use_terminal_heuristic`: terminal success bonus and failure penalty. This is
-  an auxiliary shaping term, not strict PBRS, and is disabled by default.
+- `use_terminal_heuristic`: terminal success bonus and remaining-customer
+  failure penalty. This is an auxiliary shaping term, not strict PBRS, and is
+  disabled by default in legacy configs but enabled in the formal Stage-2 config.
 - `customer_pbrs_mode`: default configs use `progress`, the strict gamma
   potential-difference form.
 
 Evaluation should usually disable PBRS and use the base objective reward. PBRS is
-intended for training only.
+intended for training only. Formal training turns the registered rollout budget
+into an environment truncation, so an unfinished trajectory receives
+`-failure_penalty * remaining_customer_fraction` on its final collected step.
+The diagnostic info records `rollout_budget_exhausted`, `remaining_customers`,
+and `remaining_customer_fraction`.
 
 ## Cus15 Baselines
 

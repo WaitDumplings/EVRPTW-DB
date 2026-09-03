@@ -139,6 +139,23 @@ def collect_rollout(agent, envs, rollout_steps: int, decode_mode: str, device: s
             break
 
     total_time_s = time.perf_counter() - total_start
+    explicit_budget_exhaustion = np.stack(
+        [
+            np.asarray(
+                info.get(
+                    "rollout_budget_exhausted",
+                    np.zeros(done.shape[1], dtype=bool),
+                ),
+                dtype=bool,
+            )
+            for info in infos
+        ],
+        axis=0,
+    )
+    # Preserve the legacy diagnostic for callers that construct an environment
+    # without the TERRAN horizon wrapper, while retaining the explicit flag for
+    # trajectories that were truncated exactly at the registered budget.
+    rollout_budget_exhausted = explicit_budget_exhaustion | (~done)
     return RolloutBatch(
         observations=obs_steps,
         actions=torch.stack(actions_steps, dim=0),
@@ -151,7 +168,7 @@ def collect_rollout(agent, envs, rollout_steps: int, decode_mode: str, device: s
         final_infos=infos,
         trajectory_steps=torch.stack(valid_steps, dim=0).sum(dim=0),
         rollout_budget_exhausted=tensor_from_array(
-            ~done, device
+            rollout_budget_exhausted, device
         ).bool(),
         timings={
             "rollout_total_time_s": float(total_time_s),

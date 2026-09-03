@@ -16,7 +16,8 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_distance
 from EVRPTW_Benchmark.Reinforcement_Learning.common.candidate_protocol import independent_candidate_batch
 
-from ..common import Stage2TaskPool, make_envs
+from ..common import Stage2TaskPool
+from .env import DRLTSHardConstraintEnv
 from .model import DRLTSPolicy
 from .rollout import rollout
 
@@ -95,7 +96,16 @@ def main() -> None:
         for batch_start in range(0, len(instances), args.batch_size):
             batch_instances = instances[batch_start : batch_start + args.batch_size]
             def solve_one(instance, candidate_seed):
-                envs = make_envs([instance], n_traj=1, info_level="full")
+                envs = [
+                    DRLTSHardConstraintEnv(
+                        instance=instance,
+                        n_traj=1,
+                        reward_mode="distance",
+                        charging_mode="station_power_full",
+                        matrix_mode="canonical",
+                        info_level="full",
+                    )
+                ]
                 with torch.no_grad():
                     single = rollout(
                         policy,

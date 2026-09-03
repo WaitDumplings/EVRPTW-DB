@@ -21,7 +21,10 @@ sys.path.insert(0, str(REPO_ROOT))
 from evrptw_core.io import iter_instances
 
 from .async_instances import AsyncInstancePool
+from ..common import Stage2TaskPool
 from ..common.data_pass import DataPassState
+from ..common.evaluation import select_min_verified_distance
+from ..common.training_protocol import append_jsonl, atomic_json
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
 from .models import Agent
@@ -277,6 +280,12 @@ def make_envs(cfg: dict[str, Any], seed: int):
     _configure_dataset_reward_scale(cfg, pool)
     pbrs_config = build_pbrs_config(cfg)
     env_cfg = dict(cfg.get("env", {}) or {})
+    # The collector's registered budget is part of the training environment's
+    # terminal semantics.  Evaluation environments are built separately and do
+    # not receive this wrapper.
+    env_cfg["rollout_horizon_steps"] = int(train_cfg.get("rollout_steps", 0))
+    if env_cfg["rollout_horizon_steps"] <= 0:
+        raise ValueError("training.rollout_steps must be positive")
     if bool(env_cfg.get("use_fast_env", True)):
         env_cfg.setdefault("info_level", "light")
     envs = [
@@ -290,7 +299,13 @@ def make_envs(cfg: dict[str, Any], seed: int):
     ]
     return envs, pool
 
-def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: int, device: str | torch.device) -> dict[str, Any]:
+def evaluate_fixed_dataset(
+    agent: Agent,
+    cfg: dict[str, Any],
+    seed: int,
+    epoch: int,
+    device: str | torch.device,
+) -> dict[str, Any]:
     eval_cfg = cfg.get("evaluation", {})
     data_cfg = cfg.get("data", {})
     num_customers = int(data_cfg.get("num_customers", 15))
@@ -298,15 +313,19 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
     eval_path = _resolve_repo_path(eval_cfg.get("eval_path"))
     n_traj = int(eval_cfg.get("eval_n_traj", 8))
     decode_mode = str(eval_cfg.get("eval_decode_mode", "sample"))
-    max_steps = int(eval_cfg.get("eval_max_steps", 128))
+    configured_max_steps = eval_cfg.get("eval_max_steps")
     limit = eval_cfg.get("eval_limit", None)
     batch_size = max(1, int(eval_cfg.get("eval_batch_size", 1)))
     num_batches_limit = eval_cfg.get("eval_num_batches", None)
     eval_save_routes = bool(eval_cfg.get("eval_save_routes", False))
     eval_info_level = str(eval_cfg.get("eval_info_level", "light"))
+    require_verifier = bool(
+        eval_cfg.get("eval_require_independent_verifier", False)
+    )
     if eval_path is None or not eval_path.exists():
         return {
             "eval_num_instances": 0,
+            "eval_complete_and_feasible": 0,
             "eval_n_traj": n_traj,
             "eval_batch_size": batch_size,
             "eval_num_batches": 0,
@@ -319,16 +338,59 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
             "eval_avg_runtime_s": np.nan,
             "eval_status": f"missing_eval_path:{eval_path}",
         }
+
+    if eval_cfg.get("eval_scale"):
+        pool = Stage2TaskPool(
+            dataset_path=eval_path,
+            family_root=_resolve_repo_path(eval_cfg.get("eval_family_root")),
+            scale=str(eval_cfg["eval_scale"]),
+            split_ids=str(eval_cfg.get("eval_split_ids", "val")),
+            track_ids=str(eval_cfg.get("eval_track_ids", "validation")),
+            seed=int(seed) + 900_000,
+            representation=str(eval_cfg.get("eval_representation", "G")),
+            euclidean_manifest=_resolve_repo_path(
+                eval_cfg.get("eval_euclidean_manifest")
+            ),
+        )
+        fixed_instances = list(pool.first(limit=limit))
+        instance_batches = [
+            fixed_instances[offset : offset + batch_size]
+            for offset in range(0, len(fixed_instances), batch_size)
+        ]
+        if num_batches_limit is not None:
+            instance_batches = instance_batches[: int(num_batches_limit)]
+    else:
+        instance_batches = _eval_instance_batches(
+            eval_path,
+            num_customers,
+            num_cs,
+            batch_size,
+            limit,
+            num_batches_limit,
+        )
+
     was_training = agent.training
     agent.eval()
     rows: list[dict[str, Any]] = []
     num_batches = 0
     seen_before_batch = 0
-    for instances in _eval_instance_batches(eval_path, num_customers, num_cs, batch_size, limit, num_batches_limit):
+    for instances in instance_batches:
         eval_env_cfg = dict(cfg.get("env", {}) or {})
         if bool(eval_env_cfg.get("use_fast_env", True)):
-            eval_env_cfg["info_level"] = "full" if eval_save_routes else eval_info_level
-        envs = [make_terran_env(instance=instance, n_traj=n_traj, **eval_env_cfg) for instance in instances]
+            eval_env_cfg["info_level"] = (
+                "full"
+                if require_verifier or eval_save_routes
+                else eval_info_level
+            )
+        envs = [
+            make_terran_env(instance=instance, n_traj=n_traj, **eval_env_cfg)
+            for instance in instances
+        ]
+        max_steps = (
+            max(env.unwrapped.max_steps for env in envs)
+            if configured_max_steps is None
+            else int(configured_max_steps)
+        )
         batch_rows = rollout_eval_batch(
             agent,
             envs,
@@ -337,17 +399,30 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
             device=device,
             seed=seed + epoch * 1_000_000 + seen_before_batch,
             include_routes=eval_save_routes,
+            return_final_info=require_verifier,
         )
         for instance, row in zip(instances, batch_rows):
             row["instance_id"] = instance.instance_id
+            if require_verifier:
+                info = row.pop("_final_info")
+                _, routes, verification = select_min_verified_distance(
+                    instance, info
+                )
+                row["feasible"] = bool(verification["passed"])
+                row["objective_distance_km"] = float(
+                    verification["objective_distance_km"]
+                )
+                row["vehicle_count"] = len(routes)
+                row["verifier_passed"] = bool(verification["passed"])
         rows.extend(batch_rows)
         num_batches += 1
         seen_before_batch += len(instances)
+    if was_training:
+        agent.train()
     if not rows:
-        if was_training:
-            agent.train()
         return {
             "eval_num_instances": 0,
+            "eval_complete_and_feasible": 0,
             "eval_n_traj": n_traj,
             "eval_batch_size": batch_size,
             "eval_num_batches": 0,
@@ -360,22 +435,36 @@ def evaluate_fixed_dataset(agent: Agent, cfg: dict[str, Any], seed: int, epoch: 
             "eval_avg_runtime_s": np.nan,
             "eval_status": f"no_instances:{eval_path}",
         }
-    if was_training:
-        agent.train()
 
     feasible_rows = [row for row in rows if row["feasible"]]
     return {
         "eval_num_instances": len(rows),
+        "eval_complete_and_feasible": len(feasible_rows),
         "eval_n_traj": n_traj,
         "eval_batch_size": batch_size,
         "eval_num_batches": num_batches,
         "eval_decode_mode": decode_mode,
         "eval_info_level": eval_info_level,
         "eval_save_routes": eval_save_routes,
-        "eval_feasible_rate": float(np.mean([row["feasible"] for row in rows])),
-        "eval_avg_objective_distance_km": float(np.mean([row["objective_distance_km"] for row in feasible_rows])) if feasible_rows else np.nan,
-        "eval_avg_vehicle_count": float(np.mean([row["vehicle_count"] for row in feasible_rows])) if feasible_rows else np.nan,
-        "eval_avg_runtime_s": float(np.mean([row["runtime_s"] for row in rows])),
+        "eval_independent_verifier": require_verifier,
+        "eval_feasible_rate": len(feasible_rows) / len(rows),
+        "eval_avg_objective_distance_km": (
+            float(
+                np.mean(
+                    [row["objective_distance_km"] for row in feasible_rows]
+                )
+            )
+            if feasible_rows
+            else np.nan
+        ),
+        "eval_avg_vehicle_count": (
+            float(np.mean([row["vehicle_count"] for row in feasible_rows]))
+            if feasible_rows
+            else np.nan
+        ),
+        "eval_avg_runtime_s": float(
+            np.mean([row["runtime_s"] for row in rows])
+        ),
         "eval_status": "ok",
     }
 
@@ -559,6 +648,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     ppo_epochs = int(train_cfg.get("ppo_update_epochs", 4))
     num_minibatches = max(1, int(train_cfg.get("num_minibatches", 1)))
     gradient_accumulation_steps = max(1, int(train_cfg.get("gradient_accumulation_steps", 1)))
+    logical_microbatches_per_epoch = max(
+        1, int(train_cfg.get("logical_microbatches_per_epoch", 1))
+    )
     checkpoint_interval = int(train_cfg.get("checkpoint_interval", 50))
     eval_interval = int(eval_cfg.get("eval_interval", 0) or 0)
     debug_enabled = bool(train_cfg.get("debug", False))
@@ -566,6 +658,18 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     profile_timing = bool(train_cfg.get("profile_timing", False))
     ppo_step_chunk_size = int(train_cfg.get("ppo_step_chunk_size", 0) or 0)
     protocol_cfg = cfg.get("protocol", {})
+    registered_effective_batch = int(
+        protocol_cfg.get(
+            "logical_environments_per_epoch",
+            len(envs) * logical_microbatches_per_epoch,
+        )
+        or len(envs) * logical_microbatches_per_epoch
+    )
+    if len(envs) * logical_microbatches_per_epoch != registered_effective_batch:
+        raise ValueError(
+            "TERRAN physical rollout count does not match the registered "
+            "effective batch"
+        )
     environment_transitions_total = int(
         protocol_cfg.get("environment_transitions", 0) or 0
     )
@@ -591,6 +695,26 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     log_path = log_dir / "train_log.csv"
     eval_log_path = log_dir / "eval_log.csv"
     debug_log_path = log_dir / "debug_log.txt"
+    validation_history_path = out_root / "validation_history.jsonl"
+    validation_summary_path = out_root / "validation_summary.json"
+    best_checkpoint_path = out_root / "best.ckpt"
+    selected_checkpoint_path = out_root / "checkpoint_selected.pt"
+    best_eval_key = (-math.inf, -math.inf)
+    if validation_summary_path.is_file():
+        previous_validation = json.loads(
+            validation_summary_path.read_text(encoding="utf-8")
+        )
+        previous_distance = previous_validation.get(
+            "mean_verified_distance_km"
+        )
+        best_eval_key = (
+            float(previous_validation["complete_and_feasible_rate"]),
+            (
+                -float(previous_distance)
+                if previous_distance is not None
+                else -math.inf
+            ),
+        )
     exposure_checkpoints = tuple(int(value) for value in protocol_cfg.get("exposure_checkpoints", []))
     gpu_hour_checkpoints = tuple(float(value) for value in protocol_cfg.get("gpu_hour_checkpoints", []))
     saved_exposure = {
@@ -625,6 +749,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "rollout_budget_exhausted_rate",
         "num_minibatches",
         "gradient_accumulation_steps",
+        "logical_microbatches_per_epoch",
         "effective_instances_per_optimizer_step",
         "pbrs_scale",
         "initial_env_pool_time_s",
@@ -661,6 +786,8 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "eval_feasible_rate",
         "eval_avg_runtime_s",
         "eval_num_instances",
+        "eval_complete_and_feasible",
+        "eval_independent_verifier",
         "eval_n_traj",
         "eval_batch_size",
         "eval_num_batches",
@@ -701,86 +828,216 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             pbrs_scale = pbrs_scale_for_epoch(cfg, epoch, epochs)
             set_pbrs_reward_scale(envs, pbrs_scale)
             agent.train()
-            batch = collect_rollout(
-                agent,
-                envs,
-                rollout_steps=rollout_steps,
-                decode_mode="sample",
-                device=device,
-                seed=seed + epoch * 100_000,
-                profile_timing=profile_timing,
-            )
-            environment_transitions = int(batch.valid.sum().item())
+            rollout_records: list[tuple[Any, torch.Tensor, torch.Tensor]] = []
+            rollout_timings: dict[str, float] = {}
+            final_infos: list[dict[str, Any]] = []
+            trajectory_parts: list[np.ndarray] = []
+            reward_sum = 0.0
+            reward_count = 0
+            environment_transitions = 0
+            rollout_budget_exhausted_count = 0
+            for microbatch_index in range(logical_microbatches_per_epoch):
+                batch = collect_rollout(
+                    agent,
+                    envs,
+                    rollout_steps=rollout_steps,
+                    decode_mode="sample",
+                    device=device,
+                    seed=seed + epoch * 100_000 + microbatch_index,
+                    profile_timing=profile_timing,
+                )
+                returns = compute_returns(batch.rewards, batch.dones, gamma=gamma)
+                advantages = returns - batch.values
+                rollout_records.append((batch, returns, advantages))
+                valid_count = int(batch.valid.sum().item())
+                environment_transitions += valid_count
+                reward_count += valid_count
+                if valid_count:
+                    reward_sum += float(batch.rewards[batch.valid].sum().detach().cpu())
+                trajectory_parts.append(
+                    batch.trajectory_steps.detach().cpu().numpy().reshape(-1)
+                )
+                final_infos.extend(batch.final_infos)
+                rollout_budget_exhausted_count += int(
+                    batch.rollout_budget_exhausted.sum().detach().cpu()
+                )
+                for key, value in batch.timings.items():
+                    rollout_timings[key] = rollout_timings.get(key, 0.0) + float(value)
+
             environment_transitions_total += environment_transitions
-            trajectory_steps = batch.trajectory_steps.detach().cpu().numpy().reshape(-1)
+            trajectory_steps = np.concatenate(trajectory_parts)
             trajectory_count = int(trajectory_steps.size)
-            rollout_budget_exhausted_count = int(
-                batch.rollout_budget_exhausted.sum().detach().cpu()
+            all_advantages = torch.cat(
+                [advantages[batch.valid] for batch, _, advantages in rollout_records]
             )
-            returns = compute_returns(batch.rewards, batch.dones, gamma=gamma)
-            advantages = returns - batch.values
-            valid = batch.valid
-            adv_vals = advantages[valid]
-            if adv_vals.numel() > 1:
-                advantages = (advantages - adv_vals.mean()) / (adv_vals.std(unbiased=False) + 1e-8)
+            if all_advantages.numel() > 1:
+                advantage_mean = all_advantages.mean()
+                advantage_std = all_advantages.std(unbiased=False)
+                rollout_records = [
+                    (
+                        batch,
+                        returns,
+                        (advantages - advantage_mean) / (advantage_std + 1e-8),
+                    )
+                    for batch, returns, advantages in rollout_records
+                ]
+
             losses = []
-            num_envs = int(batch.actions.size(1))
+            num_envs = int(rollout_records[0][0].actions.size(1))
             minibatches = min(num_minibatches, num_envs)
-            env_order = np.arange(num_envs, dtype=np.int64)
+            effective_instances = num_envs * logical_microbatches_per_epoch
             if profile_timing:
                 _sync_cuda(device)
             ppo_start = time.perf_counter()
-            total_steps = int(batch.actions.size(0))
-            chunk_size = ppo_step_chunk_size if ppo_step_chunk_size > 0 else total_steps
-            chunk_size = max(1, min(chunk_size, total_steps))
             epoch_rng = np.random.default_rng(epoch_seed + 17)
-            for _ in range(ppo_epochs):
-                epoch_rng.shuffle(env_order)
-                split_indices = [indices for indices in np.array_split(env_order, minibatches) if indices.size > 0]
-                for group_start in range(0, len(split_indices), gradient_accumulation_steps):
-                    accum_group = split_indices[group_start : group_start + gradient_accumulation_steps]
-                    if not accum_group:
-                        continue
+            if logical_microbatches_per_epoch == 1:
+                batch, returns, advantages = rollout_records[0]
+                env_order = np.arange(num_envs, dtype=np.int64)
+                total_steps = int(batch.actions.size(0))
+                chunk_size = (
+                    ppo_step_chunk_size
+                    if ppo_step_chunk_size > 0
+                    else total_steps
+                )
+                chunk_size = max(1, min(chunk_size, total_steps))
+                for _ in range(ppo_epochs):
+                    epoch_rng.shuffle(env_order)
+                    split_indices = [
+                        indices
+                        for indices in np.array_split(env_order, minibatches)
+                        if indices.size > 0
+                    ]
+                    for group_start in range(
+                        0, len(split_indices), gradient_accumulation_steps
+                    ):
+                        accum_group = split_indices[
+                            group_start : group_start + gradient_accumulation_steps
+                        ]
+                        if not accum_group:
+                            continue
+                        optimizer.zero_grad(set_to_none=True)
+                        group_policy = 0.0
+                        group_value = 0.0
+                        group_entropy = 0.0
+                        group_size = float(len(accum_group))
+                        for env_indices in accum_group:
+                            weighted_policy = 0.0
+                            weighted_value = 0.0
+                            weighted_entropy = 0.0
+                            for step_start in range(0, total_steps, chunk_size):
+                                step_end = min(
+                                    step_start + chunk_size, total_steps
+                                )
+                                chunk_weight = float(
+                                    step_end - step_start
+                                ) / max(float(total_steps), 1.0)
+                                loss, policy_loss, value_loss, entropy = (
+                                    evaluate_policy_loss(
+                                        agent,
+                                        batch,
+                                        returns,
+                                        advantages.detach(),
+                                        cfg,
+                                        device,
+                                        env_indices=env_indices,
+                                        step_start=step_start,
+                                        step_end=step_end,
+                                    )
+                                )
+                                (loss * chunk_weight / group_size).backward()
+                                weighted_policy += (
+                                    policy_loss.item() * chunk_weight
+                                )
+                                weighted_value += value_loss.item() * chunk_weight
+                                weighted_entropy += entropy.item() * chunk_weight
+                            group_policy += weighted_policy / group_size
+                            group_value += weighted_value / group_size
+                            group_entropy += weighted_entropy / group_size
+                        torch.nn.utils.clip_grad_norm_(
+                            agent.parameters(),
+                            float(train_cfg.get("max_grad_norm", 1.0)),
+                        )
+                        optimizer.step()
+                        optimizer_steps_total += 1
+                        losses.append(
+                            (group_policy, group_value, group_entropy)
+                        )
+            else:
+                # Multiple physical rollout buffers form one effective batch.
+                # PPO gradients are weighted by their base-instance share and
+                # accumulated before each optimizer step, keeping GPU residency
+                # at the registered physical batch size.
+                for _ in range(ppo_epochs):
                     optimizer.zero_grad(set_to_none=True)
                     group_policy = 0.0
                     group_value = 0.0
                     group_entropy = 0.0
-                    group_size = float(len(accum_group))
-                    for env_indices in accum_group:
-                        weighted_policy = 0.0
-                        weighted_value = 0.0
-                        weighted_entropy = 0.0
-                        for step_start in range(0, total_steps, chunk_size):
-                            step_end = min(step_start + chunk_size, total_steps)
-                            chunk_weight = float(step_end - step_start) / max(float(total_steps), 1.0)
-                            loss, policy_loss, value_loss, entropy = evaluate_policy_loss(
-                                agent,
-                                batch,
-                                returns,
-                                advantages.detach(),
-                                cfg,
-                                device,
-                                env_indices=env_indices,
-                                step_start=step_start,
-                                step_end=step_end,
+                    for record_index, (batch, returns, advantages) in enumerate(
+                        rollout_records
+                    ):
+                        record_envs = int(batch.actions.size(1))
+                        env_order = np.arange(record_envs, dtype=np.int64)
+                        epoch_rng.shuffle(env_order)
+                        record_minibatches = min(num_minibatches, record_envs)
+                        split_indices = [
+                            indices
+                            for indices in np.array_split(
+                                env_order, record_minibatches
                             )
-                            (loss * chunk_weight / group_size).backward()
-                            weighted_policy += policy_loss.item() * chunk_weight
-                            weighted_value += value_loss.item() * chunk_weight
-                            weighted_entropy += entropy.item() * chunk_weight
-                        group_policy += weighted_policy / group_size
-                        group_value += weighted_value / group_size
-                        group_entropy += weighted_entropy / group_size
-                    torch.nn.utils.clip_grad_norm_(agent.parameters(), float(train_cfg.get("max_grad_norm", 1.0)))
+                            if indices.size > 0
+                        ]
+                        total_steps = int(batch.actions.size(0))
+                        chunk_size = (
+                            ppo_step_chunk_size
+                            if ppo_step_chunk_size > 0
+                            else total_steps
+                        )
+                        chunk_size = max(1, min(chunk_size, total_steps))
+                        for env_indices in split_indices:
+                            instance_weight = (
+                                float(len(env_indices))
+                                / float(effective_instances)
+                            )
+                            for step_start in range(
+                                0, total_steps, chunk_size
+                            ):
+                                step_end = min(
+                                    step_start + chunk_size, total_steps
+                                )
+                                chunk_weight = float(
+                                    step_end - step_start
+                                ) / max(float(total_steps), 1.0)
+                                loss, policy_loss, value_loss, entropy = (
+                                    evaluate_policy_loss(
+                                        agent,
+                                        batch,
+                                        returns,
+                                        advantages.detach(),
+                                        cfg,
+                                        device,
+                                        env_indices=env_indices,
+                                        step_start=step_start,
+                                        step_end=step_end,
+                                    )
+                                )
+                                weight = instance_weight * chunk_weight
+                                (loss * weight).backward()
+                                group_policy += policy_loss.item() * weight
+                                group_value += value_loss.item() * weight
+                                group_entropy += entropy.item() * weight
+                    torch.nn.utils.clip_grad_norm_(
+                        agent.parameters(),
+                        float(train_cfg.get("max_grad_norm", 1.0)),
+                    )
                     optimizer.step()
                     optimizer_steps_total += 1
                     losses.append((group_policy, group_value, group_entropy))
             if profile_timing:
                 _sync_cuda(device)
             ppo_update_time_s = time.perf_counter() - ppo_start
-            reward_mean = float(batch.rewards[batch.valid].mean().detach().cpu().item()) if batch.valid.any() else 0.0
+            reward_mean = reward_sum / max(reward_count, 1)
             loss_arr = np.asarray(losses, dtype=float)
-            train_summary = summarize_train_infos(batch.final_infos)
+            train_summary = summarize_train_infos(final_infos)
             if epoch % debug_log_every == 0:
                 _debug_log(
                     debug_enabled,
@@ -796,9 +1053,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     f"train_veh={_format_float(train_summary['train_avg_vehicle_count'])} "
                     f"served={_format_float(train_summary['train_avg_served_customers'])} "
                     f"pbrs_scale={pbrs_scale:.4f} "
-                    f"timing_reset={batch.timings.get('rollout_reset_time_s', 0.0):.3f}s "
-                    f"timing_model={batch.timings.get('rollout_model_action_time_s', 0.0):.3f}s "
-                    f"timing_env={batch.timings.get('rollout_env_step_time_s', 0.0):.3f}s "
+                    f"timing_reset={rollout_timings.get('rollout_reset_time_s', 0.0):.3f}s "
+                    f"timing_model={rollout_timings.get('rollout_model_action_time_s', 0.0):.3f}s "
+                    f"timing_env={rollout_timings.get('rollout_env_step_time_s', 0.0):.3f}s "
                     f"timing_ppo={ppo_update_time_s:.3f}s",
                 )
             eval_row: dict[str, Any] = {}
@@ -810,6 +1067,62 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 eval_wall_time_s = time.perf_counter() - eval_start
                 eval_writer.writerow({"epoch": epoch, **eval_row})
                 ef.flush()
+                if eval_row.get("eval_status") == "ok":
+                    verified_distance = eval_row.get(
+                        "eval_avg_objective_distance_km"
+                    )
+                    validation = {
+                        "schema": "drl_validation_summary_v1",
+                        "split": "validation",
+                        "logical_epoch": epoch,
+                        "instances": int(eval_row["eval_num_instances"]),
+                        "complete_and_feasible": int(
+                            eval_row["eval_complete_and_feasible"]
+                        ),
+                        "complete_and_feasible_rate": float(
+                            eval_row["eval_feasible_rate"]
+                        ),
+                        "mean_verified_distance_km": (
+                            float(verified_distance)
+                            if verified_distance is not None
+                            and np.isfinite(float(verified_distance))
+                            else None
+                        ),
+                        "verifier_summary_passed": bool(
+                            eval_row.get("eval_independent_verifier", False)
+                            and int(eval_row["eval_complete_and_feasible"])
+                            == int(eval_row["eval_num_instances"])
+                        ),
+                    }
+                    append_jsonl(validation_history_path, validation)
+                    selection_key = (
+                        validation["complete_and_feasible_rate"],
+                        (
+                            -validation["mean_verified_distance_km"]
+                            if validation["mean_verified_distance_km"]
+                            is not None
+                            else -math.inf
+                        ),
+                    )
+                    if selection_key > best_eval_key:
+                        best_eval_key = selection_key
+                        save_checkpoint(
+                            best_checkpoint_path,
+                            agent,
+                            optimizer,
+                            cfg,
+                            epoch,
+                            seed,
+                        )
+                        save_checkpoint(
+                            selected_checkpoint_path,
+                            agent,
+                            optimizer,
+                            cfg,
+                            epoch,
+                            seed,
+                        )
+                        atomic_json(validation_summary_path, validation)
                 _debug_log(
                     debug_enabled,
                     df,
@@ -855,15 +1168,21 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         rollout_budget_exhausted_count / trajectory_count
                     ),
                     "gradient_accumulation_steps": gradient_accumulation_steps,
-                    "effective_instances_per_optimizer_step": int(np.ceil(num_envs / max(minibatches, 1))) * gradient_accumulation_steps,
+                    "logical_microbatches_per_epoch": logical_microbatches_per_epoch,
+                    "effective_instances_per_optimizer_step": (
+                        effective_instances
+                        if logical_microbatches_per_epoch > 1
+                        else int(np.ceil(num_envs / max(minibatches, 1)))
+                        * gradient_accumulation_steps
+                    ),
                     "pbrs_scale": pbrs_scale,
                     "initial_env_pool_time_s": initial_env_pool_time_s,
-                    "rollout_reset_time_s": batch.timings.get("rollout_reset_time_s", ""),
-                    "rollout_stack_obs_time_s": batch.timings.get("rollout_stack_obs_time_s", ""),
-                    "rollout_model_action_time_s": batch.timings.get("rollout_model_action_time_s", ""),
-                    "rollout_env_step_time_s": batch.timings.get("rollout_env_step_time_s", ""),
-                    "rollout_interaction_time_s": batch.timings.get("rollout_interaction_time_s", ""),
-                    "rollout_total_time_s": batch.timings.get("rollout_total_time_s", ""),
+                    "rollout_reset_time_s": rollout_timings.get("rollout_reset_time_s", ""),
+                    "rollout_stack_obs_time_s": rollout_timings.get("rollout_stack_obs_time_s", ""),
+                    "rollout_model_action_time_s": rollout_timings.get("rollout_model_action_time_s", ""),
+                    "rollout_env_step_time_s": rollout_timings.get("rollout_env_step_time_s", ""),
+                    "rollout_interaction_time_s": rollout_timings.get("rollout_interaction_time_s", ""),
+                    "rollout_total_time_s": rollout_timings.get("rollout_total_time_s", ""),
                     "ppo_update_time_s": ppo_update_time_s,
                     "eval_wall_time_s": eval_wall_time_s,
                     "epoch_wall_time_s": epoch_wall_time_s,

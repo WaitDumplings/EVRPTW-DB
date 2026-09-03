@@ -223,6 +223,10 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(dataset / "materialized" / "families"),
             "--validation-limit",
             str(job["validation_views"]),
+            "--final-validation-limit",
+            str(job.get("final_validation_views", 0)),
+            "--validation-every-epochs",
+            str(job.get("validation_every_epochs", job["training_epochs"])),
             "--validation-checkpoints",
             str(job["validation_checkpoints"]),
             "--protocol-id",
@@ -263,6 +267,10 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(dataset / "materialized" / "families"),
             "--validation-limit",
             str(job["validation_views"]),
+            "--final-validation-limit",
+            str(job.get("final_validation_views", 0)),
+            "--validation-every-epochs",
+            str(job.get("validation_every_epochs", job["training_epochs"])),
             "--validation-checkpoints",
             str(job["validation_checkpoints"]),
             "--protocol-id",
@@ -362,7 +370,13 @@ def job_complete(job: dict[str, Any], out: Path) -> bool:
     if payload.get("status") != "passed":
         return False
     if job["kind"] in {"train", "pilot"}:
-        return (out / "checkpoint_selected.pt").is_file() and (out / "validation_summary.json").is_file()
+        required = [
+            out / "checkpoint_selected.pt",
+            out / "validation_summary.json",
+        ]
+        if int(job.get("final_validation_views", 0) or 0) > 0:
+            required.append(out / "validation_final_audit.json")
+        return all(path.is_file() for path in required)
     return (out / "summary.csv").is_file() and (out / "routes.jsonl").is_file()
 
 

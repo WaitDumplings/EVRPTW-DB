@@ -85,37 +85,50 @@ RTX 2080 Ti 吞吐与 wall-time 外推不再视为当前配置证据。
 
 ## 固定训练预算
 
-当前活动候选为 `drl_rq_runtime_budget_v2_cus1000_24h_anchor`，完整推导见
-`reports/LOGICAL_EPOCH_TRAINING_BUDGET_V3_24H_ANCHOR.md`。
+当前活动候选为 `drl_rq_runtime_budget_v4_cus1000_b2_val100`，完整定义见
+`reports/LOGICAL_EPOCH_TRAINING_BUDGET_V5_CUS1000_B2.md`。
 
-正式训练不遍历全部 train views，也不使用 full-data pass 计量。epoch 是跨模型
-一致的 logical epoch，而不是某个模型恰好能装入显存的 physical batch：
+正式训练不遍历全部 train views，也不使用 full-data pass 计量。四个规模均运行
+1,000 个 logical epochs；同一 scale 的四个模型与三个 seed 使用一致的每 epoch
+base-instance 数、确定性训练流和 effective batch：
 
 ```text
-logical environments = logical epochs × environments per logical epoch
+logical environments = 1000 × environments per logical epoch
 customer exposures = logical environments × customer count
 ```
 
-同一 scale 的四个模型使用相同 epoch 数、每 epoch 环境数和 exposure。每个
-logical epoch 从按 `seed` 确定性打乱的 train pool 中无放回取样；如果 logical
-batch 超过某模型的安全 physical batch，就拆成可整除的 micro-batches、累计梯度，
-最后只做一次 optimizer update。
+训练流在每个 `city × day_type` stratum 内按冻结 seed 有放回采样，再确定性打乱。
+这让训练预算不受有限 train index 大小限制，同时保证同一 scale/condition/seed 的
+四个方法消费完全相同的 instance ID 序列。
 
-| Scale | Logical epochs | Environments / epoch | Total environments | Customer exposures |
-|---|---:|---:|---:|---:|
-| Cus50 | 100 | 200 | 20,000 | 1,000,000 |
-| Cus100 | 200 | 50 | 10,000 | 1,000,000 |
-| Cus500 | 500 | 4 | 2,000 | 1,000,000 |
-| Cus1000 | 1,000 | 1 | 1,000 | 1,000,000 |
+| Scale | Logical epochs | Instances / epoch | Effective batch | Total instances | Customer exposures |
+|---|---:|---:|---:|---:|---:|
+| Cus50 | 1,000 | 200 | 200 | 200,000 | 10,000,000 |
+| Cus100 | 1,000 | 50 | 50 | 50,000 | 5,000,000 |
+| Cus500 | 1,000 | 4 | 4 | 4,000 | 2,000,000 |
+| Cus1000 | 1,000 | 2 | 2 | 2,000 | 2,000,000 |
 
-四个规模都从完整 training pool 按冻结 seed 分层有放回抽样约20%的 view 数，
-并统一为每个 `method × scale × seed` 100万 customer exposures。Cus1000 的
-`1000 epochs × 1 env` 以单 job 约24小时作为规划锚点；该时间尚须 A6000 pilot
-实测，不是硬超时，也不代表12个 Cus1000 jobs 能在24小时内全部完成。
+显存相关的 physical batch 可按模型更小；四个方法都通过顺序梯度累积恢复上述
+effective batch。Cus1000 固定为 `physical=1 / effective=2`，所以 GPU 同时只驻留
+一个大 instance，但每个 logical epoch 在两个 rollout 的梯度累积完成后才更新。
+`1000 epochs × 2 instances` 的单 job 规划值约为48小时；这是待 pilot 校准的线性
+估计，不是硬超时。
 
-正式 job 结束时执行一次500-view validation并选择 checkpoint；T1/T2/T3 和
-Cus2000 不参与训练或 checkpoint selection。中断前若 fixed-budget job 尚未原子
-提交完成状态，该 job 从同一 seed 的确定性抽样序列开头重跑。
+每 50 epochs 固定保存并验证一次，共 20 个 checkpoint。Cus50/100/500 每次使用
+固定500个 validation views；Cus1000 每次使用固定100个 views，以避免周期验证量
+超过训练量。所有选择验证均执行完整 horizon 和独立 route verifier。Model
+selection 只用 val：
+先最大化 verifier feasibility rate；若相同，再最小化通过样本的平均 directed-road
+distance。最终同时保存 `best.ckpt` 和兼容旧 evaluation 脚本的
+`checkpoint_selected.pt`，并在 `validation_history.jsonl` 保留全部20次结果。
+Cus1000 训练结束后对已经选定的 `best.ckpt` 再执行一次完整500-view val audit，
+写入 `validation_final_audit.json`；该审计不重新选择 checkpoint。T1/T2/T3 和
+Cus2000 不参与 checkpoint selection。
+
+三个 REINFORCE trainer 在每个 50-epoch validation 边界同步更新
+`checkpoint_latest.pt` 与原子状态，可从最近边界恢复。TERRAN 保留每个边界的
+`checkpoint_epoch_*.pt` 和在线 `best.ckpt`；当前固定 epoch 队列不承诺中途自动 resume，
+避免把尚未恢复训练流 cursor 的行为误写成正式保证。
 
 ## Pilot 与 full 边界
 

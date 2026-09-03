@@ -5,6 +5,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT))
@@ -18,6 +20,53 @@ from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
 )
 
 from .pbrs import PotentialRewardConfig, PotentialRewardWrapper
+
+
+class TERRANRolloutHorizonWrapper(Wrapper):
+    """Turn TERRAN's trainer rollout budget into a Gymnasium truncation.
+
+    The shared EVRPTW environment has its own safety horizon.  Formal TERRAN
+    training may intentionally collect fewer transitions, so reaching that
+    registered budget must be surfaced as a terminal transition.  The outer
+    PBRS wrapper can then apply its remaining-customer failure penalty.
+    """
+
+    def __init__(self, env, max_rollout_steps: int) -> None:
+        super().__init__(env)
+        self.max_rollout_steps = int(max_rollout_steps)
+        if self.max_rollout_steps <= 0:
+            raise ValueError("max_rollout_steps must be positive")
+        self._elapsed_steps = 0
+
+    def reset(self, **kwargs: Any):
+        self._elapsed_steps = 0
+        obs, info = self.env.reset(**kwargs)
+        out_info = dict(info)
+        out_info["rollout_horizon_steps"] = self.max_rollout_steps
+        return obs, out_info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self._elapsed_steps += 1
+
+        terminated_array = np.asarray(terminated, dtype=bool)
+        truncated_array = np.asarray(truncated, dtype=bool)
+        budget_exhausted = np.zeros_like(terminated_array, dtype=bool)
+        if self._elapsed_steps >= self.max_rollout_steps:
+            budget_exhausted = ~(terminated_array | truncated_array)
+            truncated_array = truncated_array | budget_exhausted
+
+        served = np.asarray(info["served_customers"], dtype=np.int32)
+        num_customers = max(int(getattr(self.unwrapped, "num_customers", 0)), 1)
+        remaining = np.maximum(num_customers - served, 0)
+        out_info = dict(info)
+        out_info["rollout_horizon_steps"] = self.max_rollout_steps
+        out_info["rollout_budget_exhausted"] = budget_exhausted.copy()
+        out_info["remaining_customers"] = remaining.astype(np.int32, copy=False)
+        out_info["remaining_customer_fraction"] = (
+            remaining.astype(np.float32) / float(num_customers)
+        )
+        return obs, reward, terminated_array, truncated_array, out_info
 
 
 class OnlineInstanceResetWrapper(Wrapper):
@@ -44,6 +93,7 @@ def make_terran_env(
     n_traj: int = 50,
     reward_mode: str = "distance",
     pbrs_config: PotentialRewardConfig | None = None,
+    rollout_horizon_steps: int | None = None,
     **env_kwargs: Any,
 ):
     """Create the shared EVRPTW env with optional online sampling and PBRS."""
@@ -70,6 +120,8 @@ def make_terran_env(
         env = EVRPTWVectorEnv(instance=instance, n_traj=n_traj, reward_mode=reward_mode, **env_kwargs)
     if instance_sampler is not None:
         env = OnlineInstanceResetWrapper(env, instance_sampler)
+    if rollout_horizon_steps is not None:
+        env = TERRANRolloutHorizonWrapper(env, rollout_horizon_steps)
     if pbrs_config is not None and (
         pbrs_config.use_customer_pbrs
         or pbrs_config.use_repair_distance_pbrs
@@ -80,4 +132,8 @@ def make_terran_env(
     return env
 
 
-__all__ = ["OnlineInstanceResetWrapper", "make_terran_env"]
+__all__ = [
+    "OnlineInstanceResetWrapper",
+    "TERRANRolloutHorizonWrapper",
+    "make_terran_env",
+]

@@ -171,3 +171,27 @@ def test_am_reinforce_update_runs_through_complete_rollout() -> None:
     torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
     optimizer.step()
     assert torch.isfinite(loss)
+
+
+def test_am_training_cost_is_distance_plus_named_incomplete_guard() -> None:
+    penalty = 123.0
+    env = EVRPTWVectorEnv(_instance(), n_traj=2)
+    result = rollout(
+        AMEVRPTWPolicy(
+            embedding_dim=32,
+            hidden_dim=32,
+            n_encode_layers=1,
+            n_heads=4,
+        ),
+        [env],
+        decode_type="sampling",
+        max_steps=1,
+        seed=43,
+        incomplete_penalty_km=penalty,
+    )
+    objective = np.asarray(result.infos[0]["objective_distance_km"])
+    served = result.served_customers.detach().cpu().numpy()[0]
+    feasible = result.feasible.detach().cpu().numpy()[0]
+    incomplete_fraction = 1.0 - served / env.num_customers
+    expected = objective + (~feasible) * penalty * (1.0 + incomplete_fraction)
+    np.testing.assert_allclose(result.cost_km.detach().cpu().numpy()[0], expected)

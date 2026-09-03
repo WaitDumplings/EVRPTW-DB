@@ -58,6 +58,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples-per-instance", type=int, default=1)
     parser.add_argument("--baseline-eval-size", type=int, default=64)
     parser.add_argument("--baseline-alpha", type=float, default=0.05)
+    parser.add_argument("--baseline-warmup-epochs", type=int, default=1)
+    parser.add_argument("--ema-decay", type=float, default=0.8)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--embedding-dim", type=int, default=128)

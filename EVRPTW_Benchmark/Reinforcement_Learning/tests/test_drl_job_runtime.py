@@ -65,6 +65,20 @@ def test_one_job_run_and_valid_resume_skip(tmp_path: Path) -> None:
     assert RUNTIME.run_job(job, context, 0, True, False)
 
 
+def test_final_validation_audit_is_required_when_registered(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    job = _job()
+    job["final_validation_views"] = 500
+    output = RUNTIME.output_dir(job, context)
+    output.mkdir(parents=True)
+    (output / "checkpoint_selected.pt").write_bytes(b"checkpoint")
+    (output / "validation_summary.json").write_text("{}")
+    (output / "job_result.json").write_text(json.dumps({"status": "passed"}))
+    assert not RUNTIME.job_complete(job, output)
+    (output / "validation_final_audit.json").write_text("{}")
+    assert RUNTIME.job_complete(job, output)
+
+
 def test_failure_stops_only_its_serial_queue(tmp_path: Path) -> None:
     context = _context(tmp_path)
     context["dataset"].mkdir()
@@ -154,7 +168,9 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         "training_rollout_steps": 140,
         "physical_batch_size": 4,
         "effective_batch_size": 4,
-        "validation_views": 500,
+        "validation_views": 100,
+        "final_validation_views": 500,
+        "validation_every_epochs": 50,
         "validation_checkpoints": 1,
         "protocol_id": "rollout-budget-test",
         "run_mode": "full",
@@ -173,6 +189,10 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         assert command[index + 1] == "140"
         epoch_index = command.index("--training-epochs")
         assert command[epoch_index + 1] == "25"
+        validation_index = command.index("--validation-every-epochs")
+        assert command[validation_index + 1] == "50"
+        final_validation_index = command.index("--final-validation-limit")
+        assert command[final_validation_index + 1] == "500"
         assert "--data-passes" not in command
 
 

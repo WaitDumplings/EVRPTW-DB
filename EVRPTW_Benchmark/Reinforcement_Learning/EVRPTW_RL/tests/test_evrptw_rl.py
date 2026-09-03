@@ -21,7 +21,10 @@ from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import EVRPTWVectorEnv
 from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.model import (
     EVRPTWRLPolicy,
 )
-from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.rollout import rollout
+from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.rollout import (
+    _normalized_travel_time,
+    rollout,
+)
 
 
 def _policy() -> EVRPTWRLPolicy:
@@ -86,3 +89,35 @@ def test_evrptw_rl_rollout_reports_training_budget_exhaustion() -> None:
     )
     assert result.trajectory_steps.tolist() == [[1, 1]]
     assert result.rollout_budget_exhausted.tolist() == [[True, True]]
+
+
+def test_evrptw_rl_normalization_and_reward_match_adapter_contract() -> None:
+    penalty = 17.0
+    station_penalty = 0.3
+    env = EVRPTWVectorEnv(_instance(), n_traj=2)
+    normalized_time = _normalized_travel_time([env])
+    assert normalized_time.min() == 0.0
+    assert normalized_time.max() == 1.0
+
+    result = rollout(
+        _policy(),
+        [env],
+        decode_type="sampling",
+        max_steps=1,
+        seed=47,
+        station_visit_penalty=station_penalty,
+        incomplete_penalty=penalty,
+    )
+    objective = result.objective_distance_km.detach().cpu().numpy()[0]
+    served = result.served_customers.detach().cpu().numpy()[0]
+    station_visits = result.station_visits.detach().cpu().numpy()[0]
+    feasible = result.feasible.detach().cpu().numpy()[0]
+    incomplete_fraction = 1.0 - served / env.num_customers
+    expected = (
+        objective / env.reward_distance_scale_km
+        + station_penalty * station_visits
+        + (~feasible) * penalty * (1.0 + incomplete_fraction)
+    )
+    np.testing.assert_allclose(
+        result.training_cost.detach().cpu().numpy()[0], expected
+    )

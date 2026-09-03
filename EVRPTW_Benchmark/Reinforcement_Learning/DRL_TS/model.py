@@ -76,7 +76,7 @@ class EdgeMultiHeadAttention(nn.Module):
 
 
 class EdgeAwareGATLayer(nn.Module):
-    """Equations (4)--(5) of Chen et al. (PPSN 2022)."""
+    """Paper-aligned simultaneous node/edge update (Chen et al., Eqs. 4-5)."""
 
     def __init__(self, embedding_dim: int, n_heads: int) -> None:
         super().__init__()
@@ -171,7 +171,7 @@ class DRLTSRecurrentState:
 
 
 class DRLTSPolicy(nn.Module):
-    """Edge-feature GAT and GRU decoder from DRL-TS."""
+    """Paper-guided DRL-TS policy with documented EVRPTW-DB features."""
 
     node_feature_dim = 6
     edge_feature_dim = 4

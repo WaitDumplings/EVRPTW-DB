@@ -106,6 +106,7 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
 
 
 def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
+    from ..DRL_TS.env import DRLTSHardConstraintEnv
     from ..DRL_TS.rollout import rollout
     from ..DRL_TS.soft_env import DRLTSSoftConstraintEnv
 
@@ -126,11 +127,17 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                 for instance in instances
             ]
         else:
-            envs = make_envs(
-                instances,
-                n_traj=n_traj,
-                info_level="full" if decode_type == "greedy" else "light",
-            )
+            envs = [
+                DRLTSHardConstraintEnv(
+                    instance=instance,
+                    n_traj=n_traj,
+                    reward_mode="distance",
+                    charging_mode="station_power_full",
+                    matrix_mode="canonical",
+                    info_level="full" if decode_type == "greedy" else "light",
+                )
+                for instance in instances
+            ]
         return rollout(
             active,
             envs,

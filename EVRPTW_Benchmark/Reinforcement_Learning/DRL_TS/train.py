@@ -11,9 +11,10 @@ import numpy as np
 import torch
 from scipy.stats import ttest_rel
 
-from ..common import Stage2TaskPool, make_envs
+from ..common import Stage2TaskPool
 from ..common.protocol_entrypoints import run_drl_ts
 from ..common.training_protocol import add_data_pass_arguments
+from .env import DRLTSHardConstraintEnv
 from .model import DRLTSPolicy
 from .rollout import rollout
 from .soft_env import DRLTSSoftConstraintEnv
@@ -65,7 +66,17 @@ def parse_args() -> argparse.Namespace:
 
 def _make_envs(instances, *, n_traj: int, soft: bool, info_level: str):
     if not soft:
-        return make_envs(instances, n_traj=n_traj, info_level=info_level)
+        return [
+            DRLTSHardConstraintEnv(
+                instance=instance,
+                n_traj=n_traj,
+                reward_mode="distance",
+                charging_mode="station_power_full",
+                matrix_mode="canonical",
+                info_level=info_level,
+            )
+            for instance in instances
+        ]
     return [
         DRLTSSoftConstraintEnv(
             instance=instance,

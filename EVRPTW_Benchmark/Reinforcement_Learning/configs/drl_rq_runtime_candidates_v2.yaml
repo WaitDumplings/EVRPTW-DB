@@ -1,42 +1,46 @@
 schema: drl_rq_runtime_candidates_v2
 status: pilot_candidates_not_formally_frozen
 protocol_id: drl_rq_protocol_frozen_v1
-runtime_budget_id: drl_rq_runtime_budget_v2_cus1000_24h_anchor
+runtime_budget_id: drl_rq_runtime_budget_v4_cus1000_b2_val100
 
 seeds: [1234, 2345, 3456]
 rollout_steps: {Cus50: 80, Cus100: 140, Cus500: 600, Cus1000: 1200}
 
 # Planning anchor supplied before pilot/test evaluation. It is not a timeout and
 # does not authorize the formal run. The A6000 pilot must still measure each
-# model and confirm whether 1,000 Cus1000 environments fit this target.
+# model and confirm whether 2,000 Cus1000 environments fit this target.
 planning_anchor:
   scale: Cus1000
   hardware: RTX_A6000
-  wall_time_hours_per_job: 24
+  wall_time_hours_per_job: 48
   logical_epochs: 1000
-  environments_per_epoch: 1
-  total_environments: 1000
-  customer_exposures: 1000000
+  environments_per_epoch: 2
+  physical_batch_size: 1
+  gradient_accumulation_steps: 2
+  total_environments: 2000
+  customer_exposures: 2000000
   enforcement: estimate_then_gate
 
 # One logical epoch is one outer optimizer update over the listed number of
-# base environments. These values preserve the reviewer-facing 100/200/500/1000
-# epoch schedule while matching one million customer exposures at every scale.
+# base environments. Every scale now uses 1,000 logical epochs. Fairness is
+# enforced within each scale: every method and seed sees the same deterministic
+# stream and effective batch. Cross-scale customer exposure is intentionally not
+# forced to match because the scales are not compared as one optimization task.
 candidate_logical_epochs:
-  Cus50: 100
-  Cus100: 200
-  Cus500: 500
+  Cus50: 1000
+  Cus100: 1000
+  Cus500: 1000
   Cus1000: 1000
 candidate_environments_per_epoch:
   Cus50: 200
   Cus100: 50
   Cus500: 4
-  Cus1000: 1
+  Cus1000: 2
 candidate_customer_exposure_budget:
-  Cus50: 1000000
-  Cus100: 1000000
-  Cus500: 1000000
-  Cus1000: 1000000
+  Cus50: 10000000
+  Cus100: 5000000
+  Cus500: 2000000
+  Cus1000: 2000000
 
 # The effective/logical batch equals environments_per_epoch, so every logical
 # epoch produces exactly one outer update. Physical batches remain architecture
@@ -45,7 +49,7 @@ candidate_logical_batch:
   Cus50: 200
   Cus100: 50
   Cus500: 4
-  Cus1000: 1
+  Cus1000: 2
 physical_batch_caps:
   am_evrptw: {Cus50: 400, Cus100: 100, Cus500: 6, Cus1000: 1}
   evrptw_rl: {Cus50: 120, Cus100: 32, Cus500: 2, Cus1000: 1}
@@ -56,11 +60,19 @@ pilot:
   logical_updates: 2
   validation_views: 8
 formal_candidate:
-  validation_views: 500
+  selection_validation_views:
+    Cus50: 500
+    Cus100: 500
+    Cus500: 500
+    Cus1000: 100
+  final_validation_views:
+    Cus1000: 500
+  validation_every_epochs: 50
+  checkpoint_selection: feasibility_rate_then_mean_verified_distance
   exposure_checkpoints_fraction: [0.25, 0.50, 1.00]
   gpu_hour_checkpoints: [6, 12, 24]
   planning_wall_time_hours:
-    Cus1000: 24
+    Cus1000: 48
 
 artifacts_relative_root: EVRPTW_Benchmark/results/DRL_rq_v1/artifacts
 output_relative_root: EVRPTW_Benchmark/results/DRL_rq_v1

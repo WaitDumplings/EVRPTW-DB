@@ -8,12 +8,12 @@ from ..EVRPTW_Env import EVRPTWVectorEnvFast
 
 
 class DRLTSSoftConstraintEnv(EVRPTWVectorEnvFast):
-    """Stage-1 DRL-TS environment with the paper's three soft constraints.
+    """Paper Stage-1 environment with benchmark-normalized violations.
 
-    Customer uniqueness and elementary tour rules remain hard.  Cargo, time
+    Customer uniqueness and the paper tour rules remain hard. Cargo, time
     window, and battery violations are allowed and accumulated as normalized
-    training penalties.  This class is training-only; benchmark evaluation
-    always uses the canonical hard environment and independent route verifier.
+    benchmark-adapter penalties. This class is training-only; evaluation uses
+    :class:`DRLTSHardConstraintEnv` and the independent route verifier.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

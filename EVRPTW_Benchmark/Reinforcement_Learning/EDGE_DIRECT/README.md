@@ -1,8 +1,9 @@
 # Edge-DIRECT-H
 
-Paper-guided homogeneous-fleet adaptation of Edge-DIRECT for the canonical
-EVRPTW-DB Stage-2 environment. See `ADAPTATION.md` for the naming and objective
-boundary.
+Experimental homogeneous-fleet adapter based on Edge-DIRECT for the canonical
+EVRPTW-DB Stage-2 environment. It is excluded from formal comparisons because
+its current attention/normalization blocks do not match the paper. See
+`ADAPTATION.md` for the exact mismatch, naming, and objective boundary.
 
 Training:
 

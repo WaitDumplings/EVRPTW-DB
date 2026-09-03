@@ -60,13 +60,14 @@ def job(
             f"{logical} != {environments_per_epoch}"
         )
     cap = int(cfg["physical_batch_caps"][method][scale])
-    physical = logical if method == "terran" else largest_divisor_at_most(logical, cap)
+    physical = largest_divisor_at_most(logical, cap)
     if run_mode == "pilot":
         updates = int(cfg["pilot"]["logical_updates"])
         target_environments = updates * environments_per_epoch
         exposure = target_environments * int(scale.removeprefix("Cus"))
         stream_scope = "pilot"
         validation_views = int(cfg["pilot"]["validation_views"])
+        final_validation_views = 0
         planning_wall_time_hours = None
     else:
         updates = int(cfg["candidate_logical_epochs"][scale])
@@ -79,7 +80,12 @@ def job(
                 f"{derived_exposure} != {exposure}"
             )
         stream_scope = "formal"
-        validation_views = int(cfg["formal_candidate"]["validation_views"])
+        validation_views = int(
+            cfg["formal_candidate"]["selection_validation_views"][scale]
+        )
+        final_validation_views = int(
+            cfg["formal_candidate"].get("final_validation_views", {}).get(scale, 0)
+        )
         planning_wall_time_hours = cfg["formal_candidate"].get(
             "planning_wall_time_hours", {}
         ).get(scale)
@@ -127,7 +133,13 @@ def job(
         "physical_batch_size": physical,
         "effective_batch_size": logical,
         "validation_views": validation_views,
-        "validation_checkpoints": 1,
+        "final_validation_views": final_validation_views,
+        "validation_every_epochs": int(
+            cfg["formal_candidate"]["validation_every_epochs"]
+        ),
+        "validation_checkpoints": (
+            updates + int(cfg["formal_candidate"]["validation_every_epochs"]) - 1
+        ) // int(cfg["formal_candidate"]["validation_every_epochs"]),
         "planning_wall_time_hours": planning_wall_time_hours,
         "formal_gate_file": GATE if run_mode == "full" else None,
         "euclidean_manifest": (

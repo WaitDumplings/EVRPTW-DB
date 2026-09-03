@@ -1,6 +1,6 @@
 # DRL Baseline Paper and Canonical-Environment Audit
 
-Audit date: 2026-09-02. Target evaluation objective:
+Audit date: 2026-09-03. Target evaluation objective:
 `min_directed_road_distance_km`.
 
 ## Evidence boundary
@@ -9,13 +9,14 @@ Audit date: 2026-09-02. Target evaluation objective:
 |---|---|---|---|
 | AM-EVRPTW | Full ICLR 2019 paper | Official repository fixed at `c9abf41ac2f878a55b20dc7e829bc942bb999631` | Architecture/training adaptation verified |
 | EVRPTW-RL | Full IEEE T-ITS accepted manuscript | No verified public repository | Paper-guided implementation verified against published equations; documented deviations remain |
-| DRL-TS | Public Springer abstract only; full chapter was not publicly downloadable in this audit | No verified public repository | Canonical integration verified; equation-level paper fidelity is **pending** a legally supplied manuscript |
-| TERRAN | Project manuscript not present in the repository or supplied through `TERRAN_PAPER_SOURCE` | Existing project code | Canonical integration verified; manuscript-level method fidelity is **pending** |
-| Edge-DIRECT-H | Full Canadian AI 2024 paper | No verified public repository | Paper-guided homogeneous-fleet special case implemented and explicitly renamed |
+| DRL-TS | Full PPSN 2022 chapter supplied by the user | No verified public repository | Paper-guided implementation verified against equations; documented EVRPTW-DB adaptations remain |
+| TERRAN | User-designated CaliRoute implementation | Existing project code | Reference-code-verified Stage-2 adaptation; no independent manuscript-reproduction claim |
+| Edge-DIRECT-H | Full Canadian AI 2024 paper | No verified public repository | **Blocked**: homogeneous special case plus known encoder mismatch |
 
 The audit does not treat a publisher challenge page as a downloaded paper and
-does not bypass access controls. Missing DRL-TS or TERRAN evidence must not be
-silently upgraded to a PASS claim.
+does not bypass access controls. DRL-TS was upgraded only after the user
+supplied the full chapter; its lack of author code still precludes a numerical
+reproduction claim.
 
 ## Method checks
 
@@ -41,24 +42,37 @@ silently upgraded to a PASS claim.
 
 ### DRL-TS
 
-- The implementation has an edge-feature graph-attention encoder and the
-  advertised two stages: soft violations followed by the canonical hard mask.
-- Exact equations, soft-stage transition details, and every hyperparameter
-  cannot be certified from the public abstract. This method is runnable but
-  remains `paper_fidelity_pending`, not frozen as an exact reproduction.
+- The supplied full chapter verifies the four published node features, three
+  published edge features, simultaneous node/edge GAT updates, GRU/context
+  decoder, two-stage masks, REINFORCE objective, and greedy rollout baseline.
+- The paper has no station-visit reward. Stations may be visited repeatedly,
+  but station actions are masked immediately after the depot or another station;
+  soft training, hard training, validation, and evaluation now share that rule.
+- Service duration, station power, explicit canonical energy, normalized physical
+  units, unlimited-fleet semantics, and independent verification are documented
+  EVRPTW-DB adaptations. This is `verified_paper_guided_adaptation`, not an
+  author-code or numerical reproduction.
 
 ### TERRAN
 
+- The designated method reference is the CaliRoute `TERRAN` directory supplied
+  by the user. The target `models/` tree and `pbrs.py` match that reference.
 - Its Stage-2 adapter uses the shared canonical matrices, station-specific full
   charging, directed-distance reward, POMO candidates, and exact route verifier.
-- The absent project manuscript prevents an independent architecture-level
-  comparison. This is an evidence gap, not an execution failure.
+- Stage-2 pool/protocol/restart/reporting code and the rollout-horizon truncation
+  wrapper are documented benchmark adaptations. The reference's dormant
+  expert-provider and route-boundary collection hooks are not enabled by its
+  trainer/configs and are not imported into the formal training path.
+- This evidence supports `reference_code_verified_adaptation`; it does not claim
+  an independent manuscript-level reproduction.
 
 ### Edge-DIRECT-H
 
-- Implements the directed time-window reachability graph, a time-window GAT,
-  a second travel-time/energy edge-enhanced encoder, vehicle decoder context,
-  node decoder, and greedy-baseline REINFORCE.
+- Implements the directed time-window reachability graph, two encoder stages,
+  one-class vehicle context, node decoder, and greedy-baseline REINFORCE.
+- The current scaled-dot-product attention and LayerNorm encoder blocks do not
+  match the paper's additive GAT and BatchNorm equations. Architecture-level
+  fidelity is therefore blocked, not verified.
 - The original finite heterogeneous vehicle choice collapses to one class under
   EVRPTW-DB's unlimited homogeneous fleet. The one-class vehicle decoder is
   retained, with zero categorical log-probability, and the method is named

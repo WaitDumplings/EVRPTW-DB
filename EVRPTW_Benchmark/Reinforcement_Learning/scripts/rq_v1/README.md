@@ -25,22 +25,45 @@ The aggregate pilot report remains reviewer evidence, not a runtime dependency.
 
 No SHA-256 or per-file content hashing is performed by these scripts.
 
-## Active 24-hour anchored candidate
+## Active Cus1000 batch-two candidate
 
 The generated manifests use runtime budget
-`drl_rq_runtime_budget_v2_cus1000_24h_anchor`:
+`drl_rq_runtime_budget_v4_cus1000_b2_val100`:
 
 | Scale | Epochs | Environments/epoch | Effective batch | Total environments | Customer exposures |
 |---|---:|---:|---:|---:|---:|
-| Cus50 | 100 | 200 | 200 | 20,000 | 1,000,000 |
-| Cus100 | 200 | 50 | 50 | 10,000 | 1,000,000 |
-| Cus500 | 500 | 4 | 4 | 2,000 | 1,000,000 |
-| Cus1000 | 1,000 | 1 | 1 | 1,000 | 1,000,000 |
+| Cus50 | 1,000 | 200 | 200 | 200,000 | 10,000,000 |
+| Cus100 | 1,000 | 50 | 50 | 50,000 | 5,000,000 |
+| Cus500 | 1,000 | 4 | 4 | 4,000 | 2,000,000 |
+| Cus1000 | 1,000 | 2 | 2 | 2,000 | 2,000,000 |
 
-The supplied 24-hour value is a per-job Cus1000 planning target on one A6000,
-not an enforced timeout. With 12 jobs and two A6000 GPUs, the idealized
-training-only queue is six waves, or about six days. A6000 pilot evidence is
-still mandatory before `full` can be authorized.
+The effective batch is the number of distinct base instances consumed per
+logical epoch. Physical batches are only a memory implementation detail; exact
+gradient accumulation preserves the effective batch for the three REINFORCE
+models. TERRAN receives the same base-instance count before its paper-specific
+PPO minibatch updates.
+
+| Scale | AM physical | EVRPTW-RL physical | DRL-TS physical | TERRAN physical | Microbatches AM/RL/TS/TERRAN |
+|---|---:|---:|---:|---:|---:|
+| Cus50 | 200 | 100 | 50 | 200 | 1 / 2 / 4 / 1 |
+| Cus100 | 50 | 25 | 10 | 50 | 1 / 2 / 5 / 1 |
+| Cus500 | 4 | 2 | 1 | 4 | 1 / 2 / 4 / 1 |
+| Cus1000 | 1 | 1 | 1 | 1 | 2 / 2 / 2 / 2 |
+
+Every formal job runs 1,000 logical epochs. Validation is evaluated at epochs
+50, 100, ..., 1000. Cus50/100/500 use a fixed 500-view selection set; Cus1000
+uses a fixed 100-view selection set. Selection first maximizes independent-
+verifier feasibility rate and then minimizes mean verified directed distance.
+The winning checkpoint is written as both `best.ckpt` and the backward-
+compatible `checkpoint_selected.pt`; all 20 records remain in
+`validation_history.jsonl`. After selection, Cus1000 runs one full 500-view val
+audit and writes `validation_final_audit.json` without changing the selected
+checkpoint.
+
+The linear Cus1000 planning value is now approximately 48 hours per model/seed
+job on one A6000, not an enforced timeout. With 12 jobs and two A6000 GPUs, the
+idealized training-only queue is six waves, or about 12 days. A6000 pilot
+evidence is still mandatory before `full` can be authorized.
 
 For the common audit-checkout/original-data layout, the automatic sibling
 discovery is sufficient. An explicit portable override is also accepted:

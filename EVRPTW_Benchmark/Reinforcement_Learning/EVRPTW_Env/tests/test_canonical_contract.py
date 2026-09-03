@@ -174,3 +174,18 @@ def test_last_customer_can_return_through_charging_station(env_cls) -> None:
     assert routes == [[0, 1, 2, 0]]
     verification = validate_routes(instance, routes)
     assert verification["passed"], verification["violations"]
+
+
+def test_model_observation_normalization_contract_is_explicit() -> None:
+    env = EVRPTWVectorEnv(canonical_instance(), n_traj=1)
+    obs, _ = env.reset(seed=13)
+    np.testing.assert_allclose(obs["depot_loc"], [[0.0, 0.0]])
+    np.testing.assert_allclose(obs["cus_loc"], [[1.0, 0.0]])
+    np.testing.assert_allclose(obs["rs_loc"], [[0.5, 0.0]])
+    np.testing.assert_allclose(obs["demand"], [0.0, 0.1, 0.0])
+    np.testing.assert_allclose(obs["service_time"], [0.0, 7e-5, 0.0])
+    np.testing.assert_allclose(obs["charging_power"], [0.0, 0.0, 1.0])
+    np.testing.assert_allclose(obs["remaining_battery"], [1.0])
+    np.testing.assert_allclose(obs["current_load"], [0.0])
+    np.testing.assert_allclose(obs["current_time"], [0.0])
+    assert env.reward_distance_scale_km == pytest.approx(108.0)

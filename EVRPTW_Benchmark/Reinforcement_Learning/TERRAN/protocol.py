@@ -46,8 +46,6 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         optimizer_steps = int(state.optimizer_steps)
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
     training_rollout_steps = require_training_rollout_steps(args)
-    if physical != effective:
-        raise ValueError("TERRAN v1 registers equal physical/effective batches")
     pool = Stage2TaskPool(
         dataset_path=args.stage2_dataset_path,
         family_root=args.stage2_family_root,
@@ -80,8 +78,19 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
                 or int(args.customer_exposure_budget) != expected_exposures
             ):
                 raise ValueError("TERRAN explicit stream requires an exact exposure budget")
-        if int(args.validation_checkpoints) != 1:
-            raise ValueError("fixed-epoch protocol currently requires one final validation checkpoint")
+        validation_every_epochs = int(
+            getattr(args, "validation_every_epochs", None) or epochs
+        )
+        if validation_every_epochs <= 0:
+            raise ValueError("--validation-every-epochs must be positive")
+        expected_validation_checkpoints = (
+            epochs + validation_every_epochs - 1
+        ) // validation_every_epochs
+        if int(getattr(args, "validation_checkpoints", 1)) != expected_validation_checkpoints:
+            raise ValueError(
+                "fixed-epoch validation checkpoint count does not match "
+                "--validation-every-epochs"
+            )
         epochs_per_pass = epochs
         total_passes = 1
     else:
@@ -97,19 +106,51 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     configured = dict(overrides)
     configured.setdefault("training", {})
     configured.setdefault("data", {})
+    configured.setdefault("evaluation", {})
     configured["data"]["stage2_completed_data_passes"] = completed
     configured["training"].update(
         {
             "epochs": epochs,
             "num_envs_per_gpu": physical,
             "rollout_steps": training_rollout_steps,
+            "logical_microbatches_per_epoch": effective // physical,
             "checkpoint_interval": (
-                epochs
+                validation_every_epochs
                 if fixed_epochs
                 else max(1, epochs_per_pass * int(args.validation_every_passes))
             ),
         }
     )
+    if fixed_epochs and getattr(args, "validation_dataset_path", None) is not None:
+        configured["evaluation"].update(
+            {
+                "eval_interval": validation_every_epochs,
+                "eval_path": str(args.validation_dataset_path),
+                "eval_family_root": (
+                    str(args.validation_family_root)
+                    if args.validation_family_root is not None
+                    else None
+                ),
+                "eval_scale": str(args.stage2_scale),
+                "eval_split_ids": "val",
+                "eval_track_ids": "validation",
+                "eval_representation": str(
+                    getattr(args, "training_representation", "G")
+                ),
+                "eval_euclidean_manifest": (
+                    str(args.euclidean_manifest)
+                    if getattr(args, "euclidean_manifest", None) is not None
+                    else None
+                ),
+                "eval_limit": int(args.validation_limit),
+                "eval_n_traj": 1,
+                "eval_batch_size": 1,
+                "eval_decode_mode": "greedy",
+                "eval_info_level": "full",
+                "eval_save_routes": False,
+                "eval_require_independent_verifier": True,
+            }
+        )
     configured["output_dir"] = str(Path(args.output_dir).resolve())
     configured["protocol"] = {
         "protocol_id": args.protocol_id,
@@ -118,13 +159,17 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")
         ),
         "training_epochs": epochs if fixed_epochs else None,
-        "logical_environments_per_epoch": physical if fixed_epochs else None,
+        "logical_environments_per_epoch": effective if fixed_epochs else None,
         "data_passes": total_passes,
         "views_per_pass": len(pool),
         "epochs_per_pass": epochs_per_pass,
         "physical_batch_size": physical,
         "effective_batch_size": effective,
         "training_rollout_steps": training_rollout_steps,
+        "validation_every_epochs": (
+            validation_every_epochs if fixed_epochs else None
+        ),
+        "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
         "pilot_partial": bool(getattr(args, "pilot_mode", False)),
         "completed_data_passes": completed,
         "environment_transitions": environment_transitions,
@@ -142,7 +187,9 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     }
 
 
-def _validation_summary(path: Path, data_pass: int) -> dict[str, Any]:
+def _validation_summary(
+    path: Path, data_pass: int, logical_epoch: int | None = None
+) -> dict[str, Any]:
     with path.open("r", newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     passed = [row for row in rows if row["verifier_passed"].lower() == "true"]
@@ -150,6 +197,7 @@ def _validation_summary(path: Path, data_pass: int) -> dict[str, Any]:
         "schema": "drl_validation_summary_v1",
         "split": "validation",
         "data_pass": int(data_pass),
+        "logical_epoch": logical_epoch,
         "instances": len(rows),
         "complete_and_feasible": len(passed),
         "complete_and_feasible_rate": len(passed) / max(len(rows), 1),
@@ -168,22 +216,87 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
     output = Path(args.output_dir)
     fixed_epochs = getattr(args, "training_epochs", None) is not None
     total_passes = 1 if fixed_epochs else int(args.data_passes)
-    checkpoints = (
-        [final_checkpoint]
-        if fixed_epochs
-        else sorted(final_checkpoint.parent.glob("checkpoint_epoch_*.pt"))
-    )
-    if final_checkpoint not in checkpoints and not fixed_epochs:
-        checkpoints.append(final_checkpoint)
-    records: list[tuple[tuple[float, float], Path, dict[str, Any]]] = []
     history_path = output / "validation_history.jsonl"
-    for checkpoint in checkpoints:
-        if checkpoint.name.startswith("checkpoint_epoch_"):
-            epoch = int(checkpoint.stem.rsplit("_", 1)[1])
-        else:
-            epoch = total_passes * meta["epochs_per_pass"]
-        data_pass = max(1, min(total_passes, epoch // meta["epochs_per_pass"]))
-        validation_dir = output / "validation" / f"pass_{data_pass:03d}"
+    if fixed_epochs:
+        # Fixed-epoch jobs validate online every N epochs. Reuse that committed
+        # evidence here instead of evaluating every epoch snapshot a second time.
+        best_checkpoint = output / "best.ckpt"
+        summary_path = output / "validation_summary.json"
+        if not best_checkpoint.is_file() or not summary_path.is_file():
+            raise RuntimeError(
+                "TERRAN fixed-epoch training ended without an online validation selection"
+            )
+        selected_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        shutil.copy2(best_checkpoint, output / "checkpoint_selected.pt")
+    else:
+        checkpoints = sorted(final_checkpoint.parent.glob("checkpoint_epoch_*.pt"))
+        if final_checkpoint not in checkpoints:
+            checkpoints.append(final_checkpoint)
+        records: list[tuple[tuple[float, float], Path, dict[str, Any]]] = []
+        for checkpoint in checkpoints:
+            if checkpoint.name.startswith("checkpoint_epoch_"):
+                epoch = int(checkpoint.stem.rsplit("_", 1)[1])
+            else:
+                epoch = total_passes * meta["epochs_per_pass"]
+            data_pass = max(1, min(total_passes, epoch // meta["epochs_per_pass"]))
+            validation_dir = output / "validation" / f"pass_{data_pass:03d}"
+            command = [
+                sys.executable,
+                "-m",
+                "EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.eval_stage2",
+                "--dataset-path",
+                str(args.validation_dataset_path),
+                "--checkpoint",
+                str(checkpoint),
+                "--scale",
+                str(args.stage2_scale),
+                "--split-ids",
+                "val",
+                "--track-ids",
+                "validation",
+                "--decode-mode",
+                "greedy",
+                "--candidates",
+                "1",
+                "--candidate-chunk-size",
+                "1",
+                "--limit",
+                str(args.validation_limit),
+                "--seed",
+                str(args.seed + data_pass * 100_000),
+                "--device",
+                str(args.device or "cuda"),
+                "--output-dir",
+                str(validation_dir),
+            ]
+            if args.validation_family_root:
+                command.extend(["--family-root", str(args.validation_family_root)])
+            command.extend(["--representation", str(args.training_representation)])
+            if args.euclidean_manifest:
+                command.extend(["--euclidean-manifest", str(args.euclidean_manifest)])
+            subprocess.run(command, check=True)
+            summary = _validation_summary(
+                validation_dir / "summary.csv", data_pass
+            )
+            with history_path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(summary, sort_keys=True) + "\n")
+            distance = summary["mean_verified_distance_km"]
+            key = (
+                float(summary["complete_and_feasible_rate"]),
+                -float(distance) if distance is not None else -float("inf"),
+            )
+            records.append((key, checkpoint, summary))
+        _, selected, selected_summary = max(records, key=lambda row: row[0])
+        shutil.copy2(selected, output / "checkpoint_selected.pt")
+        shutil.copy2(selected, output / "best.ckpt")
+    shutil.copy2(final_checkpoint, output / "checkpoint_latest.pt")
+    atomic_json(output / "validation_summary.json", selected_summary)
+    final_validation_limit = int(
+        getattr(args, "final_validation_limit", 0) or 0
+    )
+    final_validation_path = output / "validation_final_audit.json"
+    if fixed_epochs and final_validation_limit > 0:
+        validation_dir = output / "validation" / "final_audit"
         command = [
             sys.executable,
             "-m",
@@ -191,7 +304,7 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             "--dataset-path",
             str(args.validation_dataset_path),
             "--checkpoint",
-            str(checkpoint),
+            str(output / "checkpoint_selected.pt"),
             "--scale",
             str(args.stage2_scale),
             "--split-ids",
@@ -205,33 +318,40 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             "--candidate-chunk-size",
             "1",
             "--limit",
-            str(args.validation_limit),
+            str(final_validation_limit),
             "--seed",
-            str(args.seed + data_pass * 100_000),
+            str(args.seed + 999_000_000),
             "--device",
             str(args.device or "cuda"),
             "--output-dir",
             str(validation_dir),
+            "--representation",
+            str(getattr(args, "training_representation", "G")),
         ]
         if args.validation_family_root:
             command.extend(["--family-root", str(args.validation_family_root)])
-        command.extend(["--representation", str(args.training_representation)])
-        if args.euclidean_manifest:
+        if getattr(args, "euclidean_manifest", None):
             command.extend(["--euclidean-manifest", str(args.euclidean_manifest)])
         subprocess.run(command, check=True)
-        summary = _validation_summary(validation_dir / "summary.csv", data_pass)
-        with history_path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(summary, sort_keys=True) + "\n")
-        distance = summary["mean_verified_distance_km"]
-        key = (
-            float(summary["complete_and_feasible_rate"]),
-            -float(distance) if distance is not None else -float("inf"),
+        final_validation = _validation_summary(
+            validation_dir / "summary.csv",
+            data_pass=1,
+            logical_epoch=selected_summary.get("logical_epoch"),
         )
-        records.append((key, checkpoint, summary))
-    _, selected, selected_summary = max(records, key=lambda row: row[0])
-    shutil.copy2(selected, output / "checkpoint_selected.pt")
-    shutil.copy2(final_checkpoint, output / "checkpoint_latest.pt")
-    atomic_json(output / "validation_summary.json", selected_summary)
+        if int(final_validation["instances"]) != final_validation_limit:
+            raise RuntimeError(
+                "final validation audit did not consume the registered view count: "
+                f"{final_validation['instances']} != {final_validation_limit}"
+            )
+        final_validation.update(
+            {
+                "schema": "drl_final_validation_audit_v1",
+                "selection_checkpoint": str(output / "best.ckpt"),
+                "selection_logical_epoch": selected_summary.get("logical_epoch"),
+                "selection_changed": False,
+            }
+        )
+        atomic_json(final_validation_path, final_validation)
     train_log = output / "logs" / "train_log.csv"
     samples_seen = 0
     environment_transitions = 0
@@ -247,7 +367,7 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             optimizer_steps = int(float(rows[-1].get("optimizer_steps_total", 0)))
             wall_time_s = sum(float(row["epoch_wall_time_s"]) for row in rows)
     expected = (
-        int(args.training_epochs) * meta["physical_batch_size"]
+        int(args.training_epochs) * meta["effective_batch_size"]
         if fixed_epochs
         else (
             int(args.max_batches_per_pass) * meta["physical_batch_size"]
@@ -288,6 +408,20 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
                 for path in sorted(final_checkpoint.parent.glob("checkpoint_gpu_hours_*.pt"))
             ],
             "selected_checkpoint": str(output / "checkpoint_selected.pt"),
+            "best_checkpoint": str(output / "best.ckpt"),
+            "validation_every_epochs": (
+                int(
+                    getattr(args, "validation_every_epochs", None)
+                    or args.training_epochs
+                )
+                if fixed_epochs
+                else None
+            ),
+            "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
+            "final_validation_limit": final_validation_limit,
+            "final_validation_audit": (
+                str(final_validation_path) if final_validation_limit > 0 else None
+            ),
             "peak_gpu_memory_bytes": peak_gpu,
             "completed_at": time.time(),
             "wall_time_s": wall_time_s,

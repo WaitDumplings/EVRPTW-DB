@@ -16,7 +16,8 @@ The following method components are retained:
 - multi-head glimpse followed by tanh-clipped single-head compatibility logits;
 - stochastic policy-gradient training with a deterministic greedy rollout
   baseline;
-- paired-test baseline replacement at the end of an epoch.
+- exponential baseline warmup with beta 0.8 during the first upstream epoch;
+- paired-test rollout-baseline replacement at the end of an upstream epoch.
 
 The selected upstream graph-encoder source and its license are vendored under
 `third_party/attention_learn_to_route/`.  The EVRP-TW decoder adapter is local
@@ -35,8 +36,12 @@ code because upstream AM does not define this problem.
 | Travel physics | Euclidean norm | exported directed distance/time/energy matrices |
 | Fleet | CVRP depot returns | each depot return closes one route; unlimited homogeneous fleet |
 
-The objective-facing training cost remains distance.  No auxiliary step reward
-is added to successful AM rollouts.  An explicitly configured incomplete
+The objective-facing training cost remains raw directed-road distance in km.
+Shared inputs use the documented benchmark normalization (per-instance
+coordinate min-max, capacity/horizon fractions, and relative station power);
+that complete normalization is an adapter choice because upstream AM has no
+EVRPTW state. No auxiliary step reward is added to successful AM rollouts. An
+explicitly configured incomplete
 rollout penalty provides a finite training signal when a rollout is truncated;
 it is not used to rank solutions and is reported as an adaptation rather than
 an upstream AM component.

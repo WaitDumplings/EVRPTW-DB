@@ -1,0 +1,72 @@
+{
+  "schema": "drl_paper_alignment_v2",
+  "audit_date": "2026-09-03",
+  "benchmark_objective": "min_directed_road_distance_km",
+  "formal_paper_fidelity_ready": false,
+  "paper_exact_reproduction_claimed": false,
+  "models": {
+    "am_evrptw": {
+      "status": "verified_adaptation",
+      "primary_evidence": [
+        "full_paper",
+        "official_code_fixed_commit"
+      ],
+      "architecture": "verified_against_official_code",
+      "normalization": "documented_benchmark_adapter",
+      "reward": "paper_distance_objective_mapped_to_directed_road_km",
+      "baseline_schedule": "paper_schedule_in_optimizer_updates",
+      "blocking_issue": null
+    },
+    "evrptw_rl": {
+      "status": "verified_paper_guided_adaptation",
+      "primary_evidence": [
+        "full_accepted_manuscript"
+      ],
+      "architecture": "verified_against_published_equations",
+      "normalization": "documented_benchmark_adapter",
+      "reward": "paper_distance_and_station_penalty_with_hard_mask_zero_terms",
+      "baseline_schedule": "paper_schedule_in_optimizer_updates",
+      "blocking_issue": null
+    },
+    "drl_ts": {
+      "status": "verified_paper_guided_adaptation",
+      "primary_evidence": [
+        "full_paper_user_supplied"
+      ],
+      "architecture": "verified_against_published_equations_with_documented_stage2_features",
+      "normalization": "documented_benchmark_adapter_not_specified_by_paper",
+      "reward": "paper_distance_plus_stage1_constraint_penalties_no_station_visit_penalty",
+      "station_semantics": "stations_reusable_but_masked_after_depot_or_station",
+      "baseline_schedule": "paper_greedy_rollout_baseline",
+      "blocking_issue": null
+    },
+    "terran": {
+      "status": "reference_code_verified_adaptation",
+      "primary_evidence": [
+        "user_designated_caliroute_reference_code"
+      ],
+      "reference_path_as_supplied": "/data/Maojie/AAAI/CaliRoute/EVRPTW_Benchmark/Reinforcement_Learning/TERRAN",
+      "architecture": "byte_equivalent_to_designated_reference_model_tree",
+      "normalization": "verified_against_reference_code_and_documented_stage2_adapter",
+      "reward": "reference_pbrs_formula_plus_named_rollout_horizon_penalty",
+      "baseline_schedule": "not_applicable_ppo",
+      "inactive_reference_extensions": [
+        "expert_provider_hooks",
+        "route_boundary_collection"
+      ],
+      "blocking_issue": null
+    },
+    "edge_direct_h": {
+      "status": "paper_fidelity_blocked",
+      "primary_evidence": [
+        "full_paper"
+      ],
+      "architecture": "known_mismatch_additive_gat_batchnorm_vs_scaled_dot_product_layernorm",
+      "normalization": "paper_does_not_specify_raw_feature_scaling",
+      "reward": "paper_travel_time_replaced_by_benchmark_directed_distance",
+      "baseline_schedule": "paper_frequency_unreported",
+      "blocking_issue": "encoder_correction_and_finite_heterogeneous_fleet_gap",
+      "formal_method": false
+    }
+  }
+}

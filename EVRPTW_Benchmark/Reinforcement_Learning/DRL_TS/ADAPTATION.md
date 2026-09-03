@@ -7,66 +7,94 @@ Wang, *Deep Reinforcement Learning with Two-Stage Training Strategy for
 Practical Electric Vehicle Routing Problem with Time Windows*, PPSN 2022,
 pp. 356--370, DOI: <https://doi.org/10.1007/978-3-031-14714-2_25>.
 
-The publisher page labels source code as available on request. No public
-author-maintained repository was verified during implementation. This
-directory is a paper-guided PyTorch reimplementation, not official code.
+The full chapter supplied by the user at `/data/Maojie/ICLR/DRL_TS.pdf` was
+audited on 2026-09-03. The paper states that source code is available on
+request; no public author-maintained repository was verified. This directory
+is therefore a paper-guided PyTorch adaptation, not official code or a claim of
+numerical reproduction.
 
-## Published design retained
+## Paper-verified design
 
-- complete directed graph with asymmetric distance and travel-time features;
-- node features for demand, time-window bounds, and node type;
-- edge features for distance, time, and the `r`-nearest-neighbor indicator;
-- two edge-aware graph-attention encoder layers by default;
-- GRU route memory, dynamic time/cargo/energy context, multi-head glimpse, and
-  tanh-clipped compatibility logits;
-- Stage 1 with hard customer uniqueness and elementary depot/station rules but
-  soft cargo, time-window, and energy constraints;
-- Stage 2 with hard cargo, time-window, and safe-energy masking;
-- total-distance objective plus normalized capacity, lateness, and energy
-  violation penalties during Stage 1;
-- REINFORCE with a statistically tested greedy rollout baseline;
-- published defaults `r=10`, embedding size 128, two layers, eight heads,
-  clipping constant 10, 200 epochs, and an equal Stage-1/Stage-2 split.
+The implementation follows the published method structure:
+
+- a complete directed graph with asymmetric distance and travel time;
+- published node features `(demand, earliest time, latest time, node type)`;
+- published edge features `(distance, travel time, r-nearest indicator)`, with
+  `r=10` in the paper;
+- linear node/edge projections followed by two edge-aware GAT layers with
+  simultaneous node and edge updates, BatchNorm, ReLU, and skip connections;
+- GRU route memory; dynamic `(time, remaining capacity, remaining battery)`
+  context; edge-aware multi-head glimpse; and tanh-clipped compatibility;
+- Stage 1 keeps tour constraints hard while capacity, time-window, and battery
+  violations are soft; Stage 2 masks all three feasibility violations;
+- REINFORCE with a greedy rollout baseline.
+
+The published experiment uses embedding dimension 128, eight heads, clipping
+constant 10, Adam at `1e-4`, penalties `alpha=beta=gamma=1`, 200 epochs, 250
+batches per epoch, and an equal 100/100 soft/hard split. Batch size is 128 for
+C10/C20/C50 and 64 for C100. These are paper settings, not a requirement that
+the EVRPTW-DB RQ launchers retain the same compute budget.
+
+## Charging-station semantics
+
+The paper explicitly says that recharging stations can be visited any number
+of times. It does not define a charging-station visit or revisit reward. Its
+Stage-1 tour mask instead blocks a station whenever the preceding node is the
+depot or another station, because the vehicle is full in those states. Thus:
+
+- a station may be revisited later after customer service;
+- `depot -> station` is masked;
+- `station -> station` is masked, including a different station;
+- no global one-visit station restriction and no invented CS reward are used.
+
+`DRLTSSoftConstraintEnv` and `DRLTSHardConstraintEnv` implement this mask. The
+hard class adds it on top of canonical Stage-2 safe-continuation feasibility so
+training, validation, and evaluation have the same station behavior.
 
 ## Benchmark adaptations
 
-| Component | Published DRL-TS | EVRPTW-B adapter |
+| Component | Published DRL-TS | EVRPTW-DB adapter |
 |---|---|---|
-| Objective-facing term | Total route distance on generated complete graphs | Sum of selected arcs in directed `distance_matrix_km` |
-| Travel inputs | Generated asymmetric distance and time | Released directed-road distance and canonical running-time matrices |
-| Energy | Scalar-consumption-derived transition cost | Released directed running-time-path energy matrix |
-| Node input | demand, TW, node type | same inputs plus service duration and station power |
-| Edge input | distance, time, nearest-neighbor indicator | same inputs plus explicit directed energy |
-| Charging | constant station service time and full recharge | arrival-dependent, station-power full-charge duration |
-| Stage-2 mask | paper feasibility rules | shared hard safe-continuation mask, including multi-station return paths |
-| Fleet | paper maximum-vehicle representation | unlimited fleet; at most one route per customer is a nonbinding representation bound |
-| Evaluation | paper instance generator and decoder | frozen Stage-2 splits, shared decoding budget, exported-route verifier |
+| Objective | Total route distance | Sum of selected directed `distance_matrix_km` arcs |
+| Node input | demand, TW bounds, node type | same plus service duration and station power |
+| Edge input | distance, time, nearest-neighbor indicator | same plus canonical path energy |
+| Energy transition | fixed consumption rate times distance | released directed running-time-path energy matrix |
+| Charging | paper service/recharging time and full recharge | arrival-dependent full-charge time from each station's power |
+| Hard feasibility | paper capacity/TW/electricity mask | canonical safe-continuation mask plus the paper station mask |
+| Fleet | finite homogeneous fleet in the paper formulation | unlimited homogeneous fleet; route count is nonbinding |
+| Evaluation | generated instances; greedy or 1,280 samples | frozen Stage-2 splits, registered candidate budget, independent verifier |
 
-The extra service, charging-power, and energy channels are input adapters; they
-do not add encoder/decoder blocks or alter the two-stage training mechanism.
-They expose distinctions in the benchmark that are absent from the paper's
-fixed charging-time model.
+Service, station power, and explicit energy are input adapters required to
+represent distinctions in EVRPTW-DB. They do not add a new encoder or decoder
+stage.
 
-## Reward adaptation
+## Reward and normalization
 
-The paper already minimizes total travel distance, so no objective replacement
-is necessary. We replace its generated-graph distance with the benchmark's
-directed-road distance. The three auxiliary Stage-1 penalties are preserved.
-Because their original normalized units cannot be reconstructed from physical
-city instances, each violation is divided by its corresponding instance scale:
+For a complete solution the paper reward is negative total distance. Its
+Stage-1 minimization cost is total distance plus raw lateness, capacity, and
+electricity violations weighted by `alpha`, `beta`, and `gamma`; in Stage 2 it
+reduces to total distance. There is no CS visit term.
 
-- excess volume by vehicle cargo capacity;
-- lateness by the operating-horizon duration;
-- energy deficit by battery capacity.
+The adapter preserves these four semantic terms, but uses explicit benchmark
+scaling:
 
-This keeps the published default penalty weights meaningful rather than adding
-raw cubic centimetres, seconds, and kWh to kilometres. A separately named
-incomplete-rollout guard supplies a finite signal only when a rollout reaches
-the step limit; it never enters final ranking.
+- directed-road distance is divided by the instance distance scale for training;
+- excess demand is divided by vehicle cargo capacity;
+- lateness is divided by the operating-horizon duration;
+- energy deficit is divided by battery capacity.
+
+Edge distance, time, and energy inputs are each divided by their finite
+per-instance maximum. The paper does not specify this complete normalization,
+so it is a documented benchmark adaptation rather than paper-exact behavior.
+A separately named incomplete-rollout guard supplies a finite training signal
+when the registered step budget is exhausted; it never ranks reported routes.
 
 ## Fidelity boundary
 
-Architecture and curriculum correspondence are method-fidelity claims. We do
-not claim numerical reproduction of the paper because its data generator,
-fixed station service time, finite-fleet setting, and some implementation
-details differ from the public benchmark contract.
+The published architecture, two-stage semantics, reward terms, station mask,
+and experiment settings have been checked against the supplied full chapter.
+Differences caused by real directed-road matrices, station-specific charging,
+explicit energy, normalized physical units, unlimited fleet semantics, and the
+independent verifier are labelled adaptations above. Without author code, this
+supports `verified_paper_guided_adaptation`, not bitwise or numerical
+reproduction.
