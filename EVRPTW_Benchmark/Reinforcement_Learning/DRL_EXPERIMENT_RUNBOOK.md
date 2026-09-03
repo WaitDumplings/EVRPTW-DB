@@ -22,19 +22,19 @@ launcher 会检查 GPU 数量与型号、branch/commit、真实数据索引、�
 独立 `jobs.jsonl`、任务摘要以及 nohup launcher：
 
 ```text
-scripts/2080ti_4_1  # 第一台 4×2080Ti，13 个 full training jobs
-scripts/2080ti_4_2  # 第二台 4×2080Ti，13 个 full training jobs
-scripts/2080ti_3_1  # 3×2080Ti，10 个 full training jobs
-scripts/a6000_2_1   # 2×A6000，12 个 Cus1000 full training jobs
+scripts/rq_v1/2080ti_4_1  # 第一台 4×2080Ti，24 个 full training jobs
+scripts/rq_v1/2080ti_4_2  # 第二台 4×2080Ti，21 个 full training jobs
+scripts/rq_v1/2080ti_3_1  # 3×2080Ti，15 个 full training jobs
+scripts/rq_v1/a6000_2_1   # 2×A6000，12 个 Cus1000 full training jobs
 ```
 
 分别在对应服务器执行：
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_4_1/pilot.sh
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_4_2/pilot.sh
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_3_1/pilot.sh
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/a6000_2_1/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/2080ti_4_1/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/2080ti_4_2/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/2080ti_3_1/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/pilot.sh
 ```
 
 这些入口默认 nohup/setsid 离线运行；同目录的 `status.sh` 和
@@ -85,6 +85,9 @@ RTX 2080 Ti 吞吐与 wall-time 外推不再视为当前配置证据。
 
 ## 固定训练预算
 
+当前活动候选为 `drl_rq_runtime_budget_v2_cus1000_24h_anchor`，完整推导见
+`reports/LOGICAL_EPOCH_TRAINING_BUDGET_V3_24H_ANCHOR.md`。
+
 正式训练不遍历全部 train views，也不使用 full-data pass 计量。epoch 是跨模型
 一致的 logical epoch，而不是某个模型恰好能装入显存的 physical batch：
 
@@ -100,14 +103,15 @@ batch 超过某模型的安全 physical batch，就拆成可整除的 micro-batc
 
 | Scale | Logical epochs | Environments / epoch | Total environments | Customer exposures |
 |---|---:|---:|---:|---:|
-| Cus50 | 100 | 100 | 10,000 | 500,000 |
-| Cus100 | 200 | 25 | 5,000 | 500,000 |
-| Cus500 | 500 | 2 | 1,000 | 500,000 |
+| Cus50 | 100 | 200 | 20,000 | 1,000,000 |
+| Cus100 | 200 | 50 | 10,000 | 1,000,000 |
+| Cus500 | 500 | 4 | 2,000 | 1,000,000 |
 | Cus1000 | 1,000 | 1 | 1,000 | 1,000,000 |
 
-Cus50/Cus100/Cus500 都使用约10%的 train pool。Cus1000 的1,000 epochs 对应
-1,000个训练环境，即20%的 train pool；这是显式的 scale-specific 预算，不应描述
-为四个 scale 完全相同的 exposure。
+四个规模都从完整 training pool 按冻结 seed 分层有放回抽样约20%的 view 数，
+并统一为每个 `method × scale × seed` 100万 customer exposures。Cus1000 的
+`1000 epochs × 1 env` 以单 job 约24小时作为规划锚点；该时间尚须 A6000 pilot
+实测，不是硬超时，也不代表12个 Cus1000 jobs 能在24小时内全部完成。
 
 正式 job 结束时执行一次500-view validation并选择 checkpoint；T1/T2/T3 和
 Cus2000 不参与训练或 checkpoint selection。中断前若 fixed-budget job 尚未原子

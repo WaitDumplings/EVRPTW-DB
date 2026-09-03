@@ -3,8 +3,27 @@ set -euo pipefail
 
 SERVER_SCRIPT_DIR="${SERVER_SCRIPT_DIR:?SERVER_SCRIPT_DIR must be set by the server wrapper}"
 export DRL_SERVER_ID="$(basename "$SERVER_SCRIPT_DIR")"
-export EVRPTW_REPO_ROOT="${EVRPTW_REPO_ROOT:-$(cd "$SERVER_SCRIPT_DIR/../../../.." && pwd)}"
-export EVRPTW_DATASET_ROOT="${EVRPTW_DATASET_ROOT:-$EVRPTW_REPO_ROOT/EVRPTW_Dataset/Instances_v2/us_11city}"
+export EVRPTW_REPO_ROOT="${EVRPTW_REPO_ROOT:-$(cd "$SERVER_SCRIPT_DIR/../../../../.." && pwd)}"
+
+if [[ -n "${EVRPTW_DATASET_ROOT:-}" ]]; then
+  DATASET_ROOT="$EVRPTW_DATASET_ROOT"
+  [[ "$DATASET_ROOT" = /* ]] || DATASET_ROOT="$EVRPTW_REPO_ROOT/$DATASET_ROOT"
+else
+  DATASET_CANDIDATES=(
+    "$EVRPTW_REPO_ROOT/EVRPTW_Dataset/Instances_v2/us_11city"
+    "$EVRPTW_REPO_ROOT/EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
+    "$EVRPTW_REPO_ROOT/../EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city"
+    "$EVRPTW_REPO_ROOT/../EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
+  )
+  DATASET_ROOT="${DATASET_CANDIDATES[0]}"
+  for candidate in "${DATASET_CANDIDATES[@]}"; do
+    if [[ -f "$candidate/generation_plan/core/train/view_index.parquet" ]]; then
+      DATASET_ROOT="$candidate"
+      break
+    fi
+  done
+fi
+export EVRPTW_DATASET_ROOT="$(realpath -m "$DATASET_ROOT")"
 export EVRPTW_OUTPUT_ROOT="${EVRPTW_OUTPUT_ROOT:-$EVRPTW_REPO_ROOT/EVRPTW_Benchmark/results/DRL_rq_v1}"
 export EVRPTW_CONDA_ENV="${EVRPTW_CONDA_ENV:-maojie}"
 export DRL_MANIFEST="$SERVER_SCRIPT_DIR/jobs.jsonl"

@@ -11,7 +11,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = ROOT / "configs" / "drl_rq_runtime_candidates_v1.yaml"
+CONFIG = ROOT / "configs" / "drl_rq_runtime_candidates_v2.yaml"
 SCRIPT_ROOT = ROOT / "scripts" / "rq_v1"
 GATE = "EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_rq_formal_launch_gate_v1.json"
 ARTIFACTS = "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts"
@@ -53,25 +53,44 @@ def job(
     representation: str, condition: str, run_mode: str, hardware: str,
 ) -> dict[str, Any]:
     logical = int(cfg["candidate_logical_batch"][scale])
+    environments_per_epoch = int(cfg["candidate_environments_per_epoch"][scale])
+    if logical != environments_per_epoch:
+        raise ValueError(
+            f"logical batch must equal environments per epoch for {scale}: "
+            f"{logical} != {environments_per_epoch}"
+        )
     cap = int(cfg["physical_batch_caps"][method][scale])
     physical = logical if method == "terran" else largest_divisor_at_most(logical, cap)
     if run_mode == "pilot":
         updates = int(cfg["pilot"]["logical_updates"])
-        exposure = updates * logical * int(scale.removeprefix("Cus"))
+        target_environments = updates * environments_per_epoch
+        exposure = target_environments * int(scale.removeprefix("Cus"))
         stream_scope = "pilot"
         validation_views = int(cfg["pilot"]["validation_views"])
+        planning_wall_time_hours = None
     else:
+        updates = int(cfg["candidate_logical_epochs"][scale])
+        target_environments = updates * environments_per_epoch
         exposure = int(cfg["candidate_customer_exposure_budget"][scale])
-        samples = exposure // int(scale.removeprefix("Cus"))
-        if samples % logical:
-            raise ValueError(f"candidate budget is not divisible by logical batch for {scale}")
-        updates = samples // logical
+        derived_exposure = target_environments * int(scale.removeprefix("Cus"))
+        if exposure != derived_exposure:
+            raise ValueError(
+                f"epoch/environment schedule does not match exposure budget for {scale}: "
+                f"{derived_exposure} != {exposure}"
+            )
         stream_scope = "formal"
         validation_views = int(cfg["formal_candidate"]["validation_views"])
-    stream = f"{ARTIFACTS}/streams/{stream_scope}/{condition}/{scale}/seed_{seed}.parquet"
+        planning_wall_time_hours = cfg["formal_candidate"].get(
+            "planning_wall_time_hours", {}
+        ).get(scale)
+    stream = (
+        f"{ARTIFACTS}/streams/{cfg['runtime_budget_id']}/"
+        f"{stream_scope}/{condition}/{scale}/seed_{seed}.parquet"
+    )
     payload = {
         "schema": "drl_rq_job_manifest_v1",
         "protocol_id": "drl_rq_protocol_frozen_v1",
+        "runtime_budget_id": cfg["runtime_budget_id"],
         "job_id": f"{run_mode}__{representation}__{condition}__{method}__{scale}__seed{seed}",
         "enabled": True,
         "kind": "pilot" if run_mode == "pilot" else "train",
@@ -89,6 +108,7 @@ def job(
         "validation_index": VALIDATION_INDEX[scale],
         "training_stream_path": stream,
         "customer_exposure_budget": exposure,
+        "target_environments": target_environments,
         "exposure_checkpoints": (
             [exposure]
             if run_mode == "pilot"
@@ -101,11 +121,14 @@ def job(
             [] if run_mode == "pilot" else cfg["formal_candidate"]["gpu_hour_checkpoints"]
         ),
         "training_epochs": updates,
+        "logical_environments_per_epoch": environments_per_epoch,
+        "planned_optimizer_updates": updates,
         "training_rollout_steps": int(cfg["rollout_steps"][scale]),
         "physical_batch_size": physical,
         "effective_batch_size": logical,
         "validation_views": validation_views,
         "validation_checkpoints": 1,
+        "planning_wall_time_hours": planning_wall_time_hours,
         "formal_gate_file": GATE if run_mode == "full" else None,
         "euclidean_manifest": (
             f"{ARTIFACTS}/euclidean/euclidean_calibration_manifest.json"
