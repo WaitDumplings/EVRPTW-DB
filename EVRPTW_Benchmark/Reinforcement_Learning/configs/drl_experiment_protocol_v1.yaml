@@ -143,7 +143,7 @@ hardware:
     memory_gate_gib: 9.5
   rtx_a6000:
     global_slots: 2
-    expected_name_pattern: RTX A6000
+    expected_name_pattern: "RTX A6000|RTX 6000 Ada Generation"
 
 pilot:
   optimization_scale: Cus100

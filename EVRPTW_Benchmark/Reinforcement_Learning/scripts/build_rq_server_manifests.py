@@ -25,7 +25,7 @@ SERVERS = {
     "2080ti_4_1": ("2080ti", 4, "RTX 2080 Ti"),
     "2080ti_4_2": ("2080ti", 4, "RTX 2080 Ti"),
     "2080ti_3_1": ("2080ti", 3, "RTX 2080 Ti"),
-    "a6000_2_1": ("a6000", 2, "RTX A6000"),
+    "a6000_2_1": ("a6000", 2, "RTX A6000|RTX 6000 Ada Generation"),
 }
 TRAIN_INDEX = {
     "Cus50": "generation_plan/compatibility_cus50/train/view_index.parquet",

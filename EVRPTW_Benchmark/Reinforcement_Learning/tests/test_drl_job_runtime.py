@@ -210,3 +210,10 @@ def test_resume_only_marks_jobs_with_complete_resume_evidence(tmp_path: Path) ->
         raise AssertionError("partial resume evidence was accepted")
     (output / "checkpoint_latest.pt").write_bytes(b"checkpoint")
     assert RUNTIME.should_resume_job(job, output, True)
+
+
+def test_gpu_name_pattern_supports_controlled_aliases() -> None:
+    accepted = "RTX A6000|RTX 6000 Ada Generation"
+    assert RUNTIME.gpu_name_matches("NVIDIA RTX A6000", accepted)
+    assert RUNTIME.gpu_name_matches("NVIDIA RTX 6000 Ada Generation", accepted)
+    assert not RUNTIME.gpu_name_matches("NVIDIA GeForce RTX 3090", accepted)

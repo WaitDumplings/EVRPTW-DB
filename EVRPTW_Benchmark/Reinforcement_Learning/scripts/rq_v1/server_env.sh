@@ -24,7 +24,7 @@ case "$DRL_SERVER_ID" in
   a6000_2_1)
     export DRL_SLOTS="0,1"
     export DRL_LOCAL_GPU_COUNT="2"
-    export DRL_GPU_NAME_PATTERN="RTX A6000"
+    export DRL_GPU_NAME_PATTERN="RTX A6000|RTX 6000 Ada Generation"
     ;;
   *) echo "Unknown RQ server bundle: $DRL_SERVER_ID" >&2; exit 2 ;;
 esac

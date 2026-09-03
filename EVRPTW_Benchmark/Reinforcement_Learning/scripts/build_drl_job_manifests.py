@@ -40,7 +40,7 @@ SERVER_SPECS = {
         "hardware": "a6000",
         "canonical_slots": (0, 1),
         "gpu_count": 2,
-        "gpu_name_pattern": "RTX A6000",
+        "gpu_name_pattern": "RTX A6000|RTX 6000 Ada Generation",
     },
 }
 

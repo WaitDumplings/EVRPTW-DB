@@ -103,6 +103,15 @@ def git_commit(repo: Path) -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
 
+def gpu_name_matches(name: str, accepted_patterns: str) -> bool:
+    patterns = [
+        pattern.strip().lower()
+        for pattern in accepted_patterns.split("|")
+        if pattern.strip()
+    ]
+    return bool(patterns) and any(pattern in name.lower() for pattern in patterns)
+
+
 def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str, Any]:
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
     if missing:
@@ -132,15 +141,22 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
     expected_branch = args.expected_branch
     if expected_branch and branch != expected_branch:
         raise RuntimeError(f"wrong branch: {branch}; expected {expected_branch}")
+    gpu_names: list[str] = []
     if not args.skip_gpu_preflight:
         query = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True
         ).splitlines()
         if len(query) != args.local_gpu_count:
             raise RuntimeError(f"expected {args.local_gpu_count} GPUs, found {len(query)}")
-        bad = [name for name in query if args.gpu_name_pattern.lower() not in name.lower()]
+        gpu_names = query
+        bad = [name for name in query if not gpu_name_matches(name, args.gpu_name_pattern)]
         if bad:
-            raise RuntimeError(f"unexpected GPU model(s): {bad}")
+            accepted = [
+                pattern.strip()
+                for pattern in args.gpu_name_pattern.split("|")
+                if pattern.strip()
+            ]
+            raise RuntimeError(f"unexpected GPU model(s): {bad}; expected one of {accepted}")
     for job in jobs:
         index_key = "train_index" if job["kind"] in {"train", "pilot"} else "dataset_index"
         path = dataset / job[index_key]
@@ -157,6 +173,7 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
         "configured_conda_env": os.environ.get("EVRPTW_CONDA_ENV"),
         "python_executable": sys.executable,
         "python_prefix": sys.prefix,
+        "gpu_names": gpu_names,
     }
     if args.mode == "evaluate" and not args.dry_run:
         missing_checkpoints = [
