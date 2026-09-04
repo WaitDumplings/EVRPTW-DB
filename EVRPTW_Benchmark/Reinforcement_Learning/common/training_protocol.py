@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import numpy as np
+import torch
 
 from .data_pass import DataPassState
 from .evaluation import select_min_verified_distance
@@ -152,7 +153,11 @@ def verified_validation(
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for index, instance in enumerate(instances):
-        info = solve(instance, int(seed) + index)
+        # Validation is selection-only. Retaining an autograd graph for every
+        # sampled trajectory wastes GPU memory and can make best-of-K OOM even
+        # though the corresponding training batch fits.
+        with torch.no_grad():
+            info = solve(instance, int(seed) + index)
         selected, routes, verification = select_min_verified_distance(instance, info)
         rows.append(
             {

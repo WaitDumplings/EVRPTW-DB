@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import torch
 
-from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_trainers
+from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_trainers, training_protocol
 
 
 class _Pool:
@@ -211,3 +211,27 @@ def test_fixed_epoch_early_stop_uses_validation_patience(tmp_path, monkeypatch) 
     assert terminal["completed_training_epochs"] == 6
     assert terminal["completed_validation_checkpoints"] == 3
     assert len(validation_calls) == 3
+
+
+def test_verified_validation_disables_autograd(monkeypatch) -> None:
+    instance = SimpleNamespace(instance_id="validation-instance")
+    grad_states = []
+
+    def solve(_instance, _seed):
+        grad_states.append(torch.is_grad_enabled())
+        return {"success": [True]}
+
+    monkeypatch.setattr(
+        training_protocol,
+        "select_min_verified_distance",
+        lambda _instance, _info: (
+            0,
+            [[0, 1, 0]],
+            {"passed": True, "objective_distance_km": 7.5},
+        ),
+    )
+    summary = training_protocol.verified_validation([instance], solve, seed=1234)
+
+    assert grad_states == [False]
+    assert summary["complete_and_feasible"] == 1
+    assert summary["mean_verified_distance_km"] == 7.5
