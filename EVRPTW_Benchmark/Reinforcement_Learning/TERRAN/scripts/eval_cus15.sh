@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 PYTHON_BIN=(conda run -n maojie python)
 
 EVAL_PATH="${1:-EVRPTW_Dataset/AC_v1/AC_Small_15}"
-N_TRAJ="${2:-50}"
+N_TRAJ="${2:-100}"
 DEVICE="${3:-cuda}"
 
 run_eval() {

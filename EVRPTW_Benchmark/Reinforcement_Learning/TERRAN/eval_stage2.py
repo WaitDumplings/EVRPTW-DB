@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--representation", choices=("E", "G"), default="G")
     parser.add_argument("--euclidean-manifest", type=Path)
     parser.add_argument("--decode-mode", choices=("sample", "greedy"), default="sample")
-    parser.add_argument("--candidates", type=int, default=50)
+    parser.add_argument("--candidates", type=int, default=100)
     parser.add_argument("--candidate-chunk-size", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--limit", type=int)

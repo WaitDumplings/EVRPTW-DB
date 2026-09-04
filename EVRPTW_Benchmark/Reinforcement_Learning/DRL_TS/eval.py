@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         choices=("greedy", "sampling"),
         default="sampling",
     )
-    parser.add_argument("--candidates", type=int, default=50)
+    parser.add_argument("--candidates", type=int, default=100)
     parser.add_argument("--candidate-chunk-size", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--limit", type=int)

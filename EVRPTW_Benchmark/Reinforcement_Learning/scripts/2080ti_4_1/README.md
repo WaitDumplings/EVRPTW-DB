@@ -18,6 +18,6 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_4_1/logs.sh
 `run.sh MODE` is the foreground/debug entrypoint. Environment paths may be
 overridden before launch; committed defaults are repository-relative.
 
-These four bundles intentionally contain no T1/T2/T3, best-of-50, or Cus2000
+These four bundles intentionally contain no T1/T2/T3, best-of-100, or Cus2000
 test jobs. Collect their `checkpoint_selected.pt`, validation, training result,
 and provenance artifacts on the future central test server.

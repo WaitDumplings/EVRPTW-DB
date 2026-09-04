@@ -105,7 +105,7 @@ def test_candidate_budget_is_matched_across_methods() -> None:
         job for job in jobs2080 + jobsa6000 if job["kind"] in {"eval", "transfer"}
     ]
     assert {job["candidate_count"] for job in evaluations if job["decode_budget"] == "greedy"} == {1}
-    assert {job["candidate_count"] for job in evaluations if job["decode_budget"] == "best_of_50"} == {50}
+    assert {job["candidate_count"] for job in evaluations if job["decode_budget"] == "best_of_100"} == {100}
 
 
 def test_training_rollout_budget_is_scale_aware_and_method_invariant() -> None:

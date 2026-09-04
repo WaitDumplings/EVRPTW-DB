@@ -56,7 +56,7 @@ pbrs:
 evaluation:
   eval_interval: 10
   eval_path: EVRPTW_Dataset/dataset_v1/dataset/val/Cus15
-  eval_n_traj: 50
+  eval_n_traj: 100
   eval_decode_mode: sample
   eval_max_steps: 40
   eval_limit: null

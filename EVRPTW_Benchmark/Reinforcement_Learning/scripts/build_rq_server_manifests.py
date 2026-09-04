@@ -128,6 +128,9 @@ def job(
         "logical_environments_per_epoch": environments_per_epoch,
         "planned_optimizer_updates": updates,
         "training_rollout_steps": int(cfg["rollout_steps"][scale]),
+        "training_trajectory_count": int(
+            cfg["training_trajectory_count_by_method"][method]
+        ),
         "physical_batch_size": physical,
         "effective_batch_size": logical,
         "validation_views": validation_views,

@@ -118,7 +118,7 @@ adaptation assessment.  Neither receives a GPU job.
 Each selected checkpoint uses two registered decoding budgets:
 
 1. `greedy`: one candidate;
-2. `best_of_50`: exactly 50 seeded candidates.
+2. `best_of_100`: exactly 100 seeded candidates.
 
 Candidate count is an evaluation budget.  The same candidate IDs/seeds must be
 used across methods.  Candidate generation may be chunked for memory, but the
@@ -128,7 +128,7 @@ reported separately in the appendix and must not replace the matched main
 comparison.
 
 For Cus100/Cus500/Cus1000, each training checkpoint therefore evaluates six
-cells: T1/T2/T3 times greedy/best-of-50.  Cus50 evaluates two cells.  Cus2000
+cells: T1/T2/T3 times greedy/best-of-100.  Cus50 evaluates two cells.  Cus2000
 evaluates the paired Cus1000 and Cus2000 cohorts under both decoding budgets.
 
 ## 3. Training-data and checkpoint protocol
@@ -205,7 +205,7 @@ The two A6000 devices consume the high-memory manifest:
 2. the second Cus1000 seed for each method;
 3. the third Cus1000 seed for each method;
 4. Cus500 overflow from the 2080 Ti pilot;
-5. best-of-50 evaluation;
+5. best-of-100 evaluation;
 6. paired Cus1000/Cus2000 zero-shot evaluation.
 
 Round-robin by seed before completing all seeds of one method.  This produces
@@ -265,7 +265,7 @@ It owns global 2080-Ti slots 8--10 and accepts the same `pilot`, `full`,
 EVRPTW_Benchmark/Reinforcement_Learning/scripts/run_drl_2xa6000.sh
 ```
 
-It owns high-memory slots 0--1 and runs the Cus1000, overflow, best-of-50, and
+It owns high-memory slots 0--1 and runs the Cus1000, overflow, best-of-100, and
 scale-transfer queues.
 
 ## 6. Common runner and manifests
@@ -291,7 +291,7 @@ Example:
 
 ```text
 train__R__am_evrptw__Cus500__seed2345
-eval__R__am_evrptw__Cus500__seed2345__T2__best_of_50
+eval__R__am_evrptw__Cus500__seed2345__T2__best_of_100
 transfer__R__terran__Cus1000_to_Cus2000__seed1234__greedy
 ```
 
@@ -337,7 +337,7 @@ method:
 2. Cus500 forward/backward memory measurement;
 3. Cus1000 forward/backward measurement on A6000;
 4. greedy route export and independent verifier PASS;
-5. chunked best-of-50 equality against an unchunked small-case run;
+5. chunked best-of-100 equality against an unchunked small-case run;
 6. data-pass counter and resume replay test;
 7. estimated wall time for 100 data passes.
 

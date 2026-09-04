@@ -97,10 +97,10 @@ decoding:
     decode_type: greedy
     candidates: 1
     candidate_chunk_size: 1
-  best_of_50:
+  best_of_100:
     decode_type: sampling
-    candidates: 50
-    candidate_chunk_size: 5
+    candidates: 100
+    candidate_chunk_size: 10
     candidate_seed_scheme: splitmix64_v1
 
 methods:
@@ -155,7 +155,7 @@ pilot:
   full_runtime_budget_approved: false
   full_runtime_budget_review_reason: pending_formal_pilot_wall_time_review
   validation_limit: 8
-  best_of_50_equality_limit: 2
+  best_of_100_equality_limit: 2
   required_methods: [am_evrptw, evrptw_rl, drl_ts, terran]
 
 disabled_tracks:

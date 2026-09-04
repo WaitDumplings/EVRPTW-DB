@@ -397,7 +397,7 @@ def build_manifests(protocol: dict[str, Any]) -> tuple[list[dict[str, Any]], lis
                             scale=scale,
                             seed=seed,
                             test_id=test_id,
-                            decode_budget="best_of_50",
+                            decode_budget="best_of_100",
                             hardware="a6000",
                         )
                     )
@@ -408,7 +408,7 @@ def build_manifests(protocol: dict[str, Any]) -> tuple[list[dict[str, Any]], lis
     for seed in seeds:
         for method in METHOD_ORDER:
             for cohort in ("paired_Cus1000", "zero_shot_Cus2000"):
-                for budget in ("greedy", "best_of_50"):
+                for budget in ("greedy", "best_of_100"):
                     transfer_jobs.append(
                         _eval_job(
                             protocol,
@@ -664,7 +664,7 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/{server_id}/logs.sh
 `run.sh MODE` is the foreground/debug entrypoint. Environment paths may be
 overridden before launch; committed defaults are repository-relative.
 
-These four bundles intentionally contain no T1/T2/T3, best-of-50, or Cus2000
+These four bundles intentionally contain no T1/T2/T3, best-of-100, or Cus2000
 test jobs. Collect their `checkpoint_selected.pt`, validation, training result,
 and provenance artifacts on the future central test server.
 """

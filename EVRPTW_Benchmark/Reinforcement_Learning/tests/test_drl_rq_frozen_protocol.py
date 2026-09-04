@@ -46,14 +46,20 @@ def test_reference_and_integrity_claims_are_conservative() -> None:
     assert protocol["ev_integrity"]["preserves_customer_order"] is True
 
 
-def test_validation_and_test_use_common_best_of_50_sampling_budget() -> None:
+def test_validation_and_test_use_common_best_of_100_sampling_budget() -> None:
     protocol = _protocol()
     selection = protocol["model_selection"]
     evaluation = protocol["test_inference"]
     assert selection["validation_decode_type"] == "sampling"
-    assert selection["validation_candidate_count"] == 50
+    assert selection["validation_candidate_count"] == 100
     assert evaluation["decode_type"] == "sampling"
-    assert evaluation["candidate_count"] == 50
+    assert evaluation["candidate_count"] == 100
+    assert protocol["training_trajectories_per_instance"] == {
+        "am_evrptw": 1,
+        "evrptw_rl": 1,
+        "drl_ts": 1,
+        "terran": 100,
+    }
 
 
 def test_support_sampling_and_statistics_use_parent_families() -> None:

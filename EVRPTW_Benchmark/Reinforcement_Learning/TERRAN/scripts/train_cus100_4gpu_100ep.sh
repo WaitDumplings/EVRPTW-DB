@@ -11,11 +11,11 @@ mkdir -p "$LOG_DIR"
 COMMON_ARGS=(
   --epochs 100
   --num-envs-per-gpu 96
-  --n-traj 64
+  --n-traj 100
   --rollout-steps 140
   --num-minibatches 16
   --eval-interval 10
-  --eval-n-traj 50
+  --eval-n-traj 100
   --debug
   --debug-log-every 1
 )

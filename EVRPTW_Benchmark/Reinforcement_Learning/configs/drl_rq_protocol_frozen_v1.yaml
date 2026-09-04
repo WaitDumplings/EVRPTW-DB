@@ -81,7 +81,7 @@ training_fairness:
 model_selection:
   validation_views: 500
   validation_decode_type: sampling
-  validation_candidate_count: 50
+  validation_candidate_count: 100
   candidate_selection: independent_verifier_feasible_then_min_directed_distance
   validation_every_epochs: 50
   primary_metric: independent_verifier_feasibility_rate
@@ -93,9 +93,15 @@ model_selection:
 
 test_inference:
   decode_type: sampling
-  candidate_count: 50
+  candidate_count: 100
   candidate_selection: independent_verifier_feasible_then_min_directed_distance
   note: common benchmark budget; paper-supported but not paper-exact candidate counts
+
+training_trajectories_per_instance:
+  am_evrptw: 1
+  evrptw_rl: 1
+  drl_ts: 1
+  terran: 100
 
 euclidean:
   distance: symmetric_straight_line_from_fixed_coordinates

@@ -49,21 +49,25 @@ logical batch.
 
 | Scale | AM physical | EVRPTW-RL physical | DRL-TS physical | TERRAN physical | Microbatches AM/RL/TS/TERRAN |
 |---|---:|---:|---:|---:|---:|
-| Cus50 | 1,024 | 128 | 128 | 256 | 1 / 8 / 8 / 4 |
-| Cus100 | 256 | 64 | 32 | 256 | 1 / 4 / 8 / 1 |
-| Cus500 | 4 | 2 | 1 | 64 | 16 / 32 / 64 / 1 |
+| Cus50 | 1,024 | 128 | 128 | 128 | 1 / 8 / 8 / 8 |
+| Cus100 | 256 | 64 | 32 | 128 | 1 / 4 / 8 / 2 |
+| Cus500 | 4 | 2 | 1 | 32 | 16 / 32 / 64 / 2 |
 
 Each formal job requests at most 1,000 logical epochs. At epochs 50, 100, ...,
 1000 it evaluates the same fixed 500 validation views. Validation and test both
-use stochastic decoding with exactly 50 seeded candidates per instance.
+use stochastic decoding with exactly 100 seeded candidates per instance.
 Checkpoint selection first maximizes independent-verifier feasibility rate and
 then minimizes mean verified directed distance over the feasible candidates.
 Validation/test reward and penalties are not added to the reported distance.
-The 50-candidate count is a common benchmark inference budget supported by all
+The 100-candidate count is a common benchmark inference budget supported by all
 four methods, not a claim that it reproduces every paper's original candidate
 count. The selected checkpoint is written as both `best.ckpt` and the
 backward-compatible `checkpoint_selected.pt`; all checks are retained in
 `validation_history.jsonl`.
+
+TERRAN uses 100 parallel POMO-style trajectories per training instance. The
+other three REINFORCE adapters retain one sampled rollout per training instance;
+their batch dimensions continue to represent different training instances.
 
 Early stopping uses validation-check patience, because no metric exists between
 50-epoch validation points. Three consecutive validation checks without a

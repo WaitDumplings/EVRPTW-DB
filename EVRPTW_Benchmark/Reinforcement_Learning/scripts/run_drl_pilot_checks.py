@@ -50,8 +50,8 @@ def eval_command(method: str, protocol: dict[str, Any], checkpoint: Path, datase
         "--family-root", str(dataset / "materialized" / "families"),
         "--checkpoint", str(checkpoint),
         "--scale", "Cus100", "--split-ids", "val", "--track-ids", "validation",
-        "--candidates", "50", "--candidate-chunk-size", str(chunk),
-        "--limit", str(protocol["pilot"]["best_of_50_equality_limit"]),
+        "--candidates", "100", "--candidate-chunk-size", str(chunk),
+        "--limit", str(protocol["pilot"]["best_of_100_equality_limit"]),
         "--seed", str(protocol["pilot"]["seed"]), "--device", "cuda",
         "--output-dir", str(output),
     ]
@@ -80,15 +80,15 @@ def main() -> None:
             "passed": bool(validation.get("verifier_summary_passed")),
             "source": str(cus100 / "validation_summary.json"),
         })
-        unchunked = evidence / "best50_runs" / method / "unchunked"
-        chunked = evidence / "best50_runs" / method / "chunked_5"
-        subprocess.run(eval_command(method, protocol, cus100 / "checkpoint_selected.pt", args.dataset_root, unchunked, 50), check=True)
-        subprocess.run(eval_command(method, protocol, cus100 / "checkpoint_selected.pt", args.dataset_root, chunked, 5), check=True)
+        unchunked = evidence / "best100_runs" / method / "unchunked"
+        chunked = evidence / "best100_runs" / method / "chunked_10"
+        subprocess.run(eval_command(method, protocol, cus100 / "checkpoint_selected.pt", args.dataset_root, unchunked, 100), check=True)
+        subprocess.run(eval_command(method, protocol, cus100 / "checkpoint_selected.pt", args.dataset_root, chunked, 10), check=True)
         equal = (
             normalized_rows(unchunked / "summary.csv") == normalized_rows(chunked / "summary.csv")
             and normalized_routes(unchunked / "routes.jsonl") == normalized_routes(chunked / "routes.jsonl")
         )
-        write(evidence / f"{method}__best50_equality.json", {"passed": equal, "candidate_count": 50, "chunk_sizes": [50, 5]})
+        write(evidence / f"{method}__best100_equality.json", {"passed": equal, "candidate_count": 100, "chunk_sizes": [100, 10]})
         write(evidence / f"{method}__data_pass_resume.json", {
             "passed": resume_passed,
             "contract": (

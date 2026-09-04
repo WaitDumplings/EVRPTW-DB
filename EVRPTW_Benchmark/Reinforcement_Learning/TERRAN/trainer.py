@@ -291,7 +291,7 @@ def make_envs(cfg: dict[str, Any], seed: int):
     envs = [
         make_terran_env(
             instance_sampler=pool.sample,
-            n_traj=int(train_cfg.get("n_traj", 50)),
+            n_traj=int(train_cfg.get("n_traj", 100)),
             pbrs_config=pbrs_config,
             **env_cfg,
         )
@@ -311,7 +311,7 @@ def evaluate_fixed_dataset(
     num_customers = int(data_cfg.get("num_customers", 15))
     num_cs = int(data_cfg.get("num_charging_stations", 3))
     eval_path = _resolve_repo_path(eval_cfg.get("eval_path"))
-    n_traj = int(eval_cfg.get("eval_n_traj", 8))
+    n_traj = int(eval_cfg.get("eval_n_traj", 100))
     decode_mode = str(eval_cfg.get("eval_decode_mode", "sample"))
     configured_max_steps = eval_cfg.get("eval_max_steps")
     limit = eval_cfg.get("eval_limit", None)
@@ -836,12 +836,12 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             debug_enabled,
             df,
             f"[Init] run={run_name} seed={seed} device={device} epochs={epochs} "
-            f"n_traj={train_cfg.get('n_traj', 50)} rollout_steps={rollout_steps} "
+            f"n_traj={train_cfg.get('n_traj', 100)} rollout_steps={rollout_steps} "
             f"num_envs={train_cfg.get('num_envs_per_gpu', 128)} minibatches={num_minibatches} "
             f"accum_grad={gradient_accumulation_steps} "
             f"n_encode_layers={model_cfg.get('n_encode_layers', 3)} "
             f"initial_env_pool_time_s={initial_env_pool_time_s:.3f} "
-            f"eval_interval={eval_interval} eval_n_traj={eval_cfg.get('eval_n_traj', 8)} "
+            f"eval_interval={eval_interval} eval_n_traj={eval_cfg.get('eval_n_traj', 100)} "
             f"eval_batch_size={eval_cfg.get('eval_batch_size', 1)} "
             f"eval_info_level={eval_cfg.get('eval_info_level', 'light')} "
             f"pbrs_annealing={cfg.get('pbrs', {}).get('annealing', {})}",
@@ -1199,7 +1199,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "environment_transitions_total": environment_transitions_total,
                     "optimizer_steps_total": optimizer_steps_total,
                     "num_envs": num_envs,
-                    "n_traj": int(train_cfg.get("n_traj", 50)),
+                    "n_traj": int(train_cfg.get("n_traj", 100)),
                     "rollout_steps": rollout_steps,
                     "num_minibatches": minibatches,
                     "trajectory_count": trajectory_count,

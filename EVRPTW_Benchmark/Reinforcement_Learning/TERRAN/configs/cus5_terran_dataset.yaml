@@ -36,7 +36,7 @@ training:
   online_training: false
   epochs: 500
   num_envs_per_gpu: 1024
-  n_traj: 50
+  n_traj: 100
   rollout_steps: 15
   ppo_update_epochs: 3
   num_minibatches: 2
@@ -61,7 +61,7 @@ pbrs:
 evaluation:
   eval_interval: 10
   eval_path: EVRPTW_Dataset/dataset_v1/dataset/val/Cus5
-  eval_n_traj: 50
+  eval_n_traj: 100
   eval_decode_mode: sample
   eval_max_steps: 15
   eval_limit: null

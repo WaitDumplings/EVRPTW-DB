@@ -90,7 +90,7 @@ def make_terran_env(
     instance_path: str | Path | None = None,
     instance: Any | None = None,
     instance_sampler: Callable[[], Any] | None = None,
-    n_traj: int = 50,
+    n_traj: int = 100,
     reward_mode: str = "distance",
     pbrs_config: PotentialRewardConfig | None = None,
     rollout_horizon_steps: int | None = None,

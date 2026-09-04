@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--num-customers", type=int, default=15)
     parser.add_argument("--num-charging-stations", type=int, default=3)
-    parser.add_argument("--n-traj", type=int, default=50)
+    parser.add_argument("--n-traj", type=int, default=100)
     parser.add_argument("--decode-mode", type=str, default="sample", choices=["sample", "greedy"])
     parser.add_argument("--max-steps", type=int, default=128)
     parser.add_argument("--limit", type=int, default=None)

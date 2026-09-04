@@ -235,6 +235,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             job["scale"].removeprefix("Cus"),
             "--num-envs-per-gpu",
             str(job["physical_batch_size"]),
+            "--n-traj",
+            str(job["training_trajectory_count"]),
             "--training-epochs",
             str(job["training_epochs"]),
             "--training-rollout-steps",

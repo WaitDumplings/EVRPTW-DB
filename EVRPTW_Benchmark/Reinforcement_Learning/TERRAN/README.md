@@ -85,7 +85,7 @@ hyperparameters:
 
 Training samples online Cus15/CS3 operating days from a 32-region service-territory
 pool and does not save each training instance. Evaluation uses a fixed
-1000-instance AC-v1 evaluation suite and sample decoding: each instance runs `n_traj=50`
+1000-instance AC-v1 evaluation suite and sample decoding: each instance runs `n_traj=100`
 trajectories and keeps the best feasible trajectory by objective distance.
 
 
@@ -104,7 +104,7 @@ objective used for benchmark comparison.
 
 `configs/cus15_terran.yaml` and `configs/cus15_terran_pbrs.yaml` run fixed-set
 evaluation every `eval_interval` epochs. The default uses the fixed Cus15/CS3
-eval set with POMO-8 sample decoding (`eval_n_traj: 8`). Evaluation metrics are
+eval set with POMO-100 sample decoding (`eval_n_traj: 100`). Evaluation metrics are
 written into both `train_log.csv` and `eval_log.csv`:
 
 - `eval_avg_objective_distance_km`

@@ -30,7 +30,7 @@ model:
 training:
   epochs: 300
   num_envs_per_gpu: 64
-  n_traj: 50
+  n_traj: 100
   rollout_steps: 450
   ppo_step_chunk_size: 64
   ppo_update_epochs: 3
