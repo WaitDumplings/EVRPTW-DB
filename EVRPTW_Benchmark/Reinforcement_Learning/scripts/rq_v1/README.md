@@ -62,6 +62,10 @@ Every listed 2080 Ti batch therefore completed below 10 GiB. The Cus500 and
 Cus1000 values are conservative Ada defaults, not final 48 GiB calibration;
 they may be increased only after running the local Ada pilot.
 
+The current 2080 revalidation and the exact Ada calibration/acceptance procedure
+are recorded in `reports/RTX2080TI_SAMPLE100_MEMORY_REVALIDATION_V3.md` and
+`reports/RTX6000_ADA_MEMORY_CALIBRATION_HANDOFF_V1.md`.
+
 Each formal job requests at most 1,000 logical epochs. At epochs 50, 100, ...,
 1000 it evaluates the same fixed 500 validation views. Validation and test both
 use stochastic decoding with exactly 100 seeded candidates per instance.
