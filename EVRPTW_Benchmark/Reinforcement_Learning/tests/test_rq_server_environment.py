@@ -52,3 +52,28 @@ def test_dataset_resolver_finds_release_below_relative_restore_root(
         ["bash", "-c", command], env=environment, text=True
     ).strip()
     assert output == str(release)
+
+
+def test_dataset_resolver_falls_back_to_repository_local_frozen_release(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    release = (
+        repo
+        / "EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
+    )
+    marker = release / "generation_plan/core/train/view_index.parquet"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    environment = os.environ.copy()
+    environment.pop("EVRPTW_DATASET_ROOT", None)
+    environment["EVRPTW_RESTORE_ROOT"] = "../missing-runtime"
+    command = (
+        f"source {SCRIPT_ROOT / 'dataset_root.sh'}; "
+        f'resolve_evrptw_dataset_root "{repo}"'
+    )
+    output = subprocess.check_output(
+        ["bash", "-c", command], env=environment, text=True
+    ).strip()
+    assert output == str(release)

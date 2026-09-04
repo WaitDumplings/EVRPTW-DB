@@ -2,7 +2,7 @@
 
 These four bundles generate training checkpoints only. All defaults are derived
 from the checked-out repository; no machine-specific absolute data path is
-embedded. Dataset discovery defaults to the archive restore tree relative to the checked-out repository: `../../../evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city`. The canonical and frozen v7 directory names are supported below that restore root. Standalone artifact preparation and all server launchers use the same resolver; no server-specific absolute path is committed.
+embedded. Dataset discovery first checks the archive restore tree relative to the checkout (`../../../evrptw_runtime`) and then the repository-local `EVRPTW_Dataset` tree. Canonical and frozen-v7 directory names are supported in both locations. A candidate is accepted only when its core training index exists; no server-specific absolute path is committed.
 
 Activate any Python environment containing the project's required dependencies
 (for example `maojie` or `caliroute`) and run exactly one pilot launcher on each
