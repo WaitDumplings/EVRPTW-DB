@@ -3,6 +3,15 @@ status: pilot_candidates_not_formally_frozen
 protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v5_seedwise_pow2_fulltrain_val500_es3
 
+# Common publication inference budget. Each candidate is independently checked
+# by the canonical verifier; selection is feasible-first, then minimum distance.
+evaluation:
+  validation_decode_type: sampling
+  validation_candidate_count: 50
+  test_decode_type: sampling
+  test_candidate_count: 50
+  selection: verifier_feasible_then_min_directed_distance
+
 seeds: [1234, 2345, 3456]
 enabled_scales: [Cus50, Cus100, Cus500]
 rollout_steps: {Cus50: 80, Cus100: 140, Cus500: 600}

@@ -80,6 +80,9 @@ training_fairness:
 
 model_selection:
   validation_views: 500
+  validation_decode_type: sampling
+  validation_candidate_count: 50
+  candidate_selection: independent_verifier_feasible_then_min_directed_distance
   validation_every_epochs: 50
   primary_metric: independent_verifier_feasibility_rate
   secondary_metric: mean_verified_directed_distance
@@ -87,6 +90,12 @@ model_selection:
   early_stop_no_improvement_epochs_equivalent: 150
   earliest_possible_early_stop_epoch: 200
   test_used_for_selection: false
+
+test_inference:
+  decode_type: sampling
+  candidate_count: 50
+  candidate_selection: independent_verifier_feasible_then_min_directed_distance
+  note: common benchmark budget; paper-supported but not paper-exact candidate counts
 
 euclidean:
   distance: symmetric_straight_line_from_fixed_coordinates

@@ -169,6 +169,8 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         "physical_batch_size": 4,
         "effective_batch_size": 4,
         "validation_views": 100,
+        "validation_decode_type": "sampling",
+        "validation_candidate_count": 50,
         "final_validation_views": 500,
         "validation_every_epochs": 50,
         "validation_checkpoints": 1,
@@ -191,6 +193,10 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         assert command[epoch_index + 1] == "25"
         validation_index = command.index("--validation-every-epochs")
         assert command[validation_index + 1] == "50"
+        decode_index = command.index("--validation-decode-type")
+        assert command[decode_index + 1] == "sampling"
+        candidate_index = command.index("--validation-candidates")
+        assert command[candidate_index + 1] == "50"
         final_validation_index = command.index("--final-validation-limit")
         assert command[final_validation_index + 1] == "500"
         assert "--data-passes" not in command

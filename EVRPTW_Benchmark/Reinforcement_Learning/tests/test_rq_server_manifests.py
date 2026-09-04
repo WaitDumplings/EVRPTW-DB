@@ -77,6 +77,10 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         assert row["validation_every_epochs"] == 50
         assert row["validation_checkpoints"] == 20
         assert row["validation_views"] == 500
+        assert row["validation_decode_type"] == "sampling"
+        assert row["validation_candidate_count"] == 50
+        assert row["test_decode_type"] == "sampling"
+        assert row["test_candidate_count"] == 50
         assert row["final_validation_views"] == 0
         assert row["planning_wall_time_hours"] is None
         assert row["early_stop_patience_validations"] == 3

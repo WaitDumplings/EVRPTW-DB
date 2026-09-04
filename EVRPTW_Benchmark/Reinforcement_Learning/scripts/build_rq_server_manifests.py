@@ -131,6 +131,13 @@ def job(
         "physical_batch_size": physical,
         "effective_batch_size": logical,
         "validation_views": validation_views,
+        "validation_decode_type": cfg["evaluation"]["validation_decode_type"],
+        "validation_candidate_count": int(
+            cfg["evaluation"]["validation_candidate_count"]
+        ),
+        "test_decode_type": cfg["evaluation"]["test_decode_type"],
+        "test_candidate_count": int(cfg["evaluation"]["test_candidate_count"]),
+        "candidate_selection": cfg["evaluation"]["selection"],
         "early_stop_patience_validations": int(cfg["formal_candidate"].get("early_stop_patience_validations", 0)) if run_mode != "pilot" else 0,
         "final_validation_views": final_validation_views,
         "validation_every_epochs": int(

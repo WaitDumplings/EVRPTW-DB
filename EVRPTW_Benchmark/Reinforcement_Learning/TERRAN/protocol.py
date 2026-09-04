@@ -19,6 +19,7 @@ from ..common.training_protocol import (
     parse_int_checkpoints,
     require_registered_batches,
     require_training_rollout_steps,
+    require_validation_decoding,
 )
 from ..common.data_pass import DataPassState
 from ..common.training_stream import read_stream_view_ids
@@ -46,6 +47,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         optimizer_steps = int(state.optimizer_steps)
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
     training_rollout_steps = require_training_rollout_steps(args)
+    validation_decode_type, validation_candidates = require_validation_decoding(args)
     pool = Stage2TaskPool(
         dataset_path=args.stage2_dataset_path,
         family_root=args.stage2_family_root,
@@ -151,9 +153,13 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
                     else None
                 ),
                 "eval_limit": int(args.validation_limit),
-                "eval_n_traj": 1,
+                "eval_n_traj": validation_candidates,
                 "eval_batch_size": 1,
-                "eval_decode_mode": "greedy",
+                "eval_decode_mode": (
+                    "sample"
+                    if validation_decode_type == "sampling"
+                    else "greedy"
+                ),
                 "eval_info_level": "full",
                 "eval_save_routes": False,
                 "eval_require_independent_verifier": True,
@@ -179,6 +185,8 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         ),
         "early_stop_patience_validations": early_stop_patience,
         "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
+        "validation_decode_type": validation_decode_type,
+        "validation_candidates": validation_candidates,
         "pilot_partial": bool(getattr(args, "pilot_mode", False)),
         "completed_data_passes": completed,
         "environment_transitions": environment_transitions,
@@ -222,6 +230,7 @@ def _validation_summary(
 def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | None) -> None:
     if meta is None:
         return
+    validation_decode_type, validation_candidates = require_validation_decoding(args)
     output = Path(args.output_dir)
     fixed_epochs = getattr(args, "training_epochs", None) is not None
     total_passes = 1 if fixed_epochs else int(args.data_passes)
@@ -264,9 +273,9 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
                 "--track-ids",
                 "validation",
                 "--decode-mode",
-                "greedy",
+                "sample" if validation_decode_type == "sampling" else "greedy",
                 "--candidates",
-                "1",
+                str(validation_candidates),
                 "--candidate-chunk-size",
                 "1",
                 "--limit",
@@ -321,9 +330,9 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             "--track-ids",
             "validation",
             "--decode-mode",
-            "greedy",
+            "sample" if validation_decode_type == "sampling" else "greedy",
             "--candidates",
-            "1",
+            str(validation_candidates),
             "--candidate-chunk-size",
             "1",
             "--limit",

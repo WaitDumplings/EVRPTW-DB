@@ -21,6 +21,7 @@ from .training_protocol import (
     parse_float_checkpoints,
     parse_int_checkpoints,
     require_registered_batches,
+    require_validation_decoding,
     validation_key,
     verified_validation,
 )
@@ -197,6 +198,7 @@ def train_reinforce_data_passes(
     never need to traverse the full training index. The legacy complete-pass
     mode remains available for old explicit CLI invocations.
     """
+    validation_decode_type, validation_candidates = require_validation_decoding(args)
 
     fixed_epochs = getattr(args, "training_epochs", None)
     if fixed_epochs is not None:
@@ -556,6 +558,8 @@ def train_reinforce_data_passes(
                         {
                             "logical_epoch": logical_epoch,
                             "split": "validation",
+                            "decode_type": validation_decode_type,
+                            "candidate_count": validation_candidates,
                         }
                     )
                     is_best = validation_key(validation) > tuple(best_key)
@@ -696,7 +700,14 @@ def train_reinforce_data_passes(
                 lambda instance, seed: validation_solve(policy, instance, seed),
                 seed=int(args.seed) + data_pass * 100_000,
             )
-            validation.update({"data_pass": data_pass, "split": "validation"})
+            validation.update(
+                {
+                    "data_pass": data_pass,
+                    "split": "validation",
+                    "decode_type": validation_decode_type,
+                    "candidate_count": validation_candidates,
+                }
+            )
             append_jsonl(output / "validation_history.jsonl", validation)
 
         is_best = bool(
@@ -832,6 +843,8 @@ def train_reinforce_data_passes(
                 "selection_checkpoint": str(best_checkpoint),
                 "selection_logical_epoch": selected_summary.get("logical_epoch"),
                 "selection_changed": False,
+                "decode_type": validation_decode_type,
+                "candidate_count": validation_candidates,
             }
         )
         atomic_json(final_validation_path, final_validation)
@@ -871,6 +884,8 @@ def train_reinforce_data_passes(
         "completed_validation_checkpoints": completed_validation_checks,
         "early_stop_patience_validations": early_stop_patience,
         "final_validation_limit": final_validation_limit,
+        "validation_decode_type": validation_decode_type,
+        "validation_candidates": validation_candidates,
         "final_validation_audit": (
             str(final_validation_path) if final_validation_limit > 0 else None
         ),

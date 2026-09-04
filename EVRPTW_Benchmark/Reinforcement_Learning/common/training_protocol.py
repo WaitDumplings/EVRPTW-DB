@@ -30,6 +30,12 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--validation-dataset-path", type=Path)
     parser.add_argument("--validation-family-root", type=Path)
     parser.add_argument("--validation-limit", type=int, default=500)
+    parser.add_argument(
+        "--validation-decode-type",
+        choices=("greedy", "sampling"),
+        default="greedy",
+    )
+    parser.add_argument("--validation-candidates", type=int, default=1)
     parser.add_argument("--final-validation-limit", type=int, default=0)
     parser.add_argument("--validation-every-passes", type=int, default=5)
     parser.add_argument("--validation-every-epochs", type=int)
@@ -59,6 +65,18 @@ def require_training_rollout_steps(args: argparse.Namespace) -> int:
     if value <= 0:
         raise ValueError("training rollout steps must be positive")
     return value
+
+
+def require_validation_decoding(args: argparse.Namespace) -> tuple[str, int]:
+    decode_type = str(getattr(args, "validation_decode_type", "greedy"))
+    candidates = int(getattr(args, "validation_candidates", 1))
+    if decode_type not in {"greedy", "sampling"}:
+        raise ValueError(f"unsupported validation decode type: {decode_type}")
+    if candidates <= 0:
+        raise ValueError("--validation-candidates must be positive")
+    if decode_type == "greedy" and candidates != 1:
+        raise ValueError("greedy validation has exactly one candidate")
+    return decode_type, candidates
 
 
 def parse_int_checkpoints(value: str | None) -> tuple[int, ...]:

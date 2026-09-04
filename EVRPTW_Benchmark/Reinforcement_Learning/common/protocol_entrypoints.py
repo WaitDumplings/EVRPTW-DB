@@ -7,7 +7,7 @@ import torch
 
 from .protocol_trainers import train_reinforce_data_passes
 from .stage2_data import make_envs
-from .training_protocol import require_training_rollout_steps
+from .training_protocol import require_training_rollout_steps, require_validation_decoding
 
 
 def _max_steps(envs: list[Any]) -> int:
@@ -18,12 +18,24 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..AM_EVRPTW.rollout import rollout
 
     training_rollout_steps = require_training_rollout_steps(args)
+    validation_decode_type, validation_candidates = require_validation_decoding(args)
 
-    def solve(active, instances, decode_type, seed, max_steps=None):
+    def solve(
+        active, instances, decode_type, seed, max_steps=None, candidate_count=None,
+    ):
+        n_traj = (
+            int(candidate_count)
+            if candidate_count is not None
+            else (args.samples_per_instance if decode_type == "sampling" else 1)
+        )
         envs = make_envs(
             instances,
-            n_traj=args.samples_per_instance if decode_type == "sampling" else 1,
-            info_level="full" if decode_type == "greedy" else "light",
+            n_traj=n_traj,
+            info_level=(
+                "full"
+                if candidate_count is not None or decode_type == "greedy"
+                else "light"
+            ),
         )
         return rollout(
             active,
@@ -56,7 +68,11 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         objective_distance=objective,
         feasible=lambda result: result.feasible,
         validation_solve=lambda active, instance, seed: solve(
-            active, [instance], "greedy", seed
+            active,
+            [instance],
+            validation_decode_type,
+            seed,
+            candidate_count=validation_candidates,
         ).infos[0],
         legacy_batch_size=args.batch_size,
     )
@@ -66,12 +82,24 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..EVRPTW_RL.rollout import rollout
 
     training_rollout_steps = require_training_rollout_steps(args)
+    validation_decode_type, validation_candidates = require_validation_decoding(args)
 
-    def solve(active, instances, decode_type, seed, max_steps=None):
+    def solve(
+        active, instances, decode_type, seed, max_steps=None, candidate_count=None,
+    ):
+        n_traj = (
+            int(candidate_count)
+            if candidate_count is not None
+            else (args.samples_per_instance if decode_type == "sampling" else 1)
+        )
         envs = make_envs(
             instances,
-            n_traj=args.samples_per_instance if decode_type == "sampling" else 1,
-            info_level="full" if decode_type == "greedy" else "light",
+            n_traj=n_traj,
+            info_level=(
+                "full"
+                if candidate_count is not None or decode_type == "greedy"
+                else "light"
+            ),
         )
         return rollout(
             active,
@@ -99,7 +127,11 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         objective_distance=lambda result: result.objective_distance_km,
         feasible=lambda result: result.feasible,
         validation_solve=lambda active, instance, seed: solve(
-            active, [instance], "greedy", seed
+            active,
+            [instance],
+            validation_decode_type,
+            seed,
+            candidate_count=validation_candidates,
         ).infos[0],
         legacy_batch_size=args.batch_size,
     )
@@ -111,9 +143,17 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..DRL_TS.soft_env import DRLTSSoftConstraintEnv
 
     training_rollout_steps = require_training_rollout_steps(args)
+    validation_decode_type, validation_candidates = require_validation_decoding(args)
 
-    def solve(active, instances, soft, decode_type, seed, max_steps=None):
-        n_traj = args.samples_per_instance if decode_type == "sampling" else 1
+    def solve(
+        active, instances, soft, decode_type, seed, max_steps=None,
+        candidate_count=None,
+    ):
+        n_traj = (
+            int(candidate_count)
+            if candidate_count is not None
+            else (args.samples_per_instance if decode_type == "sampling" else 1)
+        )
         if soft:
             envs = [
                 DRLTSSoftConstraintEnv(
@@ -122,7 +162,11 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                     reward_mode="distance",
                     charging_mode="station_power_full",
                     matrix_mode="canonical",
-                    info_level="full" if decode_type == "greedy" else "light",
+                    info_level=(
+                        "full"
+                        if candidate_count is not None or decode_type == "greedy"
+                        else "light"
+                    ),
                 )
                 for instance in instances
             ]
@@ -134,7 +178,11 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                     reward_mode="distance",
                     charging_mode="station_power_full",
                     matrix_mode="canonical",
-                    info_level="full" if decode_type == "greedy" else "light",
+                    info_level=(
+                        "full"
+                        if candidate_count is not None or decode_type == "greedy"
+                        else "light"
+                    ),
                 )
                 for instance in instances
             ]
@@ -167,7 +215,12 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         objective_distance=lambda result: result.objective_distance_km,
         feasible=lambda result: result.feasible,
         validation_solve=lambda active, instance, seed: solve(
-            active, [instance], False, "greedy", seed
+            active,
+            [instance],
+            False,
+            validation_decode_type,
+            seed,
+            candidate_count=validation_candidates,
         ).infos[0],
         legacy_batch_size=args.batch_size,
         soft_stage_fraction=args.soft_stage_fraction,
