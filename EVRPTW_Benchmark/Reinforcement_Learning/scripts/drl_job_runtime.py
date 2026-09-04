@@ -295,6 +295,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(job["physical_batch_size"]),
             "--effective-batch-size",
             str(job["effective_batch_size"]),
+            "--samples-per-instance",
+            str(job["training_trajectory_count"]),
             "--validation-dataset-path",
             str(dataset / job["validation_index"]),
             "--validation-family-root",

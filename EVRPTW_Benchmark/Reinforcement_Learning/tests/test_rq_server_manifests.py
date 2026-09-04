@@ -93,9 +93,13 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         assert row["validation_candidate_count"] == 100
         assert row["test_decode_type"] == "sampling"
         assert row["test_candidate_count"] == 100
-        assert row["training_trajectory_count"] == (
-            100 if row["method"] == "terran" else 1
-        )
+        expected_trajectories = 100 if row["method"] == "terran" else 1
+        if row["method"] == "am_evrptw" and row["scale"] in {
+            "Cus500",
+            "Cus1000",
+        }:
+            expected_trajectories = 100
+        assert row["training_trajectory_count"] == expected_trajectories
         assert row["final_validation_views"] == 0
         assert row["planning_wall_time_hours"] is None
         assert row["early_stop_patience_validations"] == 3
@@ -120,3 +124,20 @@ def test_2080ti_jobs_use_only_measured_safe_sample100_batches() -> None:
         assert row["validation_decode_type"] == "sampling"
         assert row["validation_candidate_count"] == 100
         assert row["physical_batch_size"] == safe_batches[row["method"]][row["scale"]]
+
+
+def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
+    expected = {
+        "am_evrptw": {"Cus500": 8, "Cus1000": 2},
+        "evrptw_rl": {"Cus500": 16, "Cus1000": 2},
+        "drl_ts": {"Cus500": 8, "Cus1000": 2},
+        "terran": {"Cus500": 64, "Cus1000": 2},
+    }
+    rows = build()["a6000_2_1"]
+    assert rows
+    for row in rows:
+        assert row["physical_batch_size"] == expected[row["method"]][row["scale"]]
+        assert row["physical_batch_size"] % 2 == 0
+        assert row["validation_views"] == 500
+        if row["run_mode"] == "pilot":
+            assert row["training_epochs"] == 2

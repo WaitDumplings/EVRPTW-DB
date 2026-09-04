@@ -17,6 +17,10 @@ training_trajectory_count_by_method:
   evrptw_rl: 1
   drl_ts: 1
   terran: 100
+# On the Ada-only large scales AM completed sample-100 training. EVRPTW-RL
+# and DRL-TS remain at one trajectory because both OOM at batch 1 with 100.
+training_trajectory_count_by_method_scale:
+  am_evrptw: {Cus500: 100, Cus1000: 100}
 
 seeds: [1234]
 enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
@@ -29,7 +33,7 @@ scale_hardware:
   a6000: [Cus500, Cus1000]
 
 # One logical epoch is one outer optimizer update over the listed number of
-# base environments. Every scale now uses 1,000 logical epochs. Fairness is
+# base environments. Every scale uses 1,000 logical epochs. Fairness is
 # enforced within each scale: every method and seed sees the same deterministic
 # stream and effective batch. Cross-scale customer exposure is intentionally not
 # forced to match because the scales are not compared as one optimization task.
@@ -57,15 +61,17 @@ candidate_logical_batch:
   Cus100: 256
   Cus500: 64
   Cus1000: 2
+# Provisional Ada caps are restricted to exact divisors of the frozen logical
+# batch. The final two-update, 500-view sample-100 pilot remains the launch gate.
 physical_batch_caps:
-  am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 4, Cus1000: 1}
-  evrptw_rl: {Cus50: 128, Cus100: 64, Cus500: 2, Cus1000: 1}
-  drl_ts: {Cus50: 128, Cus100: 32, Cus500: 1, Cus1000: 1}
-  terran: {Cus50: 128, Cus100: 128, Cus500: 32, Cus1000: 1}
+  am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 8, Cus1000: 2}
+  evrptw_rl: {Cus50: 128, Cus100: 64, Cus500: 16, Cus1000: 2}
+  drl_ts: {Cus50: 128, Cus100: 32, Cus500: 8, Cus1000: 2}
+  terran: {Cus50: 128, Cus100: 128, Cus500: 64, Cus1000: 2}
 
 pilot:
   logical_updates: 2
-  validation_views: 8
+  validation_views: 500
 formal_candidate:
   selection_validation_views:
     Cus50: 500

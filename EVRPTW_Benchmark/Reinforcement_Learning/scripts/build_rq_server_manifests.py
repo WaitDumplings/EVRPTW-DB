@@ -131,7 +131,9 @@ def job(
         "planned_optimizer_updates": updates,
         "training_rollout_steps": int(cfg["rollout_steps"][scale]),
         "training_trajectory_count": int(
-            cfg["training_trajectory_count_by_method"][method]
+            cfg.get("training_trajectory_count_by_method_scale", {})
+            .get(method, {})
+            .get(scale, cfg["training_trajectory_count_by_method"][method])
         ),
         "physical_batch_size": physical,
         "effective_batch_size": logical,

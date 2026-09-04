@@ -201,6 +201,9 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         if method == "terran":
             trajectory_index = command.index("--n-traj")
             assert command[trajectory_index + 1] == "100"
+        else:
+            trajectory_index = command.index("--samples-per-instance")
+            assert command[trajectory_index + 1] == "100"
         final_validation_index = command.index("--final-validation-limit")
         assert command[final_validation_index + 1] == "500"
         assert "--data-passes" not in command
