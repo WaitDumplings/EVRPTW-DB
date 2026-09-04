@@ -8,20 +8,21 @@ from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests i
 )
 
 
-def test_four_server_queues_encode_exact_four_scale_72_run_design() -> None:
+def test_four_server_queues_encode_exact_four_scale_one_seed_design() -> None:
     queues = build()
     assert set(queues) == set(SERVERS)
     rows = [row for queue in queues.values() for row in queue]
     formal = [row for row in rows if row["run_mode"] == "full"]
     pilots = [row for row in rows if row["run_mode"] == "pilot"]
-    assert len(formal) == 72
+    assert len(formal) == 24
     assert len(pilots) == 20
-    assert len({row["job_id"] for row in formal}) == 72
+    assert len({row["job_id"] for row in formal}) == 24
+    assert {row["seed"] for row in rows} == {1234}
     assert Counter((row["representation"], row["condition"]) for row in formal) == {
-        ("G", "Full-support"): 48,
-        ("G", "Random-10%-support"): 6,
-        ("G", "Coverage-10%-support"): 6,
-        ("E", "Full-support"): 12,
+        ("G", "Full-support"): 16,
+        ("G", "Random-10%-support"): 2,
+        ("G", "Coverage-10%-support"): 2,
+        ("E", "Full-support"): 4,
     }
     assert all(row["formal_gate_file"] for row in formal)
     assert all(not row["training_stream_path"].startswith("/") for row in rows)

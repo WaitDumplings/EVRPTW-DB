@@ -28,13 +28,12 @@ The aggregate pilot report remains reviewer evidence, not a runtime dependency.
 
 No SHA-256 or per-file content hashing is performed by these scripts.
 
-## Active seed-wise four-scale candidate
+## Active single-seed four-scale candidate
 
 The generated manifests use runtime budget
-`drl_rq_runtime_budget_v6_scale_aware_gpu_val500_es3`. The launcher defaults
-to seed 1234; later seeds are opt-in through `DRL_SEEDS`. Scale ownership is
-strict: the three 2080 Ti servers run only Cus50/Cus100, while the two RTX 6000
-Ada GPUs run only Cus500/Cus1000.
+`drl_rq_runtime_budget_v6_scale_aware_gpu_val500_es3`. The generated manifests
+contain seed 1234 only. Scale ownership is strict: the three 2080 Ti servers run
+only Cus50/Cus100, while the two RTX 6000 Ada GPUs run only Cus500/Cus1000.
 
 | Scale | Hardware | Epochs | Environments/epoch | Total environments | Customer exposures |
 |---|---|---:|---:|---:|---:|
@@ -86,17 +85,17 @@ the last improvement. With the first checkpoint at epoch 50, the earliest stop
 is epoch 200. An early-stopped run is a valid completed training outcome and
 retains its best checkpoint and terminal report.
 
-The default one-seed schedule uses all four servers and all 13 GPUs. The three
-2080 Ti queues are balanced at five pilot/formal jobs per GPU and contain no
-Cus500/Cus1000 work. The Ada queue contains all larger-scale work and is balanced
-at sixteen pilot/formal jobs per GPU across all three registered seeds; selecting
-only seed 1234 filters the formal jobs at launch time. Its final makespan depends
-on the later 48 GiB batch calibration and is therefore not frozen here.
+The one-seed schedule uses all four servers and all 13 GPUs. The three 2080 Ti
+queues contain no Cus500/Cus1000 work. Their pilot/formal job counts are 13, 9,
+and 6 for `2080ti_4_1`, `2080ti_4_2`, and `2080ti_3_1`, respectively. The Ada
+queue contains all larger-scale work: eight pilots and eight formal jobs, split
+evenly across its two GPUs. Its final makespan depends on the later 48 GiB batch
+calibration and is therefore not frozen here.
 
 Every server wrapper accepts `--seed`; omitting it defaults to 1234. The pilot
-jobs themselves remain the frozen seed-1234 code/hardware gate, while the
-argument selects which formal stream is prepared and which full/resume/status
-jobs are addressed.
+jobs remain the frozen seed-1234 code/hardware gate. No other seed is registered
+in this manifest version, so another seed cannot be launched until the config
+and generated manifests are explicitly revised and reviewed.
 
 ```bash
 # Default seed 1234:
@@ -116,9 +115,8 @@ Standalone preparation accepts the same argument:
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/prepare_artifacts.sh --seed 1234
 ```
 
-For a later registered seed, replace 1234 with 2345 or 3456 consistently on
-all servers. `--seeds 1234,2345` and the legacy `DRL_SEEDS` environment variable
-remain available for intentional multi-seed queueing.
+The `--seed`/`--seeds` interface and legacy `DRL_SEEDS` environment variable are
+retained for future extensions, but currently only seed 1234 matches a job.
 
 If the restore directory has a different relative location, override only its
 root; the dataset remains below `EVRPTW_Dataset`:

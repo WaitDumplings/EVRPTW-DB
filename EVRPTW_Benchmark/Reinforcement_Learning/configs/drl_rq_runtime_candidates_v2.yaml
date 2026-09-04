@@ -18,7 +18,7 @@ training_trajectory_count_by_method:
   drl_ts: 1
   terran: 100
 
-seeds: [1234, 2345, 3456]
+seeds: [1234]
 enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
 rollout_steps: {Cus50: 80, Cus100: 140, Cus500: 600, Cus1000: 1200}
 
