@@ -1,7 +1,7 @@
 schema: drl_rq_runtime_candidates_v2
 status: pilot_candidates_not_formally_frozen
 protocol_id: drl_rq_protocol_frozen_v1
-runtime_budget_id: drl_rq_runtime_budget_v5_seedwise_pow2_fulltrain_val500_es3
+runtime_budget_id: drl_rq_runtime_budget_v6_scale_aware_gpu_val500_es3
 
 # Common publication inference budget. Each candidate is independently checked
 # by the canonical verifier; selection is feasible-first, then minimum distance.
@@ -19,8 +19,14 @@ training_trajectory_count_by_method:
   terran: 100
 
 seeds: [1234, 2345, 3456]
-enabled_scales: [Cus50, Cus100, Cus500]
-rollout_steps: {Cus50: 80, Cus100: 140, Cus500: 600}
+enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
+rollout_steps: {Cus50: 80, Cus100: 140, Cus500: 600, Cus1000: 1200}
+
+# Keep the 11 GiB servers on the two measured-safe scales. Larger graph scales
+# are queued only on the two 48 GiB Ada GPUs.
+scale_hardware:
+  2080ti: [Cus50, Cus100]
+  a6000: [Cus500, Cus1000]
 
 # One logical epoch is one outer optimizer update over the listed number of
 # base environments. Every scale now uses 1,000 logical epochs. Fairness is
@@ -31,14 +37,17 @@ candidate_logical_epochs:
   Cus50: 1000
   Cus100: 1000
   Cus500: 1000
+  Cus1000: 1000
 candidate_environments_per_epoch:
   Cus50: 1024
   Cus100: 256
   Cus500: 64
+  Cus1000: 2
 candidate_customer_exposure_budget:
   Cus50: 51200000
   Cus100: 25600000
   Cus500: 32000000
+  Cus1000: 2000000
 
 # The effective/logical batch equals environments_per_epoch, so every logical
 # epoch produces exactly one outer update. Physical batches remain architecture
@@ -47,11 +56,12 @@ candidate_logical_batch:
   Cus50: 1024
   Cus100: 256
   Cus500: 64
+  Cus1000: 2
 physical_batch_caps:
-  am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 4}
-  evrptw_rl: {Cus50: 128, Cus100: 64, Cus500: 2}
-  drl_ts: {Cus50: 128, Cus100: 32, Cus500: 1}
-  terran: {Cus50: 128, Cus100: 128, Cus500: 32}
+  am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 4, Cus1000: 1}
+  evrptw_rl: {Cus50: 128, Cus100: 64, Cus500: 2, Cus1000: 1}
+  drl_ts: {Cus50: 128, Cus100: 32, Cus500: 1, Cus1000: 1}
+  terran: {Cus50: 128, Cus100: 128, Cus500: 32, Cus1000: 1}
 
 pilot:
   logical_updates: 2
@@ -61,6 +71,7 @@ formal_candidate:
     Cus50: 500
     Cus100: 500
     Cus500: 500
+    Cus1000: 500
   final_validation_views: {}
   validation_every_epochs: 50
   early_stop_patience_validations: 3

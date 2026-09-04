@@ -567,7 +567,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-branch", default="drl-benchmark-adapters")
     parser.add_argument("--minimum-free-gib", type=float, default=20.0)
     parser.add_argument("--seeds", default="1234")
-    parser.add_argument("--scales", default="Cus50,Cus100,Cus500")
+    parser.add_argument("--scales", default="Cus50,Cus100,Cus500,Cus1000")
     parser.add_argument("--skip-gpu-preflight", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()

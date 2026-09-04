@@ -28,18 +28,20 @@ The aggregate pilot report remains reviewer evidence, not a runtime dependency.
 
 No SHA-256 or per-file content hashing is performed by these scripts.
 
-## Active seed-wise Cus50/Cus100/Cus500 candidate
+## Active seed-wise four-scale candidate
 
 The generated manifests use runtime budget
-`drl_rq_runtime_budget_v5_seedwise_pow2_fulltrain_val500_es3`. Cus1000 is
-not scheduled. The launcher defaults to seed 1234; later seeds are opt-in through
-`DRL_SEEDS`.
+`drl_rq_runtime_budget_v6_scale_aware_gpu_val500_es3`. The launcher defaults
+to seed 1234; later seeds are opt-in through `DRL_SEEDS`. Scale ownership is
+strict: the three 2080 Ti servers run only Cus50/Cus100, while the two RTX 6000
+Ada GPUs run only Cus500/Cus1000.
 
-| Scale | Epochs | Environments/epoch | Total environments | Customer exposures |
-|---|---:|---:|---:|---:|
-| Cus50 | 1,000 | 1,024 | 1,024,000 | 51,200,000 |
-| Cus100 | 1,000 | 256 | 256,000 | 25,600,000 |
-| Cus500 | 1,000 | 64 | 64,000 | 32,000,000 |
+| Scale | Hardware | Epochs | Environments/epoch | Total environments | Customer exposures |
+|---|---|---:|---:|---:|---:|
+| Cus50 | 2080 Ti | 1,000 | 1,024 | 1,024,000 | 51,200,000 |
+| Cus100 | 2080 Ti | 1,000 | 256 | 256,000 | 25,600,000 |
+| Cus500 | RTX 6000 Ada | 1,000 | 64 | 64,000 | 32,000,000 |
+| Cus1000 | RTX 6000 Ada | 1,000 | 2 | 2,000 | 2,000,000 |
 
 Training views follow a deterministic city-by-day stratified shuffle cycle. A
 stratum is exhausted before any view in that stratum is reused. All four methods
@@ -52,6 +54,14 @@ logical batch.
 | Cus50 | 1,024 | 128 | 128 | 128 | 1 / 8 / 8 / 8 |
 | Cus100 | 256 | 64 | 32 | 128 | 1 / 4 / 8 / 2 |
 | Cus500 | 4 | 2 | 1 | 32 | 16 / 32 / 64 / 2 |
+| Cus1000 | 1 | 1 | 1 | 1 | 2 / 2 / 2 / 2 |
+
+The Cus50/Cus100 rows were measured on 11 GiB RTX 2080 Ti cards with the
+complete two-epoch pilot followed by sampled best-of-100 validation. Observed
+process peaks were 4.72--8.88 GiB for Cus50 and 6.32--8.49 GiB for Cus100.
+Every listed 2080 Ti batch therefore completed below 10 GiB. The Cus500 and
+Cus1000 values are conservative Ada defaults, not final 48 GiB calibration;
+they may be increased only after running the local Ada pilot.
 
 Each formal job requests at most 1,000 logical epochs. At epochs 50, 100, ...,
 1000 it evaluates the same fixed 500 validation views. Validation and test both
@@ -76,10 +86,12 @@ the last improvement. With the first checkpoint at epoch 50, the earliest stop
 is epoch 200. An early-stopped run is a valid completed training outcome and
 retains its best checkpoint and terminal report.
 
-The default one-seed schedule uses all four servers and all 13 GPUs. The current
-measurement-based no-early-stop makespan estimate is about five to six days,
-dominated by DRL-TS Cus500. Early stopping can shorten this but is not assumed in
-the conservative estimate.
+The default one-seed schedule uses all four servers and all 13 GPUs. The three
+2080 Ti queues are balanced at five pilot/formal jobs per GPU and contain no
+Cus500/Cus1000 work. The Ada queue contains all larger-scale work and is balanced
+at sixteen pilot/formal jobs per GPU across all three registered seeds; selecting
+only seed 1234 filters the formal jobs at launch time. Its final makespan depends
+on the later 48 GiB batch calibration and is therefore not frozen here.
 
 Every server wrapper accepts `--seed`; omitting it defaults to 1234. The pilot
 jobs themselves remain the frozen seed-1234 code/hardware gate, while the

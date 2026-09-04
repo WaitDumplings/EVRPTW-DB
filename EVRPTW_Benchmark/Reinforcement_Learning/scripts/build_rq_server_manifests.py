@@ -31,11 +31,13 @@ TRAIN_INDEX = {
     "Cus50": "generation_plan/compatibility_cus50/train/view_index.parquet",
     "Cus100": "generation_plan/core/train/view_index.parquet",
     "Cus500": "generation_plan/core/train/view_index.parquet",
+    "Cus1000": "generation_plan/core/train/view_index.parquet",
 }
 VALIDATION_INDEX = {
     "Cus50": "generation_plan/compatibility_cus50/val/view_index.parquet",
     "Cus100": "generation_plan/core/val/view_index.parquet",
     "Cus500": "generation_plan/core/val/view_index.parquet",
+    "Cus1000": "generation_plan/core/val/view_index.parquet",
 }
 
 
@@ -180,37 +182,108 @@ def build() -> dict[str, list[dict[str, Any]]]:
     cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     queues: dict[str, list[dict[str, Any]]] = defaultdict(list)
     scales = tuple(cfg["enabled_scales"])
-    servers = list(SERVERS)
-    pilots = [
-        job(cfg, method=method, scale=scale, seed=1234, representation="G",
-            condition="Full-support", run_mode="pilot", hardware="2080ti")
-        for scale in scales for method in METHODS
-    ] + [
-        job(cfg, method=method, scale="Cus100", seed=1234, representation="E",
-            condition="Full-support", run_mode="pilot", hardware="2080ti")
-        for method in METHODS
+    assigned_scales = [
+        scale
+        for hardware_scales in cfg["scale_hardware"].values()
+        for scale in hardware_scales
     ]
-    assign_round_robin(queues, pilots, servers)
+    scale_hardware = {
+        scale: hardware
+        for hardware, hardware_scales in cfg["scale_hardware"].items()
+        for scale in hardware_scales
+    }
+    if (
+        len(assigned_scales) != len(set(assigned_scales))
+        or set(scale_hardware) != set(scales)
+    ):
+        raise ValueError("scale_hardware must assign every enabled scale exactly once")
+    servers_by_hardware = {
+        hardware: [server for server, spec in SERVERS.items() if spec[0] == hardware]
+        for hardware in {spec[0] for spec in SERVERS.values()}
+    }
 
-    formal = []
-    for seed in cfg["seeds"]:
-        formal.extend(
-            job(cfg, method=method, scale=scale, seed=seed, representation="G",
-                condition="Full-support", run_mode="full", hardware="2080ti")
-            for scale in scales for method in METHODS
+    pilots_by_hardware: dict[str, list[dict[str, Any]]] = {
+        hardware: [] for hardware in servers_by_hardware
+    }
+    for scale in scales:
+        hardware = scale_hardware[scale]
+        pilots_by_hardware[hardware].extend(
+            job(
+                cfg,
+                method=method,
+                scale=scale,
+                seed=1234,
+                representation="G",
+                condition="Full-support",
+                run_mode="pilot",
+                hardware=hardware,
+            )
+            for method in METHODS
         )
-        formal.extend(
-            job(cfg, method=method, scale="Cus100", seed=seed, representation="G",
-                condition=condition, run_mode="full", hardware="2080ti")
+    pilots_by_hardware["2080ti"].extend(
+        job(
+            cfg,
+            method=method,
+            scale="Cus100",
+            seed=1234,
+            representation="E",
+            condition="Full-support",
+            run_mode="pilot",
+            hardware="2080ti",
+        )
+        for method in METHODS
+    )
+    for hardware, pilots in pilots_by_hardware.items():
+        assign_round_robin(queues, pilots, servers_by_hardware[hardware])
+
+    formal_by_hardware: dict[str, list[dict[str, Any]]] = {
+        hardware: [] for hardware in servers_by_hardware
+    }
+    for seed in cfg["seeds"]:
+        for scale in scales:
+            hardware = scale_hardware[scale]
+            formal_by_hardware[hardware].extend(
+                job(
+                    cfg,
+                    method=method,
+                    scale=scale,
+                    seed=seed,
+                    representation="G",
+                    condition="Full-support",
+                    run_mode="full",
+                    hardware=hardware,
+                )
+                for method in METHODS
+            )
+        formal_by_hardware["2080ti"].extend(
+            job(
+                cfg,
+                method=method,
+                scale="Cus100",
+                seed=seed,
+                representation="G",
+                condition=condition,
+                run_mode="full",
+                hardware="2080ti",
+            )
             for condition in ("Random-10%-support", "Coverage-10%-support")
             for method in ("am_evrptw", "terran")
         )
-        formal.extend(
-            job(cfg, method=method, scale="Cus100", seed=seed, representation="E",
-                condition="Full-support", run_mode="full", hardware="2080ti")
+        formal_by_hardware["2080ti"].extend(
+            job(
+                cfg,
+                method=method,
+                scale="Cus100",
+                seed=seed,
+                representation="E",
+                condition="Full-support",
+                run_mode="full",
+                hardware="2080ti",
+            )
             for method in METHODS
         )
-    assign_round_robin(queues, formal, servers)
+    for hardware, formal in formal_by_hardware.items():
+        assign_round_robin(queues, formal, servers_by_hardware[hardware])
     return queues
 
 
