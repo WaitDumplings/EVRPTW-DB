@@ -20,4 +20,6 @@ exec python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.drl_job_runtime \
   --local-gpu-count "$DRL_LOCAL_GPU_COUNT" \
   --gpu-name-pattern "$DRL_GPU_NAME_PATTERN" \
   --expected-branch "$DRL_EXPECTED_BRANCH" \
+  --seeds "$DRL_SEEDS" \
+  --scales "$DRL_SCALES" \
   "$@"

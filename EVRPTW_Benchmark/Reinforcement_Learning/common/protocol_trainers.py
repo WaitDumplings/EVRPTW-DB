@@ -230,6 +230,13 @@ def train_reinforce_data_passes(
                 "fixed-epoch validation checkpoint count does not match "
                 "--validation-every-epochs"
             )
+    early_stop_patience = int(
+        getattr(args, "early_stop_patience_validations", 0) or 0
+    )
+    if early_stop_patience < 0:
+        raise ValueError("--early-stop-patience-validations cannot be negative")
+    if early_stop_patience and fixed_epochs is None:
+        raise ValueError("early stopping is supported only with --training-epochs")
     physical, effective = require_registered_batches(args, legacy_batch_size)
     stream_path = getattr(args, "training_stream_path", None)
     expected_fixed_instances = fixed_epochs * effective if fixed_epochs is not None else None
@@ -288,6 +295,15 @@ def train_reinforce_data_passes(
     if fixed_epochs is not None and completed_logical_epochs and stream_path is None:
         raise ValueError("fixed-epoch resume requires an explicit training stream")
     best_key = tuple(resume_extra.get("best_validation_key", [-math.inf, -math.inf]))
+    validation_checks_without_improvement = int(
+        resume_extra.get("validation_checks_without_improvement", 0)
+    )
+    completed_validation_checks = int(
+        resume_extra.get("completed_validation_checks", 0)
+    )
+    early_stopped = False
+    early_stop_epoch: int | None = None
+    terminal_logical_epoch = completed_logical_epochs
     baseline_probe_size = max(
         0, int(getattr(args, "baseline_eval_size", 64))
     )
@@ -358,6 +374,7 @@ def train_reinforce_data_passes(
         ):
             logical_epoch_started = time.perf_counter()
             logical_epoch = completed_logical_epochs + group_index + 1
+            terminal_logical_epoch = logical_epoch
             group_soft = soft
             if fixed_epochs is not None and soft_stage_fraction:
                 group_soft = logical_epoch <= int(
@@ -541,13 +558,31 @@ def train_reinforce_data_passes(
                             "split": "validation",
                         }
                     )
-                    append_jsonl(output / "validation_history.jsonl", validation)
                     is_best = validation_key(validation) > tuple(best_key)
                     if is_best:
                         best_key = validation_key(validation)
+                        validation_checks_without_improvement = 0
+                    else:
+                        validation_checks_without_improvement += 1
+                    completed_validation_checks += 1
+                    early_stop_due = bool(
+                        early_stop_patience
+                        and validation_checks_without_improvement
+                        >= early_stop_patience
+                    )
+                    validation.update(
+                        {
+                            "checkpoint_selected": is_best,
+                            "validation_checks_without_improvement": validation_checks_without_improvement,
+                            "early_stop_due": early_stop_due,
+                        }
+                    )
+                    append_jsonl(output / "validation_history.jsonl", validation)
                     extra = {
                         "logical_epoch": logical_epoch,
                         "best_validation_key": list(best_key),
+                        "validation_checks_without_improvement": validation_checks_without_improvement,
+                        "completed_validation_checks": completed_validation_checks,
                         "ema_cost": ema_cost,
                         "baseline_eval_count": baseline_eval_count,
                         "baseline_update_count": baseline_update_count,
@@ -590,18 +625,23 @@ def train_reinforce_data_passes(
                     state.last_checkpoint = str(checkpoint)
                     state.atomic_write(output / "data_pass_state.json")
                     policy.train()
+                    if early_stop_due and logical_epoch < fixed_epochs:
+                        early_stopped = True
+                        early_stop_epoch = logical_epoch
+                        complete_pass = False
+                        break
 
         if instances_seen == 0:
             raise RuntimeError("data pass yielded no training instances")
         if fixed_epochs is not None:
             if (
                 optimizer_steps - starting_optimizer_steps
-                != fixed_epochs - completed_logical_epochs
+                != terminal_logical_epoch - completed_logical_epochs
             ):
                 raise RuntimeError(
                     "logical epoch count does not match optimizer update count"
                 )
-            expected_instances = (fixed_epochs - completed_logical_epochs) * effective
+            expected_instances = (terminal_logical_epoch - completed_logical_epochs) * effective
             if instances_seen != expected_instances:
                 raise RuntimeError(
                     f"incomplete fixed-epoch budget: {instances_seen} != {expected_instances}"
@@ -670,7 +710,13 @@ def train_reinforce_data_passes(
             "baseline_eval_count": baseline_eval_count,
             "baseline_update_count": baseline_update_count,
             "pilot_partial_pass": not complete_pass,
-            "logical_epoch": fixed_epochs if fixed_epochs is not None else None,
+            "logical_epoch": (
+                terminal_logical_epoch if fixed_epochs is not None else None
+            ),
+            "validation_checks_without_improvement": (
+                validation_checks_without_improvement
+            ),
+            "completed_validation_checks": completed_validation_checks,
         }
         _save_checkpoint(
             checkpoint,
@@ -792,7 +838,7 @@ def train_reinforce_data_passes(
 
     terminal = {
         "schema": "drl_training_result_v1",
-        "status": "pilot_partial" if args.pilot_mode else "passed",
+        "status": "pilot_partial" if args.pilot_mode else ("early_stopped" if early_stopped else "passed"),
         "method": method,
         "protocol_id": args.protocol_id,
         "budget_mode": (
@@ -800,7 +846,9 @@ def train_reinforce_data_passes(
             ("fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes")
         ),
         "requested_training_epochs": fixed_epochs,
-        "completed_training_epochs": fixed_epochs if fixed_epochs is not None else None,
+        "completed_training_epochs": terminal_logical_epoch if fixed_epochs is not None else None,
+        "early_stopped": early_stopped,
+        "early_stop_epoch": early_stop_epoch,
         "logical_environments_per_epoch": effective if fixed_epochs is not None else None,
         "requested_data_passes": int(args.data_passes) if args.data_passes is not None else None,
         "completed_data_passes": int(state.completed_data_passes),
@@ -820,6 +868,8 @@ def train_reinforce_data_passes(
             validation_every_epochs if fixed_epochs is not None else None
         ),
         "validation_checkpoints": int(args.validation_checkpoints),
+        "completed_validation_checkpoints": completed_validation_checks,
+        "early_stop_patience_validations": early_stop_patience,
         "final_validation_limit": final_validation_limit,
         "final_validation_audit": (
             str(final_validation_path) if final_validation_limit > 0 else None

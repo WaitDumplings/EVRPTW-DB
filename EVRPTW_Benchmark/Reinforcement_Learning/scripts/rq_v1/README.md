@@ -28,45 +28,64 @@ The aggregate pilot report remains reviewer evidence, not a runtime dependency.
 
 No SHA-256 or per-file content hashing is performed by these scripts.
 
-## Active Cus1000 batch-two candidate
+## Active seed-wise Cus50/Cus100/Cus500 candidate
 
 The generated manifests use runtime budget
-`drl_rq_runtime_budget_v4_cus1000_b2_val100`:
+`drl_rq_runtime_budget_v5_seedwise_pow2_fulltrain_val500_es3`. Cus1000 is
+not scheduled. The launcher defaults to seed 1234; later seeds are opt-in through
+`DRL_SEEDS`.
 
-| Scale | Epochs | Environments/epoch | Effective batch | Total environments | Customer exposures |
-|---|---:|---:|---:|---:|---:|
-| Cus50 | 1,000 | 200 | 200 | 200,000 | 10,000,000 |
-| Cus100 | 1,000 | 50 | 50 | 50,000 | 5,000,000 |
-| Cus500 | 1,000 | 4 | 4 | 4,000 | 2,000,000 |
-| Cus1000 | 1,000 | 2 | 2 | 2,000 | 2,000,000 |
+| Scale | Epochs | Environments/epoch | Total environments | Customer exposures |
+|---|---:|---:|---:|---:|
+| Cus50 | 1,000 | 1,024 | 1,024,000 | 51,200,000 |
+| Cus100 | 1,000 | 256 | 256,000 | 25,600,000 |
+| Cus500 | 1,000 | 64 | 64,000 | 32,000,000 |
 
-The effective batch is the number of distinct base instances consumed per
-logical epoch. Physical batches are only a memory implementation detail; exact
-gradient accumulation preserves the effective batch for the three REINFORCE
-models. TERRAN receives the same base-instance count before its paper-specific
-PPO minibatch updates.
+Training views follow a deterministic city-by-day stratified shuffle cycle. A
+stratum is exhausted before any view in that stratum is reused. All four methods
+therefore consume the same seed-specific logical stream within a scale. Physical
+batches differ only to fit GPU memory; exact accumulation preserves the common
+logical batch.
 
 | Scale | AM physical | EVRPTW-RL physical | DRL-TS physical | TERRAN physical | Microbatches AM/RL/TS/TERRAN |
 |---|---:|---:|---:|---:|---:|
-| Cus50 | 200 | 100 | 50 | 200 | 1 / 2 / 4 / 1 |
-| Cus100 | 50 | 25 | 10 | 50 | 1 / 2 / 5 / 1 |
-| Cus500 | 4 | 2 | 1 | 4 | 1 / 2 / 4 / 1 |
-| Cus1000 | 1 | 1 | 1 | 1 | 2 / 2 / 2 / 2 |
+| Cus50 | 1,024 | 128 | 128 | 256 | 1 / 8 / 8 / 4 |
+| Cus100 | 256 | 64 | 32 | 256 | 1 / 4 / 8 / 1 |
+| Cus500 | 4 | 2 | 1 | 64 | 16 / 32 / 64 / 1 |
 
-Every formal job runs 1,000 logical epochs. Validation is evaluated at epochs
-50, 100, ..., 1000. Cus50/100/500 use a fixed 500-view selection set; Cus1000
-uses a fixed 100-view selection set. Selection first maximizes independent-
-verifier feasibility rate and then minimizes mean verified directed distance.
-The winning checkpoint is written as both `best.ckpt` and the backward-
-compatible `checkpoint_selected.pt`; all 20 records remain in
-`validation_history.jsonl`. After selection, Cus1000 runs one full 500-view val
-audit and writes `validation_final_audit.json` without changing the selected
-checkpoint.
+Each formal job requests at most 1,000 logical epochs. At epochs 50, 100, ...,
+1000 it evaluates the same fixed 500 validation views. Checkpoint selection
+first maximizes independent-verifier feasibility rate and then minimizes mean
+verified directed distance. Validation/test reward and penalties are not added
+to the reported distance. The selected checkpoint is written as both `best.ckpt`
+and the backward-compatible `checkpoint_selected.pt`; all checks are retained
+in `validation_history.jsonl`.
 
-The linear Cus1000 planning value is now approximately 48 hours per model/seed
-job on one A6000, not an enforced timeout. With 12 jobs and two A6000 GPUs, the
-idealized training-only queue is six waves, or about 12 days. A6000 pilot
-evidence is still mandatory before `full` can be authorized.
+Early stopping uses validation-check patience, because no metric exists between
+50-epoch validation points. Three consecutive validation checks without a
+lexicographic improvement stop the job, equivalent to 150 training epochs since
+the last improvement. With the first checkpoint at epoch 50, the earliest stop
+is epoch 200. An early-stopped run is a valid completed training outcome and
+retains its best checkpoint and terminal report.
+
+The default one-seed schedule uses all four servers and all 13 GPUs. The current
+measurement-based no-early-stop makespan estimate is about five to six days,
+dominated by DRL-TS Cus500. Early stopping can shorten this but is not assumed in
+the conservative estimate.
+
+To launch only seed 1234 (the default):
+
+```bash
+export DRL_SEEDS=1234
+export DRL_SCALES=Cus50,Cus100,Cus500
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/pilot.sh
+# Inspect status/logs; after every local pilot passes:
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/full.sh
+```
+
+To run another seed later, set `DRL_SEEDS` to that seed before artifact
+preparation and `full.sh`. Do not combine seeds unless concurrent queueing is
+intentional.
 
 If the restore directory has a different relative location, override only its
 root; the dataset remains below `EVRPTW_Dataset`:

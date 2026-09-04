@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/dataset_root.sh"
 DATASET_ROOT="$(resolve_evrptw_dataset_root "$REPO_ROOT")"
 OUTPUT_ROOT="${EVRPTW_OUTPUT_ROOT:-$REPO_ROOT/EVRPTW_Benchmark/results/DRL_rq_v1}"
 ARTIFACT_ROOT="$OUTPUT_ROOT/artifacts"
-RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v4_cus1000_b2_val100"
+RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v5_seedwise_pow2_fulltrain_val500_es3"
 STREAM_ROOT="$ARTIFACT_ROOT/streams/$RUNTIME_BUDGET_ID"
 TRAIN_CORE="$DATASET_ROOT/generation_plan/core/train/view_index.parquet"
 TRAIN_CUS50="$DATASET_ROOT/generation_plan/compatibility_cus50/train/view_index.parquet"
@@ -15,7 +15,9 @@ FAMILY_ROOT="$DATASET_ROOT/materialized/families"
 FAMILY_METRICS="$DATASET_ROOT/reports/phase1/family_metrics.parquet"
 SUPPORT_ROOT="$ARTIFACT_ROOT/supports"
 E_MANIFEST="$ARTIFACT_ROOT/euclidean/euclidean_calibration_manifest.json"
-MARKER="$ARTIFACT_ROOT/preparation_${RUNTIME_BUDGET_ID}.json"
+SEED_SELECTION="${DRL_SEEDS:-1234}"
+SEED_TAG="${SEED_SELECTION//,/_}"
+MARKER="$ARTIFACT_ROOT/preparation_${RUNTIME_BUDGET_ID}_seeds_${SEED_TAG}.json"
 
 cd "$REPO_ROOT"
 for required in "$TRAIN_CORE" "$TRAIN_CUS50" "$FAMILY_METRICS"; do
@@ -28,7 +30,7 @@ import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 d = json.loads(p.read_text())
 paths = [pathlib.Path(item) for item in d.get("required_artifacts", [])]
-valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v4_cus1000_b2_val100"
+valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v5_seedwise_pow2_fulltrain_val500_es3"
 valid_dataset = pathlib.Path(d.get("dataset_root", "")).resolve() == pathlib.Path(sys.argv[2]).resolve()
 raise SystemExit(
     0 if valid_budget and valid_dataset and paths and all(path.is_file() for path in paths) else 1
@@ -60,24 +62,26 @@ declare -A INDEX=(
   [Cus50]="$TRAIN_CUS50"
   [Cus100]="$TRAIN_CORE"
   [Cus500]="$TRAIN_CORE"
-  [Cus1000]="$TRAIN_CORE"
 )
 declare -A FORMAL_EXPOSURE=(
-  [Cus50]=10000000
-  [Cus100]=5000000
-  [Cus500]=2000000
-  [Cus1000]=2000000
+  [Cus50]=51200000
+  [Cus100]=25600000
+  [Cus500]=32000000
 )
 declare -A PILOT_EXPOSURE=(
-  [Cus50]=20000
-  [Cus100]=10000
-  [Cus500]=4000
-  [Cus1000]=4000
+  [Cus50]=102400
+  [Cus100]=51200
+  [Cus500]=64000
 )
-SEEDS=(1234 2345 3456)
+IFS=',' read -r -a SEEDS <<< "$SEED_SELECTION"
+for seed in "${SEEDS[@]}"; do
+  [[ "$seed" =~ ^[0-9]+$ ]] || {
+    echo "Invalid DRL seed selection: $SEED_SELECTION" >&2; exit 2;
+  }
+done
 REQUIRED=("$E_MANIFEST" "$SUPPORT_ROOT/support_selection_manifest.json")
 
-for scale in Cus50 Cus100 Cus500 Cus1000; do
+for scale in Cus50 Cus100 Cus500; do
   for seed in "${SEEDS[@]}"; do
     formal="$STREAM_ROOT/formal/Full-support/$scale/seed_${seed}.parquet"
     mkdir -p "$(dirname "$formal")"
@@ -102,7 +106,7 @@ for support in Random-10%-support Coverage-10%-support; do
     mkdir -p "$(dirname "$stream")"
     python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_training_stream \
       --index "$TRAIN_CORE" --scale Cus100 --seed "$seed" \
-      --customer-exposures 5000000 \
+      --customer-exposures 25600000 \
       --allowed-family-ids "$SUPPORT_ROOT/$support.txt" \
       --output "$stream"
     REQUIRED+=("$stream" "$stream.manifest.json")
@@ -114,7 +118,7 @@ import json, os, pathlib, sys, tempfile
 target = pathlib.Path(sys.argv[1])
 payload = {
     "schema": "drl_rq_artifact_preparation_v2",
-    "runtime_budget_id": "drl_rq_runtime_budget_v4_cus1000_b2_val100",
+    "runtime_budget_id": "drl_rq_runtime_budget_v5_seedwise_pow2_fulltrain_val500_es3",
     "status": "passed",
     "dataset_root": sys.argv[2],
     "required_artifacts": sys.argv[3:],

@@ -217,3 +217,36 @@ def test_gpu_name_pattern_supports_controlled_aliases() -> None:
     assert RUNTIME.gpu_name_matches("NVIDIA RTX A6000", accepted)
     assert RUNTIME.gpu_name_matches("NVIDIA RTX 6000 Ada Generation", accepted)
     assert not RUNTIME.gpu_name_matches("NVIDIA GeForce RTX 3090", accepted)
+
+
+def test_job_loading_filters_formal_seed_and_scale_but_keeps_seed1234_pilots(
+    tmp_path: Path,
+) -> None:
+    rows = []
+    for mode in ("pilot", "full"):
+        for seed in (1234, 2345):
+            for scale in ("Cus50", "Cus1000"):
+                rows.append(
+                    {
+                        "job_id": f"{mode}-{seed}-{scale}",
+                        "run_mode": mode,
+                        "seed": seed,
+                        "scale": scale,
+                        "global_slot": 0,
+                        "queue_position": len(rows),
+                        "enabled": True,
+                    }
+                )
+    manifest = tmp_path / "jobs.jsonl"
+    manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    formal = RUNTIME.load_jobs(
+        manifest, {0}, "full", seeds={2345}, scales={"Cus50"}
+    )
+    pilots = RUNTIME.load_jobs(
+        manifest, {0}, "pilot", seeds={2345}, scales={"Cus50"}
+    )
+    assert [row["job_id"] for row in formal] == ["full-2345-Cus50"]
+    assert {row["job_id"] for row in pilots} == {
+        "pilot-1234-Cus50",
+        "pilot-2345-Cus50",
+    }

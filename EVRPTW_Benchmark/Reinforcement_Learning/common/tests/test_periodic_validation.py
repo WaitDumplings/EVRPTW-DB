@@ -127,3 +127,87 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
     assert final_audit["instances"] == 3
     assert final_audit["selection_logical_epoch"] == 4
     assert final_audit["selection_changed"] is False
+
+
+def test_fixed_epoch_early_stop_uses_validation_patience(tmp_path, monkeypatch) -> None:
+    validation_calls = []
+
+    def flat_validation(instances, _solve, *, seed):
+        count = len(list(instances))
+        validation_calls.append(seed)
+        return {
+            "schema": "drl_validation_summary_v1",
+            "instances": count,
+            "complete_and_feasible": count,
+            "complete_and_feasible_rate": 1.0,
+            "mean_verified_distance_km": 10.0,
+            "verifier_summary_passed": True,
+            "rows": [],
+        }
+
+    monkeypatch.setattr(
+        protocol_trainers, "make_validation_pool", lambda *_args, **_kwargs: _ValidationPool()
+    )
+    monkeypatch.setattr(protocol_trainers, "verified_validation", flat_validation)
+    policy = torch.nn.Linear(1, 1, bias=False)
+    optimizer = torch.optim.SGD(policy.parameters(), lr=0.01)
+
+    def result(instances):
+        count = len(instances)
+        return SimpleNamespace(
+            cost=torch.ones(count, 1),
+            objective=torch.ones(count, 1),
+            feasible=torch.ones(count, 1, dtype=torch.bool),
+            log_likelihood=policy.weight.sum().expand(count, 1),
+            environment_transitions=count,
+            trajectory_steps=torch.ones(count, 1, dtype=torch.int64),
+            rollout_budget_exhausted=torch.zeros(count, 1, dtype=torch.bool),
+        )
+
+    args = SimpleNamespace(
+        training_epochs=10,
+        data_passes=None,
+        max_batches_per_pass=None,
+        pilot_mode=False,
+        validation_every_epochs=2,
+        validation_checkpoints=5,
+        early_stop_patience_validations=2,
+        physical_batch_size=1,
+        effective_batch_size=2,
+        training_stream_path=tmp_path / "stream.parquet",
+        customer_exposure_budget=1_000,
+        scale="Cus50",
+        output_dir=tmp_path / "early-stop",
+        protocol_id="early-stop-test",
+        resume=False,
+        validation_limit=2,
+        final_validation_limit=0,
+        validation_every_passes=5,
+        seed=1234,
+        baseline_eval_size=0,
+        exposure_checkpoints="",
+        gpu_hour_checkpoints="",
+        device="cpu",
+        max_grad_norm=1.0,
+        training_rollout_steps=80,
+    )
+    protocol_trainers.train_reinforce_data_passes(
+        method="DRL-TS",
+        args=args,
+        pool=_Pool(),
+        policy=policy,
+        optimizer=optimizer,
+        make_actor=lambda instances, _soft, _seed: result(instances),
+        make_baseline=lambda _model, instances, _soft, _seed: result(instances),
+        training_cost=lambda value: value.cost,
+        objective_distance=lambda value: value.objective,
+        feasible=lambda value: value.feasible,
+        validation_solve=lambda *_args: {},
+        legacy_batch_size=1,
+    )
+    terminal = json.loads((args.output_dir / "training_result.json").read_text())
+    assert terminal["status"] == "early_stopped"
+    assert terminal["requested_training_epochs"] == 10
+    assert terminal["completed_training_epochs"] == 6
+    assert terminal["completed_validation_checkpoints"] == 3
+    assert len(validation_calls) == 3

@@ -87,9 +87,20 @@ def record_a6000_overflow(job: dict[str, Any], context: dict[str, Any]) -> Path:
     return path
 
 
-def load_jobs(path: Path, slots: set[int], mode: str) -> list[dict[str, Any]]:
+def load_jobs(
+    path: Path,
+    slots: set[int],
+    mode: str,
+    *,
+    seeds: set[int] | None = None,
+    scales: set[str] | None = None,
+) -> list[dict[str, Any]]:
     jobs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     jobs = [job for job in jobs if int(job["global_slot"]) in slots and job.get("enabled", True)]
+    if scales is not None:
+        jobs = [job for job in jobs if str(job.get("scale")) in scales]
+    if seeds is not None and mode != "pilot":
+        jobs = [job for job in jobs if int(job.get("seed", -1)) in seeds]
     if mode in {"pilot"}:
         jobs = [job for job in jobs if job["run_mode"] == "pilot"]
     elif mode in {"full", "resume"}:
@@ -238,6 +249,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(dataset / "materialized" / "families"),
             "--validation-limit",
             str(job["validation_views"]),
+            "--early-stop-patience-validations",
+            str(job.get("early_stop_patience_validations", 0)),
             "--final-validation-limit",
             str(job.get("final_validation_views", 0)),
             "--validation-every-epochs",
@@ -282,6 +295,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(dataset / "materialized" / "families"),
             "--validation-limit",
             str(job["validation_views"]),
+            "--early-stop-patience-validations",
+            str(job.get("early_stop_patience_validations", 0)),
             "--final-validation-limit",
             str(job.get("final_validation_views", 0)),
             "--validation-every-epochs",
@@ -463,11 +478,21 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         if job["kind"] in {"train", "pilot"}
         else ((out / "summary.csv").is_file() and (out / "routes.jsonl").is_file())
     )
+    training_result_path = out / "training_result.json"
+    training_result = (
+        json.loads(training_result_path.read_text(encoding="utf-8"))
+        if job["kind"] in {"train", "pilot"} and training_result_path.is_file()
+        else {}
+    )
     result = {
         "schema": "drl_job_result_v1",
         "job_id": job["job_id"],
         "status": "passed" if passed else "failed",
         "returncode": returncode,
+        "training_outcome": training_result.get("status"),
+        "completed_training_epochs": training_result.get("completed_training_epochs"),
+        "early_stopped": bool(training_result.get("early_stopped", False)),
+        "early_stop_epoch": training_result.get("early_stop_epoch"),
         "wall_time_s": time.perf_counter() - started,
         "peak_cpu_memory_bytes": peak_cpu_memory_bytes,
         "peak_gpu_memory_bytes": peak_gpu_memory_bytes,
@@ -531,6 +556,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-name-pattern", required=True)
     parser.add_argument("--expected-branch", default="drl-benchmark-adapters")
     parser.add_argument("--minimum-free-gib", type=float, default=20.0)
+    parser.add_argument("--seeds", default="1234")
+    parser.add_argument("--scales", default="Cus50,Cus100,Cus500")
     parser.add_argument("--skip-gpu-preflight", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -539,14 +566,22 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     slots = {int(value) for value in args.slots.split(",") if value.strip()}
-    jobs = load_jobs(args.manifest, slots, args.mode)
+    seeds = {int(value) for value in args.seeds.split(",") if value.strip()}
+    scales = {value.strip() for value in args.scales.split(",") if value.strip()}
+    if not seeds:
+        raise ValueError("--seeds must select at least one seed")
+    if not scales:
+        raise ValueError("--scales must select at least one scale")
+    jobs = load_jobs(args.manifest, slots, args.mode, seeds=seeds, scales=scales)
     context = preflight(args, jobs)
     if args.mode == "status":
         rows = []
         by_mode: dict[str, dict[str, int]] = {}
         for mode in ("pilot", "full", "evaluate"):
             mode_rows = []
-            for job in load_jobs(args.manifest, slots, mode):
+            for job in load_jobs(
+                args.manifest, slots, mode, seeds=seeds, scales=scales
+            ):
                 row = {
                     "job_id": job["job_id"],
                     "complete": job_complete(job, output_dir(job, context)),
@@ -571,7 +606,7 @@ def main() -> None:
         return
     if args.mode in {"full", "resume"}:
         require_server_local_pilots(
-            context, load_jobs(args.manifest, slots, "pilot")
+            context, load_jobs(args.manifest, slots, "pilot", scales=scales)
         )
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)

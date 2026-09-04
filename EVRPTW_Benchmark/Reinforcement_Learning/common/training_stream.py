@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 
-STREAM_SCHEMA = "drl_training_id_stream_v1"
+STREAM_SCHEMA = "drl_training_id_stream_v2"
 REQUIRED_INDEX_COLUMNS = {
     "view_id",
     "family_id",
@@ -68,9 +68,11 @@ def build_training_stream(
 ) -> tuple[pd.DataFrame, dict]:
     """Build one method-independent city/day-type stratified ID stream.
 
-    Sampling is with replacement inside each stratum. Exact proportional
-    quotas are assigned by largest remainder and the combined draws are
-    deterministically shuffled. No content hashes are computed.
+    Exact proportional quotas are assigned by largest remainder. Within each
+    stratum, every view is visited once in a deterministic shuffled cycle
+    before any view is reused; additional cycles receive independent seeded
+    permutations. The combined rows are deterministically shuffled. No content
+    hashes are computed.
     """
 
     missing = sorted(REQUIRED_INDEX_COLUMNS.difference(index.columns))
@@ -112,7 +114,15 @@ def build_training_stream(
             [int(seed), int(stratum_index), 0x5354524D]
         )
         rng = np.random.default_rng(sequence)
-        draws = rng.integers(0, len(group), size=quota)
+        full_cycles, remainder = divmod(quota, len(group))
+        cycle_draws = [rng.permutation(len(group)) for _ in range(full_cycles)]
+        if remainder:
+            cycle_draws.append(rng.permutation(len(group))[:remainder])
+        draws = (
+            np.concatenate(cycle_draws)
+            if cycle_draws
+            else np.empty(0, dtype=np.int64)
+        )
         sampled_parts.append(group.iloc[draws].copy())
     sampled = pd.concat(sampled_parts, ignore_index=True)
     shuffle_rng = np.random.default_rng(
@@ -139,7 +149,7 @@ def build_training_stream(
         )
     manifest = {
         "schema": STREAM_SCHEMA,
-        "sampling": "city_day_type_stratified_with_replacement_largest_remainder_v1",
+        "sampling": "city_day_type_stratified_shuffle_cycle_largest_remainder_v2",
         "seed": int(seed),
         "scale": selected_scale,
         "sample_count": len(stream),
@@ -148,7 +158,8 @@ def build_training_stream(
         "pool_view_count": len(frame),
         "realized_unique_family_count": int(stream["family_id"].nunique()),
         "realized_unique_view_count": int(stream["view_id"].nunique()),
-        "replacement": True,
+        "replacement": False,
+        "reuse_policy": "only_after_stratum_cycle_exhaustion",
         "method_independent": True,
         "strata": strata,
         "file_hash_validation_performed": False,

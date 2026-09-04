@@ -715,6 +715,33 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 else -math.inf
             ),
         )
+    early_stop_patience = int(
+        train_cfg.get("early_stop_patience_validations", 0) or 0
+    )
+    if early_stop_patience < 0:
+        raise ValueError("early_stop_patience_validations cannot be negative")
+    completed_validation_checks = 0
+    validation_checks_without_improvement = 0
+    history_best_key = (-math.inf, -math.inf)
+    if validation_history_path.is_file():
+        for line in validation_history_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            distance = row.get("mean_verified_distance_km")
+            key = (
+                float(row["complete_and_feasible_rate"]),
+                -float(distance) if distance is not None else -math.inf,
+            )
+            completed_validation_checks += 1
+            if key > history_best_key:
+                history_best_key = key
+                validation_checks_without_improvement = 0
+            else:
+                validation_checks_without_improvement += 1
+    early_stopped = False
+    early_stop_epoch: int | None = None
+    completed_epoch = start_epoch - 1
     exposure_checkpoints = tuple(int(value) for value in protocol_cfg.get("exposure_checkpoints", []))
     gpu_hour_checkpoints = tuple(float(value) for value in protocol_cfg.get("gpu_hour_checkpoints", []))
     saved_exposure = {
@@ -820,6 +847,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             f"pbrs_annealing={cfg.get('pbrs', {}).get('annealing', {})}",
         )
         for epoch in range(start_epoch, epochs + 1):
+            completed_epoch = epoch
             epoch_seed = seed + epoch * 100_000
             torch.manual_seed(epoch_seed)
             if torch.cuda.is_available():
@@ -1060,6 +1088,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 )
             eval_row: dict[str, Any] = {}
             eval_wall_time_s = 0.0
+            early_stop_due = False
             should_eval = eval_interval > 0 and (epoch % eval_interval == 0 or epoch == epochs)
             if should_eval:
                 eval_start = time.perf_counter()
@@ -1094,7 +1123,6 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                             == int(eval_row["eval_num_instances"])
                         ),
                     }
-                    append_jsonl(validation_history_path, validation)
                     selection_key = (
                         validation["complete_and_feasible_rate"],
                         (
@@ -1104,7 +1132,26 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                             else -math.inf
                         ),
                     )
-                    if selection_key > best_eval_key:
+                    is_best = selection_key > best_eval_key
+                    if is_best:
+                        validation_checks_without_improvement = 0
+                    else:
+                        validation_checks_without_improvement += 1
+                    completed_validation_checks += 1
+                    early_stop_due = bool(
+                        early_stop_patience
+                        and validation_checks_without_improvement
+                        >= early_stop_patience
+                    )
+                    validation.update(
+                        {
+                            "checkpoint_selected": is_best,
+                            "validation_checks_without_improvement": validation_checks_without_improvement,
+                            "early_stop_due": early_stop_due,
+                        }
+                    )
+                    append_jsonl(validation_history_path, validation)
+                    if is_best:
                         best_eval_key = selection_key
                         save_checkpoint(
                             best_checkpoint_path,
@@ -1263,7 +1310,26 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     last_checkpoint=str(latest),
                 )
                 state.atomic_write(out_root / "data_pass_state.json")
-    save_checkpoint(ckpt_dir / "checkpoint_final.pt", agent, optimizer, cfg, epochs, seed)
+            if early_stop_due and epoch < epochs:
+                early_stopped = True
+                early_stop_epoch = epoch
+                break
+    atomic_json(
+        out_root / "early_stop_state.json",
+        {
+            "schema": "drl_early_stop_state_v1",
+            "requested_training_epochs": epochs,
+            "completed_training_epochs": completed_epoch,
+            "completed_validation_checkpoints": completed_validation_checks,
+            "validation_checks_without_improvement": validation_checks_without_improvement,
+            "early_stop_patience_validations": early_stop_patience,
+            "early_stopped": early_stopped,
+            "early_stop_epoch": early_stop_epoch,
+        },
+    )
+    save_checkpoint(
+        ckpt_dir / "checkpoint_final.pt", agent, optimizer, cfg, completed_epoch, seed
+    )
     close_pool = getattr(pool, "close", None)
     if callable(close_pool):
         close_pool(terminate=True)

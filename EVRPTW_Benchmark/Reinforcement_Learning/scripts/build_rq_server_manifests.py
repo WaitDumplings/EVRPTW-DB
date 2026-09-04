@@ -31,13 +31,11 @@ TRAIN_INDEX = {
     "Cus50": "generation_plan/compatibility_cus50/train/view_index.parquet",
     "Cus100": "generation_plan/core/train/view_index.parquet",
     "Cus500": "generation_plan/core/train/view_index.parquet",
-    "Cus1000": "generation_plan/core/train/view_index.parquet",
 }
 VALIDATION_INDEX = {
     "Cus50": "generation_plan/compatibility_cus50/val/view_index.parquet",
     "Cus100": "generation_plan/core/val/view_index.parquet",
     "Cus500": "generation_plan/core/val/view_index.parquet",
-    "Cus1000": "generation_plan/core/val/view_index.parquet",
 }
 
 
@@ -133,6 +131,7 @@ def job(
         "physical_batch_size": physical,
         "effective_batch_size": logical,
         "validation_views": validation_views,
+        "early_stop_patience_validations": int(cfg["formal_candidate"].get("early_stop_patience_validations", 0)) if run_mode != "pilot" else 0,
         "final_validation_views": final_validation_views,
         "validation_every_epochs": int(
             cfg["formal_candidate"]["validation_every_epochs"]
@@ -159,6 +158,7 @@ def assign_round_robin(
     slots = [(server, slot) for server in servers for slot in range(SERVERS[server][1])]
     for index, payload in enumerate(jobs):
         server, slot = slots[index % len(slots)]
+        payload["hardware"] = SERVERS[server][0]
         payload["global_slot"] = slot
         payload["queue_position"] = sum(
             row.get("global_slot") == slot for row in queues[server]
@@ -169,47 +169,38 @@ def assign_round_robin(
 def build() -> dict[str, list[dict[str, Any]]]:
     cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     queues: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    pilot_2080 = [
+    scales = tuple(cfg["enabled_scales"])
+    servers = list(SERVERS)
+    pilots = [
         job(cfg, method=method, scale=scale, seed=1234, representation="G",
             condition="Full-support", run_mode="pilot", hardware="2080ti")
-        for scale in ("Cus50", "Cus100", "Cus500") for method in METHODS
-    ]
-    pilot_a6000 = [
-        job(cfg, method=method, scale="Cus1000", seed=1234, representation="G",
-            condition="Full-support", run_mode="pilot", hardware="a6000")
-        for method in METHODS
+        for scale in scales for method in METHODS
     ] + [
         job(cfg, method=method, scale="Cus100", seed=1234, representation="E",
-            condition="Full-support", run_mode="pilot", hardware="a6000")
+            condition="Full-support", run_mode="pilot", hardware="2080ti")
         for method in METHODS
     ]
-    assign_round_robin(queues, pilot_2080, ["2080ti_4_1", "2080ti_4_2", "2080ti_3_1"])
-    assign_round_robin(queues, pilot_a6000, ["a6000_2_1"])
+    assign_round_robin(queues, pilots, servers)
 
-    formal_2080 = [
-        job(cfg, method=method, scale=scale, seed=seed, representation="G",
-            condition="Full-support", run_mode="full", hardware="2080ti")
-        for scale in ("Cus50", "Cus100", "Cus500")
-        for method in METHODS for seed in cfg["seeds"]
-    ]
-    formal_2080 += [
-        job(cfg, method=method, scale="Cus100", seed=seed, representation="G",
-            condition=condition, run_mode="full", hardware="2080ti")
-        for condition in ("Random-10%-support", "Coverage-10%-support")
-        for method in ("am_evrptw", "terran") for seed in cfg["seeds"]
-    ]
-    formal_2080 += [
-        job(cfg, method=method, scale="Cus100", seed=seed, representation="E",
-            condition="Full-support", run_mode="full", hardware="2080ti")
-        for method in METHODS for seed in cfg["seeds"]
-    ]
-    formal_a6000 = [
-        job(cfg, method=method, scale="Cus1000", seed=seed, representation="G",
-            condition="Full-support", run_mode="full", hardware="a6000")
-        for method in METHODS for seed in cfg["seeds"]
-    ]
-    assign_round_robin(queues, formal_2080, ["2080ti_4_1", "2080ti_4_2", "2080ti_3_1"])
-    assign_round_robin(queues, formal_a6000, ["a6000_2_1"])
+    formal = []
+    for seed in cfg["seeds"]:
+        formal.extend(
+            job(cfg, method=method, scale=scale, seed=seed, representation="G",
+                condition="Full-support", run_mode="full", hardware="2080ti")
+            for scale in scales for method in METHODS
+        )
+        formal.extend(
+            job(cfg, method=method, scale="Cus100", seed=seed, representation="G",
+                condition=condition, run_mode="full", hardware="2080ti")
+            for condition in ("Random-10%-support", "Coverage-10%-support")
+            for method in ("am_evrptw", "terran")
+        )
+        formal.extend(
+            job(cfg, method=method, scale="Cus100", seed=seed, representation="E",
+                condition="Full-support", run_mode="full", hardware="2080ti")
+            for method in METHODS
+        )
+    assign_round_robin(queues, formal, servers)
     return queues
 
 

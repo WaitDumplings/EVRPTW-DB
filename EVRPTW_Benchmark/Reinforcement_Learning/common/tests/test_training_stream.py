@@ -28,7 +28,7 @@ def _index() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_stream_is_deterministic_stratified_and_with_replacement() -> None:
+def test_stream_is_deterministic_stratified_shuffle_cycle() -> None:
     first, manifest = build_training_stream(_index(), scale="Cus100", seed=7, sample_count=100)
     replay, _ = build_training_stream(_index(), scale="100", seed=7, sample_count=100)
     assert first.equals(replay)
@@ -37,10 +37,17 @@ def test_stream_is_deterministic_stratified_and_with_replacement() -> None:
         ("a", "weekend"): 20,
         ("b", "weekday"): 20,
     }
-    assert first["view_id"].nunique() < len(first)
+    assert first["view_id"].nunique() == len(_index())
     assert manifest["customer_exposures"] == 10_000
-    assert manifest["replacement"] is True
+    assert manifest["replacement"] is False
+    assert manifest["reuse_policy"] == "only_after_stratum_cycle_exhaustion"
     assert manifest["method_independent"] is True
+
+    one_cycle, _ = build_training_stream(
+        _index(), scale="Cus100", seed=7, sample_count=len(_index())
+    )
+    assert set(one_cycle["view_id"]) == set(_index()["view_id"])
+    assert one_cycle["view_id"].is_unique
 
 
 def test_parent_family_support_is_enforced() -> None:

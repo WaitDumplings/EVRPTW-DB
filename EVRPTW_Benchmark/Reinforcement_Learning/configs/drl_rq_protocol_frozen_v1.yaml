@@ -6,20 +6,19 @@ historical_evidence_relabelled: false
 
 methods: [am_evrptw, evrptw_rl, drl_ts, terran]
 seeds: [1234, 2345, 3456]
-training_scales: [Cus50, Cus100, Cus500, Cus1000]
+training_scales: [Cus50, Cus100, Cus500]
 evaluation_only_scales: [Cus2000]
 training_rollout_steps:
   Cus50: 80
   Cus100: 140
   Cus500: 600
-  Cus1000: 1200
 
 research_questions:
   RQ1:
     title: Scale
-    main_training_runs: 48
-    same_scale: [Cus50, Cus100, Cus500, Cus1000]
-    cross_scale_to_cus2000: [Cus100, Cus500, Cus1000]
+    main_training_runs: 36
+    same_scale: [Cus50, Cus100, Cus500]
+    cross_scale_to_cus2000: [Cus100, Cus500]
     reference_title: Reference Availability and Stability of Best-Observed Solutions
     canonical_lower_bound_available: false
     canonical_optimality_gap_available: false
@@ -44,7 +43,7 @@ research_questions:
     additional_core_training_runs: 12
     graph_injection_enabled: false
 
-core_training_run_count: 72
+core_training_run_count: 60
 train_cus2000: false
 energy_relaxed_directed_vrptw_model: excluded
 
@@ -69,7 +68,7 @@ ev_integrity:
 training_fairness:
   primary: customer_exposure_matched
   secondary: gpu_hour_matched
-  sampling: stratified_deterministic_with_replacement
+  sampling: stratified_deterministic_shuffle_cycle
   shared_stream_within_scale_seed: true
   test_used_for_checkpoint_selection: false
   statistical_unit: parent_family
@@ -78,6 +77,16 @@ training_fairness:
   customer_exposure_budget_by_scale: null
   logical_batch_by_scale: null
   physical_microbatch_by_method_scale: null
+
+model_selection:
+  validation_views: 500
+  validation_every_epochs: 50
+  primary_metric: independent_verifier_feasibility_rate
+  secondary_metric: mean_verified_directed_distance
+  early_stop_patience_validation_checks: 3
+  early_stop_no_improvement_epochs_equivalent: 150
+  earliest_possible_early_stop_epoch: 200
+  test_used_for_selection: false
 
 euclidean:
   distance: symmetric_straight_line_from_fixed_coordinates
@@ -93,7 +102,7 @@ formal_launch_gates:
     requirement: customer_exposure_budget_for_every_scale
     status: PILOT_REQUIRED
   G2:
-    requirement: shared_deterministic_stratified_with_replacement_id_stream
+    requirement: shared_deterministic_stratified_shuffle_cycle_id_stream
     status: IMPLEMENTATION_REQUIRED
   G3:
     requirement: exposure_and_gpu_hour_checkpoints
@@ -105,7 +114,7 @@ formal_launch_gates:
     requirement: per_method_physical_microbatch_and_oom_policy
     status: PILOT_REQUIRED
   G6:
-    requirement: rtx_a6000_cus1000_memory_and_runtime_pilot
+    requirement: cross_hardware_same_config_runtime_and_memory_pilot
     status: PILOT_REQUIRED
   G7:
     requirement: euclidean_distance_time_energy_generation_manifest

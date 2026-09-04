@@ -1,9 +1,9 @@
 {
-  "formal_jobs": 24,
+  "formal_jobs": 20,
   "formal_launch_allowed": false,
   "gpu_count": 4,
   "hardware": "2080ti",
-  "pilot_jobs": 5,
+  "pilot_jobs": 7,
   "schema": "drl_rq_server_assignment_v1",
   "server": "2080ti_4_1"
 }

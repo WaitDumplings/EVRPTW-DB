@@ -1,9 +1,9 @@
 {
-  "formal_jobs": 12,
+  "formal_jobs": 8,
   "formal_launch_allowed": false,
   "gpu_count": 2,
   "hardware": "a6000",
-  "pilot_jobs": 8,
+  "pilot_jobs": 2,
   "schema": "drl_rq_server_assignment_v1",
   "server": "a6000_2_1"
 }

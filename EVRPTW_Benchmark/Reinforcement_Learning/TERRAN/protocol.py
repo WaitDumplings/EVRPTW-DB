@@ -57,6 +57,13 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         euclidean_manifest=getattr(args, "euclidean_manifest", None),
     )
     fixed_epochs = getattr(args, "training_epochs", None) is not None
+    early_stop_patience = int(
+        getattr(args, "early_stop_patience_validations", 0) or 0
+    )
+    if early_stop_patience < 0:
+        raise ValueError("--early-stop-patience-validations cannot be negative")
+    if early_stop_patience and not fixed_epochs:
+        raise ValueError("early stopping is supported only with --training-epochs")
     stream_path = getattr(args, "training_stream_path", None)
     if fixed_epochs:
         if args.data_passes is not None or args.max_batches_per_pass is not None:
@@ -119,6 +126,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
                 if fixed_epochs
                 else max(1, epochs_per_pass * int(args.validation_every_passes))
             ),
+            "early_stop_patience_validations": early_stop_patience,
         }
     )
     if fixed_epochs and getattr(args, "validation_dataset_path", None) is not None:
@@ -169,6 +177,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "validation_every_epochs": (
             validation_every_epochs if fixed_epochs else None
         ),
+        "early_stop_patience_validations": early_stop_patience,
         "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
         "pilot_partial": bool(getattr(args, "pilot_mode", False)),
         "completed_data_passes": completed,
@@ -358,6 +367,18 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
     optimizer_steps = 0
     wall_time_s = 0.0
     peak_gpu = int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else 0
+    early_stop_state_path = output / "early_stop_state.json"
+    early_stop_state = (
+        json.loads(early_stop_state_path.read_text(encoding="utf-8"))
+        if fixed_epochs and early_stop_state_path.is_file()
+        else {}
+    )
+    completed_training_epochs = (
+        int(early_stop_state.get("completed_training_epochs", args.training_epochs))
+        if fixed_epochs
+        else None
+    )
+    early_stopped = bool(early_stop_state.get("early_stopped", False))
     if train_log.exists():
         with train_log.open("r", newline="", encoding="utf-8") as stream:
             rows = list(csv.DictReader(stream))
@@ -367,7 +388,7 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             optimizer_steps = int(float(rows[-1].get("optimizer_steps_total", 0)))
             wall_time_s = sum(float(row["epoch_wall_time_s"]) for row in rows)
     expected = (
-        int(args.training_epochs) * meta["effective_batch_size"]
+        int(completed_training_epochs) * meta["effective_batch_size"]
         if fixed_epochs
         else (
             int(args.max_batches_per_pass) * meta["physical_batch_size"]
@@ -381,7 +402,7 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
         output / "training_result.json",
         {
             "schema": "drl_training_result_v1",
-            "status": "pilot_partial" if getattr(args, "pilot_mode", False) else "passed",
+            "status": "pilot_partial" if getattr(args, "pilot_mode", False) else ("early_stopped" if early_stopped else "passed"),
             "method": "TERRAN",
             "protocol_id": args.protocol_id,
             "budget_mode": (
@@ -389,10 +410,12 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
                 ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")
             ),
             "requested_training_epochs": int(args.training_epochs) if fixed_epochs else None,
-            "completed_training_epochs": int(args.training_epochs) if fixed_epochs else None,
+            "completed_training_epochs": completed_training_epochs,
+            "early_stopped": early_stopped,
+            "early_stop_epoch": early_stop_state.get("early_stop_epoch"),
             "logical_environments_per_epoch": meta["effective_batch_size"] if fixed_epochs else None,
             "requested_data_passes": int(args.data_passes) if args.data_passes is not None else None,
-            "completed_data_passes": 1 if fixed_epochs else (0 if args.max_batches_per_pass is not None else int(args.data_passes)),
+            "completed_data_passes": (0 if early_stopped else 1) if fixed_epochs else (0 if args.max_batches_per_pass is not None else int(args.data_passes)),
             "training_rollout_steps": int(args.training_rollout_steps),
             "instances_seen": samples_seen,
             "customer_exposures": samples_seen * int(str(args.stage2_scale).removeprefix("Cus")),
@@ -418,6 +441,8 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
                 else None
             ),
             "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
+            "completed_validation_checkpoints": int(early_stop_state.get("completed_validation_checkpoints", 0)),
+            "early_stop_patience_validations": int(getattr(args, "early_stop_patience_validations", 0) or 0),
             "final_validation_limit": final_validation_limit,
             "final_validation_audit": (
                 str(final_validation_path) if final_validation_limit > 0 else None

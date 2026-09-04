@@ -24,10 +24,10 @@ def test_formal_launch_is_blocked_until_all_eight_gates_pass() -> None:
 def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
     protocol = _protocol()
     questions = protocol["research_questions"]
-    assert questions["RQ1"]["main_training_runs"] == 48
+    assert questions["RQ1"]["main_training_runs"] == 36
     assert questions["RQ2"]["additional_core_training_runs"] == 12
     assert questions["RQ3"]["additional_core_training_runs"] == 12
-    assert protocol["core_training_run_count"] == 72
+    assert protocol["core_training_run_count"] == 60
     assert protocol["train_cus2000"] is False
     assert protocol["energy_relaxed_directed_vrptw_model"] == "excluded"
     assert questions["RQ3"]["conditions"] == ["E_to_G", "G_to_G"]
@@ -57,6 +57,6 @@ def test_support_sampling_and_statistics_use_parent_families() -> None:
     ]
     assert rq2["selection_uses_validation_or_test"] is False
     fairness = protocol["training_fairness"]
-    assert fairness["sampling"] == "stratified_deterministic_with_replacement"
+    assert fairness["sampling"] == "stratified_deterministic_shuffle_cycle"
     assert fairness["shared_stream_within_scale_seed"] is True
     assert fairness["statistical_unit"] == "parent_family"
