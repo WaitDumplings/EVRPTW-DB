@@ -1,7 +1,7 @@
 schema: drl_rq_runtime_candidates_v2
 status: direct_full_runtime_frozen
 protocol_id: drl_rq_protocol_frozen_v1
-runtime_budget_id: drl_rq_runtime_budget_v6_scale_aware_gpu_val500_es3
+runtime_budget_id: drl_rq_runtime_budget_v7_ada2000_gpu_val500_es3
 
 # Common publication inference budget. Each candidate is independently checked
 # by the canonical verifier; selection is feasible-first, then minimum distance.
@@ -33,15 +33,16 @@ scale_hardware:
   a6000: [Cus500, Cus1000]
 
 # One logical epoch is one outer optimizer update over the listed number of
-# base environments. Every scale uses 1,000 logical epochs. Fairness is
-# enforced within each scale: every method and seed sees the same deterministic
-# stream and effective batch. Cross-scale customer exposure is intentionally not
-# forced to match because the scales are not compared as one optimization task.
+# base environments. The Ada-owned Cus500/Cus1000 runs use 2,000 logical epochs;
+# the 2080 Ti-owned Cus50/Cus100 runs remain at 1,000. Fairness is enforced
+# within each scale: every method and seed sees the same deterministic stream
+# and effective batch. Cross-scale customer exposure is intentionally not forced
+# to match because the scales are not compared as one optimization task.
 candidate_logical_epochs:
   Cus50: 1000
   Cus100: 1000
-  Cus500: 1000
-  Cus1000: 1000
+  Cus500: 2000
+  Cus1000: 2000
 candidate_environments_per_epoch:
   Cus50: 1024
   Cus100: 256
@@ -50,8 +51,8 @@ candidate_environments_per_epoch:
 candidate_customer_exposure_budget:
   Cus50: 51200000
   Cus100: 25600000
-  Cus500: 32000000
-  Cus1000: 2000000
+  Cus500: 64000000
+  Cus1000: 4000000
 
 # The effective/logical batch equals environments_per_epoch, so every logical
 # epoch produces exactly one outer update. Physical batches remain architecture

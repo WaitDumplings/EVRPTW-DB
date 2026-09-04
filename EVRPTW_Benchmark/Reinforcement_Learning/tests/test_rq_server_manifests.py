@@ -62,8 +62,8 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
     expected = {
         "Cus50": (1_000, 1_024, 1_024_000, 51_200_000),
         "Cus100": (1_000, 256, 256_000, 25_600_000),
-        "Cus500": (1_000, 64, 64_000, 32_000_000),
-        "Cus1000": (1_000, 2, 2_000, 2_000_000),
+        "Cus500": (2_000, 64, 128_000, 64_000_000),
+        "Cus1000": (2_000, 2, 4_000, 4_000_000),
     }
     formal = [
         row
@@ -75,7 +75,7 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         epochs, environments_per_epoch, total_environments, exposures = expected[
             row["scale"]
         ]
-        assert row["runtime_budget_id"] == "drl_rq_runtime_budget_v6_scale_aware_gpu_val500_es3"
+        assert row["runtime_budget_id"] == "drl_rq_runtime_budget_v7_ada2000_gpu_val500_es3"
         assert row["runtime_budget_id"] in row["training_stream_path"]
         assert row["training_epochs"] == epochs
         assert row["planned_optimizer_updates"] == epochs
@@ -86,7 +86,7 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         assert row["physical_batch_size"] <= row["effective_batch_size"]
         assert row["effective_batch_size"] % row["physical_batch_size"] == 0
         assert row["validation_every_epochs"] == 50
-        assert row["validation_checkpoints"] == 20
+        assert row["validation_checkpoints"] == epochs // 50
         assert row["validation_views"] == 500
         assert row["validation_decode_type"] == "sampling"
         assert row["validation_candidate_count"] == 100

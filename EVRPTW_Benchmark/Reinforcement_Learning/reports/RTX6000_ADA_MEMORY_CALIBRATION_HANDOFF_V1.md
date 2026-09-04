@@ -5,6 +5,8 @@
 > pilot procedure below is retained only as historical provenance and must not
 > be used as the current launch instruction. Use
 > `scripts/rq_v1/a6000_2_1/full.sh --seed 1234` directly.
+> The current direct-full configuration uses 2,000 epochs for Cus500/Cus1000;
+> the 1,000-epoch values below describe only the superseded calibration setup.
 
 Date: 2026-09-04
 
