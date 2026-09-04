@@ -99,11 +99,9 @@ def load_jobs(
     jobs = [job for job in jobs if int(job["global_slot"]) in slots and job.get("enabled", True)]
     if scales is not None:
         jobs = [job for job in jobs if str(job.get("scale")) in scales]
-    if seeds is not None and mode != "pilot":
+    if seeds is not None:
         jobs = [job for job in jobs if int(job.get("seed", -1)) in seeds]
-    if mode in {"pilot"}:
-        jobs = [job for job in jobs if job["run_mode"] == "pilot"]
-    elif mode in {"full", "resume"}:
+    if mode in {"full", "resume"}:
         jobs = [job for job in jobs if job["run_mode"] == "full"]
     elif mode == "evaluate":
         jobs = [job for job in jobs if job["run_mode"] == "evaluate"]
@@ -169,7 +167,7 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
             ]
             raise RuntimeError(f"unexpected GPU model(s): {bad}; expected one of {accepted}")
     for job in jobs:
-        index_key = "train_index" if job["kind"] in {"train", "pilot"} else "dataset_index"
+        index_key = "train_index" if job["kind"] == "train" else "dataset_index"
         path = dataset / job[index_key]
         if not path.is_file():
             raise FileNotFoundError(f"dataset index is missing for {job['job_id']}: {path}")
@@ -207,8 +205,6 @@ def output_dir(job: dict[str, Any], context: dict[str, Any]) -> Path:
     root = root / job["method"] / job["scale"] / f"seed_{job['seed']}" / context["commit"]
     if job["kind"] in {"eval", "transfer"}:
         root = root / job["test_id"] / job["decode_budget"]
-    elif job["kind"] == "pilot":
-        root = root / "pilot" / job["stage"]
     return root
 
 
@@ -320,8 +316,6 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             "--output-dir",
             str(out),
         ]
-    if job["run_mode"] == "pilot":
-        command.append("--pilot-mode")
     if job.get("training_stream_path"):
         command.extend(
             [
@@ -399,7 +393,7 @@ def evaluation_command(job: dict[str, Any], context: dict[str, Any], out: Path) 
 def command_for(job: dict[str, Any], context: dict[str, Any], out: Path, resume: bool) -> list[str]:
     if "test_command" in job:
         return list(job["test_command"])
-    if job["kind"] in {"train", "pilot"}:
+    if job["kind"] == "train":
         return training_command(job, context, out, resume)
     return evaluation_command(job, context, out)
 
@@ -411,7 +405,7 @@ def job_complete(job: dict[str, Any], out: Path) -> bool:
     payload = json.loads(result.read_text(encoding="utf-8"))
     if payload.get("status") != "passed":
         return False
-    if job["kind"] in {"train", "pilot"}:
+    if job["kind"] == "train":
         required = [
             out / "checkpoint_selected.pt",
             out / "validation_summary.json",
@@ -423,7 +417,7 @@ def job_complete(job: dict[str, Any], out: Path) -> bool:
 
 
 def should_resume_job(job: dict[str, Any], out: Path, requested: bool) -> bool:
-    if not requested or job["kind"] not in {"train", "pilot"}:
+    if not requested or job["kind"] != "train":
         return False
     state = (out / "data_pass_state.json").is_file()
     checkpoint = (out / "checkpoint_latest.pt").is_file()
@@ -487,13 +481,13 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         overflow_manifest = record_a6000_overflow(job, context)
     passed = returncode == 0 and (
         ((out / "checkpoint_selected.pt").is_file() and (out / "validation_summary.json").is_file())
-        if job["kind"] in {"train", "pilot"}
+        if job["kind"] == "train"
         else ((out / "summary.csv").is_file() and (out / "routes.jsonl").is_file())
     )
     training_result_path = out / "training_result.json"
     training_result = (
         json.loads(training_result_path.read_text(encoding="utf-8"))
-        if job["kind"] in {"train", "pilot"} and training_result_path.is_file()
+        if job["kind"] == "train" and training_result_path.is_file()
         else {}
     )
     result = {
@@ -536,32 +530,9 @@ def handle_signal(signum: int, _frame: Any) -> None:
             pass
 
 
-def require_server_local_pilots(
-    context: dict[str, Any], pilot_jobs: list[dict[str, Any]]
-) -> None:
-    """Require only the pilots declared by this server's own manifest.
-
-    Pilot artifacts are commit-scoped by ``output_dir``.  A full queue therefore
-    cannot inherit a pilot from another executable commit or another server
-    manifest, while independent servers do not need a shared output root.
-    """
-    if not pilot_jobs:
-        raise RuntimeError("full mode is blocked: this server manifest has no pilot jobs")
-    incomplete = [
-        job["job_id"]
-        for job in pilot_jobs
-        if not job_complete(job, output_dir(job, context))
-    ]
-    if incomplete:
-        raise RuntimeError(
-            "full mode is blocked until this server's local pilots pass: "
-            + ", ".join(incomplete)
-        )
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run frozen DRL manifest queues.")
-    parser.add_argument("mode", choices=("pilot", "full", "evaluate", "status", "resume"))
+    parser.add_argument("mode", choices=("full", "evaluate", "status", "resume"))
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--slots", required=True)
     parser.add_argument("--local-gpu-count", type=int, required=True)
@@ -594,7 +565,7 @@ def main() -> None:
     if args.mode == "status":
         rows = []
         by_mode: dict[str, dict[str, int]] = {}
-        for mode in ("pilot", "full", "evaluate"):
+        for mode in ("full", "evaluate"):
             mode_rows = []
             for job in load_jobs(
                 args.manifest, slots, mode, seeds=seeds, scales=scales
@@ -621,10 +592,6 @@ def main() -> None:
             )
         )
         return
-    if args.mode in {"full", "resume"}:
-        require_server_local_pilots(
-            context, load_jobs(args.manifest, slots, "pilot", scales=scales)
-        )
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
     by_slot = {slot: [job for job in jobs if int(job["global_slot"]) == slot] for slot in slots}

@@ -50,7 +50,7 @@ def largest_divisor_at_most(value: int, limit: int) -> int:
 
 def job(
     cfg: dict[str, Any], *, method: str, scale: str, seed: int,
-    representation: str, condition: str, run_mode: str, hardware: str,
+    representation: str, condition: str, hardware: str,
 ) -> dict[str, Any]:
     logical = int(cfg["candidate_logical_batch"][scale])
     environments_per_epoch = int(cfg["candidate_environments_per_epoch"][scale])
@@ -61,47 +61,37 @@ def job(
         )
     cap = int(cfg["physical_batch_caps"][method][scale])
     physical = largest_divisor_at_most(logical, cap)
-    if run_mode == "pilot":
-        updates = int(cfg["pilot"]["logical_updates"])
-        target_environments = updates * environments_per_epoch
-        exposure = target_environments * int(scale.removeprefix("Cus"))
-        stream_scope = "pilot"
-        validation_views = int(cfg["pilot"]["validation_views"])
-        final_validation_views = 0
-        planning_wall_time_hours = None
-    else:
-        updates = int(cfg["candidate_logical_epochs"][scale])
-        target_environments = updates * environments_per_epoch
-        exposure = int(cfg["candidate_customer_exposure_budget"][scale])
-        derived_exposure = target_environments * int(scale.removeprefix("Cus"))
-        if exposure != derived_exposure:
-            raise ValueError(
-                f"epoch/environment schedule does not match exposure budget for {scale}: "
-                f"{derived_exposure} != {exposure}"
-            )
-        stream_scope = "formal"
-        validation_views = int(
-            cfg["formal_candidate"]["selection_validation_views"][scale]
+    updates = int(cfg["candidate_logical_epochs"][scale])
+    target_environments = updates * environments_per_epoch
+    exposure = int(cfg["candidate_customer_exposure_budget"][scale])
+    derived_exposure = target_environments * int(scale.removeprefix("Cus"))
+    if exposure != derived_exposure:
+        raise ValueError(
+            f"epoch/environment schedule does not match exposure budget for {scale}: "
+            f"{derived_exposure} != {exposure}"
         )
-        final_validation_views = int(
-            cfg["formal_candidate"].get("final_validation_views", {}).get(scale, 0)
-        )
-        planning_wall_time_hours = cfg["formal_candidate"].get(
-            "planning_wall_time_hours", {}
-        ).get(scale)
+    validation_views = int(
+        cfg["formal_candidate"]["selection_validation_views"][scale]
+    )
+    final_validation_views = int(
+        cfg["formal_candidate"].get("final_validation_views", {}).get(scale, 0)
+    )
+    planning_wall_time_hours = cfg["formal_candidate"].get(
+        "planning_wall_time_hours", {}
+    ).get(scale)
     stream = (
         f"{ARTIFACTS}/streams/{cfg['runtime_budget_id']}/"
-        f"{stream_scope}/{condition}/{scale}/seed_{seed}.parquet"
+        f"formal/{condition}/{scale}/seed_{seed}.parquet"
     )
     payload = {
         "schema": "drl_rq_job_manifest_v1",
         "protocol_id": "drl_rq_protocol_frozen_v1",
         "runtime_budget_id": cfg["runtime_budget_id"],
-        "job_id": f"{run_mode}__{representation}__{condition}__{method}__{scale}__seed{seed}",
+        "job_id": f"full__{representation}__{condition}__{method}__{scale}__seed{seed}",
         "enabled": True,
-        "kind": "pilot" if run_mode == "pilot" else "train",
-        "run_mode": run_mode,
-        "stage": "g1_g4_g5_g6_runtime_memory" if run_mode == "pilot" else "formal_training",
+        "kind": "train",
+        "run_mode": "full",
+        "stage": "formal_training",
         "hardware": hardware,
         "representation": representation,
         "training_representation": representation,
@@ -115,17 +105,11 @@ def job(
         "training_stream_path": stream,
         "customer_exposure_budget": exposure,
         "target_environments": target_environments,
-        "exposure_checkpoints": (
-            [exposure]
-            if run_mode == "pilot"
-            else [
-                int(exposure * float(fraction))
-                for fraction in cfg["formal_candidate"]["exposure_checkpoints_fraction"]
-            ]
-        ),
-        "gpu_hour_checkpoints": (
-            [] if run_mode == "pilot" else cfg["formal_candidate"]["gpu_hour_checkpoints"]
-        ),
+        "exposure_checkpoints": [
+            int(exposure * float(fraction))
+            for fraction in cfg["formal_candidate"]["exposure_checkpoints_fraction"]
+        ],
+        "gpu_hour_checkpoints": cfg["formal_candidate"]["gpu_hour_checkpoints"],
         "training_epochs": updates,
         "logical_environments_per_epoch": environments_per_epoch,
         "planned_optimizer_updates": updates,
@@ -145,7 +129,7 @@ def job(
         "test_decode_type": cfg["evaluation"]["test_decode_type"],
         "test_candidate_count": int(cfg["evaluation"]["test_candidate_count"]),
         "candidate_selection": cfg["evaluation"]["selection"],
-        "early_stop_patience_validations": int(cfg["formal_candidate"].get("early_stop_patience_validations", 0)) if run_mode != "pilot" else 0,
+        "early_stop_patience_validations": int(cfg["formal_candidate"].get("early_stop_patience_validations", 0)),
         "final_validation_views": final_validation_views,
         "validation_every_epochs": int(
             cfg["formal_candidate"]["validation_every_epochs"]
@@ -154,7 +138,7 @@ def job(
             updates + int(cfg["formal_candidate"]["validation_every_epochs"]) - 1
         ) // int(cfg["formal_candidate"]["validation_every_epochs"]),
         "planning_wall_time_hours": planning_wall_time_hours,
-        "formal_gate_file": GATE if run_mode == "full" else None,
+        "formal_gate_file": GATE,
         "euclidean_manifest": (
             f"{ARTIFACTS}/euclidean/euclidean_calibration_manifest.json"
             if representation == "E" else None
@@ -204,40 +188,6 @@ def build() -> dict[str, list[dict[str, Any]]]:
         for hardware in {spec[0] for spec in SERVERS.values()}
     }
 
-    pilots_by_hardware: dict[str, list[dict[str, Any]]] = {
-        hardware: [] for hardware in servers_by_hardware
-    }
-    for scale in scales:
-        hardware = scale_hardware[scale]
-        pilots_by_hardware[hardware].extend(
-            job(
-                cfg,
-                method=method,
-                scale=scale,
-                seed=1234,
-                representation="G",
-                condition="Full-support",
-                run_mode="pilot",
-                hardware=hardware,
-            )
-            for method in METHODS
-        )
-    pilots_by_hardware["2080ti"].extend(
-        job(
-            cfg,
-            method=method,
-            scale="Cus100",
-            seed=1234,
-            representation="E",
-            condition="Full-support",
-            run_mode="pilot",
-            hardware="2080ti",
-        )
-        for method in METHODS
-    )
-    for hardware, pilots in pilots_by_hardware.items():
-        assign_round_robin(queues, pilots, servers_by_hardware[hardware])
-
     formal_by_hardware: dict[str, list[dict[str, Any]]] = {
         hardware: [] for hardware in servers_by_hardware
     }
@@ -252,7 +202,6 @@ def build() -> dict[str, list[dict[str, Any]]]:
                     seed=seed,
                     representation="G",
                     condition="Full-support",
-                    run_mode="full",
                     hardware=hardware,
                 )
                 for method in METHODS
@@ -265,7 +214,6 @@ def build() -> dict[str, list[dict[str, Any]]]:
                 seed=seed,
                 representation="G",
                 condition=condition,
-                run_mode="full",
                 hardware="2080ti",
             )
             for condition in ("Random-10%-support", "Coverage-10%-support")
@@ -279,7 +227,6 @@ def build() -> dict[str, list[dict[str, Any]]]:
                 seed=seed,
                 representation="E",
                 condition="Full-support",
-                run_mode="full",
                 hardware="2080ti",
             )
             for method in METHODS
@@ -306,9 +253,10 @@ def main() -> None:
             "server": server,
             "hardware": SERVERS[server][0],
             "gpu_count": SERVERS[server][1],
-            "pilot_jobs": sum(row["run_mode"] == "pilot" for row in rows),
+            "pilot_jobs": 0,
             "formal_jobs": sum(row["run_mode"] == "full" for row in rows),
-            "formal_launch_allowed": False,
+            "formal_launch_allowed": True,
+            "launch_policy": "direct_full",
         }
         (destination / "assignment_summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"

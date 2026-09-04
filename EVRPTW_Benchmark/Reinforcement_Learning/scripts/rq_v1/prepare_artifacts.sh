@@ -101,12 +101,6 @@ declare -A FORMAL_EXPOSURE=(
   [Cus500]=32000000
   [Cus1000]=2000000
 )
-declare -A PILOT_EXPOSURE=(
-  [Cus50]=102400
-  [Cus100]=51200
-  [Cus500]=64000
-  [Cus1000]=4000
-)
 IFS=',' read -r -a SEEDS <<< "$SEED_SELECTION"
 for seed in "${SEEDS[@]}"; do
   [[ "$seed" =~ ^[0-9]+$ ]] || {
@@ -125,13 +119,6 @@ for scale in Cus50 Cus100 Cus500 Cus1000; do
       --output "$formal"
     REQUIRED+=("$formal" "$formal.manifest.json")
   done
-  pilot="$STREAM_ROOT/pilot/Full-support/$scale/seed_1234.parquet"
-  mkdir -p "$(dirname "$pilot")"
-  python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_training_stream \
-    --index "${INDEX[$scale]}" --scale "$scale" --seed 1234 \
-    --customer-exposures "${PILOT_EXPOSURE[$scale]}" \
-    --output "$pilot"
-  REQUIRED+=("$pilot" "$pilot.manifest.json")
 done
 
 for support in Random-10%-support Coverage-10%-support; do

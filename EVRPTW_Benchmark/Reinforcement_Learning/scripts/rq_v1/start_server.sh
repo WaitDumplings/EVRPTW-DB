@@ -3,9 +3,9 @@ set -euo pipefail
 SERVER_SCRIPT_DIR="${SERVER_SCRIPT_DIR:?SERVER_SCRIPT_DIR must be set}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/server_env.sh"
-MODE="${1:?usage: start_server.sh pilot|full|resume}"
+MODE="${1:?usage: start_server.sh full|resume}"
 shift
-case "$MODE" in pilot|full|resume) ;; *) echo "invalid mode: $MODE" >&2; exit 2 ;; esac
+case "$MODE" in full|resume) ;; *) echo "invalid mode: $MODE" >&2; exit 2 ;; esac
 LOG_DIR="$EVRPTW_OUTPUT_ROOT/launcher_logs/$DRL_SERVER_ID"
 mkdir -p "$LOG_DIR"
 PID_FILE="$LOG_DIR/$MODE.pid"

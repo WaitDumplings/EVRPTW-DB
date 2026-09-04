@@ -1,5 +1,5 @@
 schema: drl_rq_runtime_candidates_v2
-status: pilot_candidates_not_formally_frozen
+status: direct_full_runtime_frozen
 protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v6_scale_aware_gpu_val500_es3
 
@@ -61,17 +61,14 @@ candidate_logical_batch:
   Cus100: 256
   Cus500: 64
   Cus1000: 2
-# Provisional Ada caps are restricted to exact divisors of the frozen logical
-# batch. The final two-update, 500-view sample-100 pilot remains the launch gate.
+# Ada caps are restricted to exact divisors of the frozen logical batch. The
+# user-authorized workflow launches the formal queues directly without pilots.
 physical_batch_caps:
   am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 8, Cus1000: 2}
   evrptw_rl: {Cus50: 128, Cus100: 64, Cus500: 16, Cus1000: 2}
   drl_ts: {Cus50: 128, Cus100: 32, Cus500: 8, Cus1000: 2}
   terran: {Cus50: 128, Cus100: 128, Cus500: 64, Cus1000: 2}
 
-pilot:
-  logical_updates: 2
-  validation_views: 500
 formal_candidate:
   selection_validation_views:
     Cus50: 500

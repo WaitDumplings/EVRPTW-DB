@@ -1,5 +1,11 @@
 # RTX 6000 Ada memory calibration handoff v1
 
+> **Superseded on 2026-09-04.** The user explicitly removed the pilot workflow
+> and authorized direct formal launch with the frozen calibrated batches. The
+> pilot procedure below is retained only as historical provenance and must not
+> be used as the current launch instruction. Use
+> `scripts/rq_v1/a6000_2_1/full.sh --seed 1234` directly.
+
 Date: 2026-09-04
 
 Target server bundle: `scripts/rq_v1/a6000_2_1`
@@ -163,4 +169,3 @@ After all eight method/scale pairs are confirmed:
 If the Ada agent changes anything other than physical batch sizing or discovers
 an environment/verifier defect, it must stop and report the issue instead of
 continuing the memory sweep.
-

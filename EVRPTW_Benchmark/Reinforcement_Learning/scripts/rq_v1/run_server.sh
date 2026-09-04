@@ -3,7 +3,7 @@ set -euo pipefail
 SERVER_SCRIPT_DIR="${SERVER_SCRIPT_DIR:?SERVER_SCRIPT_DIR must be set}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/server_env.sh"
-MODE="${1:?usage: run_server.sh pilot|full|resume|status}"
+MODE="${1:?usage: run_server.sh full|resume|status}"
 shift
 SEED_SELECTION="${DRL_SEEDS:-1234}"
 FORWARD_ARGS=()
@@ -39,7 +39,7 @@ done
 }
 export DRL_SEEDS="$SEED_SELECTION"
 case "$MODE" in
-  pilot|full|resume)
+  full|resume)
     bash "$SCRIPT_DIR/prepare_artifacts.sh"
     ;;
   status) ;;

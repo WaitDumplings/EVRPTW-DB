@@ -13,9 +13,8 @@ def test_four_server_queues_encode_exact_four_scale_one_seed_design() -> None:
     assert set(queues) == set(SERVERS)
     rows = [row for queue in queues.values() for row in queue]
     formal = [row for row in rows if row["run_mode"] == "full"]
-    pilots = [row for row in rows if row["run_mode"] == "pilot"]
     assert len(formal) == 24
-    assert len(pilots) == 20
+    assert rows == formal
     assert len({row["job_id"] for row in formal}) == 24
     assert {row["seed"] for row in rows} == {1234}
     assert Counter((row["representation"], row["condition"]) for row in formal) == {
@@ -139,5 +138,3 @@ def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
         assert row["physical_batch_size"] == expected[row["method"]][row["scale"]]
         assert row["physical_batch_size"] % 2 == 0
         assert row["validation_views"] == 500
-        if row["run_mode"] == "pilot":
-            assert row["training_epochs"] == 2
