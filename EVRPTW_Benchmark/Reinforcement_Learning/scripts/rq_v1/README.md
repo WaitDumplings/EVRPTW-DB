@@ -73,19 +73,32 @@ measurement-based no-early-stop makespan estimate is about five to six days,
 dominated by DRL-TS Cus500. Early stopping can shorten this but is not assumed in
 the conservative estimate.
 
-To launch only seed 1234 (the default):
+Every server wrapper accepts `--seed`; omitting it defaults to 1234. The pilot
+jobs themselves remain the frozen seed-1234 code/hardware gate, while the
+argument selects which formal stream is prepared and which full/resume/status
+jobs are addressed.
 
 ```bash
-export DRL_SEEDS=1234
-export DRL_SCALES=Cus50,Cus100,Cus500
+# Default seed 1234:
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/pilot.sh
-# Inspect status/logs; after every local pilot passes:
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/status.sh
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/full.sh
+
+# Equivalent explicit form:
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/full.sh --seed 1234
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/status.sh --seed 1234
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/resume.sh --seed 1234
 ```
 
-To run another seed later, set `DRL_SEEDS` to that seed before artifact
-preparation and `full.sh`. Do not combine seeds unless concurrent queueing is
-intentional.
+Standalone preparation accepts the same argument:
+
+```bash
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/prepare_artifacts.sh --seed 1234
+```
+
+For a later registered seed, replace 1234 with 2345 or 3456 consistently on
+all servers. `--seeds 1234,2345` and the legacy `DRL_SEEDS` environment variable
+remain available for intentional multi-seed queueing.
 
 If the restore directory has a different relative location, override only its
 root; the dataset remains below `EVRPTW_Dataset`:

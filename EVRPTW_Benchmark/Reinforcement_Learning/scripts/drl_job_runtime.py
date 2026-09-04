@@ -573,6 +573,11 @@ def main() -> None:
     if not scales:
         raise ValueError("--scales must select at least one scale")
     jobs = load_jobs(args.manifest, slots, args.mode, seeds=seeds, scales=scales)
+    if args.mode != "status" and not jobs:
+        raise ValueError(
+            f"no {args.mode} jobs match seeds={sorted(seeds)} "
+            f"and scales={sorted(scales)} in {args.manifest}"
+        )
     context = preflight(args, jobs)
     if args.mode == "status":
         rows = []

@@ -16,6 +16,37 @@ FAMILY_METRICS="$DATASET_ROOT/reports/phase1/family_metrics.parquet"
 SUPPORT_ROOT="$ARTIFACT_ROOT/supports"
 E_MANIFEST="$ARTIFACT_ROOT/euclidean/euclidean_calibration_manifest.json"
 SEED_SELECTION="${DRL_SEEDS:-1234}"
+while (( $# )); do
+  case "$1" in
+    --seed)
+      (( $# >= 2 )) || { echo "--seed requires one integer" >&2; exit 2; }
+      SEED_SELECTION="$2"
+      shift 2
+      ;;
+    --seed=*)
+      SEED_SELECTION="${1#--seed=}"
+      shift
+      ;;
+    --seeds)
+      (( $# >= 2 )) || { echo "--seeds requires a comma-separated list" >&2; exit 2; }
+      SEED_SELECTION="$2"
+      shift 2
+      ;;
+    --seeds=*)
+      SEED_SELECTION="${1#--seeds=}"
+      shift
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+[[ "$SEED_SELECTION" =~ ^[0-9]+(,[0-9]+)*$ ]] || {
+  echo "invalid seed selection: $SEED_SELECTION" >&2
+  exit 2
+}
+export DRL_SEEDS="$SEED_SELECTION"
 SEED_TAG="${SEED_SELECTION//,/_}"
 MARKER="$ARTIFACT_ROOT/preparation_${RUNTIME_BUDGET_ID}_seeds_${SEED_TAG}.json"
 
