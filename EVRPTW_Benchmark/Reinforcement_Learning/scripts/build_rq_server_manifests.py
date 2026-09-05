@@ -62,6 +62,9 @@ def job(
     cap = int(cfg["physical_batch_caps"][method][scale])
     physical = largest_divisor_at_most(logical, cap)
     updates = int(cfg["candidate_logical_epochs"][scale])
+    minimum_updates = int(cfg["candidate_minimum_logical_epochs"][scale])
+    if not 0 < minimum_updates <= updates:
+        raise ValueError("minimum logical epochs must not exceed the hard cap")
     target_environments = updates * environments_per_epoch
     exposure = int(cfg["candidate_customer_exposure_budget"][scale])
     derived_exposure = target_environments * int(scale.removeprefix("Cus"))
@@ -111,6 +114,11 @@ def job(
         ],
         "gpu_hour_checkpoints": cfg["formal_candidate"]["gpu_hour_checkpoints"],
         "training_epochs": updates,
+        "minimum_training_epochs": minimum_updates,
+        "minimum_target_environments": minimum_updates * environments_per_epoch,
+        "minimum_customer_exposure_budget": (
+            minimum_updates * environments_per_epoch * int(scale.removeprefix("Cus"))
+        ),
         "logical_environments_per_epoch": environments_per_epoch,
         "planned_optimizer_updates": updates,
         "training_rollout_steps": int(cfg["rollout_steps"][scale]),
@@ -133,13 +141,40 @@ def job(
         "candidate_selection": cfg["evaluation"]["selection"],
         "early_stop_patience_validations": int(cfg["formal_candidate"].get("early_stop_patience_validations", 0)),
         "early_stop_start_epoch": int(cfg["formal_candidate"].get("early_stop_start_epoch", 0)),
+        "post_minimum_validation_every_epochs": int(
+            cfg["formal_candidate"].get(
+                "post_minimum_validation_every_epochs",
+                cfg["formal_candidate"]["validation_every_epochs"],
+            )
+        ),
+        "soft_stage_end_epoch": (
+            int(cfg["formal_candidate"]["drl_ts_soft_stage_end_epoch"])
+            if method == "drl_ts" else None
+        ),
+        "primary_checkpoint": "best_within_5000.ckpt",
+        "extended_checkpoint": "best_overall.ckpt",
         "final_validation_views": final_validation_views,
         "validation_every_epochs": int(
             cfg["formal_candidate"]["validation_every_epochs"]
         ),
-        "validation_checkpoints": (
-            updates + int(cfg["formal_candidate"]["validation_every_epochs"]) - 1
-        ) // int(cfg["formal_candidate"]["validation_every_epochs"]),
+        "validation_checkpoints": len(
+            set(
+                range(
+                    int(cfg["formal_candidate"]["validation_every_epochs"]),
+                    minimum_updates + 1,
+                    int(cfg["formal_candidate"]["validation_every_epochs"]),
+                )
+            )
+            | {minimum_updates}
+            | set(
+                range(
+                    minimum_updates + int(cfg["formal_candidate"]["post_minimum_validation_every_epochs"]),
+                    updates + 1,
+                    int(cfg["formal_candidate"]["post_minimum_validation_every_epochs"]),
+                )
+            )
+            | {updates}
+        ),
         "planning_wall_time_hours": planning_wall_time_hours,
         "formal_gate_file": GATE,
         "euclidean_manifest": (

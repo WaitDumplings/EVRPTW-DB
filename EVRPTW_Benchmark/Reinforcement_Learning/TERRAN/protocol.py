@@ -20,12 +20,13 @@ from ..common.training_protocol import (
     require_registered_batches,
     require_training_rollout_steps,
     require_validation_decoding,
+    validation_epochs,
 )
 from ..common.data_pass import DataPassState
 from ..common.training_stream import read_stream_view_ids
 
 
-def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int] | None]:
+def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if getattr(args, "training_epochs", None) is None and args.data_passes is None:
         return overrides, None
     if args.stage2_dataset_path is None or args.output_dir is None:
@@ -108,15 +109,27 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         validation_every_epochs = int(
             getattr(args, "validation_every_epochs", None) or epochs
         )
-        if validation_every_epochs <= 0:
-            raise ValueError("--validation-every-epochs must be positive")
-        expected_validation_checkpoints = (
-            epochs + validation_every_epochs - 1
-        ) // validation_every_epochs
-        if int(getattr(args, "validation_checkpoints", 1)) != expected_validation_checkpoints:
+        minimum_training_epochs = int(
+            getattr(args, "minimum_training_epochs", None) or epochs
+        )
+        post_minimum_validation_every_epochs = int(
+            getattr(args, "post_minimum_validation_every_epochs", None)
+            or validation_every_epochs
+        )
+        scheduled_validation_epochs = validation_epochs(
+            epochs,
+            initial_interval=validation_every_epochs,
+            minimum_epochs=minimum_training_epochs,
+            post_minimum_interval=post_minimum_validation_every_epochs,
+        )
+        if int(getattr(args, "validation_checkpoints", 1)) != len(scheduled_validation_epochs):
             raise ValueError(
                 "fixed-epoch validation checkpoint count does not match "
-                "--validation-every-epochs"
+                "the configured two-phase validation schedule"
+            )
+        if early_stop_patience and early_stop_start_epoch < minimum_training_epochs:
+            raise ValueError(
+                "early stopping cannot start before --minimum-training-epochs"
             )
         epochs_per_pass = epochs
         total_passes = 1
@@ -149,6 +162,11 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             ),
             "early_stop_patience_validations": early_stop_patience,
             "early_stop_start_epoch": early_stop_start_epoch,
+            "minimum_training_epochs": (minimum_training_epochs if fixed_epochs else None),
+            "post_minimum_validation_every_epochs": (
+                post_minimum_validation_every_epochs if fixed_epochs else None
+            ),
+            "validation_epochs": (list(scheduled_validation_epochs) if fixed_epochs else []),
         }
     )
     if fixed_epochs and getattr(args, "validation_dataset_path", None) is not None:
@@ -204,6 +222,15 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "validation_every_epochs": (
             validation_every_epochs if fixed_epochs else None
         ),
+        "minimum_training_epochs": (
+            minimum_training_epochs if fixed_epochs else None
+        ),
+        "post_minimum_validation_every_epochs": (
+            post_minimum_validation_every_epochs if fixed_epochs else None
+        ),
+        "scheduled_validation_epochs": (
+            list(scheduled_validation_epochs) if fixed_epochs else []
+        ),
         "early_stop_patience_validations": early_stop_patience,
         "early_stop_start_epoch": early_stop_start_epoch,
         "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
@@ -225,6 +252,9 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "epochs_per_pass": epochs_per_pass,
         "physical_batch_size": physical,
         "effective_batch_size": effective,
+        "scheduled_validation_epochs": (
+            list(scheduled_validation_epochs) if fixed_epochs else []
+        ),
     }
 
 
@@ -251,7 +281,7 @@ def _validation_summary(
     }
 
 
-def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | None) -> None:
+def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | None) -> None:
     if meta is None:
         return
     validation_decode_type, validation_candidates = require_validation_decoding(args)
@@ -269,7 +299,12 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
         # evidence here instead of evaluating every epoch snapshot a second time.
         best_checkpoint = output / "best.ckpt"
         summary_path = output / "validation_summary.json"
-        if not best_checkpoint.is_file() or not summary_path.is_file():
+        if (
+            not best_checkpoint.is_file()
+            or not (output / "best_within_5000.ckpt").is_file()
+            or not (output / "best_overall.ckpt").is_file()
+            or not summary_path.is_file()
+        ):
             raise RuntimeError(
                 "TERRAN fixed-epoch training ended without an online validation selection"
             )
@@ -470,6 +505,12 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             ],
             "selected_checkpoint": str(output / "checkpoint_selected.pt"),
             "best_checkpoint": str(output / "best.ckpt"),
+            "best_within_5000_checkpoint": str(output / "best_within_5000.ckpt"),
+            "best_overall_checkpoint": str(output / "best_overall.ckpt"),
+            "minimum_training_epochs": (
+                int(getattr(args, "minimum_training_epochs", None) or args.training_epochs)
+                if fixed_epochs else None
+            ),
             "validation_every_epochs": (
                 int(
                     getattr(args, "validation_every_epochs", None)
@@ -477,6 +518,17 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
                 )
                 if fixed_epochs
                 else None
+            ),
+            "post_minimum_validation_every_epochs": (
+                int(
+                    getattr(args, "post_minimum_validation_every_epochs", None)
+                    or getattr(args, "validation_every_epochs", None)
+                    or args.training_epochs
+                )
+                if fixed_epochs else None
+            ),
+            "scheduled_validation_epochs": list(
+                meta.get("scheduled_validation_epochs", [])
             ),
             "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
             "completed_validation_checkpoints": int(early_stop_state.get("completed_validation_checkpoints", 0)),

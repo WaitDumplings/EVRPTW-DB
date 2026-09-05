@@ -11,20 +11,20 @@ data path is committed.
 
 ## Active single-seed four-scale configuration
 
-Runtime budget: `drl_rq_runtime_budget_v9_5000ep_fixed_val250`.
-This is a fresh candidate budget: start it with `full.sh`; do not use a v8
-checkpoint as a v9 resume source. `resume.sh` is for interruption recovery within
-the same v9 job and commit.
+Runtime budget: `drl_rq_runtime_budget_v10_min5000_max10000_tailval50`.
+This is a fresh candidate budget: start it with `full.sh`; do not use a v8 or v9
+checkpoint as a v10 resume source. `resume.sh` is for interruption recovery within
+the same v10 job and commit.
 
 The manifests contain seed 1234 only. The 2080 Ti servers own Cus50/Cus100;
 the two RTX 6000 Ada GPUs own Cus500/Cus1000.
 
-| Scale | Hardware | Epochs | Environments/epoch | Total environments | Customer exposures |
-|---|---|---:|---:|---:|---:|
-| Cus50 | RTX 2080 Ti | 5,000 | 1,024 | 5,120,000 | 256,000,000 |
-| Cus100 | RTX 2080 Ti | 5,000 | 256 | 1,280,000 | 128,000,000 |
-| Cus500 | RTX 6000 Ada | 5,000 | 64 | 320,000 | 160,000,000 |
-| Cus1000 | RTX 6000 Ada | 5,000 | 2 | 10,000 | 10,000,000 |
+| Scale | Hardware | Minimum epochs | Hard cap | Environments/epoch | Maximum environments | Maximum customer exposures |
+|---|---|---:|---:|---:|---:|---:|
+| Cus50 | RTX 2080 Ti | 5,000 | 10,000 | 1,024 | 10,240,000 | 512,000,000 |
+| Cus100 | RTX 2080 Ti | 5,000 | 10,000 | 256 | 2,560,000 | 256,000,000 |
+| Cus500 | RTX 6000 Ada | 5,000 | 10,000 | 64 | 640,000 | 320,000,000 |
+| Cus1000 | RTX 6000 Ada | 5,000 | 10,000 | 2 | 20,000 | 20,000,000 |
 
 Physical batches use exact gradient accumulation divisors of the logical batch:
 
@@ -37,12 +37,17 @@ Physical batches use exact gradient accumulation divisors of the logical batch:
 
 AM and TERRAN use 100 training trajectories on Cus500/Cus1000. EVRPTW-RL and
 DRL-TS use one because sample-100 exceeded memory even at physical batch 1.
-Validation and test use stochastic best-of-100 decoding. Formal validation runs
-every 250 epochs on 500 fixed views. Early stopping is disabled: every method
-receives exactly 5,000 updates, while
-`best.ckpt` is still selected from at most 20 validation checkpoints. The
+Validation and test use stochastic best-of-100 decoding on 500 fixed validation
+views. Validation runs every 250 epochs through epoch 5,000, then every 50 epochs.
+Early stopping is disabled through epoch 5,000; after that, ten consecutive
+non-improving validations stop the run, with a hard cap of 10,000 epochs and an
+earliest stop at epoch 5,500. `best.ckpt`, `checkpoint_selected.pt`, and
+`best_within_5000.ckpt` identify the primary fixed-budget selection.
+`best_overall.ckpt` records the best state including optional tail training. The
 validation instance set and per-instance candidate seeds are fixed across all
-checkpoints; test remains independent and never selects a checkpoint.
+checkpoints; test remains independent and never selects a checkpoint. DRL-TS
+always switches from soft to hard training after epoch 2,500, independent of the
+10,000-epoch cap.
 
 There are 24 formal jobs total. Server counts are 8, 5, 3, and 8 for
 `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1`, and `a6000_2_1`, respectively.

@@ -235,6 +235,10 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(job["training_trajectory_count"]),
             "--training-epochs",
             str(job["training_epochs"]),
+            "--minimum-training-epochs",
+            str(job.get("minimum_training_epochs", job["training_epochs"])),
+            "--post-minimum-validation-every-epochs",
+            str(job.get("post_minimum_validation_every_epochs", job.get("validation_every_epochs", job["training_epochs"]))),
             "--training-rollout-steps",
             str(job["training_rollout_steps"]),
             "--physical-batch-size",
@@ -289,6 +293,10 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             "cuda",
             "--training-epochs",
             str(job["training_epochs"]),
+            "--minimum-training-epochs",
+            str(job.get("minimum_training_epochs", job["training_epochs"])),
+            "--post-minimum-validation-every-epochs",
+            str(job.get("post_minimum_validation_every_epochs", job.get("validation_every_epochs", job["training_epochs"]))),
             "--training-rollout-steps",
             str(job["training_rollout_steps"]),
             "--physical-batch-size",
@@ -324,6 +332,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             "--output-dir",
             str(out),
         ]
+    if job["method"] == "drl_ts" and job.get("soft_stage_end_epoch") is not None:
+        command.extend(["--soft-stage-end-epoch", str(job["soft_stage_end_epoch"])])
     if job.get("training_stream_path"):
         command.extend(
             [

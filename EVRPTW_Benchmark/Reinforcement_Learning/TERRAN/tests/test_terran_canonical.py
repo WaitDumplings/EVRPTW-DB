@@ -240,13 +240,21 @@ def test_fixed_epoch_protocol_does_not_expand_to_a_full_data_pass(
         max_batches_per_pass=None,
         validation_every_passes=5,
         validation_every_epochs=50,
-        validation_checkpoints=4,
+        minimum_training_epochs=100,
+        post_minimum_validation_every_epochs=10,
+        validation_checkpoints=12,
+        early_stop_patience_validations=3,
+        early_stop_start_epoch=100,
         pilot_mode=False,
     )
     configured, meta = terran_protocol.configure_protocol(args, {})
     assert configured["training"]["epochs"] == 200
     assert configured["training"]["checkpoint_interval"] == 50
-    assert configured["protocol"]["validation_checkpoints"] == 4
+    assert configured["protocol"]["validation_checkpoints"] == 12
+    assert configured["training"]["validation_epochs"][:3] == [50, 100, 110]
+    assert configured["training"]["validation_epochs"][-1] == 200
+    assert configured["protocol"]["minimum_training_epochs"] == 100
+    assert configured["protocol"]["post_minimum_validation_every_epochs"] == 10
     assert configured["protocol"]["budget_mode"] == "fixed_logical_epochs"
     assert configured["protocol"]["epochs_per_pass"] == 200
     assert configured["protocol"]["logical_environments_per_epoch"] == 2
@@ -353,6 +361,8 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
     final_checkpoint = checkpoint_dir / "checkpoint_final.pt"
     final_checkpoint.write_bytes(b"final")
     (output / "best.ckpt").write_bytes(b"best")
+    (output / "best_within_5000.ckpt").write_bytes(b"best")
+    (output / "best_overall.ckpt").write_bytes(b"best")
     (output / "validation_summary.json").write_text(
         json.dumps(
             {

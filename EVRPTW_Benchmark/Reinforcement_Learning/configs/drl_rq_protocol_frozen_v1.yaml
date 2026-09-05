@@ -83,14 +83,19 @@ model_selection:
   validation_decode_type: sampling
   validation_candidate_count: 100
   candidate_selection: independent_verifier_feasible_then_min_directed_distance
-  validation_every_epochs: 250
+  minimum_training_epochs: 5000
+  maximum_training_epochs: 10000
+  validation_every_epochs_through_minimum: 250
+  validation_every_epochs_after_minimum: 50
   primary_metric: independent_verifier_feasibility_rate
   secondary_metric: mean_verified_directed_distance
-  early_stopping: disabled
-  early_stop_patience_validation_checks: 0
-  early_stop_no_improvement_epochs_equivalent: 0
-  early_stop_start_epoch_exclusive: null
-  earliest_possible_early_stop_epoch: null
+  early_stopping: enabled_after_minimum_budget
+  early_stop_patience_validation_checks: 10
+  early_stop_no_improvement_epochs_equivalent: 500
+  early_stop_start_epoch_exclusive: 5000
+  earliest_possible_early_stop_epoch: 5500
+  primary_checkpoint: best_within_5000.ckpt
+  extended_checkpoint: best_overall.ckpt
   validation_seed_rule: fixed_training_seed_plus_910000000
   test_used_for_selection: false
 
@@ -99,6 +104,12 @@ test_inference:
   candidate_count: 100
   candidate_selection: independent_verifier_feasible_then_min_directed_distance
   note: common benchmark budget; paper-supported but not paper-exact candidate counts
+
+training_stage_boundaries:
+  am_ema_warmup_end_update: 2500
+  evrptw_rl_ema_warmup_end_update: 1000
+  drl_ts_soft_stage_end_update: 2500
+  boundaries_independent_of_maximum_epochs: true
 
 training_trajectories_per_instance:
   am_evrptw: 1

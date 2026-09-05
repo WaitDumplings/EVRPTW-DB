@@ -1,7 +1,7 @@
 schema: drl_rq_runtime_candidates_v2
 status: runtime_candidate_not_yet_validated
 protocol_id: drl_rq_protocol_frozen_v1
-runtime_budget_id: drl_rq_runtime_budget_v9_5000ep_fixed_val250
+runtime_budget_id: drl_rq_runtime_budget_v10_min5000_max10000_tailval50
 
 # Common publication inference budget. Each candidate is independently checked
 # by the canonical verifier; selection is feasible-first, then minimum distance.
@@ -33,25 +33,30 @@ scale_hardware:
   a6000: [Cus500, Cus1000]
 
 # One logical epoch is one outer optimizer update over the listed number of
-# base environments. Every scale uses 5,000 logical epochs. Fairness is enforced
+# base environments. Every scale has a 5,000-epoch minimum and a 10,000-epoch hard cap. Fairness is enforced
 # within each scale: every method and seed sees the same deterministic stream
 # and effective batch. Cross-scale customer exposure is intentionally not forced
 # to match because the scales are not compared as one optimization task.
-candidate_logical_epochs:
+candidate_minimum_logical_epochs:
   Cus50: 5000
   Cus100: 5000
   Cus500: 5000
   Cus1000: 5000
+candidate_logical_epochs:
+  Cus50: 10000
+  Cus100: 10000
+  Cus500: 10000
+  Cus1000: 10000
 candidate_environments_per_epoch:
   Cus50: 1024
   Cus100: 256
   Cus500: 64
   Cus1000: 2
 candidate_customer_exposure_budget:
-  Cus50: 256000000
-  Cus100: 128000000
-  Cus500: 160000000
-  Cus1000: 10000000
+  Cus50: 512000000
+  Cus100: 256000000
+  Cus500: 320000000
+  Cus1000: 20000000
 
 # The effective/logical batch equals environments_per_epoch, so every logical
 # epoch produces exactly one outer update. Physical batches remain architecture
@@ -77,10 +82,13 @@ formal_candidate:
     Cus1000: 500
   final_validation_views: {}
   validation_every_epochs: 250
-  early_stop_patience_validations: 0
-  early_stopping: disabled
-  early_stop_start_epoch: 0
-  early_stop_patience_epochs_equivalent: 0
+  post_minimum_validation_every_epochs: 50
+  early_stop_patience_validations: 10
+  early_stopping: enabled_after_minimum_budget
+  early_stop_start_epoch: 5000
+  earliest_possible_early_stop_epoch: 5500
+  early_stop_patience_epochs_equivalent: 500
+  drl_ts_soft_stage_end_epoch: 2500
   validation_seed_offset: 910000000
   checkpoint_selection: feasibility_rate_then_mean_verified_distance
   exposure_checkpoints_fraction: [0.25, 0.50, 1.00]

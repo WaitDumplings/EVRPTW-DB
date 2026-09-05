@@ -22,6 +22,7 @@ from .training_protocol import (
     parse_int_checkpoints,
     require_registered_batches,
     require_validation_decoding,
+    validation_epochs,
     validation_key,
     verified_validation,
 )
@@ -191,6 +192,7 @@ def train_reinforce_data_passes(
     validation_solve: Callable[[torch.nn.Module, Any, int], dict[str, Any]],
     legacy_batch_size: int,
     soft_stage_fraction: float = 0.0,
+    soft_stage_end_epoch: int | None = None,
 ) -> None:
     """Run a fixed-batch protocol for the three REINFORCE baselines.
 
@@ -226,16 +228,27 @@ def train_reinforce_data_passes(
         or fixed_epochs
         or 1
     )
-    if validation_every_epochs <= 0:
-        raise ValueError("--validation-every-epochs must be positive")
+    minimum_training_epochs = int(
+        getattr(args, "minimum_training_epochs", None)
+        or fixed_epochs
+        or 1
+    )
+    post_minimum_validation_every_epochs = int(
+        getattr(args, "post_minimum_validation_every_epochs", None)
+        or validation_every_epochs
+    )
+    scheduled_validation_epochs: tuple[int, ...] = ()
     if fixed_epochs is not None:
-        expected_validation_checkpoints = (
-            fixed_epochs + validation_every_epochs - 1
-        ) // validation_every_epochs
-        if int(args.validation_checkpoints) != expected_validation_checkpoints:
+        scheduled_validation_epochs = validation_epochs(
+            fixed_epochs,
+            initial_interval=validation_every_epochs,
+            minimum_epochs=minimum_training_epochs,
+            post_minimum_interval=post_minimum_validation_every_epochs,
+        )
+        if int(args.validation_checkpoints) != len(scheduled_validation_epochs):
             raise ValueError(
                 "fixed-epoch validation checkpoint count does not match "
-                "--validation-every-epochs"
+                "the configured two-phase validation schedule"
             )
     early_stop_patience = int(
         getattr(args, "early_stop_patience_validations", 0) or 0
@@ -254,6 +267,10 @@ def train_reinforce_data_passes(
     if fixed_epochs is not None and early_stop_start_epoch >= fixed_epochs:
         raise ValueError(
             "--early-stop-start-epoch must be smaller than --training-epochs"
+        )
+    if early_stop_patience and early_stop_start_epoch < minimum_training_epochs:
+        raise ValueError(
+            "early stopping cannot start before --minimum-training-epochs"
         )
     physical, effective = require_registered_batches(args, legacy_batch_size)
     stream_path = getattr(args, "training_stream_path", None)
@@ -278,6 +295,8 @@ def train_reinforce_data_passes(
     checkpoint = output / "checkpoint_latest.pt"
     selected_checkpoint = output / "checkpoint_selected.pt"
     best_checkpoint = output / "best.ckpt"
+    best_within_minimum_checkpoint = output / "best_within_5000.ckpt"
+    best_overall_checkpoint = output / "best_overall.ckpt"
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
@@ -313,6 +332,9 @@ def train_reinforce_data_passes(
     if fixed_epochs is not None and completed_logical_epochs and stream_path is None:
         raise ValueError("fixed-epoch resume requires an explicit training stream")
     best_key = tuple(resume_extra.get("best_validation_key", [-math.inf, -math.inf]))
+    best_within_minimum_key = tuple(
+        resume_extra.get("best_within_minimum_key", [-math.inf, -math.inf])
+    )
     validation_checks_without_improvement = int(
         resume_extra.get("validation_checks_without_improvement", 0)
     )
@@ -322,6 +344,12 @@ def train_reinforce_data_passes(
     early_stopped = False
     early_stop_epoch: int | None = None
     terminal_logical_epoch = completed_logical_epochs
+    if soft_stage_end_epoch is not None:
+        soft_stage_end_epoch = int(soft_stage_end_epoch)
+        if fixed_epochs is None:
+            raise ValueError("an absolute soft-stage boundary requires --training-epochs")
+        if not 0 <= soft_stage_end_epoch <= fixed_epochs:
+            raise ValueError("soft-stage end epoch must be in [0, training epochs]")
     baseline_probe_size = max(
         0, int(getattr(args, "baseline_eval_size", 64))
     )
@@ -360,7 +388,7 @@ def train_reinforce_data_passes(
         pass_started = time.perf_counter()
         soft = bool(soft_stage_fraction and data_pass <= int(total_passes * soft_stage_fraction))
         training_stage = "soft" if soft else "hard"
-        if fixed_epochs is not None and soft_stage_fraction:
+        if fixed_epochs is not None and (soft_stage_fraction or soft_stage_end_epoch is not None):
             training_stage = "mixed"
         sums = {"loss": 0.0, "cost": 0.0, "distance": 0.0, "feasible": 0.0}
         instances_seen = 0
@@ -399,7 +427,9 @@ def train_reinforce_data_passes(
             logical_epoch = completed_logical_epochs + group_index + 1
             terminal_logical_epoch = logical_epoch
             group_soft = soft
-            if fixed_epochs is not None and soft_stage_fraction:
+            if fixed_epochs is not None and soft_stage_end_epoch is not None:
+                group_soft = logical_epoch <= soft_stage_end_epoch
+            elif fixed_epochs is not None and soft_stage_fraction:
                 group_soft = logical_epoch <= int(
                     fixed_epochs * soft_stage_fraction
                 )
@@ -561,10 +591,7 @@ def train_reinforce_data_passes(
                 )
                 validation_due = bool(
                     validation_instances
-                    and (
-                        logical_epoch % validation_every_epochs == 0
-                        or logical_epoch == fixed_epochs
-                    )
+                    and logical_epoch in scheduled_validation_epochs
                 )
                 if validation_due:
                     policy.eval()
@@ -586,9 +613,14 @@ def train_reinforce_data_passes(
                             "candidate_count": validation_candidates,
                         }
                     )
-                    is_best = validation_key(validation) > tuple(best_key)
-                    if is_best:
-                        best_key = validation_key(validation)
+                    current_key = validation_key(validation)
+                    is_best_overall = current_key > tuple(best_key)
+                    is_best_within_minimum = bool(
+                        logical_epoch <= minimum_training_epochs
+                        and current_key > tuple(best_within_minimum_key)
+                    )
+                    if is_best_overall:
+                        best_key = current_key
                         validation_checks_without_improvement = 0
                     elif logical_epoch > early_stop_start_epoch:
                         validation_checks_without_improvement += 1
@@ -596,6 +628,8 @@ def train_reinforce_data_passes(
                         # Pre-gate validation still selects best.ckpt, but it must
                         # not consume patience intended for the mature phase.
                         validation_checks_without_improvement = 0
+                    if is_best_within_minimum:
+                        best_within_minimum_key = current_key
                     completed_validation_checks += 1
                     early_stop_eligible = logical_epoch > early_stop_start_epoch
                     early_stop_due = bool(
@@ -606,7 +640,10 @@ def train_reinforce_data_passes(
                     )
                     validation.update(
                         {
-                            "checkpoint_selected": is_best,
+                            "checkpoint_selected": is_best_within_minimum,
+                            "best_within_minimum_selected": is_best_within_minimum,
+                            "best_overall_selected": is_best_overall,
+                            "minimum_training_epochs": minimum_training_epochs,
                             "validation_checks_without_improvement": validation_checks_without_improvement,
                             "early_stop_start_epoch": early_stop_start_epoch,
                             "early_stop_eligible": early_stop_eligible,
@@ -617,6 +654,7 @@ def train_reinforce_data_passes(
                     extra = {
                         "logical_epoch": logical_epoch,
                         "best_validation_key": list(best_key),
+                        "best_within_minimum_key": list(best_within_minimum_key),
                         "validation_checks_without_improvement": validation_checks_without_improvement,
                         "completed_validation_checks": completed_validation_checks,
                         "ema_cost": ema_cost,
@@ -641,10 +679,15 @@ def train_reinforce_data_passes(
                         extra=extra,
                     )
                     shutil.copy2(epoch_checkpoint, checkpoint)
-                    if is_best:
+                    if is_best_overall:
+                        shutil.copy2(epoch_checkpoint, best_overall_checkpoint)
+                        atomic_json(output / "validation_summary_overall.json", validation)
+                    if is_best_within_minimum:
+                        shutil.copy2(epoch_checkpoint, best_within_minimum_checkpoint)
                         shutil.copy2(epoch_checkpoint, selected_checkpoint)
                         shutil.copy2(epoch_checkpoint, best_checkpoint)
                         atomic_json(output / "validation_summary.json", validation)
+                        atomic_json(output / "validation_summary_within_5000.json", validation)
                     state.completed_data_passes = checkpoint_completed_passes
                     state.instances_seen = starting_state_instances + instances_seen
                     state.customer_exposures = (
@@ -749,6 +792,7 @@ def train_reinforce_data_passes(
             best_key = validation_key(validation)
         extra = {
             "best_validation_key": list(best_key),
+            "best_within_minimum_key": list(best_within_minimum_key),
             "ema_cost": ema_cost,
             "baseline_eval_count": baseline_eval_count,
             "baseline_update_count": baseline_update_count,
@@ -800,6 +844,7 @@ def train_reinforce_data_passes(
             "environment_transitions_total": environment_transitions_total + transition_count,
             "physical_batch_size": physical,
             "training_rollout_steps": int(args.training_rollout_steps),
+            "soft_stage_end_epoch": soft_stage_end_epoch,
             "trajectory_count": trajectory_count,
             "mean_trajectory_steps": float(observed_steps.mean()),
             "trajectory_steps_p50": float(np.quantile(observed_steps, 0.50)),
@@ -898,6 +943,7 @@ def train_reinforce_data_passes(
         "requested_data_passes": int(args.data_passes) if args.data_passes is not None else None,
         "completed_data_passes": int(state.completed_data_passes),
         "training_rollout_steps": int(args.training_rollout_steps),
+        "soft_stage_end_epoch": soft_stage_end_epoch,
         "instances_seen": int(state.instances_seen),
         "customer_exposures": int(state.customer_exposures),
         "training_stream_path": str(stream_path) if stream_path is not None else None,
@@ -909,9 +955,16 @@ def train_reinforce_data_passes(
         "saved_gpu_hour_checkpoints": sorted(saved_gpu_hours),
         "selected_checkpoint": str(selected_checkpoint if selected_checkpoint.exists() else checkpoint),
         "best_checkpoint": str(best_checkpoint if best_checkpoint.exists() else selected_checkpoint),
+        "best_within_5000_checkpoint": str(best_within_minimum_checkpoint),
+        "best_overall_checkpoint": str(best_overall_checkpoint),
+        "minimum_training_epochs": minimum_training_epochs if fixed_epochs is not None else None,
         "validation_every_epochs": (
             validation_every_epochs if fixed_epochs is not None else None
         ),
+        "post_minimum_validation_every_epochs": (
+            post_minimum_validation_every_epochs if fixed_epochs is not None else None
+        ),
+        "scheduled_validation_epochs": list(scheduled_validation_epochs),
         "validation_checkpoints": int(args.validation_checkpoints),
         "completed_validation_checkpoints": completed_validation_checks,
         "early_stop_patience_validations": early_stop_patience,

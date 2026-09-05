@@ -52,8 +52,15 @@ def test_validation_and_test_use_common_best_of_100_sampling_budget() -> None:
     evaluation = protocol["test_inference"]
     assert selection["validation_decode_type"] == "sampling"
     assert selection["validation_candidate_count"] == 100
-    assert selection["early_stopping"] == "disabled"
-    assert selection["early_stop_patience_validation_checks"] == 0
+    assert selection["early_stopping"] == "enabled_after_minimum_budget"
+    assert selection["minimum_training_epochs"] == 5_000
+    assert selection["maximum_training_epochs"] == 10_000
+    assert selection["validation_every_epochs_through_minimum"] == 250
+    assert selection["validation_every_epochs_after_minimum"] == 50
+    assert selection["early_stop_patience_validation_checks"] == 10
+    assert selection["earliest_possible_early_stop_epoch"] == 5_500
+    assert selection["primary_checkpoint"] == "best_within_5000.ckpt"
+    assert selection["extended_checkpoint"] == "best_overall.ckpt"
     assert evaluation["decode_type"] == "sampling"
     assert evaluation["candidate_count"] == 100
     assert protocol["training_trajectories_per_instance"] == {

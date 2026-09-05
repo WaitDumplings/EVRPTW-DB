@@ -41,6 +41,8 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--final-validation-limit", type=int, default=0)
     parser.add_argument("--validation-every-passes", type=int, default=5)
     parser.add_argument("--validation-every-epochs", type=int)
+    parser.add_argument("--minimum-training-epochs", type=int)
+    parser.add_argument("--post-minimum-validation-every-epochs", type=int)
     parser.add_argument("--validation-checkpoints", type=int, default=1)
     parser.add_argument("--early-stop-patience-validations", type=int, default=0)
     parser.add_argument("--early-stop-start-epoch", type=int, default=0)
@@ -80,6 +82,34 @@ def require_validation_decoding(args: argparse.Namespace) -> tuple[str, int]:
     if decode_type == "greedy" and candidates != 1:
         raise ValueError("greedy validation has exactly one candidate")
     return decode_type, candidates
+
+
+def validation_epochs(
+    maximum_epochs: int,
+    *,
+    initial_interval: int,
+    minimum_epochs: int | None = None,
+    post_minimum_interval: int | None = None,
+) -> tuple[int, ...]:
+    """Return the exact fixed-budget validation schedule.
+
+    The minimum-budget checkpoint belongs to the initial phase. A denser
+    post-minimum schedule starts strictly after that checkpoint.
+    """
+    maximum = int(maximum_epochs)
+    initial = int(initial_interval)
+    minimum = maximum if minimum_epochs is None else int(minimum_epochs)
+    tail = initial if post_minimum_interval is None else int(post_minimum_interval)
+    if maximum <= 0 or initial <= 0 or tail <= 0:
+        raise ValueError("epoch limits and validation intervals must be positive")
+    if not 0 < minimum <= maximum:
+        raise ValueError("minimum training epochs must be in [1, maximum epochs]")
+    scheduled = set(range(initial, minimum + 1, initial))
+    scheduled.add(minimum)
+    if minimum < maximum:
+        scheduled.update(range(minimum + tail, maximum + 1, tail))
+        scheduled.add(maximum)
+    return tuple(sorted(scheduled))
 
 
 def parse_int_checkpoints(value: str | None) -> tuple[int, ...]:
@@ -235,6 +265,7 @@ __all__ = [
     "parse_int_checkpoints",
     "require_registered_batches",
     "require_training_rollout_steps",
+    "validation_epochs",
     "validation_key",
     "verified_validation",
 ]

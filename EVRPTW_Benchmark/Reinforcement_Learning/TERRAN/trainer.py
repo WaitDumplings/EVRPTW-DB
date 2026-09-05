@@ -700,12 +700,22 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     debug_log_path = log_dir / "debug_log.txt"
     validation_history_path = out_root / "validation_history.jsonl"
     validation_summary_path = out_root / "validation_summary.json"
+    validation_summary_within_path = out_root / "validation_summary_within_5000.json"
+    validation_summary_overall_path = out_root / "validation_summary_overall.json"
     best_checkpoint_path = out_root / "best.ckpt"
+    best_within_minimum_path = out_root / "best_within_5000.ckpt"
+    best_overall_path = out_root / "best_overall.ckpt"
     selected_checkpoint_path = out_root / "checkpoint_selected.pt"
     best_eval_key = (-math.inf, -math.inf)
-    if validation_summary_path.is_file():
+    best_within_minimum_key = (-math.inf, -math.inf)
+    previous_overall_path = (
+        validation_summary_overall_path
+        if validation_summary_overall_path.is_file()
+        else validation_summary_path
+    )
+    if previous_overall_path.is_file():
         previous_validation = json.loads(
-            validation_summary_path.read_text(encoding="utf-8")
+            previous_overall_path.read_text(encoding="utf-8")
         )
         previous_distance = previous_validation.get(
             "mean_verified_distance_km"
@@ -718,6 +728,28 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 else -math.inf
             ),
         )
+    previous_within_path = (
+        validation_summary_within_path
+        if validation_summary_within_path.is_file()
+        else validation_summary_path
+    )
+    if previous_within_path.is_file():
+        previous_within = json.loads(previous_within_path.read_text(encoding="utf-8"))
+        previous_within_distance = previous_within.get("mean_verified_distance_km")
+        best_within_minimum_key = (
+            float(previous_within["complete_and_feasible_rate"]),
+            (
+                -float(previous_within_distance)
+                if previous_within_distance is not None
+                else -math.inf
+            ),
+        )
+    minimum_training_epochs = int(
+        train_cfg.get("minimum_training_epochs", epochs) or epochs
+    )
+    scheduled_validation_epochs = {
+        int(value) for value in train_cfg.get("validation_epochs", [])
+    }
     early_stop_patience = int(
         train_cfg.get("early_stop_patience_validations", 0) or 0
     )
@@ -1102,7 +1134,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             eval_row: dict[str, Any] = {}
             eval_wall_time_s = 0.0
             early_stop_due = False
-            should_eval = eval_interval > 0 and (epoch % eval_interval == 0 or epoch == epochs)
+            should_eval = (
+                epoch in scheduled_validation_epochs
+                if scheduled_validation_epochs
+                else eval_interval > 0 and (epoch % eval_interval == 0 or epoch == epochs)
+            )
             if should_eval:
                 eval_start = time.perf_counter()
                 eval_row = evaluate_fixed_dataset(
@@ -1149,8 +1185,12 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                             else -math.inf
                         ),
                     )
-                    is_best = selection_key > best_eval_key
-                    if is_best:
+                    is_best_overall = selection_key > best_eval_key
+                    is_best_within_minimum = bool(
+                        epoch <= minimum_training_epochs
+                        and selection_key > best_within_minimum_key
+                    )
+                    if is_best_overall:
                         validation_checks_without_improvement = 0
                     elif epoch > early_stop_start_epoch:
                         validation_checks_without_improvement += 1
@@ -1166,7 +1206,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     )
                     validation.update(
                         {
-                            "checkpoint_selected": is_best,
+                            "checkpoint_selected": is_best_within_minimum,
+                            "best_within_minimum_selected": is_best_within_minimum,
+                            "best_overall_selected": is_best_overall,
+                            "minimum_training_epochs": minimum_training_epochs,
                             "validation_checks_without_improvement": validation_checks_without_improvement,
                             "early_stop_start_epoch": early_stop_start_epoch,
                             "early_stop_eligible": early_stop_eligible,
@@ -1174,25 +1217,25 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         }
                     )
                     append_jsonl(validation_history_path, validation)
-                    if is_best:
+                    if is_best_overall:
                         best_eval_key = selection_key
                         save_checkpoint(
-                            best_checkpoint_path,
-                            agent,
-                            optimizer,
-                            cfg,
-                            epoch,
-                            seed,
+                            best_overall_path, agent, optimizer, cfg, epoch, seed
+                        )
+                        atomic_json(validation_summary_overall_path, validation)
+                    if is_best_within_minimum:
+                        best_within_minimum_key = selection_key
+                        save_checkpoint(
+                            best_within_minimum_path, agent, optimizer, cfg, epoch, seed
                         )
                         save_checkpoint(
-                            selected_checkpoint_path,
-                            agent,
-                            optimizer,
-                            cfg,
-                            epoch,
-                            seed,
+                            best_checkpoint_path, agent, optimizer, cfg, epoch, seed
+                        )
+                        save_checkpoint(
+                            selected_checkpoint_path, agent, optimizer, cfg, epoch, seed
                         )
                         atomic_json(validation_summary_path, validation)
+                        atomic_json(validation_summary_within_path, validation)
                 _debug_log(
                     debug_enabled,
                     df,
@@ -1275,7 +1318,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 }
             )
             f.flush()
-            if epoch % checkpoint_interval == 0 or epoch == epochs:
+            if should_eval or epoch % checkpoint_interval == 0 or epoch == epochs:
                 save_checkpoint(ckpt_dir / f"checkpoint_epoch_{epoch:04d}.pt", agent, optimizer, cfg, epoch, seed)
             observed_exposure = int(pool.sample_count) * num_customers
             observed_gpu_hours = (time.perf_counter() - training_started) / 3600.0
@@ -1311,7 +1354,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             if (
                 protocol_cfg
                 and protocol_epochs > 0
-                and epoch % protocol_epochs == 0
+                and (should_eval or epoch % protocol_epochs == 0)
             ):
                 latest = out_root / "checkpoint_latest.pt"
                 save_checkpoint(

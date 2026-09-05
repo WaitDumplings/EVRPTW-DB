@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--city-slugs")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--soft-stage-fraction", type=float, default=0.5)
+    parser.add_argument("--soft-stage-end-epoch", type=int)
     parser.add_argument("--batches-per-epoch", type=int, default=250)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--samples-per-instance", type=int, default=1)
@@ -116,6 +117,8 @@ def main() -> None:
     args = parse_args()
     if not 0.0 <= args.soft_stage_fraction <= 1.0:
         raise ValueError("soft-stage-fraction must be in [0, 1]")
+    if args.soft_stage_end_epoch is not None and args.soft_stage_end_epoch < 0:
+        raise ValueError("soft-stage-end-epoch cannot be negative")
     set_seed(args.seed)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pool = Stage2TaskPool(

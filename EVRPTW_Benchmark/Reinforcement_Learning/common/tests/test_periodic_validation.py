@@ -66,16 +66,18 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         )
 
     args = SimpleNamespace(
-        training_epochs=4,
+        training_epochs=6,
         data_passes=None,
         max_batches_per_pass=None,
         pilot_mode=False,
         validation_every_epochs=2,
-        validation_checkpoints=2,
+        minimum_training_epochs=4,
+        post_minimum_validation_every_epochs=1,
+        validation_checkpoints=4,
         physical_batch_size=1,
         effective_batch_size=2,
         training_stream_path=tmp_path / "stream.parquet",
-        customer_exposure_budget=400,
+        customer_exposure_budget=600,
         scale="Cus50",
         output_dir=tmp_path / "run",
         protocol_id="periodic-validation-test",
@@ -104,6 +106,7 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         feasible=lambda value: value.feasible,
         validation_solve=lambda *_args: {},
         legacy_batch_size=1,
+        soft_stage_end_epoch=2,
     )
 
     output = args.output_dir
@@ -111,10 +114,17 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         json.loads(line)
         for line in (output / "validation_history.jsonl").read_text().splitlines()
     ]
-    assert [row["logical_epoch"] for row in history] == [2, 4]
+    assert [row["logical_epoch"] for row in history] == [2, 4, 5, 6]
+    logical_history = [
+        json.loads(line)
+        for line in (output / "logical_epoch_history.jsonl").read_text().splitlines()
+    ]
+    assert [row["training_stage"] for row in logical_history] == [
+        "soft", "soft", "hard", "hard", "hard", "hard"
+    ]
     assert all(row["validation_wall_time_s"] >= 0 for row in history)
-    assert [count for count, _ in validation_calls] == [2, 2, 3]
-    assert validation_calls[0][1] == validation_calls[1][1]
+    assert [count for count, _ in validation_calls] == [2, 2, 2, 2, 3]
+    assert len({seed for _, seed in validation_calls[:-1]}) == 1
     assert (output / "checkpoint_epoch_0002.pt").is_file()
     assert (output / "checkpoint_epoch_0004.pt").is_file()
     assert (output / "best.ckpt").read_bytes() == (
@@ -122,6 +132,18 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
     ).read_bytes()
     summary = json.loads((output / "validation_summary.json").read_text())
     assert summary["logical_epoch"] == 4
+    overall_summary = json.loads(
+        (output / "validation_summary_overall.json").read_text()
+    )
+    assert overall_summary["logical_epoch"] == 6
+    primary_payload = torch.load(
+        output / "best_within_5000.ckpt", map_location="cpu", weights_only=False
+    )
+    overall_payload = torch.load(
+        output / "best_overall.ckpt", map_location="cpu", weights_only=False
+    )
+    assert primary_payload["logical_epoch"] == 4
+    assert overall_payload["logical_epoch"] == 6
     final_audit = json.loads(
         (output / "validation_final_audit.json").read_text()
     )
@@ -172,6 +194,8 @@ def test_fixed_epoch_early_stop_waits_until_after_start_epoch(tmp_path, monkeypa
         max_batches_per_pass=None,
         pilot_mode=False,
         validation_every_epochs=2,
+        minimum_training_epochs=4,
+        post_minimum_validation_every_epochs=2,
         validation_checkpoints=5,
         early_stop_patience_validations=2,
         early_stop_start_epoch=4,
@@ -215,6 +239,8 @@ def test_fixed_epoch_early_stop_waits_until_after_start_epoch(tmp_path, monkeypa
     assert terminal["completed_validation_checkpoints"] == 4
     assert terminal["early_stop_start_epoch"] == 4
     assert len(validation_calls) == 4
+    assert (args.output_dir / "best_within_5000.ckpt").is_file()
+    assert (args.output_dir / "best_overall.ckpt").is_file()
 
 
 def test_completed_fixed_budget_can_resume_a_prefix_stable_extension(
@@ -317,6 +343,19 @@ def test_completed_fixed_budget_can_resume_a_prefix_stable_extension(
     assert state["completed_data_passes"] == 1
     assert state["instances_seen"] == 8
     assert state["optimizer_steps"] == 4
+
+
+def test_two_phase_validation_schedule_has_exact_boundary_and_tail():
+    epochs = training_protocol.validation_epochs(
+        10_000,
+        initial_interval=250,
+        minimum_epochs=5_000,
+        post_minimum_interval=50,
+    )
+    assert len(epochs) == 120
+    assert epochs[:3] == (250, 500, 750)
+    assert epochs[19:23] == (5_000, 5_050, 5_100, 5_150)
+    assert epochs[-1] == 10_000
 
 
 def test_verified_validation_disables_autograd(monkeypatch) -> None:

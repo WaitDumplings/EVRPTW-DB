@@ -240,6 +240,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         ).infos[0],
         legacy_batch_size=args.batch_size,
         soft_stage_fraction=args.soft_stage_fraction,
+        soft_stage_end_epoch=getattr(args, "soft_stage_end_epoch", None),
     )
 
 
