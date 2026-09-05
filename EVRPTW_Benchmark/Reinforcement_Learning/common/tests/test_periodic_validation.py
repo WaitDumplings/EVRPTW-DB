@@ -123,6 +123,13 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         "soft", "soft", "hard", "hard", "hard", "hard"
     ]
     assert all(row["validation_wall_time_s"] >= 0 for row in history)
+    assert [row["checkpoint_selected"] for row in history] == [True] * 4
+    assert [row["best_within_minimum_selected"] for row in history] == [
+        True,
+        True,
+        False,
+        False,
+    ]
     assert [count for count, _ in validation_calls] == [2, 2, 2, 2, 3]
     assert len({seed for _, seed in validation_calls[:-1]}) == 1
     assert (output / "checkpoint_epoch_0002.pt").is_file()
@@ -130,26 +137,37 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
     assert (output / "best.ckpt").read_bytes() == (
         output / "checkpoint_selected.pt"
     ).read_bytes()
+    assert (output / "best.ckpt").read_bytes() == (
+        output / "best_overall.ckpt"
+    ).read_bytes()
     summary = json.loads((output / "validation_summary.json").read_text())
-    assert summary["logical_epoch"] == 4
+    assert summary["logical_epoch"] == 6
+    within_summary = json.loads(
+        (output / "validation_summary_within_5000.json").read_text()
+    )
+    assert within_summary["logical_epoch"] == 4
     overall_summary = json.loads(
         (output / "validation_summary_overall.json").read_text()
     )
     assert overall_summary["logical_epoch"] == 6
-    primary_payload = torch.load(
+    within_payload = torch.load(
         output / "best_within_5000.ckpt", map_location="cpu", weights_only=False
     )
     overall_payload = torch.load(
         output / "best_overall.ckpt", map_location="cpu", weights_only=False
     )
-    assert primary_payload["logical_epoch"] == 4
+    selected_payload = torch.load(
+        output / "checkpoint_selected.pt", map_location="cpu", weights_only=False
+    )
+    assert within_payload["logical_epoch"] == 4
     assert overall_payload["logical_epoch"] == 6
+    assert selected_payload["logical_epoch"] == 6
     final_audit = json.loads(
         (output / "validation_final_audit.json").read_text()
     )
     assert final_audit["schema"] == "drl_final_validation_audit_v1"
     assert final_audit["instances"] == 3
-    assert final_audit["selection_logical_epoch"] == 4
+    assert final_audit["selection_logical_epoch"] == 6
     assert final_audit["selection_changed"] is False
 
 

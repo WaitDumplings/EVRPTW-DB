@@ -297,19 +297,28 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
     if fixed_epochs:
         # Fixed-epoch jobs validate online every N epochs. Reuse that committed
         # evidence here instead of evaluating every epoch snapshot a second time.
-        best_checkpoint = output / "best.ckpt"
-        summary_path = output / "validation_summary.json"
+        # The formal aliases are always republished from the best checkpoint over
+        # the complete run; fixed-minimum evidence remains separately named.
+        best_overall_checkpoint = output / "best_overall.ckpt"
+        best_within_minimum_checkpoint = output / "best_within_5000.ckpt"
+        overall_summary_path = output / "validation_summary_overall.json"
+        within_minimum_summary_path = (
+            output / "validation_summary_within_5000.json"
+        )
         if (
-            not best_checkpoint.is_file()
-            or not (output / "best_within_5000.ckpt").is_file()
-            or not (output / "best_overall.ckpt").is_file()
-            or not summary_path.is_file()
+            not best_overall_checkpoint.is_file()
+            or not best_within_minimum_checkpoint.is_file()
+            or not overall_summary_path.is_file()
+            or not within_minimum_summary_path.is_file()
         ):
             raise RuntimeError(
                 "TERRAN fixed-epoch training ended without an online validation selection"
             )
-        selected_summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        shutil.copy2(best_checkpoint, output / "checkpoint_selected.pt")
+        selected_summary = json.loads(
+            overall_summary_path.read_text(encoding="utf-8")
+        )
+        shutil.copy2(best_overall_checkpoint, output / "checkpoint_selected.pt")
+        shutil.copy2(best_overall_checkpoint, output / "best.ckpt")
     else:
         checkpoints = sorted(final_checkpoint.parent.glob("checkpoint_epoch_*.pt"))
         if final_checkpoint not in checkpoints:

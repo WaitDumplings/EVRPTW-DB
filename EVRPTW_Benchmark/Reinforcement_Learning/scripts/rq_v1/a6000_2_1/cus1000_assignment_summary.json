@@ -1,0 +1,21 @@
+{
+  "formal_jobs": 4,
+  "formal_launch_allowed": true,
+  "gpu_count": 2,
+  "hardware": "a6000",
+  "launch_policy": "direct_full",
+  "pilot_jobs": 0,
+  "profile": "cus1000_priority",
+  "schema": "drl_rq_server_assignment_v1",
+  "server": "a6000_2_1",
+  "slot_queues": {
+    "0": [
+      "terran"
+    ],
+    "1": [
+      "drl_ts",
+      "evrptw_rl",
+      "am_evrptw"
+    ]
+  }
+}

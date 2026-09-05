@@ -416,6 +416,23 @@ def command_for(job: dict[str, Any], context: dict[str, Any], out: Path, resume:
     return evaluation_command(job, context, out)
 
 
+def required_training_artifacts(job: dict[str, Any], out: Path) -> list[Path]:
+    artifacts = [
+        out / "checkpoint_selected.pt",
+        out / "validation_summary.json",
+    ]
+    for field in (
+        "primary_checkpoint",
+        "minimum_budget_checkpoint",
+        "extended_checkpoint",
+    ):
+        if field in job:
+            artifacts.append(out / str(job[field]))
+    if int(job.get("final_validation_views", 0) or 0) > 0:
+        artifacts.append(out / "validation_final_audit.json")
+    return list(dict.fromkeys(artifacts))
+
+
 def job_complete(job: dict[str, Any], out: Path) -> bool:
     result = out / "job_result.json"
     if not result.exists():
@@ -424,13 +441,7 @@ def job_complete(job: dict[str, Any], out: Path) -> bool:
     if payload.get("status") != "passed":
         return False
     if job["kind"] == "train":
-        required = [
-            out / "checkpoint_selected.pt",
-            out / "validation_summary.json",
-        ]
-        if int(job.get("final_validation_views", 0) or 0) > 0:
-            required.append(out / "validation_final_audit.json")
-        return all(path.is_file() for path in required)
+        return all(path.is_file() for path in required_training_artifacts(job, out))
     return (out / "summary.csv").is_file() and (out / "routes.jsonl").is_file()
 
 
@@ -498,7 +509,7 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
     if oom and job.get("hardware") == "2080ti" and job.get("scale") == "Cus500":
         overflow_manifest = record_a6000_overflow(job, context)
     passed = returncode == 0 and (
-        ((out / "checkpoint_selected.pt").is_file() and (out / "validation_summary.json").is_file())
+        all(path.is_file() for path in required_training_artifacts(job, out))
         if job["kind"] == "train"
         else ((out / "summary.csv").is_file() and (out / "routes.jsonl").is_file())
     )

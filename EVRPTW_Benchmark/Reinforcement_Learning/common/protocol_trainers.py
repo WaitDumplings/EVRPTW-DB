@@ -297,6 +297,11 @@ def train_reinforce_data_passes(
     best_checkpoint = output / "best.ckpt"
     best_within_minimum_checkpoint = output / "best_within_5000.ckpt"
     best_overall_checkpoint = output / "best_overall.ckpt"
+    validation_summary = output / "validation_summary.json"
+    validation_summary_within_minimum = (
+        output / "validation_summary_within_5000.json"
+    )
+    validation_summary_overall = output / "validation_summary_overall.json"
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
@@ -640,7 +645,12 @@ def train_reinforce_data_passes(
                     )
                     validation.update(
                         {
-                            "checkpoint_selected": is_best_within_minimum,
+                            # The formal alias follows the best checkpoint over
+                            # the complete run, including the optional
+                            # post-minimum early-stopping tail.  The fixed-budget
+                            # selection remains available under its explicit
+                            # best_within_5000 name.
+                            "checkpoint_selected": is_best_overall,
                             "best_within_minimum_selected": is_best_within_minimum,
                             "best_overall_selected": is_best_overall,
                             "minimum_training_epochs": minimum_training_epochs,
@@ -681,13 +691,13 @@ def train_reinforce_data_passes(
                     shutil.copy2(epoch_checkpoint, checkpoint)
                     if is_best_overall:
                         shutil.copy2(epoch_checkpoint, best_overall_checkpoint)
-                        atomic_json(output / "validation_summary_overall.json", validation)
-                    if is_best_within_minimum:
-                        shutil.copy2(epoch_checkpoint, best_within_minimum_checkpoint)
                         shutil.copy2(epoch_checkpoint, selected_checkpoint)
                         shutil.copy2(epoch_checkpoint, best_checkpoint)
-                        atomic_json(output / "validation_summary.json", validation)
-                        atomic_json(output / "validation_summary_within_5000.json", validation)
+                        atomic_json(validation_summary_overall, validation)
+                        atomic_json(validation_summary, validation)
+                    if is_best_within_minimum:
+                        shutil.copy2(epoch_checkpoint, best_within_minimum_checkpoint)
+                        atomic_json(validation_summary_within_minimum, validation)
                     state.completed_data_passes = checkpoint_completed_passes
                     state.instances_seen = starting_state_instances + instances_seen
                     state.customer_exposures = (
@@ -883,6 +893,22 @@ def train_reinforce_data_passes(
         else:
             break
 
+    # Re-publish the formal aliases from their canonical overall artifacts at
+    # the terminal boundary.  Besides making the contract explicit, this also
+    # repairs aliases created by an older pre-tail-selection implementation
+    # when such a run is resumed with the current code.
+    if fixed_epochs is not None and best_overall_checkpoint.is_file():
+        if not validation_summary_overall.is_file():
+            raise RuntimeError(
+                "best_overall.ckpt exists without validation_summary_overall.json"
+            )
+        shutil.copy2(best_overall_checkpoint, selected_checkpoint)
+        shutil.copy2(best_overall_checkpoint, best_checkpoint)
+        atomic_json(
+            validation_summary,
+            json.loads(validation_summary_overall.read_text(encoding="utf-8")),
+        )
+
     final_validation_limit = int(
         getattr(args, "final_validation_limit", 0) or 0
     )
@@ -911,7 +937,7 @@ def train_reinforce_data_passes(
                 f"{final_validation['instances']} != {final_validation_limit}"
             )
         selected_summary = json.loads(
-            (output / "validation_summary.json").read_text(encoding="utf-8")
+            validation_summary.read_text(encoding="utf-8")
         )
         final_validation.update(
             {

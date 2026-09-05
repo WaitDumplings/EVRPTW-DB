@@ -21,6 +21,12 @@ METHODS = {
     "drl_ts": "EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.train",
     "terran": "EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train",
 }
+CUS1000_PRIORITY_SCHEDULE = (
+    ("terran", 0),
+    ("drl_ts", 1),
+    ("evrptw_rl", 1),
+    ("am_evrptw", 1),
+)
 SERVERS = {
     "2080ti_4_1": ("2080ti", 4, "RTX 2080 Ti"),
     "2080ti_4_2": ("2080ti", 4, "RTX 2080 Ti"),
@@ -151,7 +157,8 @@ def job(
             int(cfg["formal_candidate"]["drl_ts_soft_stage_end_epoch"])
             if method == "drl_ts" else None
         ),
-        "primary_checkpoint": "best_within_5000.ckpt",
+        "primary_checkpoint": "best_overall.ckpt",
+        "minimum_budget_checkpoint": "best_within_5000.ckpt",
         "extended_checkpoint": "best_overall.ckpt",
         "final_validation_views": final_validation_views,
         "validation_every_epochs": int(
@@ -274,6 +281,38 @@ def build() -> dict[str, list[dict[str, Any]]]:
     return queues
 
 
+def build_a6000_cus1000_priority_queue(
+    queues: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Project the canonical A6000 jobs into the approved Cus1000 priority queue."""
+    source = (queues or build())["a6000_2_1"]
+    selected = {
+        str(row["method"]): row
+        for row in source
+        if row["run_mode"] == "full"
+        and row["representation"] == "G"
+        and row["condition"] == "Full-support"
+        and row["scale"] == "Cus1000"
+        and int(row["seed"]) == 1234
+    }
+    expected = {method for method, _slot in CUS1000_PRIORITY_SCHEDULE}
+    if set(selected) != expected:
+        raise ValueError(
+            "Cus1000 priority queue requires exactly one seed-1234 job for "
+            f"each method; found {sorted(selected)}"
+        )
+
+    queue_positions: dict[int, int] = defaultdict(int)
+    priority: list[dict[str, Any]] = []
+    for method, slot in CUS1000_PRIORITY_SCHEDULE:
+        payload = dict(selected[method])
+        payload["global_slot"] = slot
+        payload["queue_position"] = queue_positions[slot]
+        queue_positions[slot] += 1
+        priority.append(payload)
+    return priority
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build four frozen RQ training queues.")
     parser.add_argument("--output-root", type=Path, default=SCRIPT_ROOT)
@@ -299,6 +338,31 @@ def main() -> None:
         (destination / "assignment_summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+    cus1000_priority = build_a6000_cus1000_priority_queue(queues)
+    a6000_destination = args.output_root / "a6000_2_1"
+    (a6000_destination / "cus1000_jobs.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in cus1000_priority),
+        encoding="utf-8",
+    )
+    priority_summary = {
+        "schema": "drl_rq_server_assignment_v1",
+        "server": "a6000_2_1",
+        "profile": "cus1000_priority",
+        "hardware": "a6000",
+        "gpu_count": 2,
+        "pilot_jobs": 0,
+        "formal_jobs": len(cus1000_priority),
+        "formal_launch_allowed": True,
+        "launch_policy": "direct_full",
+        "slot_queues": {
+            "0": ["terran"],
+            "1": ["drl_ts", "evrptw_rl", "am_evrptw"],
+        },
+    }
+    (a6000_destination / "cus1000_assignment_summary.json").write_text(
+        json.dumps(priority_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps({server: len(rows) for server, rows in queues.items()}, sort_keys=True))
 
 

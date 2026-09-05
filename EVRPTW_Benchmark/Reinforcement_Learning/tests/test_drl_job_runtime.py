@@ -36,15 +36,27 @@ def _job(job_id: str = "train__R__am_evrptw__Cus100__seed1234"):
         "seed": 1234,
         "global_slot": 0,
         "queue_position": 0,
+        "primary_checkpoint": "best_overall.ckpt",
+        "minimum_budget_checkpoint": "best_within_5000.ckpt",
+        "extended_checkpoint": "best_overall.ckpt",
     }
 
 
-def _artifact_command(output: Path, exit_code: int = 0):
+def _artifact_command(
+    output: Path, exit_code: int = 0, *, include_manifest_checkpoints: bool = True
+):
+    manifest_artifacts = ""
+    if include_manifest_checkpoints:
+        manifest_artifacts = (
+            "(p/'best_overall.ckpt').write_bytes(b'overall'); "
+            "(p/'best_within_5000.ckpt').write_bytes(b'within'); "
+        )
     source = (
         "from pathlib import Path; "
         f"p=Path({str(output)!r}); p.mkdir(parents=True, exist_ok=True); "
         "(p/'checkpoint_selected.pt').write_bytes(b'x'); "
         "(p/'validation_summary.json').write_text('{}'); "
+        f"{manifest_artifacts}"
         f"raise SystemExit({exit_code})"
     )
     return [sys.executable, "-c", source]
@@ -73,10 +85,49 @@ def test_final_validation_audit_is_required_when_registered(tmp_path: Path) -> N
     output.mkdir(parents=True)
     (output / "checkpoint_selected.pt").write_bytes(b"checkpoint")
     (output / "validation_summary.json").write_text("{}")
+    (output / "best_overall.ckpt").write_bytes(b"overall")
+    (output / "best_within_5000.ckpt").write_bytes(b"within")
     (output / "job_result.json").write_text(json.dumps({"status": "passed"}))
     assert not RUNTIME.job_complete(job, output)
     (output / "validation_final_audit.json").write_text("{}")
     assert RUNTIME.job_complete(job, output)
+
+
+def test_training_completion_requires_each_distinct_manifest_checkpoint(
+    tmp_path: Path,
+) -> None:
+    job = _job()
+    output = tmp_path / "job"
+    output.mkdir()
+    (output / "checkpoint_selected.pt").write_bytes(b"selected")
+    (output / "validation_summary.json").write_text("{}")
+    (output / "best_overall.ckpt").write_bytes(b"overall")
+    (output / "job_result.json").write_text(json.dumps({"status": "passed"}))
+
+    required = RUNTIME.required_training_artifacts(job, output)
+    assert required.count(output / "best_overall.ckpt") == 1
+    assert output / "best_within_5000.ckpt" in required
+    assert not RUNTIME.job_complete(job, output)
+
+    (output / "best_within_5000.ckpt").write_bytes(b"within")
+    assert RUNTIME.job_complete(job, output)
+
+
+def test_successful_training_process_fails_without_manifest_checkpoint(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    context["dataset"].mkdir()
+    job = _job()
+    output = RUNTIME.output_dir(job, context)
+    job["test_command"] = _artifact_command(
+        output, include_manifest_checkpoints=False
+    )
+
+    assert not RUNTIME.run_job(job, context, 0, False, False)
+    result = json.loads((output / "job_result.json").read_text())
+    assert result["returncode"] == 0
+    assert result["status"] == "failed"
 
 
 def test_failure_stops_only_its_serial_queue(tmp_path: Path) -> None:
@@ -158,6 +209,9 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         candidate_index = command.index("--validation-candidates")
         assert command[candidate_index + 1] == "100"
         if method == "terran":
+            assert command.count("--num-customers") == 1
+            customer_index = command.index("--num-customers")
+            assert command[customer_index + 1] == "100"
             trajectory_index = command.index("--n-traj")
             assert command[trajectory_index + 1] == "100"
         else:

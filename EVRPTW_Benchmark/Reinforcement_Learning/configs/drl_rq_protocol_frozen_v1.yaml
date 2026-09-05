@@ -1,24 +1,28 @@
 protocol_id: drl_rq_protocol_frozen_v1
-status: method_frozen_formal_launch_blocked
-formal_launch_allowed: false
+status: method_frozen_formal_training_active
+formal_launch_allowed: true
+launch_mode: direct_full
+launch_policy: direct_full_user_authorized_2026-09-04
+runtime_budget_id: drl_rq_runtime_budget_v11_min5000_max6000_tailval50
 supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
 
 methods: [am_evrptw, evrptw_rl, drl_ts, terran]
-seeds: [1234, 2345, 3456]
-training_scales: [Cus50, Cus100, Cus500]
+seeds: [1234]
+training_scales: [Cus50, Cus100, Cus500, Cus1000]
 evaluation_only_scales: [Cus2000]
 training_rollout_steps:
   Cus50: 80
   Cus100: 140
   Cus500: 600
+  Cus1000: 1200
 
 research_questions:
   RQ1:
     title: Scale
-    main_training_runs: 36
-    same_scale: [Cus50, Cus100, Cus500]
-    cross_scale_to_cus2000: [Cus100, Cus500]
+    main_training_runs: 16
+    same_scale: [Cus50, Cus100, Cus500, Cus1000]
+    cross_scale_to_cus2000: [Cus100, Cus500, Cus1000]
     reference_title: Reference Availability and Stability of Best-Observed Solutions
     canonical_lower_bound_available: false
     canonical_optimality_gap_available: false
@@ -33,17 +37,17 @@ research_questions:
       - Coverage-10%-support
       - Full-support
     optional_support_conditions: [Random-1%-support]
-    additional_core_training_runs: 12
+    additional_core_training_runs: 4
     support_unit: parent_family
     selection_uses_validation_or_test: false
   RQ3:
     title: Euclidean-to-directed-road transfer
     scale: Cus100
     conditions: [E_to_G, G_to_G]
-    additional_core_training_runs: 12
+    additional_core_training_runs: 4
     graph_injection_enabled: false
 
-core_training_run_count: 60
+core_training_run_count: 24
 train_cus2000: false
 energy_relaxed_directed_vrptw_model: excluded
 
@@ -73,10 +77,26 @@ training_fairness:
   test_used_for_checkpoint_selection: false
   statistical_unit: parent_family
   wall_clock_checkpoints_h: [6, 12, 24]
-  exposure_checkpoints: null
-  customer_exposure_budget_by_scale: null
-  logical_batch_by_scale: null
-  physical_microbatch_by_method_scale: null
+  exposure_checkpoints:
+    Cus50: [76800000, 153600000, 307200000]
+    Cus100: [38400000, 76800000, 153600000]
+    Cus500: [48000000, 96000000, 192000000]
+    Cus1000: [3000000, 6000000, 12000000]
+  customer_exposure_budget_by_scale:
+    Cus50: 307200000
+    Cus100: 153600000
+    Cus500: 192000000
+    Cus1000: 12000000
+  logical_batch_by_scale:
+    Cus50: 1024
+    Cus100: 256
+    Cus500: 64
+    Cus1000: 2
+  physical_microbatch_by_method_scale:
+    am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 8, Cus1000: 2}
+    evrptw_rl: {Cus50: 128, Cus100: 64, Cus500: 16, Cus1000: 2}
+    drl_ts: {Cus50: 128, Cus100: 32, Cus500: 8, Cus1000: 2}
+    terran: {Cus50: 128, Cus100: 128, Cus500: 64, Cus1000: 2}
 
 model_selection:
   validation_views: 500
@@ -84,7 +104,7 @@ model_selection:
   validation_candidate_count: 100
   candidate_selection: independent_verifier_feasible_then_min_directed_distance
   minimum_training_epochs: 5000
-  maximum_training_epochs: 10000
+  maximum_training_epochs: 6000
   validation_every_epochs_through_minimum: 250
   validation_every_epochs_after_minimum: 50
   primary_metric: independent_verifier_feasibility_rate
@@ -94,7 +114,8 @@ model_selection:
   early_stop_no_improvement_epochs_equivalent: 500
   early_stop_start_epoch_exclusive: 5000
   earliest_possible_early_stop_epoch: 5500
-  primary_checkpoint: best_within_5000.ckpt
+  primary_checkpoint: best_overall.ckpt
+  minimum_budget_checkpoint: best_within_5000.ckpt
   extended_checkpoint: best_overall.ckpt
   validation_seed_rule: fixed_training_seed_plus_910000000
   test_used_for_selection: false
@@ -116,6 +137,8 @@ training_trajectories_per_instance:
   evrptw_rl: 1
   drl_ts: 1
   terran: 100
+training_trajectories_per_instance_by_method_scale:
+  am_evrptw: {Cus500: 100, Cus1000: 100}
 
 euclidean:
   distance: symmetric_straight_line_from_fixed_coordinates
@@ -129,25 +152,25 @@ euclidean:
 formal_launch_gates:
   G1:
     requirement: customer_exposure_budget_for_every_scale
-    status: PILOT_REQUIRED
+    status: PILOT_WAIVED_BY_USER
   G2:
     requirement: shared_deterministic_stratified_shuffle_cycle_id_stream
-    status: IMPLEMENTATION_REQUIRED
+    status: IMPLEMENTED_RELEASE_EXECUTION_REQUIRED
   G3:
     requirement: exposure_and_gpu_hour_checkpoints
-    status: IMPLEMENTATION_REQUIRED
+    status: PILOT_WAIVED_BY_USER
   G4:
     requirement: common_logical_batch_for_every_scale
-    status: PILOT_REQUIRED
+    status: PILOT_WAIVED_BY_USER
   G5:
     requirement: per_method_physical_microbatch_and_oom_policy
-    status: PILOT_REQUIRED
+    status: PILOT_WAIVED_BY_USER
   G6:
     requirement: cross_hardware_same_config_runtime_and_memory_pilot
-    status: PILOT_REQUIRED
+    status: PILOT_WAIVED_BY_USER
   G7:
     requirement: euclidean_distance_time_energy_generation_manifest
-    status: IMPLEMENTATION_REQUIRED
+    status: PARTIAL_IMPLEMENTATION_FEASIBILITY_AUDIT_REQUIRED
   G8:
     requirement: parent_family_clustered_paired_bootstrap_aggregation
-    status: IMPLEMENTATION_REQUIRED
+    status: IMPLEMENTED_UNIT_TESTED

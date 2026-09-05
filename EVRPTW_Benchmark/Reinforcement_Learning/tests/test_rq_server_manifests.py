@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import (
     SERVERS,
+    SCRIPT_ROOT,
     build,
+    build_a6000_cus1000_priority_queue,
 )
 
 
@@ -58,12 +61,12 @@ def test_scale_aware_hardware_assignment_is_strict() -> None:
         assert all(row["scale"] in allowed for row in rows)
 
 
-def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() -> None:
+def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() -> None:
     expected = {
-        "Cus50": (10_000, 1_024, 10_240_000, 512_000_000),
-        "Cus100": (10_000, 256, 2_560_000, 256_000_000),
-        "Cus500": (10_000, 64, 640_000, 320_000_000),
-        "Cus1000": (10_000, 2, 20_000, 20_000_000),
+        "Cus50": (6_000, 1_024, 6_144_000, 307_200_000),
+        "Cus100": (6_000, 256, 1_536_000, 153_600_000),
+        "Cus500": (6_000, 64, 384_000, 192_000_000),
+        "Cus1000": (6_000, 2, 12_000, 12_000_000),
     }
     formal = [
         row
@@ -75,7 +78,10 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         epochs, environments_per_epoch, total_environments, exposures = expected[
             row["scale"]
         ]
-        assert row["runtime_budget_id"] == "drl_rq_runtime_budget_v10_min5000_max10000_tailval50"
+        assert (
+            row["runtime_budget_id"]
+            == "drl_rq_runtime_budget_v11_min5000_max6000_tailval50"
+        )
         assert row["runtime_budget_id"] in row["training_stream_path"]
         assert row["training_epochs"] == epochs
         assert row["planned_optimizer_updates"] == epochs
@@ -86,7 +92,7 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         assert row["physical_batch_size"] <= row["effective_batch_size"]
         assert row["effective_batch_size"] % row["physical_batch_size"] == 0
         assert row["validation_every_epochs"] == 250
-        assert row["validation_checkpoints"] == 120
+        assert row["validation_checkpoints"] == 40
         assert row["minimum_training_epochs"] == 5_000
         assert row["post_minimum_validation_every_epochs"] == 50
         assert row["validation_views"] == 500
@@ -106,7 +112,8 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         assert row["early_stop_patience_validations"] == 10
         assert row["early_stop_start_epoch"] == 5_000
         assert row["soft_stage_end_epoch"] == (2_500 if row["method"] == "drl_ts" else None)
-        assert row["primary_checkpoint"] == "best_within_5000.ckpt"
+        assert row["primary_checkpoint"] == "best_overall.ckpt"
+        assert row["minimum_budget_checkpoint"] == "best_within_5000.ckpt"
         assert row["extended_checkpoint"] == "best_overall.ckpt"
         assert row["validation_seed"] == row["seed"] + 910_000_000
 
@@ -145,3 +152,71 @@ def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
         assert row["physical_batch_size"] == expected[row["method"]][row["scale"]]
         assert row["physical_batch_size"] % 2 == 0
         assert row["validation_views"] == 500
+
+
+def test_a6000_cus1000_priority_queue_uses_approved_two_gpu_order() -> None:
+    canonical = build()["a6000_2_1"]
+    rows = build_a6000_cus1000_priority_queue()
+    assert [
+        (row["method"], row["global_slot"], row["queue_position"])
+        for row in rows
+    ] == [
+        ("terran", 0, 0),
+        ("drl_ts", 1, 0),
+        ("evrptw_rl", 1, 1),
+        ("am_evrptw", 1, 2),
+    ]
+    assert {row["scale"] for row in rows} == {"Cus1000"}
+    assert {row["seed"] for row in rows} == {1234}
+    assert {row["job_id"] for row in rows} == {
+        row["job_id"] for row in canonical if row["scale"] == "Cus1000"
+    }
+
+    canonical_by_id = {row["job_id"]: row for row in canonical}
+    for row in rows:
+        scientific = {
+            key: value
+            for key, value in row.items()
+            if key not in {"global_slot", "queue_position"}
+        }
+        canonical_scientific = {
+            key: value
+            for key, value in canonical_by_id[row["job_id"]].items()
+            if key not in {"global_slot", "queue_position"}
+        }
+        assert scientific == canonical_scientific
+
+
+def test_checked_in_a6000_cus1000_priority_manifest_matches_builder() -> None:
+    manifest = SCRIPT_ROOT / "a6000_2_1" / "cus1000_jobs.jsonl"
+    checked_in = [
+        json.loads(line)
+        for line in manifest.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert checked_in == build_a6000_cus1000_priority_queue()
+
+
+def test_checked_in_server_manifests_match_builder() -> None:
+    for server, expected in build().items():
+        manifest = SCRIPT_ROOT / server / "jobs.jsonl"
+        checked_in = [
+            json.loads(line)
+            for line in manifest.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert checked_in == expected
+
+
+def test_artifact_preparation_uses_v11_manifest_exposure_budgets() -> None:
+    script = (SCRIPT_ROOT / "prepare_artifacts.sh").read_text(encoding="utf-8")
+    assert "drl_rq_runtime_budget_v11_min5000_max6000_tailval50" in script
+    assert "drl_rq_runtime_budget_v10_min5000_max10000_tailval50" not in script
+    for scale, exposure in {
+        "Cus50": 307_200_000,
+        "Cus100": 153_600_000,
+        "Cus500": 192_000_000,
+        "Cus1000": 12_000_000,
+    }.items():
+        assert f"[{scale}]={exposure}" in script
+    assert '--customer-exposures "${FORMAL_EXPOSURE[Cus100]}"' in script

@@ -7,7 +7,7 @@ export EVRPTW_REPO_ROOT="${EVRPTW_REPO_ROOT:-$(cd "$SERVER_SCRIPT_DIR/../../../.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dataset_root.sh"
 export EVRPTW_DATASET_ROOT="$(resolve_evrptw_dataset_root "$EVRPTW_REPO_ROOT")"
 export EVRPTW_OUTPUT_ROOT="${EVRPTW_OUTPUT_ROOT:-$EVRPTW_REPO_ROOT/EVRPTW_Benchmark/results/DRL_rq_v1}"
-export DRL_MANIFEST="$SERVER_SCRIPT_DIR/jobs.jsonl"
+export DRL_MANIFEST="${DRL_MANIFEST:-$SERVER_SCRIPT_DIR/jobs.jsonl}"
 export DRL_EXPECTED_BRANCH="${DRL_EXPECTED_BRANCH:-drl-benchmark-adapters}"
 export DRL_SEEDS="${DRL_SEEDS:-1234}"
 export DRL_SCALES="${DRL_SCALES:-Cus50,Cus100,Cus500,Cus1000}"

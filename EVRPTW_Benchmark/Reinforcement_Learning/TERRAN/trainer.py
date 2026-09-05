@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 import random
+import shutil
 import sys
 import time
 from typing import Any, Sequence
@@ -730,6 +731,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     best_within_minimum_path = out_root / "best_within_5000.ckpt"
     best_overall_path = out_root / "best_overall.ckpt"
     selected_checkpoint_path = out_root / "checkpoint_selected.pt"
+    minimum_training_epochs = int(
+        train_cfg.get("minimum_training_epochs", epochs) or epochs
+    )
     best_eval_key = (-math.inf, -math.inf)
     best_within_minimum_key = (-math.inf, -math.inf)
     previous_overall_path = (
@@ -759,18 +763,21 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     )
     if previous_within_path.is_file():
         previous_within = json.loads(previous_within_path.read_text(encoding="utf-8"))
-        previous_within_distance = previous_within.get("mean_verified_distance_km")
-        best_within_minimum_key = (
-            float(previous_within["complete_and_feasible_rate"]),
-            (
-                -float(previous_within_distance)
-                if previous_within_distance is not None
-                else -math.inf
-            ),
+        previous_within_epoch = int(
+            previous_within.get("logical_epoch", minimum_training_epochs) or 0
         )
-    minimum_training_epochs = int(
-        train_cfg.get("minimum_training_epochs", epochs) or epochs
-    )
+        if previous_within_epoch <= minimum_training_epochs:
+            previous_within_distance = previous_within.get(
+                "mean_verified_distance_km"
+            )
+            best_within_minimum_key = (
+                float(previous_within["complete_and_feasible_rate"]),
+                (
+                    -float(previous_within_distance)
+                    if previous_within_distance is not None
+                    else -math.inf
+                ),
+            )
     scheduled_validation_epochs = {
         int(value) for value in train_cfg.get("validation_epochs", [])
     }
@@ -1230,7 +1237,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     )
                     validation.update(
                         {
-                            "checkpoint_selected": is_best_within_minimum,
+                            # Formal evaluation follows the best validation
+                            # checkpoint across the full run, including the
+                            # optional post-minimum tail.
+                            "checkpoint_selected": is_best_overall,
                             "best_within_minimum_selected": is_best_within_minimum,
                             "best_overall_selected": is_best_overall,
                             "minimum_training_epochs": minimum_training_epochs,
@@ -1246,19 +1256,15 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         save_checkpoint(
                             best_overall_path, agent, optimizer, cfg, epoch, seed
                         )
+                        shutil.copy2(best_overall_path, best_checkpoint_path)
+                        shutil.copy2(best_overall_path, selected_checkpoint_path)
                         atomic_json(validation_summary_overall_path, validation)
+                        atomic_json(validation_summary_path, validation)
                     if is_best_within_minimum:
                         best_within_minimum_key = selection_key
                         save_checkpoint(
                             best_within_minimum_path, agent, optimizer, cfg, epoch, seed
                         )
-                        save_checkpoint(
-                            best_checkpoint_path, agent, optimizer, cfg, epoch, seed
-                        )
-                        save_checkpoint(
-                            selected_checkpoint_path, agent, optimizer, cfg, epoch, seed
-                        )
-                        atomic_json(validation_summary_path, validation)
                         atomic_json(validation_summary_within_path, validation)
                 _debug_log(
                     debug_enabled,

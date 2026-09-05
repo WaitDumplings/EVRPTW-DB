@@ -4,9 +4,14 @@
 Baseline: `6ea2419bdab4c69e41009863c54a079546737b5b`.
 
 This patch removes repeated work in training and online validation. It does not
-change the v10 budget, physical/logical batches, shared ID stream, seeds,
+change the then-active v10 budget, physical/logical batches, shared ID stream,
+seeds,
 validation cohort, best-of-100 decoding, objective, charging rules, feasibility
 semantics, architecture or checkpoint selection. It launches no training.
+
+The later v11 launch budget changes only the hard cap from 10,000 to 6,000 and
+selects `best_overall.ckpt` formally; the optimizations and equivalence evidence
+described here remain applicable.
 
 ## Implementation
 

@@ -350,6 +350,123 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
     assert int(row["effective_instances_per_optimizer_step"]) == 2
 
 
+def test_terran_online_selection_publishes_tail_best_as_formal_aliases(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class Pool:
+        sample_count = 0
+
+        def close(self, terminate: bool = False) -> None:
+            del terminate
+
+    pool = Pool()
+
+    def fake_collect(_agent, _envs, **_kwargs):
+        pool.sample_count += 1
+        return SimpleNamespace(
+            actions=torch.zeros((1, 1), dtype=torch.long),
+            rewards=torch.ones((1, 1)),
+            dones=torch.ones((1, 1), dtype=torch.bool),
+            values=torch.zeros((1, 1)),
+            valid=torch.ones((1, 1), dtype=torch.bool),
+            trajectory_steps=torch.ones((1, 1), dtype=torch.int64),
+            rollout_budget_exhausted=torch.zeros((1, 1), dtype=torch.bool),
+            final_infos=[
+                {
+                    "success": np.asarray([True]),
+                    "objective_distance_km": np.asarray([1.0]),
+                    "vehicle_count": np.asarray([1]),
+                    "served_customers": np.asarray([1000]),
+                }
+            ],
+            timings={},
+        )
+
+    def fake_loss(agent, *_args, **_kwargs):
+        loss = agent.weight.sum()
+        metric = loss.detach()
+        return loss, metric, metric, metric
+
+    def fake_evaluate(_agent, _cfg, *, seed, epoch, device):
+        del seed, device
+        return {
+            "eval_avg_objective_distance_km": 10.0 - epoch,
+            "eval_feasible_rate": 1.0,
+            "eval_num_instances": 2,
+            "eval_complete_and_feasible": 2,
+            "eval_independent_verifier": True,
+            "eval_status": "ok",
+        }
+
+    monkeypatch.setattr(
+        terran_trainer,
+        "Agent",
+        lambda **_kwargs: torch.nn.Linear(1, 1, bias=False),
+    )
+    monkeypatch.setattr(
+        terran_trainer, "make_envs", lambda _cfg, _seed: ([object()], pool)
+    )
+    monkeypatch.setattr(terran_trainer, "collect_rollout", fake_collect)
+    monkeypatch.setattr(terran_trainer, "evaluate_policy_loss", fake_loss)
+    monkeypatch.setattr(
+        terran_trainer, "evaluate_fixed_dataset", fake_evaluate
+    )
+
+    cfg = {
+        "run_name": "overall-selection-test",
+        "output_dir": str(tmp_path),
+        "data": {"num_customers": 1000, "num_charging_stations": 200},
+        "model": {},
+        "env": {},
+        "pbrs": {},
+        "evaluation": {"eval_interval": 1},
+        "training": {
+            "epochs": 3,
+            "num_envs_per_gpu": 1,
+            "logical_microbatches_per_epoch": 1,
+            "rollout_steps": 1,
+            "ppo_update_epochs": 1,
+            "num_minibatches": 1,
+            "gradient_accumulation_steps": 1,
+            "checkpoint_interval": 1,
+            "minimum_training_epochs": 2,
+            "validation_epochs": [1, 2, 3],
+            "early_stop_patience_validations": 0,
+            "early_stop_start_epoch": 2,
+        },
+    }
+    terran_trainer.train_from_config(cfg, seed=1234, device="cpu")
+
+    selected = torch.load(
+        tmp_path / "checkpoint_selected.pt", map_location="cpu", weights_only=False
+    )
+    best = torch.load(
+        tmp_path / "best.ckpt", map_location="cpu", weights_only=False
+    )
+    overall = torch.load(
+        tmp_path / "best_overall.ckpt", map_location="cpu", weights_only=False
+    )
+    within = torch.load(
+        tmp_path / "best_within_5000.ckpt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    assert selected["epoch"] == best["epoch"] == overall["epoch"] == 3
+    assert within["epoch"] == 2
+    assert json.loads((tmp_path / "validation_summary.json").read_text())[
+        "logical_epoch"
+    ] == 3
+    assert json.loads(
+        (tmp_path / "validation_summary_within_5000.json").read_text()
+    )["logical_epoch"] == 2
+    history = [
+        json.loads(line)
+        for line in (tmp_path / "validation_history.jsonl").read_text().splitlines()
+    ]
+    assert history[-1]["checkpoint_selected"] is True
+    assert history[-1]["best_within_minimum_selected"] is False
+
+
 def test_terran_finalizer_runs_full_audit_without_reselecting(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -360,15 +477,33 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
     log_dir.mkdir(parents=True)
     final_checkpoint = checkpoint_dir / "checkpoint_final.pt"
     final_checkpoint.write_bytes(b"final")
-    (output / "best.ckpt").write_bytes(b"best")
-    (output / "best_within_5000.ckpt").write_bytes(b"best")
-    (output / "best_overall.ckpt").write_bytes(b"best")
+    (output / "best.ckpt").write_bytes(b"stale-within")
+    (output / "best_within_5000.ckpt").write_bytes(b"within")
+    (output / "best_overall.ckpt").write_bytes(b"overall")
     (output / "validation_summary.json").write_text(
         json.dumps(
             {
                 "logical_epoch": 50,
                 "complete_and_feasible_rate": 0.5,
                 "mean_verified_distance_km": 10.0,
+            }
+        )
+    )
+    (output / "validation_summary_within_5000.json").write_text(
+        json.dumps(
+            {
+                "logical_epoch": 50,
+                "complete_and_feasible_rate": 0.5,
+                "mean_verified_distance_km": 10.0,
+            }
+        )
+    )
+    (output / "validation_summary_overall.json").write_text(
+        json.dumps(
+            {
+                "logical_epoch": 75,
+                "complete_and_feasible_rate": 1.0,
+                "mean_verified_distance_km": 8.0,
             }
         )
     )
@@ -447,9 +582,14 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
     assert observed_commands[0][observed_commands[0].index("--limit") + 1] == "2"
     audit = json.loads((output / "validation_final_audit.json").read_text())
     assert audit["instances"] == 2
-    assert audit["selection_logical_epoch"] == 50
+    assert audit["selection_logical_epoch"] == 75
     assert audit["selection_changed"] is False
-    assert (output / "checkpoint_selected.pt").read_bytes() == b"best"
+    assert (output / "checkpoint_selected.pt").read_bytes() == b"overall"
+    assert (output / "best.ckpt").read_bytes() == b"overall"
+    assert (output / "best_within_5000.ckpt").read_bytes() == b"within"
+    assert json.loads((output / "validation_summary.json").read_text())[
+        "logical_epoch"
+    ] == 75
 
 
 def test_protocol_resume_carries_exact_optimizer_step_count(
