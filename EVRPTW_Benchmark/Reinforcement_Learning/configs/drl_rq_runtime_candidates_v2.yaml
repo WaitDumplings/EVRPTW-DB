@@ -1,7 +1,7 @@
 schema: drl_rq_runtime_candidates_v2
 status: formal_runtime_active
 protocol_id: drl_rq_protocol_frozen_v1
-runtime_budget_id: drl_rq_runtime_budget_v12_min5000_max10000_tailval50
+runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
 formal_launch_allowed: true
 launch_policy: direct_full_user_authorized_2026-09-04
 
@@ -15,14 +15,14 @@ evaluation:
   selection: verifier_feasible_then_min_directed_distance
 
 training_trajectory_count_by_method:
-  am_evrptw: 1
+  am_evrptw: 5
   evrptw_rl: 1
   drl_ts: 1
   terran: 100
-# On the Ada-only large scales AM completed sample-100 training. EVRPTW-RL
-# and DRL-TS remain at one trajectory because both OOM at batch 1 with 100.
-training_trajectory_count_by_method_scale:
-  am_evrptw: {Cus500: 100, Cus1000: 100}
+# Keep each method's training-trajectory semantics hardware invariant. AM uses
+# five sampled trajectories per base instance on every scale; EVRPTW-RL and
+# DRL-TS retain one, while TERRAN retains its native 100-trajectory training.
+training_trajectory_count_by_method_scale: {}
 
 # TERRAN Cus1000 produces two base-environment groups per logical epoch at the
 # registered batch of 2. Process them as one PPO minibatch and evaluate up to

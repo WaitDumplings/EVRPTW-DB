@@ -11,10 +11,10 @@ data path is committed.
 
 ## Active single-seed four-scale configuration
 
-Runtime budget: `drl_rq_runtime_budget_v12_min5000_max10000_tailval50`.
+Runtime budget: `drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50`.
 This is a fresh candidate budget: start it with `full.sh`; do not use a v8, v9,
-v10, or v11 checkpoint as a v12 resume source. `resume.sh` is for interruption
-recovery within the same v12 job and commit.
+v10, v11, or v12 checkpoint as a v13 resume source. `resume.sh` is for interruption
+recovery within the same v13 job and commit.
 
 The manifests contain seed 1234 only. The 2080 Ti servers own Cus50/Cus100;
 the two RTX 6000 Ada GPUs own Cus500/Cus1000.
@@ -42,7 +42,7 @@ Larger method-specific batches could not simultaneously satisfy the 40--45 GiB
 target, the common-exposure contract, the even-batch constraint, and the formal
 deadline; batch 2 is therefore intentional rather than an uncalibrated default.
 
-AM and TERRAN use 100 training trajectories on Cus500/Cus1000. EVRPTW-RL and
+AM uses 5 training trajectories on every scale; TERRAN uses 100. EVRPTW-RL and
 DRL-TS use one because sample-100 exceeded memory even at physical batch 1.
 Validation and test use stochastic best-of-100 decoding on 500 fixed validation
 views. Validation runs every 250 epochs through epoch 5,000, then every 50 epochs.

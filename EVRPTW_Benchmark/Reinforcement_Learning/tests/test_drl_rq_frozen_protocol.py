@@ -94,7 +94,7 @@ def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
     assert questions["RQ3"]["graph_injection_enabled"] is False
 
 
-def test_frozen_fairness_numbers_match_v12_runtime_configuration() -> None:
+def test_frozen_fairness_numbers_match_v13_runtime_configuration() -> None:
     protocol = _protocol()
     runtime = _runtime()
     fairness = protocol["training_fairness"]
@@ -131,9 +131,7 @@ def test_frozen_fairness_numbers_match_v12_runtime_configuration() -> None:
     ]
     assert protocol[
         "training_trajectories_per_instance_by_method_scale"
-    ] == runtime["training_trajectory_count_by_method_scale"] == {
-        "am_evrptw": {"Cus500": 100, "Cus1000": 100}
-    }
+    ] == runtime["training_trajectory_count_by_method_scale"] == {}
 
 
 def test_reference_and_integrity_claims_are_conservative() -> None:

@@ -3,7 +3,7 @@ status: method_frozen_formal_training_active
 formal_launch_allowed: true
 launch_mode: direct_full
 launch_policy: direct_full_user_authorized_2026-09-04
-runtime_budget_id: drl_rq_runtime_budget_v12_min5000_max10000_tailval50
+runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
 supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
 
@@ -133,12 +133,11 @@ training_stage_boundaries:
   boundaries_independent_of_maximum_epochs: true
 
 training_trajectories_per_instance:
-  am_evrptw: 1
+  am_evrptw: 5
   evrptw_rl: 1
   drl_ts: 1
   terran: 100
-training_trajectories_per_instance_by_method_scale:
-  am_evrptw: {Cus500: 100, Cus1000: 100}
+training_trajectories_per_instance_by_method_scale: {}
 
 euclidean:
   distance: symmetric_straight_line_from_fixed_coordinates

@@ -96,3 +96,28 @@ make memory utilization look uniform.
 
 These tools write only to their requested disposable output root. They do not
 modify formal checkpoints or launch the long-running queues.
+
+
+## Post-v4 AM trajectory-5 revalidation (2026-09-05)
+
+After the hardware-invariance review, AM-EVRPTW training was changed from one
+trajectory on RTX 2080 Ti and 100 trajectories on the large-scale Ada jobs to
+five trajectories per base instance on every scale. The 2080 Ti physical and
+effective batches were not changed.
+
+Five affected 2080 Ti job variants completed two logical training epochs and
+the full fixed 500-view, sample-100 validation with the independent verifier:
+
+| Job variant | Batch | AM train trajectories | Process peak (GiB) | Result |
+|---|---:|---:|---:|---|
+| Cus50 G Full-support | 1,024 | 5 | 4.658 | PASS |
+| Cus100 G Full-support | 256 | 5 | 3.465 | PASS |
+| Cus100 E Full-support | 256 | 5 | 3.465 | PASS |
+| Cus100 G Random-10%-support | 256 | 5 | 3.465 | PASS |
+| Cus100 G Coverage-10%-support | 256 | 5 | 3.465 | PASS |
+
+No CUDA OOM occurred. All five runs exited zero, completed exactly two training
+epochs, recorded one 500-instance/100-candidate validation row, and completed
+the verifier. The retained formal setting is therefore AM training trajectories
+= 5 under runtime budget
+`drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50`.

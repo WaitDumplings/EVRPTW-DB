@@ -80,7 +80,7 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         ]
         assert (
             row["runtime_budget_id"]
-            == "drl_rq_runtime_budget_v12_min5000_max10000_tailval50"
+            == "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50"
         )
         assert row["runtime_budget_id"] in row["training_stream_path"]
         assert row["training_epochs"] == epochs
@@ -102,12 +102,12 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         assert row["validation_candidate_count"] == 100
         assert row["test_decode_type"] == "sampling"
         assert row["test_candidate_count"] == 100
-        expected_trajectories = 100 if row["method"] == "terran" else 1
-        if row["method"] == "am_evrptw" and row["scale"] in {
-            "Cus500",
-            "Cus1000",
-        }:
-            expected_trajectories = 100
+        expected_trajectories = {
+            "am_evrptw": 5,
+            "evrptw_rl": 1,
+            "drl_ts": 1,
+            "terran": 100,
+        }[row["method"]]
         assert row["training_trajectory_count"] == expected_trajectories
         assert row["final_validation_views"] == 0
         assert row["planning_wall_time_hours"] is None
@@ -252,7 +252,7 @@ def test_checked_in_server_manifests_match_builder() -> None:
 
 def test_artifact_preparation_uses_v12_manifest_exposure_budgets() -> None:
     script = (SCRIPT_ROOT / "prepare_artifacts.sh").read_text(encoding="utf-8")
-    assert "drl_rq_runtime_budget_v12_min5000_max10000_tailval50" in script
+    assert "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50" in script
     assert "drl_rq_runtime_budget_v11_min5000_max6000_tailval50" not in script
     assert "drl_rq_runtime_budget_v10_min5000_max10000_tailval50" not in script
     for scale, exposure in {

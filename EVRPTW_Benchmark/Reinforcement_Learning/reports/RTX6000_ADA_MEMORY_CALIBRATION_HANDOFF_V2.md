@@ -24,9 +24,9 @@ Do not interpret the checked-in Ada caps as post-revision measurements.
 - Validation/test decoding: sampling, best of 100, independently verified.
 - Keep logical batches, deterministic streams, reward, normalization, model
   definitions and trajectory counts unchanged.
-- AM-EVRPTW and TERRAN train with 100 trajectories on both large scales;
-  EVRPTW-RL and DRL-TS retain one training trajectory because sample-100 did
-  not fit even at physical batch 1 in the prior measurements.
+- AM-EVRPTW trains with 5 trajectories on every scale and TERRAN retains 100;
+  EVRPTW-RL and DRL-TS retain one training trajectory. This hardware-invariant
+  AM setting supersedes the earlier Ada-only sample-100 calibration.
 
 Current starting caps are:
 

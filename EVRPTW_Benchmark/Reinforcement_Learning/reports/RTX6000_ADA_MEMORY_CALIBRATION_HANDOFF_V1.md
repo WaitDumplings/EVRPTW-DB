@@ -2,7 +2,7 @@
 
 > **Superseded on 2026-09-04.** The user explicitly removed the pilot workflow;
 > the pilot procedure below is retained only as historical provenance and must
-> not be used as the current launch instruction. The active v12 configuration
+> not be used as the current launch instruction. The active v13 configuration
 > has a 5,000-epoch minimum and 10,000-epoch hard cap, validates every 50 epochs
 > after the minimum, and permits early stopping there. Use
 > `scripts/rq_v1/README.md` for current execution metadata. The 1,000-epoch
