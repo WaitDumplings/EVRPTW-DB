@@ -31,6 +31,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     if args.stage2_dataset_path is None or args.output_dir is None:
         raise ValueError("TERRAN protocol mode requires Stage-2 data and --output-dir")
     completed = 0
+    completed_samples = 0
     environment_transitions = 0
     optimizer_steps = 0
     resume_checkpoint = None
@@ -43,6 +44,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             )
         state = DataPassState.load(state_path, protocol_id=args.protocol_id)
         completed = int(state.completed_data_passes)
+        completed_samples = int(state.instances_seen)
         environment_transitions = int(state.environment_transitions)
         optimizer_steps = int(state.optimizer_steps)
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
@@ -128,6 +130,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     configured.setdefault("data", {})
     configured.setdefault("evaluation", {})
     configured["data"]["stage2_completed_data_passes"] = completed
+    configured["data"]["stage2_completed_samples"] = completed_samples
     configured["training"].update(
         {
             "epochs": epochs,
@@ -202,6 +205,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "validation_candidates": validation_candidates,
         "pilot_partial": bool(getattr(args, "pilot_mode", False)),
         "completed_data_passes": completed,
+        "completed_samples": completed_samples,
         "environment_transitions": environment_transitions,
         "optimizer_steps": optimizer_steps,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,

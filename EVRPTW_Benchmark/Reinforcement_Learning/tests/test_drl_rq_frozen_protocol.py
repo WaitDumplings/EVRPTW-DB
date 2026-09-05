@@ -73,6 +73,6 @@ def test_support_sampling_and_statistics_use_parent_families() -> None:
     ]
     assert rq2["selection_uses_validation_or_test"] is False
     fairness = protocol["training_fairness"]
-    assert fairness["sampling"] == "stratified_deterministic_shuffle_cycle"
+    assert fairness["sampling"] == "prefix_stable_full_pool_shuffle_cycle"
     assert fairness["shared_stream_within_scale_seed"] is True
     assert fairness["statistical_unit"] == "parent_family"

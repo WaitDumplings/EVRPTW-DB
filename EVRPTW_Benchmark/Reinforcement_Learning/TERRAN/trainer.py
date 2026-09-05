@@ -230,6 +230,7 @@ def make_envs(cfg: dict[str, Any], seed: int):
             seed=seed,
             cache_size=int(data_cfg.get("stage2_cache_size", 4)),
             completed_data_passes=int(data_cfg.get("stage2_completed_data_passes", 0)),
+            completed_samples=int(data_cfg.get("stage2_completed_samples", 0)),
             training_stream_path=_resolve_repo_path(
                 data_cfg.get("stage2_training_stream_path")
             ),
@@ -1127,6 +1128,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                             and np.isfinite(float(verified_distance))
                             else None
                         ),
+                        "validation_wall_time_s": eval_wall_time_s,
                         "verifier_summary_passed": bool(
                             eval_row.get("eval_independent_verifier", False)
                             and int(eval_row["eval_complete_and_feasible"])

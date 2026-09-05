@@ -31,6 +31,7 @@ class Stage2TERRANPool:
     seed: int = 1234
     cache_size: int = 4
     completed_data_passes: int = 0
+    completed_samples: int = 0
     training_stream_path: str | Path | None = None
     representation: str = "G"
     euclidean_manifest: str | Path | None = None
@@ -60,7 +61,11 @@ class Stage2TERRANPool:
                 raise ValueError(
                     f"TERRAN training stream contains IDs outside its pool: {missing[:3]}"
                 )
-            self.sample_count = 0
+            self.sample_count = int(self.completed_samples)
+            if not 0 <= self.sample_count <= len(self._stream_view_ids):
+                raise ValueError(
+                    "TERRAN completed sample offset is outside the training stream"
+                )
             self._order = None
         else:
             self.sample_count = int(self.completed_data_passes) * len(self.pool)

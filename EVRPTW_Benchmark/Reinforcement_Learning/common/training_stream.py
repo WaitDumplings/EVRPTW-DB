@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 
-STREAM_SCHEMA = "drl_training_id_stream_v2"
+STREAM_SCHEMA = "drl_training_id_stream_v3"
 REQUIRED_INDEX_COLUMNS = {
     "view_id",
     "family_id",
@@ -41,23 +41,6 @@ def normalize_scale(value: str | int) -> str:
     return f"Cus{int(suffix)}"
 
 
-def _largest_remainder_quotas(counts: pd.Series, total: int) -> dict[tuple[str, str], int]:
-    if int(total) <= 0:
-        raise ValueError("stream length must be positive")
-    weights = counts.astype(np.float64) / float(counts.sum())
-    exact = weights * int(total)
-    floor = np.floor(exact).astype(np.int64)
-    remainder = int(total) - int(floor.sum())
-    order = sorted(
-        counts.index,
-        key=lambda key: (-float(exact.loc[key] - floor.loc[key]), str(key)),
-    )
-    quotas = {key: int(floor.loc[key]) for key in counts.index}
-    for key in order[:remainder]:
-        quotas[key] += 1
-    return quotas
-
-
 def build_training_stream(
     index: pd.DataFrame,
     *,
@@ -66,13 +49,13 @@ def build_training_stream(
     sample_count: int,
     allowed_family_ids: Iterable[str] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
-    """Build one method-independent city/day-type stratified ID stream.
+    """Build one method-independent, prefix-stable training ID stream.
 
-    Exact proportional quotas are assigned by largest remainder. Within each
-    stratum, every view is visited once in a deterministic shuffled cycle
-    before any view is reused; additional cycles receive independent seeded
-    permutations. The combined rows are deterministically shuffled. No content
-    hashes are computed.
+    Each deterministic cycle visits every eligible view exactly once. A longer
+    stream with the same source/support/scale/seed therefore preserves the
+    complete shorter stream as its prefix. Complete cycles reproduce the exact
+    city/day-type composition of the eligible pool; a final partial cycle is a
+    seeded sample without replacement. No content hashes are computed.
     """
 
     missing = sorted(REQUIRED_INDEX_COLUMNS.difference(index.columns))
@@ -101,34 +84,28 @@ def build_training_stream(
         raise ValueError("scale/customer_count mismatch in training index")
     if frame["day_type"].isna().any() or frame["city_slug"].isna().any():
         raise ValueError("city_slug and day_type must be populated")
+    if int(sample_count) <= 0:
+        raise ValueError("stream length must be positive")
     frame = frame.reset_index().rename(columns={"index": "source_row_position"})
-    grouped = frame.groupby(["city_slug", "day_type"], sort=True, dropna=False)
-    pool_counts = grouped.size()
-    quotas = _largest_remainder_quotas(pool_counts, int(sample_count))
+    # Canonicalize input ordering so an equivalent parquet index cannot change
+    # the registered stream merely by reordering its rows.
+    frame = frame.sort_values("view_id", kind="stable").reset_index(drop=True)
+    pool_counts = frame.groupby(
+        ["city_slug", "day_type"], sort=True, dropna=False
+    ).size()
     sampled_parts: list[pd.DataFrame] = []
-    for stratum_index, (key, group) in enumerate(grouped):
-        quota = quotas[key]
-        if quota == 0:
-            continue
-        sequence = np.random.SeedSequence(
-            [int(seed), int(stratum_index), 0x5354524D]
+    remaining = int(sample_count)
+    cycle_index = 0
+    while remaining:
+        rng = np.random.default_rng(
+            np.random.SeedSequence([int(seed), int(cycle_index), 0x5354524D])
         )
-        rng = np.random.default_rng(sequence)
-        full_cycles, remainder = divmod(quota, len(group))
-        cycle_draws = [rng.permutation(len(group)) for _ in range(full_cycles)]
-        if remainder:
-            cycle_draws.append(rng.permutation(len(group))[:remainder])
-        draws = (
-            np.concatenate(cycle_draws)
-            if cycle_draws
-            else np.empty(0, dtype=np.int64)
-        )
-        sampled_parts.append(group.iloc[draws].copy())
+        take = min(remaining, len(frame))
+        draws = rng.permutation(len(frame))[:take]
+        sampled_parts.append(frame.iloc[draws].copy())
+        remaining -= take
+        cycle_index += 1
     sampled = pd.concat(sampled_parts, ignore_index=True)
-    shuffle_rng = np.random.default_rng(
-        np.random.SeedSequence([int(seed), 0x4F524452])
-    )
-    sampled = sampled.iloc[shuffle_rng.permutation(len(sampled))].reset_index(drop=True)
     sampled.insert(0, "stream_position", np.arange(len(sampled), dtype=np.int64))
     sampled["scale_id"] = selected_scale
     stream = sampled[STREAM_COLUMNS].copy()
@@ -149,7 +126,7 @@ def build_training_stream(
         )
     manifest = {
         "schema": STREAM_SCHEMA,
-        "sampling": "city_day_type_stratified_shuffle_cycle_largest_remainder_v2",
+        "sampling": "city_day_type_full_pool_shuffle_cycle_prefix_stable_v3",
         "seed": int(seed),
         "scale": selected_scale,
         "sample_count": len(stream),
@@ -158,8 +135,10 @@ def build_training_stream(
         "pool_view_count": len(frame),
         "realized_unique_family_count": int(stream["family_id"].nunique()),
         "realized_unique_view_count": int(stream["view_id"].nunique()),
-        "replacement": False,
-        "reuse_policy": "only_after_stratum_cycle_exhaustion",
+        "replacement": len(stream) > len(frame),
+        "reuse_policy": "only_after_full_eligible_pool_cycle_exhaustion",
+        "prefix_stable": True,
+        "prefix_stability_scope": "same_source_support_scale_seed",
         "method_independent": True,
         "strata": strata,
         "file_hash_validation_performed": False,

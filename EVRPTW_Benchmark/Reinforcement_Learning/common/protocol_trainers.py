@@ -345,7 +345,12 @@ def train_reinforce_data_passes(
     if str(args.device).startswith("cuda"):
         torch.cuda.reset_peak_memory_stats(args.device)
 
-    first_pass = state.completed_data_passes + 1
+    # A fixed-update run is one logical pass even while an interrupted or
+    # explicitly extended budget has completed_data_passes=1 from its previous
+    # terminal checkpoint. Resume from logical_epoch, not from the pass flag.
+    first_pass = (
+        1 if fixed_epochs is not None else state.completed_data_passes + 1
+    )
     for data_pass in range(first_pass, total_passes + 1):
         pass_started = time.perf_counter()
         soft = bool(soft_stage_fraction and data_pass <= int(total_passes * soft_stage_fraction))
@@ -558,6 +563,7 @@ def train_reinforce_data_passes(
                 )
                 if validation_due:
                     policy.eval()
+                    validation_started = time.perf_counter()
                     validation = verified_validation(
                         validation_instances,
                         lambda instance, seed: validation_solve(
@@ -567,6 +573,7 @@ def train_reinforce_data_passes(
                     )
                     validation.update(
                         {
+                            "validation_wall_time_s": time.perf_counter() - validation_started,
                             "logical_epoch": logical_epoch,
                             "split": "validation",
                             "decode_type": validation_decode_type,
@@ -614,14 +621,13 @@ def train_reinforce_data_passes(
                     epoch_checkpoint = (
                         output / f"checkpoint_epoch_{logical_epoch:04d}.pt"
                     )
+                    checkpoint_completed_passes = (
+                        data_pass if logical_epoch == fixed_epochs else 0
+                    )
                     _save_checkpoint(
                         epoch_checkpoint,
                         method=method,
-                        data_pass=(
-                            data_pass
-                            if logical_epoch == fixed_epochs
-                            else state.completed_data_passes
-                        ),
+                        data_pass=checkpoint_completed_passes,
                         policy=policy,
                         baseline=baseline,
                         optimizer=optimizer,
@@ -633,9 +639,7 @@ def train_reinforce_data_passes(
                         shutil.copy2(epoch_checkpoint, selected_checkpoint)
                         shutil.copy2(epoch_checkpoint, best_checkpoint)
                         atomic_json(output / "validation_summary.json", validation)
-                    state.completed_data_passes = (
-                        data_pass if logical_epoch == fixed_epochs else 0
-                    )
+                    state.completed_data_passes = checkpoint_completed_passes
                     state.instances_seen = starting_state_instances + instances_seen
                     state.customer_exposures = (
                         starting_state_exposures
@@ -714,6 +718,7 @@ def train_reinforce_data_passes(
         )
         if should_validate:
             policy.eval()
+            validation_started = time.perf_counter()
             validation = verified_validation(
                 validation_instances,
                 lambda instance, seed: validation_solve(policy, instance, seed),
@@ -721,6 +726,7 @@ def train_reinforce_data_passes(
             )
             validation.update(
                 {
+                    "validation_wall_time_s": time.perf_counter() - validation_started,
                     "data_pass": data_pass,
                     "split": "validation",
                     "decode_type": validation_decode_type,

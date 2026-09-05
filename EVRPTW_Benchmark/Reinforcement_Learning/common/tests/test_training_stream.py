@@ -39,8 +39,9 @@ def test_stream_is_deterministic_stratified_shuffle_cycle() -> None:
     }
     assert first["view_id"].nunique() == len(_index())
     assert manifest["customer_exposures"] == 10_000
-    assert manifest["replacement"] is False
-    assert manifest["reuse_policy"] == "only_after_stratum_cycle_exhaustion"
+    assert manifest["replacement"] is True
+    assert manifest["reuse_policy"] == "only_after_full_eligible_pool_cycle_exhaustion"
+    assert manifest["prefix_stable"] is True
     assert manifest["method_independent"] is True
 
     one_cycle, _ = build_training_stream(
@@ -48,6 +49,20 @@ def test_stream_is_deterministic_stratified_shuffle_cycle() -> None:
     )
     assert set(one_cycle["view_id"]) == set(_index()["view_id"])
     assert one_cycle["view_id"].is_unique
+
+
+def test_stream_extension_preserves_exact_prefix_and_input_order_invariance() -> None:
+    short, _ = build_training_stream(
+        _index(), scale="Cus100", seed=13, sample_count=17
+    )
+    extended, _ = build_training_stream(
+        _index().sample(frac=1.0, random_state=99),
+        scale="Cus100",
+        seed=13,
+        sample_count=37,
+    )
+    assert extended.iloc[: len(short)]["view_id"].tolist() == short["view_id"].tolist()
+    assert set(extended.iloc[: len(_index())]["view_id"]) == set(_index()["view_id"])
 
 
 def test_parent_family_support_is_enforced() -> None:

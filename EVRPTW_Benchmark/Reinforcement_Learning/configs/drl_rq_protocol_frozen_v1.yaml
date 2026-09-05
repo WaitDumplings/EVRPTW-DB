@@ -68,7 +68,7 @@ ev_integrity:
 training_fairness:
   primary: customer_exposure_matched
   secondary: gpu_hour_matched
-  sampling: stratified_deterministic_shuffle_cycle
+  sampling: prefix_stable_full_pool_shuffle_cycle
   shared_stream_within_scale_seed: true
   test_used_for_checkpoint_selection: false
   statistical_unit: parent_family
@@ -83,13 +83,13 @@ model_selection:
   validation_decode_type: sampling
   validation_candidate_count: 100
   candidate_selection: independent_verifier_feasible_then_min_directed_distance
-  validation_every_epochs: 50
+  validation_every_epochs: 250
   primary_metric: independent_verifier_feasibility_rate
   secondary_metric: mean_verified_directed_distance
-  early_stop_patience_validation_checks: 3
-  early_stop_no_improvement_epochs_equivalent: 150
-  early_stop_start_epoch_exclusive: 1000
-  earliest_possible_early_stop_epoch: 1150
+  early_stop_patience_validation_checks: 4
+  early_stop_no_improvement_epochs_equivalent: 1000
+  early_stop_start_epoch_exclusive: 3500
+  earliest_possible_early_stop_epoch: 4500
   test_used_for_selection: false
 
 test_inference:

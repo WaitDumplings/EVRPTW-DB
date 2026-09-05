@@ -112,6 +112,7 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         for line in (output / "validation_history.jsonl").read_text().splitlines()
     ]
     assert [row["logical_epoch"] for row in history] == [2, 4]
+    assert all(row["validation_wall_time_s"] >= 0 for row in history)
     assert [count for count, _ in validation_calls] == [2, 2, 3]
     assert (output / "checkpoint_epoch_0002.pt").is_file()
     assert (output / "checkpoint_epoch_0004.pt").is_file()
@@ -213,6 +214,108 @@ def test_fixed_epoch_early_stop_waits_until_after_start_epoch(tmp_path, monkeypa
     assert terminal["completed_validation_checkpoints"] == 4
     assert terminal["early_stop_start_epoch"] == 4
     assert len(validation_calls) == 4
+
+
+def test_completed_fixed_budget_can_resume_a_prefix_stable_extension(
+    tmp_path, monkeypatch
+) -> None:
+    calls = []
+
+    def fake_validation(instances, _solve, *, seed):
+        count = len(list(instances))
+        calls.append(seed)
+        return {
+            "schema": "drl_validation_summary_v1",
+            "instances": count,
+            "complete_and_feasible": count,
+            "complete_and_feasible_rate": 1.0,
+            "mean_verified_distance_km": 100.0 - len(calls),
+            "verifier_summary_passed": True,
+            "rows": [],
+        }
+
+    monkeypatch.setattr(
+        protocol_trainers,
+        "make_validation_pool",
+        lambda *_args, **_kwargs: _ValidationPool(),
+    )
+    monkeypatch.setattr(protocol_trainers, "verified_validation", fake_validation)
+    policy = torch.nn.Linear(1, 1, bias=False)
+    optimizer = torch.optim.SGD(policy.parameters(), lr=0.01)
+
+    def result(instances):
+        count = len(instances)
+        return SimpleNamespace(
+            cost=torch.ones(count, 1),
+            objective=torch.ones(count, 1),
+            feasible=torch.ones(count, 1, dtype=torch.bool),
+            log_likelihood=policy.weight.sum().expand(count, 1),
+            environment_transitions=count,
+            trajectory_steps=torch.ones(count, 1, dtype=torch.int64),
+            rollout_budget_exhausted=torch.zeros(count, 1, dtype=torch.bool),
+        )
+
+    args = SimpleNamespace(
+        training_epochs=2,
+        data_passes=None,
+        max_batches_per_pass=None,
+        pilot_mode=False,
+        validation_every_epochs=1,
+        validation_checkpoints=2,
+        early_stop_patience_validations=0,
+        early_stop_start_epoch=0,
+        physical_batch_size=1,
+        effective_batch_size=2,
+        training_stream_path=tmp_path / "stream.parquet",
+        customer_exposure_budget=200,
+        scale="Cus50",
+        output_dir=tmp_path / "extension",
+        protocol_id="fixed-extension-test",
+        resume=False,
+        validation_limit=2,
+        final_validation_limit=0,
+        validation_every_passes=5,
+        seed=1234,
+        baseline_eval_size=0,
+        exposure_checkpoints="",
+        gpu_hour_checkpoints="",
+        device="cpu",
+        max_grad_norm=1.0,
+        training_rollout_steps=80,
+    )
+
+    def run():
+        protocol_trainers.train_reinforce_data_passes(
+            method="DRL-TS",
+            args=args,
+            pool=_Pool(),
+            policy=policy,
+            optimizer=optimizer,
+            make_actor=lambda instances, _soft, _seed: result(instances),
+            make_baseline=lambda _model, instances, _soft, _seed: result(instances),
+            training_cost=lambda value: value.cost,
+            objective_distance=lambda value: value.objective,
+            feasible=lambda value: value.feasible,
+            validation_solve=lambda *_args: {},
+            legacy_batch_size=1,
+        )
+
+    run()
+    args.training_epochs = 4
+    args.validation_checkpoints = 4
+    args.customer_exposure_budget = 400
+    args.resume = True
+    run()
+
+    history = [
+        json.loads(line)
+        for line in (args.output_dir / "validation_history.jsonl").read_text().splitlines()
+    ]
+    assert [row["logical_epoch"] for row in history] == [1, 2, 3, 4]
+    state = json.loads((args.output_dir / "data_pass_state.json").read_text())
+    assert state["completed_data_passes"] == 1
+    assert state["instances_seen"] == 8
+    assert state["optimizer_steps"] == 4
 
 
 def test_verified_validation_disables_autograd(monkeypatch) -> None:

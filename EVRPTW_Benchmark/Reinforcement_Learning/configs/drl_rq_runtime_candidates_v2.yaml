@@ -1,7 +1,7 @@
 schema: drl_rq_runtime_candidates_v2
-status: direct_full_runtime_frozen
+status: runtime_candidate_not_yet_validated
 protocol_id: drl_rq_protocol_frozen_v1
-runtime_budget_id: drl_rq_runtime_budget_v8_2000ep_es_after1000
+runtime_budget_id: drl_rq_runtime_budget_v9_5000ep_val250_es4500
 
 # Common publication inference budget. Each candidate is independently checked
 # by the canonical verifier; selection is feasible-first, then minimum distance.
@@ -33,25 +33,25 @@ scale_hardware:
   a6000: [Cus500, Cus1000]
 
 # One logical epoch is one outer optimizer update over the listed number of
-# base environments. Every scale uses 2,000 logical epochs. Fairness is enforced
+# base environments. Every scale uses 5,000 logical epochs. Fairness is enforced
 # within each scale: every method and seed sees the same deterministic stream
 # and effective batch. Cross-scale customer exposure is intentionally not forced
 # to match because the scales are not compared as one optimization task.
 candidate_logical_epochs:
-  Cus50: 2000
-  Cus100: 2000
-  Cus500: 2000
-  Cus1000: 2000
+  Cus50: 5000
+  Cus100: 5000
+  Cus500: 5000
+  Cus1000: 5000
 candidate_environments_per_epoch:
   Cus50: 1024
   Cus100: 256
   Cus500: 64
   Cus1000: 2
 candidate_customer_exposure_budget:
-  Cus50: 102400000
-  Cus100: 51200000
-  Cus500: 64000000
-  Cus1000: 4000000
+  Cus50: 256000000
+  Cus100: 128000000
+  Cus500: 160000000
+  Cus1000: 10000000
 
 # The effective/logical batch equals environments_per_epoch, so every logical
 # epoch produces exactly one outer update. Physical batches remain architecture
@@ -76,12 +76,12 @@ formal_candidate:
     Cus500: 500
     Cus1000: 500
   final_validation_views: {}
-  validation_every_epochs: 50
-  early_stop_patience_validations: 3
-  # Epoch 1,000 and earlier still select best.ckpt, but do not consume patience.
-  # The first eligible no-improvement check is Epoch 1,050.
-  early_stop_start_epoch: 1000
-  early_stop_patience_epochs_equivalent: 150
+  validation_every_epochs: 250
+  early_stop_patience_validations: 4
+  # Epoch 3,500 and earlier still select best.ckpt, but do not consume patience.
+  # Four later checks represent 1,000 mature-stage updates before stopping.
+  early_stop_start_epoch: 3500
+  early_stop_patience_epochs_equivalent: 1000
   checkpoint_selection: feasibility_rate_then_mean_verified_distance
   exposure_checkpoints_fraction: [0.25, 0.50, 1.00]
   gpu_hour_checkpoints: [6, 12, 24]

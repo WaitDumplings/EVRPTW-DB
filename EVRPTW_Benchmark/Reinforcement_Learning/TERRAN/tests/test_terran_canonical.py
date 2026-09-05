@@ -482,5 +482,7 @@ def test_protocol_resume_carries_exact_optimizer_step_count(
     )
     configured, _ = terran_protocol.configure_protocol(args, {})
     assert configured["protocol"]["optimizer_steps"] == 7
+    assert configured["protocol"]["completed_samples"] == 100
+    assert configured["data"]["stage2_completed_samples"] == 100
     assert configured["training"]["rollout_steps"] == 140
     assert configured["protocol"]["training_rollout_steps"] == 140
