@@ -11,7 +11,7 @@ data path is committed.
 
 ## Active single-seed four-scale configuration
 
-Runtime budget: `drl_rq_runtime_budget_v9_5000ep_val250_es4500`.
+Runtime budget: `drl_rq_runtime_budget_v9_5000ep_fixed_val250`.
 This is a fresh candidate budget: start it with `full.sh`; do not use a v8
 checkpoint as a v9 resume source. `resume.sh` is for interruption recovery within
 the same v9 job and commit.
@@ -38,10 +38,11 @@ Physical batches use exact gradient accumulation divisors of the logical batch:
 AM and TERRAN use 100 training trajectories on Cus500/Cus1000. EVRPTW-RL and
 DRL-TS use one because sample-100 exceeded memory even at physical batch 1.
 Validation and test use stochastic best-of-100 decoding. Formal validation runs
-every 250 epochs on 500 fixed views. Epoch 3,500 and earlier perform checkpoint selection but do not consume early-stop patience.
-After Epoch 3,500, four consecutive non-improving validation checks stop
-training; the earliest possible stop is Epoch 4,500. Every job has at most 20
-validation checkpoints.
+every 250 epochs on 500 fixed views. Early stopping is disabled: every method
+receives exactly 5,000 updates, while
+`best.ckpt` is still selected from at most 20 validation checkpoints. The
+validation instance set and per-instance candidate seeds are fixed across all
+checkpoints; test remains independent and never selects a checkpoint.
 
 There are 24 formal jobs total. Server counts are 8, 5, 3, and 8 for
 `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1`, and `a6000_2_1`, respectively.

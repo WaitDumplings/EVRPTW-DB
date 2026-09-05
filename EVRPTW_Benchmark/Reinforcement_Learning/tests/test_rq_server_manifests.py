@@ -75,7 +75,7 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         epochs, environments_per_epoch, total_environments, exposures = expected[
             row["scale"]
         ]
-        assert row["runtime_budget_id"] == "drl_rq_runtime_budget_v9_5000ep_val250_es4500"
+        assert row["runtime_budget_id"] == "drl_rq_runtime_budget_v9_5000ep_fixed_val250"
         assert row["runtime_budget_id"] in row["training_stream_path"]
         assert row["training_epochs"] == epochs
         assert row["planned_optimizer_updates"] == epochs
@@ -101,8 +101,9 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         assert row["training_trajectory_count"] == expected_trajectories
         assert row["final_validation_views"] == 0
         assert row["planning_wall_time_hours"] is None
-        assert row["early_stop_patience_validations"] == 4
-        assert row["early_stop_start_epoch"] == 3500
+        assert row["early_stop_patience_validations"] == 0
+        assert row["early_stop_start_epoch"] == 0
+        assert row["validation_seed"] == row["seed"] + 910_000_000
 
 
 def test_2080ti_jobs_use_only_measured_safe_sample100_batches() -> None:

@@ -199,6 +199,11 @@ def train_reinforce_data_passes(
     mode remains available for old explicit CLI invocations.
     """
     validation_decode_type, validation_candidates = require_validation_decoding(args)
+    validation_seed = int(
+        getattr(args, "validation_seed", None)
+        if getattr(args, "validation_seed", None) is not None
+        else int(args.seed) + 910_000_000
+    )
 
     fixed_epochs = getattr(args, "training_epochs", None)
     if fixed_epochs is not None:
@@ -569,12 +574,13 @@ def train_reinforce_data_passes(
                         lambda instance, seed: validation_solve(
                             policy, instance, seed
                         ),
-                        seed=int(args.seed) + logical_epoch * 100_000,
+                        seed=validation_seed,
                     )
                     validation.update(
                         {
                             "validation_wall_time_s": time.perf_counter() - validation_started,
                             "logical_epoch": logical_epoch,
+                            "validation_seed": validation_seed,
                             "split": "validation",
                             "decode_type": validation_decode_type,
                             "candidate_count": validation_candidates,
@@ -722,12 +728,13 @@ def train_reinforce_data_passes(
             validation = verified_validation(
                 validation_instances,
                 lambda instance, seed: validation_solve(policy, instance, seed),
-                seed=int(args.seed) + data_pass * 100_000,
+                seed=validation_seed,
             )
             validation.update(
                 {
                     "validation_wall_time_s": time.perf_counter() - validation_started,
                     "data_pass": data_pass,
+                    "validation_seed": validation_seed,
                     "split": "validation",
                     "decode_type": validation_decode_type,
                     "candidate_count": validation_candidates,
@@ -912,6 +919,7 @@ def train_reinforce_data_passes(
         "final_validation_limit": final_validation_limit,
         "validation_decode_type": validation_decode_type,
         "validation_candidates": validation_candidates,
+        "validation_seed": validation_seed,
         "final_validation_audit": (
             str(final_validation_path) if final_validation_limit > 0 else None
         ),

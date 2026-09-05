@@ -50,6 +50,11 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
+    validation_seed = int(
+        getattr(args, "validation_seed", None)
+        if getattr(args, "validation_seed", None) is not None
+        else int(args.seed) + 910_000_000
+    )
     pool = Stage2TaskPool(
         dataset_path=args.stage2_dataset_path,
         family_root=args.stage2_family_root,
@@ -169,6 +174,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
                 ),
                 "eval_limit": int(args.validation_limit),
                 "eval_n_traj": validation_candidates,
+                "eval_seed": validation_seed,
                 "eval_batch_size": 1,
                 "eval_decode_mode": (
                     "sample"
@@ -203,6 +209,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
         "validation_decode_type": validation_decode_type,
         "validation_candidates": validation_candidates,
+        "validation_seed": validation_seed,
         "pilot_partial": bool(getattr(args, "pilot_mode", False)),
         "completed_data_passes": completed,
         "completed_samples": completed_samples,
@@ -248,6 +255,11 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
     if meta is None:
         return
     validation_decode_type, validation_candidates = require_validation_decoding(args)
+    validation_seed = int(
+        getattr(args, "validation_seed", None)
+        if getattr(args, "validation_seed", None) is not None
+        else int(args.seed) + 910_000_000
+    )
     output = Path(args.output_dir)
     fixed_epochs = getattr(args, "training_epochs", None) is not None
     total_passes = 1 if fixed_epochs else int(args.data_passes)
@@ -470,6 +482,7 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             "completed_validation_checkpoints": int(early_stop_state.get("completed_validation_checkpoints", 0)),
             "early_stop_patience_validations": int(getattr(args, "early_stop_patience_validations", 0) or 0),
             "early_stop_start_epoch": int(getattr(args, "early_stop_start_epoch", 0) or 0),
+            "validation_seed": validation_seed,
             "final_validation_limit": final_validation_limit,
             "final_validation_audit": (
                 str(final_validation_path) if final_validation_limit > 0 else None

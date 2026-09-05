@@ -86,10 +86,12 @@ model_selection:
   validation_every_epochs: 250
   primary_metric: independent_verifier_feasibility_rate
   secondary_metric: mean_verified_directed_distance
-  early_stop_patience_validation_checks: 4
-  early_stop_no_improvement_epochs_equivalent: 1000
-  early_stop_start_epoch_exclusive: 3500
-  earliest_possible_early_stop_epoch: 4500
+  early_stopping: disabled
+  early_stop_patience_validation_checks: 0
+  early_stop_no_improvement_epochs_equivalent: 0
+  early_stop_start_epoch_exclusive: null
+  earliest_possible_early_stop_epoch: null
+  validation_seed_rule: fixed_training_seed_plus_910000000
   test_used_for_selection: false
 
 test_inference:

@@ -308,6 +308,7 @@ def evaluate_fixed_dataset(
     device: str | torch.device,
 ) -> dict[str, Any]:
     eval_cfg = cfg.get("evaluation", {})
+    candidate_seed = int(eval_cfg.get("eval_seed", seed + 910_000_000))
     data_cfg = cfg.get("data", {})
     num_customers = int(data_cfg.get("num_customers", 15))
     num_cs = int(data_cfg.get("num_charging_stations", 3))
@@ -398,7 +399,7 @@ def evaluate_fixed_dataset(
             decode_mode=decode_mode,
             max_steps=max_steps,
             device=device,
-            seed=seed + epoch * 1_000_000 + seen_before_batch,
+            seed=candidate_seed + seen_before_batch,
             include_routes=eval_save_routes,
             return_final_info=require_verifier,
         )
@@ -654,6 +655,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     )
     checkpoint_interval = int(train_cfg.get("checkpoint_interval", 50))
     eval_interval = int(eval_cfg.get("eval_interval", 0) or 0)
+    validation_seed = int(eval_cfg.get("eval_seed", seed + 910_000_000))
     debug_enabled = bool(train_cfg.get("debug", False))
     debug_log_every = max(1, int(train_cfg.get("debug_log_every", 1)))
     profile_timing = bool(train_cfg.get("profile_timing", False))
@@ -1103,7 +1105,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             should_eval = eval_interval > 0 and (epoch % eval_interval == 0 or epoch == epochs)
             if should_eval:
                 eval_start = time.perf_counter()
-                eval_row = evaluate_fixed_dataset(agent, cfg, seed=seed, epoch=epoch, device=device)
+                eval_row = evaluate_fixed_dataset(
+                    agent, cfg, seed=seed, epoch=epoch, device=device
+                )
                 eval_wall_time_s = time.perf_counter() - eval_start
                 eval_writer.writerow({"epoch": epoch, **eval_row})
                 ef.flush()
@@ -1115,6 +1119,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         "schema": "drl_validation_summary_v1",
                         "split": "validation",
                         "logical_epoch": epoch,
+                        "validation_seed": validation_seed,
                         "instances": int(eval_row["eval_num_instances"]),
                         "complete_and_feasible": int(
                             eval_row["eval_complete_and_feasible"]

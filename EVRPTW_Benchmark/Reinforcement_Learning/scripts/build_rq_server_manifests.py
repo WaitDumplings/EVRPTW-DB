@@ -126,6 +126,8 @@ def job(
         "validation_candidate_count": int(
             cfg["evaluation"]["validation_candidate_count"]
         ),
+        "validation_seed": int(seed)
+        + int(cfg["formal_candidate"]["validation_seed_offset"]),
         "test_decode_type": cfg["evaluation"]["test_decode_type"],
         "test_candidate_count": int(cfg["evaluation"]["test_candidate_count"]),
         "candidate_selection": cfg["evaluation"]["selection"],

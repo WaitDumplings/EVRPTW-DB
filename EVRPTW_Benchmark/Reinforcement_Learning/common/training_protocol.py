@@ -37,6 +37,7 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
         default="greedy",
     )
     parser.add_argument("--validation-candidates", type=int, default=1)
+    parser.add_argument("--validation-seed", type=int)
     parser.add_argument("--final-validation-limit", type=int, default=0)
     parser.add_argument("--validation-every-passes", type=int, default=5)
     parser.add_argument("--validation-every-epochs", type=int)

@@ -114,6 +114,7 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
     assert [row["logical_epoch"] for row in history] == [2, 4]
     assert all(row["validation_wall_time_s"] >= 0 for row in history)
     assert [count for count, _ in validation_calls] == [2, 2, 3]
+    assert validation_calls[0][1] == validation_calls[1][1]
     assert (output / "checkpoint_epoch_0002.pt").is_file()
     assert (output / "checkpoint_epoch_0004.pt").is_file()
     assert (output / "best.ckpt").read_bytes() == (

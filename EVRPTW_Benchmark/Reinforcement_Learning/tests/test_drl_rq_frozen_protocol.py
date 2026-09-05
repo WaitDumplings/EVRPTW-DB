@@ -52,6 +52,8 @@ def test_validation_and_test_use_common_best_of_100_sampling_budget() -> None:
     evaluation = protocol["test_inference"]
     assert selection["validation_decode_type"] == "sampling"
     assert selection["validation_candidate_count"] == 100
+    assert selection["early_stopping"] == "disabled"
+    assert selection["early_stop_patience_validation_checks"] == 0
     assert evaluation["decode_type"] == "sampling"
     assert evaluation["candidate_count"] == 100
     assert protocol["training_trajectories_per_instance"] == {
