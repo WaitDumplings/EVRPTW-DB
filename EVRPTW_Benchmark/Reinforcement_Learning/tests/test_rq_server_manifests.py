@@ -63,10 +63,10 @@ def test_scale_aware_hardware_assignment_is_strict() -> None:
 
 def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() -> None:
     expected = {
-        "Cus50": (6_000, 1_024, 6_144_000, 307_200_000),
-        "Cus100": (6_000, 256, 1_536_000, 153_600_000),
-        "Cus500": (6_000, 64, 384_000, 192_000_000),
-        "Cus1000": (6_000, 2, 12_000, 12_000_000),
+        "Cus50": (10_000, 1_024, 10_240_000, 512_000_000),
+        "Cus100": (10_000, 256, 2_560_000, 256_000_000),
+        "Cus500": (10_000, 64, 640_000, 320_000_000),
+        "Cus1000": (10_000, 2, 20_000, 20_000_000),
     }
     formal = [
         row
@@ -80,7 +80,7 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         ]
         assert (
             row["runtime_budget_id"]
-            == "drl_rq_runtime_budget_v11_min5000_max6000_tailval50"
+            == "drl_rq_runtime_budget_v12_min5000_max10000_tailval50"
         )
         assert row["runtime_budget_id"] in row["training_stream_path"]
         assert row["training_epochs"] == epochs
@@ -92,7 +92,7 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         assert row["physical_batch_size"] <= row["effective_batch_size"]
         assert row["effective_batch_size"] % row["physical_batch_size"] == 0
         assert row["validation_every_epochs"] == 250
-        assert row["validation_checkpoints"] == 40
+        assert row["validation_checkpoints"] == 120
         assert row["minimum_training_epochs"] == 5_000
         assert row["post_minimum_validation_every_epochs"] == 50
         assert row["validation_views"] == 500
@@ -208,15 +208,16 @@ def test_checked_in_server_manifests_match_builder() -> None:
         assert checked_in == expected
 
 
-def test_artifact_preparation_uses_v11_manifest_exposure_budgets() -> None:
+def test_artifact_preparation_uses_v12_manifest_exposure_budgets() -> None:
     script = (SCRIPT_ROOT / "prepare_artifacts.sh").read_text(encoding="utf-8")
-    assert "drl_rq_runtime_budget_v11_min5000_max6000_tailval50" in script
+    assert "drl_rq_runtime_budget_v12_min5000_max10000_tailval50" in script
+    assert "drl_rq_runtime_budget_v11_min5000_max6000_tailval50" not in script
     assert "drl_rq_runtime_budget_v10_min5000_max10000_tailval50" not in script
     for scale, exposure in {
-        "Cus50": 307_200_000,
-        "Cus100": 153_600_000,
-        "Cus500": 192_000_000,
-        "Cus1000": 12_000_000,
+        "Cus50": 512_000_000,
+        "Cus100": 256_000_000,
+        "Cus500": 320_000_000,
+        "Cus1000": 20_000_000,
     }.items():
         assert f"[{scale}]={exposure}" in script
     assert '--customer-exposures "${FORMAL_EXPOSURE[Cus100]}"' in script

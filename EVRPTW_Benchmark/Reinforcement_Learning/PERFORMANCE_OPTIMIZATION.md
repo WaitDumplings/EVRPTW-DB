@@ -9,9 +9,10 @@ seeds,
 validation cohort, best-of-100 decoding, objective, charging rules, feasibility
 semantics, architecture or checkpoint selection. It launches no training.
 
-The later v11 launch budget changes only the hard cap from 10,000 to 6,000 and
-selects `best_overall.ckpt` formally; the optimizations and equivalence evidence
-described here remain applicable.
+The later v11 launch budget temporarily changed the hard cap from 10,000 to
+6,000 and selected `best_overall.ckpt` formally. The active v12 budget restores
+the 10,000-epoch cap while retaining that overall-best selection; the
+optimizations and equivalence evidence described here remain applicable.
 
 ## Implementation
 

@@ -1,12 +1,12 @@
 # RTX 6000 Ada memory calibration handoff v1
 
-> **Superseded on 2026-09-04.** The user explicitly removed the pilot workflow
-> and authorized direct formal launch with the frozen calibrated batches. The
-> pilot procedure below is retained only as historical provenance and must not
-> be used as the current launch instruction. Use
-> `scripts/rq_v1/a6000_2_1/full.sh --seed 1234` directly.
-> The current direct-full configuration uses 2,000 epochs for Cus500/Cus1000;
-> the 1,000-epoch values below describe only the superseded calibration setup.
+> **Superseded on 2026-09-04.** The user explicitly removed the pilot workflow;
+> the pilot procedure below is retained only as historical provenance and must
+> not be used as the current launch instruction. The active v12 configuration
+> has a 5,000-epoch minimum and 10,000-epoch hard cap, validates every 50 epochs
+> after the minimum, and permits early stopping there. Use
+> `scripts/rq_v1/README.md` for current execution metadata. The 1,000-epoch
+> values below describe only the superseded calibration setup.
 
 Date: 2026-09-04
 

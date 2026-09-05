@@ -4,7 +4,7 @@
 > **历史文档提示（2026-09-04）：** 本文后续出现的 1,000-epoch 预算、pilot
 > 流程及相关旧数值仅保留作历史记录，不再用于当前正式实验。当前配置以
 > [`scripts/rq_v1/README.md`](scripts/rq_v1/README.md) 为准：预算版本为
-> `v11`，minimum/max epochs 为 5,000/6,000，已取消 pilot gate；Cus1000 的
+> `v12`，minimum/max epochs 为 5,000/10,000，已取消 pilot gate；Cus1000 的
 > validation/test 使用 `sample` 解码且 `n_traj=100`。
 
 本目录只调度四个已冻结 baseline：AM-EVRPTW、EVRPTW-RL、DRL-TS、TERRAN。统一目标是 independent verifier 通过后的 directed-road total distance。Edge-DIRECT-H、LEHD、`E -> R` 和 `R -> Inject -> R` 不会生成 GPU job。

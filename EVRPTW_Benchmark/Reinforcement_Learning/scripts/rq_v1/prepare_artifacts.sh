@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/dataset_root.sh"
 DATASET_ROOT="$(resolve_evrptw_dataset_root "$REPO_ROOT")"
 OUTPUT_ROOT="${EVRPTW_OUTPUT_ROOT:-$REPO_ROOT/EVRPTW_Benchmark/results/DRL_rq_v1}"
 ARTIFACT_ROOT="$OUTPUT_ROOT/artifacts"
-RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v11_min5000_max6000_tailval50"
+RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v12_min5000_max10000_tailval50"
 STREAM_ROOT="$ARTIFACT_ROOT/streams/$RUNTIME_BUDGET_ID"
 TRAIN_CORE="$DATASET_ROOT/generation_plan/core/train/view_index.parquet"
 TRAIN_CUS50="$DATASET_ROOT/generation_plan/compatibility_cus50/train/view_index.parquet"
@@ -61,7 +61,7 @@ import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 d = json.loads(p.read_text())
 paths = [pathlib.Path(item) for item in d.get("required_artifacts", [])]
-valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v11_min5000_max6000_tailval50"
+valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v12_min5000_max10000_tailval50"
 valid_dataset = pathlib.Path(d.get("dataset_root", "")).resolve() == pathlib.Path(sys.argv[2]).resolve()
 raise SystemExit(
     0 if valid_budget and valid_dataset and paths and all(path.is_file() for path in paths) else 1
@@ -96,10 +96,10 @@ declare -A INDEX=(
   [Cus1000]="$TRAIN_CORE"
 )
 declare -A FORMAL_EXPOSURE=(
-  [Cus50]=307200000
-  [Cus100]=153600000
-  [Cus500]=192000000
-  [Cus1000]=12000000
+  [Cus50]=512000000
+  [Cus100]=256000000
+  [Cus500]=320000000
+  [Cus1000]=20000000
 )
 IFS=',' read -r -a SEEDS <<< "$SEED_SELECTION"
 for seed in "${SEEDS[@]}"; do
@@ -139,7 +139,7 @@ import json, os, pathlib, sys, tempfile
 target = pathlib.Path(sys.argv[1])
 payload = {
     "schema": "drl_rq_artifact_preparation_v2",
-    "runtime_budget_id": "drl_rq_runtime_budget_v11_min5000_max6000_tailval50",
+    "runtime_budget_id": "drl_rq_runtime_budget_v12_min5000_max10000_tailval50",
     "status": "passed",
     "dataset_root": sys.argv[2],
     "required_artifacts": sys.argv[3:],

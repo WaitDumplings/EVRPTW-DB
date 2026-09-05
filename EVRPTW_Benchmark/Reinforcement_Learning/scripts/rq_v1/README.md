@@ -11,20 +11,20 @@ data path is committed.
 
 ## Active single-seed four-scale configuration
 
-Runtime budget: `drl_rq_runtime_budget_v11_min5000_max6000_tailval50`.
+Runtime budget: `drl_rq_runtime_budget_v12_min5000_max10000_tailval50`.
 This is a fresh candidate budget: start it with `full.sh`; do not use a v8, v9,
-or v10 checkpoint as a v11 resume source. `resume.sh` is for interruption
-recovery within the same v11 job and commit.
+v10, or v11 checkpoint as a v12 resume source. `resume.sh` is for interruption
+recovery within the same v12 job and commit.
 
 The manifests contain seed 1234 only. The 2080 Ti servers own Cus50/Cus100;
 the two RTX 6000 Ada GPUs own Cus500/Cus1000.
 
 | Scale | Hardware | Minimum epochs | Hard cap | Environments/epoch | Maximum environments | Maximum customer exposures |
 |---|---|---:|---:|---:|---:|---:|
-| Cus50 | RTX 2080 Ti | 5,000 | 6,000 | 1,024 | 6,144,000 | 307,200,000 |
-| Cus100 | RTX 2080 Ti | 5,000 | 6,000 | 256 | 1,536,000 | 153,600,000 |
-| Cus500 | RTX 6000 Ada | 5,000 | 6,000 | 64 | 384,000 | 192,000,000 |
-| Cus1000 | RTX 6000 Ada | 5,000 | 6,000 | 2 | 12,000 | 12,000,000 |
+| Cus50 | RTX 2080 Ti | 5,000 | 10,000 | 1,024 | 10,240,000 | 512,000,000 |
+| Cus100 | RTX 2080 Ti | 5,000 | 10,000 | 256 | 2,560,000 | 256,000,000 |
+| Cus500 | RTX 6000 Ada | 5,000 | 10,000 | 64 | 640,000 | 320,000,000 |
+| Cus1000 | RTX 6000 Ada | 5,000 | 10,000 | 2 | 20,000 | 20,000,000 |
 
 Physical batches use exact gradient accumulation divisors of the logical batch:
 
@@ -35,12 +35,18 @@ Physical batches use exact gradient accumulation divisors of the logical batch:
 | Cus500 | 8 | 16 | 8 | 64 |
 | Cus1000 | 2 | 2 | 2 | 2 |
 
+The 2026-09-04 Cus1000 boundary sweep is recorded in
+[`RTX6000_ADA_CUS1000_MEMORY_CALIBRATION_V2.md`](../../reports/RTX6000_ADA_CUS1000_MEMORY_CALIBRATION_V2.md).
+Larger method-specific batches could not simultaneously satisfy the 40--45 GiB
+target, the common-exposure contract, the even-batch constraint, and the formal
+deadline; batch 2 is therefore intentional rather than an uncalibrated default.
+
 AM and TERRAN use 100 training trajectories on Cus500/Cus1000. EVRPTW-RL and
 DRL-TS use one because sample-100 exceeded memory even at physical batch 1.
 Validation and test use stochastic best-of-100 decoding on 500 fixed validation
 views. Validation runs every 250 epochs through epoch 5,000, then every 50 epochs.
 Early stopping is disabled through epoch 5,000; after that, ten consecutive
-non-improving validations stop the run, with a hard cap of 6,000 epochs and an
+non-improving validations stop the run, with a hard cap of 10,000 epochs and an
 earliest stop at epoch 5,500. `best.ckpt`, `checkpoint_selected.pt`, and
 `validation_summary.json` are the formal aliases for `best_overall.ckpt` and
 `validation_summary_overall.json`: they identify the best state across the
@@ -49,7 +55,7 @@ complete run, including optional tail training. `best_within_5000.ckpt` and
 separate evidence. The validation instance set and per-instance candidate seeds
 are fixed across all checkpoints; test remains independent and never selects a
 checkpoint. DRL-TS always switches from soft to hard training after epoch 2,500,
-independent of the 6,000-epoch cap.
+independent of the 10,000-epoch cap.
 
 There are 24 formal jobs total. Server counts are 8, 5, 3, and 8 for
 `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1`, and `a6000_2_1`, respectively.
@@ -101,7 +107,7 @@ export EVRPTW_RESTORE_ROOT="../../../evrptw_runtime"
 ## Runtime optimizations (2026-09-04)
 
 New launches use rollout-local static caches, final-only route export during
-online validation, and compact TERRAN observations. The v11 budgets, seeds,
+online validation, and compact TERRAN observations. The v12 budgets, seeds,
 batches, dropout/update schedules and best-of-100 evaluation are unchanged.
 See [performance implementation and verification](../../PERFORMANCE_OPTIMIZATION.md)
 for equivalence tests, timing boundaries, an optional idle-GPU diagnostic and

@@ -3,7 +3,7 @@ status: method_frozen_formal_training_active
 formal_launch_allowed: true
 launch_mode: direct_full
 launch_policy: direct_full_user_authorized_2026-09-04
-runtime_budget_id: drl_rq_runtime_budget_v11_min5000_max6000_tailval50
+runtime_budget_id: drl_rq_runtime_budget_v12_min5000_max10000_tailval50
 supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
 
@@ -78,15 +78,15 @@ training_fairness:
   statistical_unit: parent_family
   wall_clock_checkpoints_h: [6, 12, 24]
   exposure_checkpoints:
-    Cus50: [76800000, 153600000, 307200000]
-    Cus100: [38400000, 76800000, 153600000]
-    Cus500: [48000000, 96000000, 192000000]
-    Cus1000: [3000000, 6000000, 12000000]
+    Cus50: [128000000, 256000000, 512000000]
+    Cus100: [64000000, 128000000, 256000000]
+    Cus500: [80000000, 160000000, 320000000]
+    Cus1000: [5000000, 10000000, 20000000]
   customer_exposure_budget_by_scale:
-    Cus50: 307200000
-    Cus100: 153600000
-    Cus500: 192000000
-    Cus1000: 12000000
+    Cus50: 512000000
+    Cus100: 256000000
+    Cus500: 320000000
+    Cus1000: 20000000
   logical_batch_by_scale:
     Cus50: 1024
     Cus100: 256
@@ -104,7 +104,7 @@ model_selection:
   validation_candidate_count: 100
   candidate_selection: independent_verifier_feasible_then_min_directed_distance
   minimum_training_epochs: 5000
-  maximum_training_epochs: 6000
+  maximum_training_epochs: 10000
   validation_every_epochs_through_minimum: 250
   validation_every_epochs_after_minimum: 50
   primary_metric: independent_verifier_feasibility_rate

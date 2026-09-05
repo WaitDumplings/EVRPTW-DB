@@ -94,7 +94,7 @@ def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
     assert questions["RQ3"]["graph_injection_enabled"] is False
 
 
-def test_frozen_fairness_numbers_match_v11_runtime_configuration() -> None:
+def test_frozen_fairness_numbers_match_v12_runtime_configuration() -> None:
     protocol = _protocol()
     runtime = _runtime()
     fairness = protocol["training_fairness"]
@@ -157,7 +157,7 @@ def test_validation_and_test_use_common_best_of_100_sampling_budget() -> None:
     assert selection["validation_candidate_count"] == 100
     assert selection["early_stopping"] == "enabled_after_minimum_budget"
     assert selection["minimum_training_epochs"] == 5_000
-    assert selection["maximum_training_epochs"] == 6_000
+    assert selection["maximum_training_epochs"] == 10_000
     assert selection["validation_every_epochs_through_minimum"] == 250
     assert selection["validation_every_epochs_after_minimum"] == 50
     assert selection["early_stop_patience_validation_checks"] == 10

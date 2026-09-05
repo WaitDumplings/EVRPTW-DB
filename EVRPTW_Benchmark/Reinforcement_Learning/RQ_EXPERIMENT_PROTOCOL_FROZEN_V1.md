@@ -3,10 +3,10 @@
 > [!IMPORTANT]
 > **Historical contract notice (2026-09-04):** the blocked-launch status,
 > three-seed counts, and gate table below describe the original frozen design.
-> The active single-seed v11 execution metadata is maintained in
+> The active single-seed v12 execution metadata is maintained in
 > `configs/drl_rq_protocol_frozen_v1.yaml` and `scripts/rq_v1/README.md`:
 > direct formal launch is user-authorized, with 24 training jobs and a
-> 5,000-epoch minimum / 6,000-epoch hard cap.
+> 5,000-epoch minimum / 10,000-epoch hard cap.
 
 Status: **method frozen; formal training launch blocked**
 Scope: four registered learning methods, classical solver evidence, and the
