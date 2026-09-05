@@ -22,7 +22,11 @@ class MultiHeadAttentionLayer(nn.Module):
         self.ff = nn.Sequential(
             nn.Linear(embedding_dim, feed_forward_hidden),
             nn.SiLU(),
-            nn.Dropout(0.1),
+            # PPO re-evaluates stored actions under the current policy. A
+            # stochastic encoder would give rollout and update different
+            # probabilities even before parameters change. Keep this module in
+            # place so existing state-dict key indices remain compatible.
+            nn.Dropout(0.0),
             nn.Linear(feed_forward_hidden, embedding_dim),
         )
         self.norm3 = Normalization(embedding_dim)

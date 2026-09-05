@@ -580,8 +580,8 @@ def evaluate_policy_loss(
         env_indices,
     )
     # Reuse the immutable instance tensors within this exact PPO time chunk.
-    # The encoder is still run once per chunk, with unchanged training dropout;
-    # no encoded state is reused across chunks or optimizer updates.
+    # No encoded state is reused across chunks or optimizer updates because the
+    # encoder graph is consumed by backward and parameters may then change.
     static_device = {
         key: torch.as_tensor(value, device=agent.backbone.device)
         for key, value in static_mb.items()
@@ -685,6 +685,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     debug_log_every = max(1, int(train_cfg.get("debug_log_every", 1)))
     profile_timing = bool(train_cfg.get("profile_timing", False))
     ppo_step_chunk_size = int(train_cfg.get("ppo_step_chunk_size", 0) or 0)
+    cache_rollout_encoder = bool(train_cfg.get("cache_rollout_encoder", True))
     protocol_cfg = cfg.get("protocol", {})
     registered_effective_batch = int(
         protocol_cfg.get(
@@ -949,6 +950,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     device=device,
                     seed=seed + epoch * 100_000 + microbatch_index,
                     profile_timing=profile_timing,
+                    cache_static_embeddings=cache_rollout_encoder,
                 )
                 returns = compute_returns(batch.rewards, batch.dones, gamma=gamma)
                 advantages = returns - batch.values

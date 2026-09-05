@@ -61,8 +61,18 @@ def _sync_cuda(device: str | torch.device) -> None:
         torch.cuda.synchronize()
 
 
-def sample_actions(agent, obs_batch: dict[str, np.ndarray], decode_mode: str, device: str | torch.device):
-    logits_tuple = agent.backbone(obs_batch)
+def sample_actions(
+    agent,
+    obs_batch: dict[str, np.ndarray],
+    decode_mode: str,
+    device: str | torch.device,
+    cached_state=None,
+):
+    logits_tuple = (
+        agent.backbone(obs_batch)
+        if cached_state is None
+        else agent.backbone.decode(obs_batch, cached_state)
+    )
     logits = logits_tuple[0]
     dist = torch.distributions.Categorical(logits=logits)
     if decode_mode == "greedy":
@@ -80,8 +90,8 @@ def sample_actions(agent, obs_batch: dict[str, np.ndarray], decode_mode: str, de
 def sample_eval_actions(agent, obs_batch, decode_mode: str, cached_state=None):
     """Action-only inference, with optional encoder cache for eval-mode models.
 
-    Training dropout draws must remain step-wise. Do not reuse an encoded graph
-    in training mode, even when gradients are disabled.
+    Keep this evaluation helper restricted to eval mode so future mode-dependent
+    encoder layers cannot silently invalidate its cache.
     """
     if cached_state is not None:
         if agent.training:
@@ -153,7 +163,17 @@ def _defer_route_info(envs, enabled: bool):
             base.info_level = "full"
 
 
-def collect_rollout(agent, envs, rollout_steps: int, decode_mode: str, device: str | torch.device, seed: int | None = None, profile_timing: bool = False, compact_observations: bool = True) -> RolloutBatch:
+def collect_rollout(
+    agent,
+    envs,
+    rollout_steps: int,
+    decode_mode: str,
+    device: str | torch.device,
+    seed: int | None = None,
+    profile_timing: bool = False,
+    compact_observations: bool = True,
+    cache_static_embeddings: bool = True,
+) -> RolloutBatch:
     total_start = time.perf_counter()
     reset_start = time.perf_counter()
     observations, infos = reset_envs(envs, seed=seed)
@@ -172,6 +192,7 @@ def collect_rollout(agent, envs, rollout_steps: int, decode_mode: str, device: s
     stack_obs_time_s = 0.0
     static_obs = None
     static_device = None
+    cached_state = None
 
     for _ in range(int(rollout_steps)):
         valid = ~done
@@ -191,9 +212,18 @@ def collect_rollout(agent, envs, rollout_steps: int, decode_mode: str, device: s
                 model_obs = {**obs_batch, **static_device}
             else:
                 model_obs = obs_batch
-            # Deliberately keep the full per-step encoder call: training-mode
-            # encoder dropout and its RNG consumption are unchanged.
-            actions, logprob, entropy, value, _ = sample_actions(agent, model_obs, decode_mode=decode_mode, device=device)
+            if cache_static_embeddings and cached_state is None:
+                # Static instance features and model parameters do not change
+                # during no-grad rollout collection. PPO recomputes the encoder
+                # with gradients during its update.
+                cached_state = agent.backbone.encode(model_obs)
+            actions, logprob, entropy, value, _ = sample_actions(
+                agent,
+                model_obs,
+                decode_mode=decode_mode,
+                device=device,
+                cached_state=cached_state,
+            )
         if profile_timing:
             _sync_cuda(device)
         model_action_time_s += time.perf_counter() - model_start
@@ -335,7 +365,7 @@ def rollout_eval_batch(
     """Evaluate fixed instances, retaining opt-out switches for A/B validation.
 
     Encoder caching is enabled only if the caller already selected eval mode;
-    this function never changes model mode or training dropout semantics.
+    this function never changes model mode.
     """
     if not envs:
         return []

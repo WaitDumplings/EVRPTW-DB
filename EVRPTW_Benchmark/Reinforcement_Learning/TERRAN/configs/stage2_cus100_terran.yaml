@@ -32,6 +32,7 @@ training:
   num_envs_per_gpu: 64
   n_traj: 100
   rollout_steps: 450
+  cache_rollout_encoder: true
   ppo_step_chunk_size: 64
   ppo_update_epochs: 3
   num_minibatches: 4

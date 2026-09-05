@@ -123,6 +123,14 @@ online validation, and compact TERRAN observations. The v12 logical budgets,
 seeds and best-of-100 evaluation are unchanged. Physical batches and rollout
 limits use the current post-optimization calibration. The TERRAN Cus1000 PPO
 override documented above is the only update-schedule change.
+
+TERRAN's encoder Dropout modules are retained for checkpoint-key compatibility
+but use `p=0`, so PPO rollout and update log-probabilities are evaluated under
+the same deterministic policy. Training rollouts encode immutable instance
+features once and reuse that state across decoder steps. On Cus1000 this reduced
+the measured training-epoch wall time from 22.70 s to 18.32 s on average while
+leaving the 42,319 MiB PPO peak unchanged. Formal runs must start fresh from the
+post-change commit rather than resume a pre-change checkpoint.
 See [performance implementation and verification](../../PERFORMANCE_OPTIMIZATION.md)
 for equivalence tests, timing boundaries, an optional idle-GPU diagnostic and
 cross-commit resume precautions. No formal training was launched by this patch.

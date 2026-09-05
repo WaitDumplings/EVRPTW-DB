@@ -55,6 +55,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug-log-every", type=int, default=None)
     parser.add_argument("--profile-timing", action="store_true", help="Synchronize CUDA around timed sections for accurate profiling.")
     parser.add_argument("--no-profile-timing", action="store_true", help="Disable CUDA synchronization used only for profiling.")
+    cache_group = parser.add_mutually_exclusive_group()
+    cache_group.add_argument(
+        "--cache-rollout-encoder",
+        dest="cache_rollout_encoder",
+        action="store_true",
+        help="Encode immutable instance features once per training rollout.",
+    )
+    cache_group.add_argument(
+        "--no-cache-rollout-encoder",
+        dest="cache_rollout_encoder",
+        action="store_false",
+        help="Recompute the encoder at every rollout step for A/B diagnostics.",
+    )
+    parser.set_defaults(cache_rollout_encoder=None)
     parser.add_argument("--async-instance-prefetch", action="store_true")
     parser.add_argument("--no-async-instance-prefetch", action="store_true")
     parser.add_argument("--async-instance-workers", type=int, default=None)
@@ -143,6 +157,8 @@ def main() -> None:
         overrides["training"]["profile_timing"] = True
     if args.no_profile_timing:
         overrides["training"]["profile_timing"] = False
+    if args.cache_rollout_encoder is not None:
+        overrides["training"]["cache_rollout_encoder"] = args.cache_rollout_encoder
     if args.eval_interval is not None:
         overrides["evaluation"]["eval_interval"] = args.eval_interval
     if args.eval_path is not None:
@@ -161,10 +177,9 @@ def main() -> None:
         overrides["evaluation"]["eval_save_routes"] = True
     if args.no_eval_save_routes:
         overrides["evaluation"]["eval_save_routes"] = False
-    if not overrides["data"] and not overrides["training"] and not overrides["evaluation"]:
-        overrides = {}
-    else:
-        overrides = {key: value for key, value in overrides.items() if value}
+    if args.output_dir is not None:
+        overrides["output_dir"] = str(args.output_dir.resolve())
+    overrides = {key: value for key, value in overrides.items() if value}
     overrides, protocol_meta = configure_protocol(args, overrides)
     ckpt = train_from_config(cfg, seed=args.seed, device=args.device, overrides=overrides)
     finalize_protocol(args, ckpt, protocol_meta)

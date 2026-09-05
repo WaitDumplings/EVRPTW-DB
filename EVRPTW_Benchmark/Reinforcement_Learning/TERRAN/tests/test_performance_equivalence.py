@@ -91,19 +91,29 @@ def test_compact_inputs_preserve_logits_and_rng(training):
         torch.testing.assert_close(observed, expected, rtol=0, atol=0)
 
 
-def test_training_compact_rollout_preserves_dropout_rewards_and_storage():
+def test_training_encoder_cache_preserves_rollout_and_storage():
     agent = _agent(training=True)
     encoder_calls = []
     hook = agent.backbone.encoder.register_forward_hook(lambda *_: encoder_calls.append(1))
     torch.manual_seed(23)
-    reference = collect_rollout(agent, _envs(pbrs=True), 12, "sample", "cpu", seed=24, compact_observations=False)
+    reference = collect_rollout(
+        agent,
+        _envs(pbrs=True),
+        12,
+        "sample",
+        "cpu",
+        seed=24,
+        compact_observations=False,
+        cache_static_embeddings=False,
+    )
     reference_rng = torch.get_rng_state().clone()
     reference_calls = len(encoder_calls)
     encoder_calls.clear()
     torch.manual_seed(23)
     compact = collect_rollout(agent, _envs(pbrs=True), 12, "sample", "cpu", seed=24)
     hook.remove()
-    assert len(encoder_calls) == reference_calls == len(compact.observations)
+    assert reference_calls == len(reference.observations)
+    assert len(encoder_calls) == 1
     assert torch.equal(torch.get_rng_state(), reference_rng)
     for name in ("actions", "old_logprobs", "rewards", "dones", "values", "valid", "entropies", "trajectory_steps", "rollout_budget_exhausted"):
         torch.testing.assert_close(getattr(compact, name), getattr(reference, name), rtol=0, atol=0)
@@ -138,7 +148,7 @@ def _legacy_policy_loss(agent, batch, returns, advantages, indices, start, end):
 
 
 @pytest.mark.parametrize("step_start", [0, 1])
-def test_ppo_compact_transport_preserves_loss_gradients_and_dropout(step_start):
+def test_ppo_compact_transport_preserves_loss_and_gradients(step_start):
     agent = _agent(training=True)
     batch = collect_rollout(agent, _envs(), 8, "sample", "cpu", seed=29, compact_observations=False)
     returns = compute_returns(batch.rewards, batch.dones, 0.99)
@@ -161,6 +171,42 @@ def test_ppo_compact_transport_preserves_loss_gradients_and_dropout(step_start):
             assert parameter.grad is None
         else:
             torch.testing.assert_close(parameter.grad, expected, rtol=0, atol=0)
+
+
+def test_ppo_logprob_ratio_is_one_before_parameter_update():
+    agent = _agent(training=True)
+    batch = collect_rollout(agent, _envs(), 8, "sample", "cpu", seed=33)
+    indices = np.arange(batch.actions.size(1), dtype=np.int64)
+    cached_state = agent.backbone.encode(
+        _slice_obs_by_env(batch.observations[0], indices)
+    )
+    valid_old = []
+    valid_new = []
+    for step, obs in enumerate(batch.observations):
+        _, new_logprob, _, _, _ = agent.get_action_and_value_cached(
+            _slice_obs_by_env(obs, indices),
+            action=batch.actions[step, indices].long(),
+            state=cached_state,
+        )
+        valid = batch.valid[step, indices]
+        valid_old.append(batch.old_logprobs[step, indices][valid])
+        valid_new.append(new_logprob[valid])
+    old_logprob = torch.cat(valid_old)
+    new_logprob = torch.cat(valid_new)
+    torch.testing.assert_close(new_logprob, old_logprob, rtol=0, atol=1e-7)
+    torch.testing.assert_close(
+        torch.exp(new_logprob - old_logprob),
+        torch.ones_like(old_logprob),
+        rtol=0,
+        atol=1e-7,
+    )
+
+
+def test_terran_encoder_has_no_active_dropout():
+    agent = _agent(training=True)
+    dropouts = [module for module in agent.modules() if isinstance(module, torch.nn.Dropout)]
+    assert dropouts
+    assert all(module.p == 0.0 for module in dropouts)
 
 
 @pytest.mark.parametrize("decode_mode", ["sample", "greedy"])
@@ -227,7 +273,7 @@ def test_action_only_matches_reference_and_cached_logits(decode_mode):
         sample_eval_actions(agent, obs, decode_mode, cache)
 
 
-def test_eval_wrapper_does_not_cache_training_dropout_and_restores_info(monkeypatch):
+def test_eval_wrapper_does_not_cache_in_training_mode_and_restores_info(monkeypatch):
     agent = _agent(training=True)
     calls = []
     hook = agent.backbone.encoder.register_forward_hook(lambda *_: calls.append(1))
