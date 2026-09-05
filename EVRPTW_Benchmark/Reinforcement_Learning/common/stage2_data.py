@@ -207,6 +207,7 @@ class Stage2TaskPool:
         *,
         start: int = 0,
         stop: int | None = None,
+        logical_batch_size: int | None = None,
     ) -> Iterable[list[EVRPTWInstance]]:
         """Consume an explicit method-independent training ID stream."""
 
@@ -219,11 +220,22 @@ class Stage2TaskPool:
                 f"training stream contains {len(missing)} IDs outside the filtered pool: "
                 f"{missing[:3]}"
             )
-        for offset in range(0, len(view_ids), int(physical_batch_size)):
-            yield [
-                self.instance(self._task_by_view_id[view_id])
-                for view_id in view_ids[offset : offset + int(physical_batch_size)]
-            ]
+        logical = (
+            len(view_ids)
+            if logical_batch_size is None
+            else int(logical_batch_size)
+        )
+        if logical <= 0:
+            raise ValueError("logical_batch_size must be positive")
+        for logical_offset in range(0, len(view_ids), logical):
+            logical_ids = view_ids[logical_offset : logical_offset + logical]
+            for offset in range(0, len(logical_ids), int(physical_batch_size)):
+                yield [
+                    self.instance(self._task_by_view_id[view_id])
+                    for view_id in logical_ids[
+                        offset : offset + int(physical_batch_size)
+                    ]
+                ]
 
 
 def make_envs(

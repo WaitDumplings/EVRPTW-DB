@@ -36,7 +36,7 @@ training_overrides_by_method_scale:
 
 seeds: [1234]
 enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
-rollout_steps: {Cus50: 80, Cus100: 140, Cus500: 600, Cus1000: 1200}
+rollout_steps: {Cus50: 65, Cus100: 120, Cus500: 580, Cus1000: 1200}
 
 # Keep the 11 GiB servers on the two measured-safe scales. Larger graph scales
 # are queued only on the two 48 GiB Ada GPUs.
@@ -73,10 +73,10 @@ candidate_customer_exposure_budget:
   Cus1000: 20000000
 
 # The effective/logical batch equals environments_per_epoch. For the three
-# REINFORCE trainers, gradient accumulation produces one optimizer update per
-# logical epoch; TERRAN retains its explicitly documented PPO inner-update
-# schedule. Physical batches remain architecture dependent and use exact
-# gradient accumulation divisors.
+# REINFORCE trainers, exact sample-weighted gradient accumulation produces one
+# optimizer update per logical epoch, including a possible final remainder
+# microbatch. TERRAN retains its explicitly documented PPO inner-update
+# schedule and exact physical divisors.
 candidate_logical_batch:
   Cus50: 1024
   Cus100: 256
@@ -86,9 +86,9 @@ candidate_logical_batch:
 # user-authorized workflow launches the formal queues directly without pilots.
 physical_batch_caps:
   am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 8, Cus1000: 2}
-  evrptw_rl: {Cus50: 128, Cus100: 64, Cus500: 16, Cus1000: 2}
-  drl_ts: {Cus50: 128, Cus100: 32, Cus500: 8, Cus1000: 2}
-  terran: {Cus50: 128, Cus100: 128, Cus500: 64, Cus1000: 2}
+  evrptw_rl: {Cus50: 224, Cus100: 68, Cus500: 16, Cus1000: 2}
+  drl_ts: {Cus50: 132, Cus100: 34, Cus500: 8, Cus1000: 2}
+  terran: {Cus50: 256, Cus100: 128, Cus500: 64, Cus1000: 2}
 
 formal_candidate:
   selection_validation_views:

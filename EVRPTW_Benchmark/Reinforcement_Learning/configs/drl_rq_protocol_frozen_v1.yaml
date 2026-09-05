@@ -12,9 +12,9 @@ seeds: [1234]
 training_scales: [Cus50, Cus100, Cus500, Cus1000]
 evaluation_only_scales: [Cus2000]
 training_rollout_steps:
-  Cus50: 80
-  Cus100: 140
-  Cus500: 600
+  Cus50: 65
+  Cus100: 120
+  Cus500: 580
   Cus1000: 1200
 
 research_questions:
@@ -94,9 +94,9 @@ training_fairness:
     Cus1000: 2
   physical_microbatch_by_method_scale:
     am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 8, Cus1000: 2}
-    evrptw_rl: {Cus50: 128, Cus100: 64, Cus500: 16, Cus1000: 2}
-    drl_ts: {Cus50: 128, Cus100: 32, Cus500: 8, Cus1000: 2}
-    terran: {Cus50: 128, Cus100: 128, Cus500: 64, Cus1000: 2}
+    evrptw_rl: {Cus50: 224, Cus100: 68, Cus500: 16, Cus1000: 2}
+    drl_ts: {Cus50: 132, Cus100: 34, Cus500: 8, Cus1000: 2}
+    terran: {Cus50: 256, Cus100: 128, Cus500: 64, Cus1000: 2}
 
 model_selection:
   validation_views: 500

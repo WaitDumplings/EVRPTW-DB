@@ -47,13 +47,6 @@ VALIDATION_INDEX = {
 }
 
 
-def largest_divisor_at_most(value: int, limit: int) -> int:
-    for candidate in range(min(int(value), int(limit)), 0, -1):
-        if int(value) % candidate == 0:
-            return candidate
-    raise AssertionError("one divides every positive integer")
-
-
 def job(
     cfg: dict[str, Any], *, method: str, scale: str, seed: int,
     representation: str, condition: str, hardware: str,
@@ -66,7 +59,13 @@ def job(
             f"{logical} != {environments_per_epoch}"
         )
     cap = int(cfg["physical_batch_caps"][method][scale])
-    physical = largest_divisor_at_most(logical, cap)
+    physical = cap
+    if not 0 < physical <= logical:
+        raise ValueError(
+            f"physical batch must be in [1, logical batch]: {method} {scale}"
+        )
+    if method == "terran" and logical % physical:
+        raise ValueError("TERRAN physical batch must divide its logical batch")
     updates = int(cfg["candidate_logical_epochs"][scale])
     minimum_updates = int(cfg["candidate_minimum_logical_epochs"][scale])
     if not 0 < minimum_updates <= updates:

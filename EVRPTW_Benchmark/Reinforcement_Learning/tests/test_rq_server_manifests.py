@@ -91,7 +91,8 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         assert row["target_environments"] == total_environments
         assert row["customer_exposure_budget"] == exposures
         assert row["physical_batch_size"] <= row["effective_batch_size"]
-        assert row["effective_batch_size"] % row["physical_batch_size"] == 0
+        if row["method"] == "terran":
+            assert row["effective_batch_size"] % row["physical_batch_size"] == 0
         assert row["validation_every_epochs"] == 250
         assert row["validation_checkpoints"] == 120
         assert row["minimum_training_epochs"] == 5_000
@@ -119,12 +120,20 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         assert row["validation_seed"] == row["seed"] + 910_000_000
 
 
+def test_scale_rollout_limits_match_current_protocol() -> None:
+    expected = {"Cus50": 65, "Cus100": 120, "Cus500": 580, "Cus1000": 1200}
+    rows = [row for queue in build().values() for row in queue]
+    assert rows
+    for row in rows:
+        assert row["training_rollout_steps"] == expected[row["scale"]]
+
+
 def test_2080ti_jobs_use_only_measured_safe_sample100_batches() -> None:
     safe_batches = {
         "am_evrptw": {"Cus50": 1024, "Cus100": 256},
-        "evrptw_rl": {"Cus50": 128, "Cus100": 64},
-        "drl_ts": {"Cus50": 128, "Cus100": 32},
-        "terran": {"Cus50": 128, "Cus100": 128},
+        "evrptw_rl": {"Cus50": 224, "Cus100": 68},
+        "drl_ts": {"Cus50": 132, "Cus100": 34},
+        "terran": {"Cus50": 256, "Cus100": 128},
     }
     queues = build()
     rows = [

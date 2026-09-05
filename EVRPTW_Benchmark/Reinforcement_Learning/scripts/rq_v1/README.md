@@ -26,12 +26,13 @@ the two RTX 6000 Ada GPUs own Cus500/Cus1000.
 | Cus500 | RTX 6000 Ada | 5,000 | 10,000 | 64 | 640,000 | 320,000,000 |
 | Cus1000 | RTX 6000 Ada | 5,000 | 10,000 | 2 | 20,000 | 20,000,000 |
 
-Physical batches use exact gradient accumulation divisors of the logical batch:
+Physical batches use exact sample-weighted gradient accumulation. REINFORCE
+jobs may use a smaller final remainder microbatch; TERRAN keeps exact divisors:
 
 | Scale | AM | EVRPTW-RL | DRL-TS | TERRAN |
 |---|---:|---:|---:|---:|
-| Cus50 | 1,024 | 128 | 128 | 128 |
-| Cus100 | 256 | 64 | 32 | 128 |
+| Cus50 | 1,024 | 224 | 132 | 256 |
+| Cus100 | 256 | 68 | 34 | 128 |
 | Cus500 | 8 | 16 | 8 | 64 |
 | Cus1000 | 2 | 2 | 2 | 2 |
 
@@ -70,7 +71,8 @@ count is recorded separately at runtime as `optimizer_steps_total`.
 There are 24 formal jobs total. Server counts are 8, 5, 3, and 8 for
 `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1`, and `a6000_2_1`, respectively.
 The Ada queue contains the eight large-scale jobs, split evenly across its two
-GPUs.
+GPUs. Current rollout limits are Cus50=65, Cus100=120, Cus500=580, and
+Cus1000=1200.
 
 ### Cus1000 priority profile on A6000
 
@@ -117,9 +119,15 @@ export EVRPTW_RESTORE_ROOT="../../../evrptw_runtime"
 ## Runtime optimizations (2026-09-04)
 
 New launches use rollout-local static caches, final-only route export during
-online validation, and compact TERRAN observations. The v12 budgets, seeds,
-batches and best-of-100 evaluation are unchanged. The TERRAN Cus1000 PPO
+online validation, and compact TERRAN observations. The v12 logical budgets,
+seeds and best-of-100 evaluation are unchanged. Physical batches and rollout
+limits use the current post-optimization calibration. The TERRAN Cus1000 PPO
 override documented above is the only update-schedule change.
 See [performance implementation and verification](../../PERFORMANCE_OPTIMIZATION.md)
 for equivalence tests, timing boundaries, an optional idle-GPU diagnostic and
 cross-commit resume precautions. No formal training was launched by this patch.
+
+The complete 2080 Ti evidence is in
+[`RTX2080TI_PER_JOB_MEMORY_CALIBRATION_V4.md`](../../reports/RTX2080TI_PER_JOB_MEMORY_CALIBRATION_V4.md).
+Ada revalidation instructions are in
+[`RTX6000_ADA_MEMORY_CALIBRATION_HANDOFF_V2.md`](../../reports/RTX6000_ADA_MEMORY_CALIBRATION_HANDOFF_V2.md).

@@ -66,9 +66,9 @@ def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
         "Cus1000",
     ]
     assert protocol["training_rollout_steps"] == runtime["rollout_steps"] == {
-        "Cus50": 80,
-        "Cus100": 140,
-        "Cus500": 600,
+        "Cus50": 65,
+        "Cus100": 120,
+        "Cus500": 580,
         "Cus1000": 1200,
     }
     assert questions["RQ1"]["same_scale"] == protocol["training_scales"]
