@@ -24,6 +24,16 @@ training_trajectory_count_by_method:
 training_trajectory_count_by_method_scale:
   am_evrptw: {Cus500: 100, Cus1000: 100}
 
+# TERRAN Cus1000 produces two base-environment groups per logical epoch at the
+# registered batch of 2. Process them as one PPO minibatch and evaluate up to
+# 736 recorded steps in one chunk. Keeping this override here (rather
+# than in TERRAN's shared base config) leaves every other scale unchanged.
+training_overrides_by_method_scale:
+  terran:
+    Cus1000:
+      num_minibatches: 1
+      ppo_step_chunk_size: 736
+
 seeds: [1234]
 enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
 rollout_steps: {Cus50: 80, Cus100: 140, Cus500: 600, Cus1000: 1200}
@@ -34,9 +44,10 @@ scale_hardware:
   2080ti: [Cus50, Cus100]
   a6000: [Cus500, Cus1000]
 
-# One logical epoch is one outer optimizer update over the listed number of
-# base environments. Every scale has a 5,000-epoch minimum and a 10,000-epoch
-# hard cap. Fairness is enforced
+# One logical epoch is one benchmark outer training iteration over the listed
+# number of base environments. TERRAN performs its native PPO inner optimizer
+# steps inside that iteration. Every scale has a 5,000-epoch minimum and a
+# 10,000-epoch hard cap. Fairness is enforced
 # within each scale: every method and seed sees the same deterministic stream
 # and effective batch. Cross-scale customer exposure is intentionally not forced
 # to match because the scales are not compared as one optimization task.
@@ -61,9 +72,11 @@ candidate_customer_exposure_budget:
   Cus500: 320000000
   Cus1000: 20000000
 
-# The effective/logical batch equals environments_per_epoch, so every logical
-# epoch produces exactly one outer update. Physical batches remain architecture
-# dependent and use exact gradient accumulation divisors.
+# The effective/logical batch equals environments_per_epoch. For the three
+# REINFORCE trainers, gradient accumulation produces one optimizer update per
+# logical epoch; TERRAN retains its explicitly documented PPO inner-update
+# schedule. Physical batches remain architecture dependent and use exact
+# gradient accumulation divisors.
 candidate_logical_batch:
   Cus50: 1024
   Cus100: 256

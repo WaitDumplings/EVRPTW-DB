@@ -334,6 +334,13 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
         ]
     if job["method"] == "drl_ts" and job.get("soft_stage_end_epoch") is not None:
         command.extend(["--soft-stage-end-epoch", str(job["soft_stage_end_epoch"])])
+    if job["method"] == "terran":
+        for field, option in (
+            ("num_minibatches", "--num-minibatches"),
+            ("ppo_step_chunk_size", "--ppo-step-chunk-size"),
+        ):
+            if field in job:
+                command.extend([option, str(job[field])])
     if job.get("training_stream_path"):
         command.extend(
             [

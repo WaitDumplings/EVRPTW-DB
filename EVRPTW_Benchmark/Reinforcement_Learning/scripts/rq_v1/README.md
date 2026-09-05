@@ -57,6 +57,16 @@ are fixed across all checkpoints; test remains independent and never selects a
 checkpoint. DRL-TS always switches from soft to hard training after epoch 2,500,
 independent of the 10,000-epoch cap.
 
+TERRAN Cus1000 has a manifest-level PPO hyperparameter override of
+`num_minibatches=1` and `ppo_step_chunk_size=736`. Batch 2, 100 training
+trajectories, three PPO epochs, and the registered exposure budget are
+unchanged. With two base environments, the minibatch override reduces Adam
+updates from six to three per logical epoch; the larger step chunk reduces
+loss-evaluation/backward slicing within each minibatch. The override is not
+applied to TERRAN Cus500 or to any other method or scale. Manifests call the
+10,000-epoch outer budget `planned_logical_epochs`; TERRAN's native Adam-step
+count is recorded separately at runtime as `optimizer_steps_total`.
+
 There are 24 formal jobs total. Server counts are 8, 5, 3, and 8 for
 `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1`, and `a6000_2_1`, respectively.
 The Ada queue contains the eight large-scale jobs, split evenly across its two
@@ -108,7 +118,8 @@ export EVRPTW_RESTORE_ROOT="../../../evrptw_runtime"
 
 New launches use rollout-local static caches, final-only route export during
 online validation, and compact TERRAN observations. The v12 budgets, seeds,
-batches, dropout/update schedules and best-of-100 evaluation are unchanged.
+batches and best-of-100 evaluation are unchanged. The TERRAN Cus1000 PPO
+override documented above is the only update-schedule change.
 See [performance implementation and verification](../../PERFORMANCE_OPTIMIZATION.md)
 for equivalence tests, timing boundaries, an optional idle-GPU diagnostic and
 cross-commit resume precautions. No formal training was launched by this patch.

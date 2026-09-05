@@ -126,7 +126,7 @@ def job(
             minimum_updates * environments_per_epoch * int(scale.removeprefix("Cus"))
         ),
         "logical_environments_per_epoch": environments_per_epoch,
-        "planned_optimizer_updates": updates,
+        "planned_logical_epochs": updates,
         "training_rollout_steps": int(cfg["rollout_steps"][scale]),
         "training_trajectory_count": int(
             cfg.get("training_trajectory_count_by_method_scale", {})
@@ -190,6 +190,32 @@ def job(
         ),
         "file_hash_validation_performed": False,
     }
+    training_overrides = (
+        cfg.get("training_overrides_by_method_scale", {})
+        .get(method, {})
+        .get(scale, {})
+    )
+    if training_overrides and method != "terran":
+        raise ValueError(
+            "PPO training overrides are supported only for TERRAN; "
+            f"found {method}/{scale}"
+        )
+    allowed_training_overrides = {"num_minibatches", "ppo_step_chunk_size"}
+    unexpected_training_overrides = set(training_overrides).difference(
+        allowed_training_overrides
+    )
+    if unexpected_training_overrides:
+        raise ValueError(
+            f"unsupported training override(s) for {method}/{scale}: "
+            f"{sorted(unexpected_training_overrides)}"
+        )
+    for field, value in training_overrides.items():
+        value = int(value)
+        if value <= 0:
+            raise ValueError(
+                f"{field} must be positive for {method}/{scale}: {value}"
+            )
+        payload[field] = value
     return payload
 
 

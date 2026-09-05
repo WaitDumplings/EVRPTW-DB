@@ -5,7 +5,9 @@ Date: 2026-09-04
 Hardware: 2 x NVIDIA RTX 6000 Ada Generation, 49,140 MiB per GPU, driver
 545.23.08
 
-Executable revision: `f4d106876490e42d77d802f41289fb66dca7024a`
+Base calibration revision: `f4d106876490e42d77d802f41289fb66dca7024a`
+
+TERRAN PPO follow-up revision: `cab06ffcb1dbba18205e19164559e1e74b77dea4`
 
 ## Scope
 
@@ -62,11 +64,12 @@ sample-100.
 | `152 x 50` | 44.842 | PASS | 761.3 s pure training; 781.1 s including 8-view validation |
 | `168 x 50` | 47.346 | OOM | Failed in PPO loss evaluation after 602.5 s |
 
-`4 x 50` and the formal `2 x 100` both generate 200 trajectories per epoch,
-but they are not equivalent. The former uses four independent graph instances
-instead of two and triggers four PPO minibatches rather than two; with three PPO
-epochs this means 12 Adam updates instead of 6. Its measured epoch was about
-twice as slow as the approximately 30.3-second `2 x 100` short-run mean.
+`4 x 50` and the pre-override `2 x 100` baseline both generate 200 trajectories
+per epoch, but they are not equivalent. The former uses four independent graph
+instances instead of two and triggers four PPO minibatches rather than two;
+with three PPO epochs this means 12 Adam updates instead of 6. Its measured
+epoch was about twice as slow as the approximately 30.3-second `2 x 100`
+short-run mean.
 
 At the memory target, `152 x 50` generates 7,600 trajectories per epoch. This
 is fewer than the 8,800 trajectories of `88 x 100`, yet its pure-training epoch
@@ -127,8 +130,55 @@ The active runtime budget is
 - earliest possible early stop at epoch 5,500;
 - selection checkpoint `best_overall.ckpt`.
 
-For context, the observed TERRAN batch-2 non-validation epoch mean was about
-30.9 seconds, while a 500-view sample-100 validation was about 0.81 hours. The
-estimated TERRAN wall time is therefore about 3 days at the earliest possible
-early stop and about 7.6 days at the 10,000-epoch cap. Unlike batch 88, this is
-compatible with the September 18 deadline.
+For context, the selected PPO configuration averaged about 22.6 seconds of
+pure training over its two-epoch confirmation, while a 500-view sample-100
+validation was about 0.81 hours. A linear planning estimate is therefore about
+2.5 days at the earliest possible early stop and about 6.7 days at the
+10,000-epoch cap. This estimate is not a convergence guarantee.
+
+### TERRAN Cus1000 PPO hyperparameter override
+
+The formal TERRAN Cus1000 job keeps `batch=2`, `n_traj=100`, the shared
+environment/customer-exposure budget, and `ppo_update_epochs=3`. It overrides
+only two PPO hyperparameters through the generated job manifest:
+
+- `num_minibatches=1`, instead of allowing the shared TERRAN default of four
+  to be clipped to the two available base environments. This reduces Adam
+  updates per logical epoch from `2 minibatches x 3 PPO epochs = 6` to
+  `1 x 3 = 3`;
+- `ppo_step_chunk_size=736`, replacing the shared 64-step loss-evaluation
+  chunks with coarser chunks. Step chunks accumulate backward contributions
+  inside a minibatch and do not themselves add Adam updates.
+
+These are method-and-scale-specific runtime settings, not changes to the shared
+TERRAN configuration. TERRAN Cus500 and all other jobs retain their defaults.
+
+The user's 6,400 count is the maximum number of time/trajectory tensor
+positions in one old loss chunk: `64 steps x 1 environment x 100
+trajectories`. With a 1,200-step horizon, the old two-minibatch configuration
+required at most `2 x ceil(1200 / 64) x 3 = 114` loss-evaluation/backward calls
+per logical epoch. They are backward slices, not 114 optimizer steps. The
+selected configuration requires at most `ceil(1200 / 736) x 3 = 6` such calls.
+
+| Configuration | Peak GPU memory | Epoch-1 PPO time | Epoch-1 pure training | Adam steps/epoch | Result |
+|---|---:|---:|---:|---:|---|
+| minibatches 2, chunk 64 | 2.621 GiB | 24.380 s | 34.801 s | 6 | PASS |
+| minibatches 1, chunk 736 | 41.307 GiB | 13.270 s | 23.684 s | 3 | PASS |
+| minibatches 1, chunk 800 | 44.783 GiB | 13.317 s | 23.574 s | 3 | PASS, insufficient headroom |
+| minibatches 1, chunk 896 | 47.473 GiB | n/a | n/a | n/a | OOM |
+
+The selected setting completed a separate two-epoch run and an eight-view
+sample-100 validation in 74.733 seconds. Its first epoch used exactly the same
+150,038 valid transitions as the control and reduced pure epoch time by 31.9%.
+Chunk-only tests with two minibatches peaked at 32.187 GiB even at chunk 1,200
+and did not materially improve PPO time; combining the two environments into
+one minibatch produced the measured speedup.
+
+This is not a bitwise-equivalent execution rewrite. The rollout data, 200
+training trajectories per epoch, customer exposure and three PPO passes are
+unchanged, so every valid transition is still reused three times. However, the
+two environments now contribute to one gradient update rather than two, and
+chunk grouping changes encoder-dropout RNG consumption. The formal maximum is
+therefore 30,000 native Adam steps (15,000 by epoch 5,000), not the legacy
+60,000-step interpretation. Formal training must start from scratch and its
+validation curve remains the convergence check.

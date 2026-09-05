@@ -84,7 +84,8 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         )
         assert row["runtime_budget_id"] in row["training_stream_path"]
         assert row["training_epochs"] == epochs
-        assert row["planned_optimizer_updates"] == epochs
+        assert row["planned_logical_epochs"] == epochs
+        assert "planned_optimizer_updates" not in row
         assert row["logical_environments_per_epoch"] == environments_per_epoch
         assert row["effective_batch_size"] == environments_per_epoch
         assert row["target_environments"] == total_environments
@@ -152,6 +153,38 @@ def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
         assert row["physical_batch_size"] == expected[row["method"]][row["scale"]]
         assert row["physical_batch_size"] % 2 == 0
         assert row["validation_views"] == 500
+
+
+def test_only_terran_cus1000_has_formal_ppo_overrides() -> None:
+    rows = [row for queue in build().values() for row in queue]
+    overridden = [
+        row
+        for row in rows
+        if "num_minibatches" in row or "ppo_step_chunk_size" in row
+    ]
+    assert overridden
+    assert all(row["method"] == "terran" for row in overridden)
+    assert all(row["scale"] == "Cus1000" for row in overridden)
+    assert all(row["num_minibatches"] == 1 for row in overridden)
+    assert all(row["ppo_step_chunk_size"] == 736 for row in overridden)
+
+    terran_cus500 = [
+        row
+        for row in rows
+        if row["method"] == "terran" and row["scale"] == "Cus500"
+    ]
+    assert terran_cus500
+    assert all("num_minibatches" not in row for row in terran_cus500)
+    assert all("ppo_step_chunk_size" not in row for row in terran_cus500)
+
+    priority_terran = [
+        row
+        for row in build_a6000_cus1000_priority_queue()
+        if row["method"] == "terran"
+    ]
+    assert len(priority_terran) == 1
+    assert priority_terran[0]["num_minibatches"] == 1
+    assert priority_terran[0]["ppo_step_chunk_size"] == 736
 
 
 def test_a6000_cus1000_priority_queue_uses_approved_two_gpu_order() -> None:

@@ -220,6 +220,37 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         final_validation_index = command.index("--final-validation-limit")
         assert command[final_validation_index + 1] == "500"
         assert "--data-passes" not in command
+        assert "--num-minibatches" not in command
+        assert "--ppo-step-chunk-size" not in command
+        if method == "terran":
+            job["num_minibatches"] = 1
+            job["ppo_step_chunk_size"] = 736
+            overridden = RUNTIME.training_command(
+                job, context, tmp_path / method, resume=False
+            )
+            minibatch_index = overridden.index("--num-minibatches")
+            assert overridden[minibatch_index + 1] == "1"
+            chunk_index = overridden.index("--ppo-step-chunk-size")
+            assert overridden[chunk_index + 1] == "736"
+
+    non_terran = _job("train__R__am_evrptw__Cus1000__seed1234")
+    non_terran.update(common)
+    non_terran.update(
+        {
+            "method": "am_evrptw",
+            "scale": "Cus1000",
+            "train_module": (
+                "EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.train"
+            ),
+            "num_minibatches": 1,
+            "ppo_step_chunk_size": 736,
+        }
+    )
+    non_terran_command = RUNTIME.training_command(
+        non_terran, context, tmp_path / "non-terran", resume=False
+    )
+    assert "--num-minibatches" not in non_terran_command
+    assert "--ppo-step-chunk-size" not in non_terran_command
 
 
 def test_resume_only_marks_jobs_with_complete_resume_evidence(tmp_path: Path) -> None:
