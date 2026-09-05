@@ -66,6 +66,13 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         raise ValueError("--early-stop-patience-validations cannot be negative")
     if early_stop_patience and not fixed_epochs:
         raise ValueError("early stopping is supported only with --training-epochs")
+    early_stop_start_epoch = int(
+        getattr(args, "early_stop_start_epoch", 0) or 0
+    )
+    if early_stop_start_epoch < 0:
+        raise ValueError("--early-stop-start-epoch cannot be negative")
+    if early_stop_start_epoch and not fixed_epochs:
+        raise ValueError("delayed early stopping requires --training-epochs")
     stream_path = getattr(args, "training_stream_path", None)
     if fixed_epochs:
         if args.data_passes is not None or args.max_batches_per_pass is not None:
@@ -73,6 +80,10 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         epochs = int(args.training_epochs)
         if epochs <= 0:
             raise ValueError("--training-epochs must be positive")
+        if early_stop_start_epoch >= epochs:
+            raise ValueError(
+                "--early-stop-start-epoch must be smaller than --training-epochs"
+            )
         if stream_path is None and epochs * physical > len(pool):
             raise ValueError("fixed training budget exceeds the no-replacement training pool")
         if stream_path is not None:
@@ -129,6 +140,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
                 else max(1, epochs_per_pass * int(args.validation_every_passes))
             ),
             "early_stop_patience_validations": early_stop_patience,
+            "early_stop_start_epoch": early_stop_start_epoch,
         }
     )
     if fixed_epochs and getattr(args, "validation_dataset_path", None) is not None:
@@ -184,6 +196,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             validation_every_epochs if fixed_epochs else None
         ),
         "early_stop_patience_validations": early_stop_patience,
+        "early_stop_start_epoch": early_stop_start_epoch,
         "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
         "validation_decode_type": validation_decode_type,
         "validation_candidates": validation_candidates,
@@ -452,6 +465,7 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, int] | 
             "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
             "completed_validation_checkpoints": int(early_stop_state.get("completed_validation_checkpoints", 0)),
             "early_stop_patience_validations": int(getattr(args, "early_stop_patience_validations", 0) or 0),
+            "early_stop_start_epoch": int(getattr(args, "early_stop_start_epoch", 0) or 0),
             "final_validation_limit": final_validation_limit,
             "final_validation_audit": (
                 str(final_validation_path) if final_validation_limit > 0 else None

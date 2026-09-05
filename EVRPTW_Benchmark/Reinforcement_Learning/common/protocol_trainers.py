@@ -239,6 +239,17 @@ def train_reinforce_data_passes(
         raise ValueError("--early-stop-patience-validations cannot be negative")
     if early_stop_patience and fixed_epochs is None:
         raise ValueError("early stopping is supported only with --training-epochs")
+    early_stop_start_epoch = int(
+        getattr(args, "early_stop_start_epoch", 0) or 0
+    )
+    if early_stop_start_epoch < 0:
+        raise ValueError("--early-stop-start-epoch cannot be negative")
+    if early_stop_start_epoch and fixed_epochs is None:
+        raise ValueError("delayed early stopping requires --training-epochs")
+    if fixed_epochs is not None and early_stop_start_epoch >= fixed_epochs:
+        raise ValueError(
+            "--early-stop-start-epoch must be smaller than --training-epochs"
+        )
     physical, effective = require_registered_batches(args, legacy_batch_size)
     stream_path = getattr(args, "training_stream_path", None)
     expected_fixed_instances = fixed_epochs * effective if fixed_epochs is not None else None
@@ -566,11 +577,17 @@ def train_reinforce_data_passes(
                     if is_best:
                         best_key = validation_key(validation)
                         validation_checks_without_improvement = 0
-                    else:
+                    elif logical_epoch > early_stop_start_epoch:
                         validation_checks_without_improvement += 1
+                    else:
+                        # Pre-gate validation still selects best.ckpt, but it must
+                        # not consume patience intended for the mature phase.
+                        validation_checks_without_improvement = 0
                     completed_validation_checks += 1
+                    early_stop_eligible = logical_epoch > early_stop_start_epoch
                     early_stop_due = bool(
                         early_stop_patience
+                        and early_stop_eligible
                         and validation_checks_without_improvement
                         >= early_stop_patience
                     )
@@ -578,6 +595,8 @@ def train_reinforce_data_passes(
                         {
                             "checkpoint_selected": is_best,
                             "validation_checks_without_improvement": validation_checks_without_improvement,
+                            "early_stop_start_epoch": early_stop_start_epoch,
+                            "early_stop_eligible": early_stop_eligible,
                             "early_stop_due": early_stop_due,
                         }
                     )
@@ -883,6 +902,7 @@ def train_reinforce_data_passes(
         "validation_checkpoints": int(args.validation_checkpoints),
         "completed_validation_checkpoints": completed_validation_checks,
         "early_stop_patience_validations": early_stop_patience,
+        "early_stop_start_epoch": early_stop_start_epoch,
         "final_validation_limit": final_validation_limit,
         "validation_decode_type": validation_decode_type,
         "validation_candidates": validation_candidates,

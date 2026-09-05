@@ -720,6 +720,13 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     )
     if early_stop_patience < 0:
         raise ValueError("early_stop_patience_validations cannot be negative")
+    early_stop_start_epoch = int(
+        train_cfg.get("early_stop_start_epoch", 0) or 0
+    )
+    if early_stop_start_epoch < 0:
+        raise ValueError("early_stop_start_epoch cannot be negative")
+    if early_stop_start_epoch >= epochs:
+        raise ValueError("early_stop_start_epoch must be smaller than epochs")
     completed_validation_checks = 0
     validation_checks_without_improvement = 0
     history_best_key = (-math.inf, -math.inf)
@@ -734,11 +741,14 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 -float(distance) if distance is not None else -math.inf,
             )
             completed_validation_checks += 1
+            logical_epoch = int(row.get("logical_epoch", 0) or 0)
             if key > history_best_key:
                 history_best_key = key
                 validation_checks_without_improvement = 0
-            else:
+            elif logical_epoch > early_stop_start_epoch:
                 validation_checks_without_improvement += 1
+            else:
+                validation_checks_without_improvement = 0
     early_stopped = False
     early_stop_epoch: int | None = None
     completed_epoch = start_epoch - 1
@@ -1135,11 +1145,15 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     is_best = selection_key > best_eval_key
                     if is_best:
                         validation_checks_without_improvement = 0
-                    else:
+                    elif epoch > early_stop_start_epoch:
                         validation_checks_without_improvement += 1
+                    else:
+                        validation_checks_without_improvement = 0
                     completed_validation_checks += 1
+                    early_stop_eligible = epoch > early_stop_start_epoch
                     early_stop_due = bool(
                         early_stop_patience
+                        and early_stop_eligible
                         and validation_checks_without_improvement
                         >= early_stop_patience
                     )
@@ -1147,6 +1161,8 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         {
                             "checkpoint_selected": is_best,
                             "validation_checks_without_improvement": validation_checks_without_improvement,
+                            "early_stop_start_epoch": early_stop_start_epoch,
+                            "early_stop_eligible": early_stop_eligible,
                             "early_stop_due": early_stop_due,
                         }
                     )
@@ -1323,6 +1339,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             "completed_validation_checkpoints": completed_validation_checks,
             "validation_checks_without_improvement": validation_checks_without_improvement,
             "early_stop_patience_validations": early_stop_patience,
+            "early_stop_start_epoch": early_stop_start_epoch,
             "early_stopped": early_stopped,
             "early_stop_epoch": early_stop_epoch,
         },

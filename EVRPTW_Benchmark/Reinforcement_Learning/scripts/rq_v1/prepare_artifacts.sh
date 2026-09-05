@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/dataset_root.sh"
 DATASET_ROOT="$(resolve_evrptw_dataset_root "$REPO_ROOT")"
 OUTPUT_ROOT="${EVRPTW_OUTPUT_ROOT:-$REPO_ROOT/EVRPTW_Benchmark/results/DRL_rq_v1}"
 ARTIFACT_ROOT="$OUTPUT_ROOT/artifacts"
-RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v7_ada2000_gpu_val500_es3"
+RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v8_2000ep_es_after1000"
 STREAM_ROOT="$ARTIFACT_ROOT/streams/$RUNTIME_BUDGET_ID"
 TRAIN_CORE="$DATASET_ROOT/generation_plan/core/train/view_index.parquet"
 TRAIN_CUS50="$DATASET_ROOT/generation_plan/compatibility_cus50/train/view_index.parquet"
@@ -61,7 +61,7 @@ import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 d = json.loads(p.read_text())
 paths = [pathlib.Path(item) for item in d.get("required_artifacts", [])]
-valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v7_ada2000_gpu_val500_es3"
+valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v8_2000ep_es_after1000"
 valid_dataset = pathlib.Path(d.get("dataset_root", "")).resolve() == pathlib.Path(sys.argv[2]).resolve()
 raise SystemExit(
     0 if valid_budget and valid_dataset and paths and all(path.is_file() for path in paths) else 1
@@ -96,8 +96,8 @@ declare -A INDEX=(
   [Cus1000]="$TRAIN_CORE"
 )
 declare -A FORMAL_EXPOSURE=(
-  [Cus50]=51200000
-  [Cus100]=25600000
+  [Cus50]=102400000
+  [Cus100]=51200000
   [Cus500]=64000000
   [Cus1000]=4000000
 )
@@ -127,7 +127,7 @@ for support in Random-10%-support Coverage-10%-support; do
     mkdir -p "$(dirname "$stream")"
     python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_training_stream \
       --index "$TRAIN_CORE" --scale Cus100 --seed "$seed" \
-      --customer-exposures 25600000 \
+      --customer-exposures 51200000 \
       --allowed-family-ids "$SUPPORT_ROOT/$support.txt" \
       --output "$stream"
     REQUIRED+=("$stream" "$stream.manifest.json")
@@ -139,7 +139,7 @@ import json, os, pathlib, sys, tempfile
 target = pathlib.Path(sys.argv[1])
 payload = {
     "schema": "drl_rq_artifact_preparation_v2",
-    "runtime_budget_id": "drl_rq_runtime_budget_v7_ada2000_gpu_val500_es3",
+    "runtime_budget_id": "drl_rq_runtime_budget_v8_2000ep_es_after1000",
     "status": "passed",
     "dataset_root": sys.argv[2],
     "required_artifacts": sys.argv[3:],

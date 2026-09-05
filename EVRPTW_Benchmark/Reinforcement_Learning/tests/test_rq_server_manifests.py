@@ -60,8 +60,8 @@ def test_scale_aware_hardware_assignment_is_strict() -> None:
 
 def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() -> None:
     expected = {
-        "Cus50": (1_000, 1_024, 1_024_000, 51_200_000),
-        "Cus100": (1_000, 256, 256_000, 25_600_000),
+        "Cus50": (2_000, 1_024, 2_048_000, 102_400_000),
+        "Cus100": (2_000, 256, 512_000, 51_200_000),
         "Cus500": (2_000, 64, 128_000, 64_000_000),
         "Cus1000": (2_000, 2, 4_000, 4_000_000),
     }
@@ -75,7 +75,7 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         epochs, environments_per_epoch, total_environments, exposures = expected[
             row["scale"]
         ]
-        assert row["runtime_budget_id"] == "drl_rq_runtime_budget_v7_ada2000_gpu_val500_es3"
+        assert row["runtime_budget_id"] == "drl_rq_runtime_budget_v8_2000ep_es_after1000"
         assert row["runtime_budget_id"] in row["training_stream_path"]
         assert row["training_epochs"] == epochs
         assert row["planned_optimizer_updates"] == epochs
@@ -102,6 +102,7 @@ def test_pow2_full_train_budget_has_exact_epoch_environment_and_exposure_semanti
         assert row["final_validation_views"] == 0
         assert row["planning_wall_time_hours"] is None
         assert row["early_stop_patience_validations"] == 3
+        assert row["early_stop_start_epoch"] == 1000
 
 
 def test_2080ti_jobs_use_only_measured_safe_sample100_batches() -> None:

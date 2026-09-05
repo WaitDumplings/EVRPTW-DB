@@ -42,6 +42,7 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--validation-every-epochs", type=int)
     parser.add_argument("--validation-checkpoints", type=int, default=1)
     parser.add_argument("--early-stop-patience-validations", type=int, default=0)
+    parser.add_argument("--early-stop-start-epoch", type=int, default=0)
     parser.add_argument("--protocol-id", default="legacy_cli_defaults")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--max-batches-per-pass", type=int)

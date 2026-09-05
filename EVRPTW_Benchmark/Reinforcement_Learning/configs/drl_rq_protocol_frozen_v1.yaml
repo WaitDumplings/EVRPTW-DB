@@ -88,7 +88,8 @@ model_selection:
   secondary_metric: mean_verified_directed_distance
   early_stop_patience_validation_checks: 3
   early_stop_no_improvement_epochs_equivalent: 150
-  earliest_possible_early_stop_epoch: 200
+  early_stop_start_epoch_exclusive: 1000
+  earliest_possible_early_stop_epoch: 1150
   test_used_for_selection: false
 
 test_inference:

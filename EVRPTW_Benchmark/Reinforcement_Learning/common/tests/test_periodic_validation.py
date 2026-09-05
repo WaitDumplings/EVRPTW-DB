@@ -129,7 +129,7 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
     assert final_audit["selection_changed"] is False
 
 
-def test_fixed_epoch_early_stop_uses_validation_patience(tmp_path, monkeypatch) -> None:
+def test_fixed_epoch_early_stop_waits_until_after_start_epoch(tmp_path, monkeypatch) -> None:
     validation_calls = []
 
     def flat_validation(instances, _solve, *, seed):
@@ -172,6 +172,7 @@ def test_fixed_epoch_early_stop_uses_validation_patience(tmp_path, monkeypatch) 
         validation_every_epochs=2,
         validation_checkpoints=5,
         early_stop_patience_validations=2,
+        early_stop_start_epoch=4,
         physical_batch_size=1,
         effective_batch_size=2,
         training_stream_path=tmp_path / "stream.parquet",
@@ -208,9 +209,10 @@ def test_fixed_epoch_early_stop_uses_validation_patience(tmp_path, monkeypatch) 
     terminal = json.loads((args.output_dir / "training_result.json").read_text())
     assert terminal["status"] == "early_stopped"
     assert terminal["requested_training_epochs"] == 10
-    assert terminal["completed_training_epochs"] == 6
-    assert terminal["completed_validation_checkpoints"] == 3
-    assert len(validation_calls) == 3
+    assert terminal["completed_training_epochs"] == 8
+    assert terminal["completed_validation_checkpoints"] == 4
+    assert terminal["early_stop_start_epoch"] == 4
+    assert len(validation_calls) == 4
 
 
 def test_verified_validation_disables_autograd(monkeypatch) -> None:

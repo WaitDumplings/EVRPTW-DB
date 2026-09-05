@@ -130,6 +130,7 @@ def job(
         "test_candidate_count": int(cfg["evaluation"]["test_candidate_count"]),
         "candidate_selection": cfg["evaluation"]["selection"],
         "early_stop_patience_validations": int(cfg["formal_candidate"].get("early_stop_patience_validations", 0)),
+        "early_stop_start_epoch": int(cfg["formal_candidate"].get("early_stop_start_epoch", 0)),
         "final_validation_views": final_validation_views,
         "validation_every_epochs": int(
             cfg["formal_candidate"]["validation_every_epochs"]

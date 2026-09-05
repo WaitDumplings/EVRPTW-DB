@@ -11,14 +11,14 @@ data path is committed.
 
 ## Active single-seed four-scale configuration
 
-Runtime budget: `drl_rq_runtime_budget_v7_ada2000_gpu_val500_es3`.
+Runtime budget: `drl_rq_runtime_budget_v8_2000ep_es_after1000`.
 The manifests contain seed 1234 only. The 2080 Ti servers own Cus50/Cus100;
 the two RTX 6000 Ada GPUs own Cus500/Cus1000.
 
 | Scale | Hardware | Epochs | Environments/epoch | Total environments | Customer exposures |
 |---|---|---:|---:|---:|---:|
-| Cus50 | RTX 2080 Ti | 1,000 | 1,024 | 1,024,000 | 51,200,000 |
-| Cus100 | RTX 2080 Ti | 1,000 | 256 | 256,000 | 25,600,000 |
+| Cus50 | RTX 2080 Ti | 2,000 | 1,024 | 2,048,000 | 102,400,000 |
+| Cus100 | RTX 2080 Ti | 2,000 | 256 | 512,000 | 51,200,000 |
 | Cus500 | RTX 6000 Ada | 2,000 | 64 | 128,000 | 64,000,000 |
 | Cus1000 | RTX 6000 Ada | 2,000 | 2 | 4,000 | 4,000,000 |
 
@@ -34,8 +34,10 @@ Physical batches use exact gradient accumulation divisors of the logical batch:
 AM and TERRAN use 100 training trajectories on Cus500/Cus1000. EVRPTW-RL and
 DRL-TS use one because sample-100 exceeded memory even at physical batch 1.
 Validation and test use stochastic best-of-100 decoding. Formal validation runs
-every 50 epochs on 500 fixed views, with early-stop patience of three validation
-checks. Thus each large-scale job has at most 40 validation checkpoints.
+every 50 epochs on 500 fixed views. Epoch 1,000 and earlier perform checkpoint
+selection but do not consume early-stop patience. After Epoch 1,000, three
+consecutive non-improving validation checks stop training; the earliest possible
+stop is Epoch 1,150. Every job has at most 40 validation checkpoints.
 
 There are 24 formal jobs total. Server counts are 8, 5, 3, and 8 for
 `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1`, and `a6000_2_1`, respectively.
