@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import (
     DataPassState,
     pass_batches,
@@ -8,6 +10,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import (
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
     grouped_batches,
+    require_registered_batches,
 )
 
 
@@ -39,6 +42,28 @@ def test_microbatches_form_exact_logical_epochs_without_extra_rows() -> None:
     assert [sum(map(len, group)) for group in logical] == [100, 100, 100]
     selected = [row for group in logical for batch in group for row in batch]
     assert len(selected) == len(set(selected)) == 300
+
+
+def test_remainder_microbatches_keep_exact_logical_boundaries() -> None:
+    physical = [list(range(start, min(start + 6, 30))) for start in range(0, 30, 6)]
+    logical = list(grouped_batches(physical, effective_batch_size=10))
+    assert [sum(map(len, group)) for group in logical] == [10, 10, 10]
+    assert [item for group in logical for batch in group for item in batch] == list(range(30))
+    assert [[len(batch) for batch in group] for group in logical] == [
+        [6, 4], [2, 6, 2], [4, 6]
+    ]
+
+
+def test_registered_batch_allows_safe_remainder_but_not_oversize() -> None:
+    args = SimpleNamespace(physical_batch_size=6, effective_batch_size=10)
+    assert require_registered_batches(args, legacy_batch=1) == (6, 10)
+    args.physical_batch_size = 11
+    try:
+        require_registered_batches(args, legacy_batch=1)
+    except ValueError as exc:
+        assert "cannot exceed" in str(exc)
+    else:
+        raise AssertionError("oversize physical batch must fail")
 
 
 def test_atomic_state_resume_and_protocol_guard(tmp_path) -> None:

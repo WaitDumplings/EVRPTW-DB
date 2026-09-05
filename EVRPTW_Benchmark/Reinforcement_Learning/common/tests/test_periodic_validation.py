@@ -15,7 +15,10 @@ class _Pool:
     def first(self, *, limit: int):
         return [object() for _ in range(min(limit, 1))]
 
-    def stream_batches(self, _path, physical: int, *, start: int, stop: int):
+    def stream_batches(
+        self, _path, physical: int, *, start: int, stop: int,
+        logical_batch_size: int | None = None,
+    ):
         for offset in range(start, stop, physical):
             yield [object() for _ in range(min(physical, stop - offset))]
 

@@ -49,6 +49,8 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         environment_transitions = int(state.environment_transitions)
         optimizer_steps = int(state.optimizer_steps)
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
+    if effective % physical:
+        raise ValueError("TERRAN requires an exact physical-batch divisor")
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     validation_seed = int(

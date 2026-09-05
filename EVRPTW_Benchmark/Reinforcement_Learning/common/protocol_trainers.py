@@ -288,7 +288,11 @@ def train_reinforce_data_passes(
         expected_budget = int(expected_fixed_instances) * _customer_count(args.scale)
         if customer_budget is None or int(customer_budget) != expected_budget:
             raise ValueError("explicit training stream requires an exact customer-exposure budget")
-    microbatches_per_epoch = effective // physical
+    if effective % physical and stream_path is None:
+        raise ValueError(
+            "a remainder physical batch requires an explicit training stream"
+        )
+    microbatches_per_epoch = math.ceil(effective / physical)
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     state = load_state(output, args.protocol_id, args.resume)
@@ -402,9 +406,13 @@ def train_reinforce_data_passes(
             else None
         )
         max_batches = (
-            remaining_fixed_epochs * microbatches_per_epoch
-            if fixed_epochs is not None
-            else args.max_batches_per_pass
+            None
+            if fixed_epochs is not None and stream_path is not None
+            else (
+                remaining_fixed_epochs * microbatches_per_epoch
+                if fixed_epochs is not None
+                else args.max_batches_per_pass
+            )
         )
         batches = (
             pool.stream_batches(
@@ -412,6 +420,7 @@ def train_reinforce_data_passes(
                 physical,
                 start=completed_logical_epochs * effective,
                 stop=expected_fixed_instances,
+                logical_batch_size=effective,
             )
             if stream_path is not None
             else pool.data_pass_batches(data_pass, physical)

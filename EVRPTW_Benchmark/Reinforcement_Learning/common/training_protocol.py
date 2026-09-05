@@ -57,8 +57,8 @@ def require_registered_batches(args: argparse.Namespace, legacy_batch: int) -> t
     effective = int(args.effective_batch_size or physical)
     if physical <= 0 or effective <= 0:
         raise ValueError("physical/effective batch sizes must be positive")
-    if effective % physical:
-        raise ValueError("effective batch size must be a multiple of physical batch size")
+    if physical > effective:
+        raise ValueError("physical batch size cannot exceed effective batch size")
     return physical, effective
 
 
@@ -136,23 +136,30 @@ def grouped_batches(
     effective_batch_size: int,
     max_batches: int | None = None,
 ) -> Iterable[list[list[Any]]]:
+    """Group and, when needed, split microbatches at logical boundaries."""
+
+    if int(effective_batch_size) <= 0:
+        raise ValueError("effective_batch_size must be positive")
     group: list[list[Any]] = []
     count = 0
     seen_batches = 0
-    for batch in batches:
+    for incoming in batches:
         if max_batches is not None and seen_batches >= int(max_batches):
             break
         seen_batches += 1
-        if group and count + len(batch) > effective_batch_size:
-            yield group
-            group = []
-            count = 0
-        group.append(batch)
-        count += len(batch)
-        if count == effective_batch_size:
-            yield group
-            group = []
-            count = 0
+        offset = 0
+        while offset < len(incoming):
+            room = int(effective_batch_size) - count
+            batch = incoming[offset : offset + room]
+            offset += len(batch)
+            if not batch:
+                break
+            group.append(batch)
+            count += len(batch)
+            if count == int(effective_batch_size):
+                yield group
+                group = []
+                count = 0
     if group:
         yield group
 
