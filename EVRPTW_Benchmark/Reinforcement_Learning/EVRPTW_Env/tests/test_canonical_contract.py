@@ -136,6 +136,9 @@ def test_fast_and_reference_masks_follow_same_canonical_contract() -> None:
     np.testing.assert_allclose(
         ref_obs["charging_power"], fast_obs["charging_power"]
     )
+    np.testing.assert_allclose(
+        ref_obs["charging_time_ratio"], fast_obs["charging_time_ratio"]
+    )
     np.testing.assert_allclose(ref_obs["remaining_demand"], fast_obs["remaining_demand"])
     np.testing.assert_allclose(
         ref_obs["remaining_vehicle_ratio"],
@@ -176,6 +179,36 @@ def test_last_customer_can_return_through_charging_station(env_cls) -> None:
     assert verification["passed"], verification["violations"]
 
 
+@pytest.mark.parametrize("env_cls", [EVRPTWVectorEnv, EVRPTWVectorEnvFast])
+def test_station_revisit_is_route_local_and_resets_at_depot(env_cls) -> None:
+    base = canonical_instance()
+    distance = np.ones((4, 4), dtype=np.float32)
+    np.fill_diagonal(distance, 0.0)
+    instance = replace(
+        base,
+        customers=np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        distance_matrix_km=distance,
+        demands_cm3=np.ones(2, dtype=np.float32),
+        package_counts=np.ones(2, dtype=np.int32),
+        service_time_s=np.full(2, 30.0, dtype=np.float32),
+        tw_s=np.asarray([[0.0, 100_000.0]] * 2, dtype=np.float32),
+        shortest_time_matrix_s=distance * 60.0,
+        energy_matrix_kwh=distance * 0.5,
+    )
+    kwargs = {"use_jit_mask": True} if env_cls is EVRPTWVectorEnvFast else {}
+    env = env_cls(instance, n_traj=1, **kwargs)
+    observation, _ = env.reset(seed=12)
+    station = env.station_start
+    assert observation["action_mask"][0, station]
+
+    env.step(np.asarray([station], dtype=np.int64))
+    observation, *_ = env.step(np.asarray([1], dtype=np.int64))
+    assert not observation["action_mask"][0, station]
+
+    observation, *_ = env.step(np.asarray([0], dtype=np.int64))
+    assert observation["action_mask"][0, station]
+
+
 def test_model_observation_normalization_contract_is_explicit() -> None:
     env = EVRPTWVectorEnv(canonical_instance(), n_traj=1)
     obs, _ = env.reset(seed=13)
@@ -185,6 +218,7 @@ def test_model_observation_normalization_contract_is_explicit() -> None:
     np.testing.assert_allclose(obs["demand"], [0.0, 0.1, 0.0])
     np.testing.assert_allclose(obs["service_time"], [0.0, 7e-5, 0.0])
     np.testing.assert_allclose(obs["charging_power"], [0.0, 0.0, 1.0])
+    np.testing.assert_allclose(obs["charging_time_ratio"], [0.0, 0.0, 0.036])
     np.testing.assert_allclose(obs["remaining_battery"], [1.0])
     np.testing.assert_allclose(obs["current_load"], [0.0])
     np.testing.assert_allclose(obs["current_time"], [0.0])

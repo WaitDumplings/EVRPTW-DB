@@ -103,6 +103,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             station_start=self.station_start,
             last=self.last,
             visited=self.visited,
+            cs_visited_current_route=self.cs_visited_current_route,
             terminated=self.terminated,
             truncated=self.truncated,
             served_customers=self.served_customers,
@@ -139,6 +140,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             "time_window": tw_norm,
             "service_time": service_norm,
             "charging_power": self._normalized_charging_power(),
+            "charging_time_ratio": self._charging_time_ratio(),
             "battery_capacity": np.array([1.0], dtype=np.float32),
             "loading_capacity": np.array([1.0], dtype=np.float32),
         }
@@ -203,6 +205,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             "time_window": static["time_window"],
             "service_time": static["service_time"],
             "charging_power": static["charging_power"],
+            "charging_time_ratio": static["charging_time_ratio"],
             "remaining_demand": remaining_demand,
             "action_mask": action_mask,
             "last_node_idx": self.last.copy(),
@@ -247,6 +250,18 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             out[self.station_start :] = (self.charging_power_kw / scale).astype(
                 np.float32
             )
+        return out
+
+    def _charging_time_ratio(self) -> np.ndarray:
+        out = np.zeros(self.num_nodes, dtype=np.float32)
+        if self.num_stations:
+            usable_power_kw = np.maximum(
+                self.charging_power_kw * self.charging_power_derating_factor,
+                1e-12,
+            )
+            out[self.station_start :] = (
+                3600.0 * self.battery_capacity_kwh / usable_power_kw / self.horizon_s
+            ).astype(np.float32)
         return out
 
 

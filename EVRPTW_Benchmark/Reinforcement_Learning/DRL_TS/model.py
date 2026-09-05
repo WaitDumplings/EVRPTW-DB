@@ -324,7 +324,7 @@ class DRLTSPolicy(nn.Module):
         demand = _tensor(observation["demand"], self.device).float()
         time_window = _tensor(observation["time_window"], self.device).float()
         service = _tensor(observation["service_time"], self.device).float()
-        charging_power = _tensor(observation["charging_power"], self.device).float()
+        charging_time_ratio = _tensor(observation["charging_time_ratio"], self.device).float()
         batch_size, num_nodes = demand.shape
         node_type = torch.ones(
             batch_size,
@@ -342,7 +342,7 @@ class DRLTSPolicy(nn.Module):
                 demand[..., None],
                 time_window,
                 service[..., None],
-                charging_power[..., None],
+                charging_time_ratio[..., None],
                 node_type[..., None],
             ),
             dim=-1,

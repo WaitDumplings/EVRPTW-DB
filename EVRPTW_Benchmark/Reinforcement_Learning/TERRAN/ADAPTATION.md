@@ -56,5 +56,9 @@ adds
 to the final training transition (and applies the recorded PBRS annealing scale).
 A trajectory completing exactly on the horizon receives the configured success
 bonus instead. This shaping is not used for fixed-set benchmark evaluation.
-Charging stations remain reusable after the vehicle leaves them; only an
-immediate self-loop to the current station is masked.
+A physical charging station is usable at most once within the current vehicle
+route and becomes available again after a depot return. This route-local
+anti-cycle rule is inherited from the designated legacy environment; it is not
+a global station-copy limit. Station input uses full-charge time divided by the
+operating horizon, and the distance reward uses one deterministic scale
+estimated only from the frozen training pool.

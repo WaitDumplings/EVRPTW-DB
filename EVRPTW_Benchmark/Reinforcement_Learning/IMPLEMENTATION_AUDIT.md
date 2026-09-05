@@ -45,9 +45,10 @@ reproduction claim.
 - The supplied full chapter verifies the four published node features, three
   published edge features, simultaneous node/edge GAT updates, GRU/context
   decoder, two-stage masks, REINFORCE objective, and greedy rollout baseline.
-- The paper has no station-visit reward. Stations may be visited repeatedly,
-  but station actions are masked immediately after the depot or another station;
-  soft training, hard training, validation, and evaluation now share that rule.
+- The paper has no station-visit reward and permits repeated station use. The
+  benchmark explicitly adds a route-local anti-cycle rule (same station at most
+  once per route, reset at depot) while retaining the paper's depot/station mask;
+  soft training, hard training, validation, and evaluation share that rule.
 - Service duration, station power, explicit canonical energy, normalized physical
   units, unlimited-fleet semantics, and independent verification are documented
   EVRPTW-DB adaptations. This is `verified_paper_guided_adaptation`, not an
@@ -88,7 +89,7 @@ All five adapters use the same Stage-2 contract:
 - schedule arcs: canonical directed running-time shortest paths;
 - battery arcs: energy evaluated on those running-time paths;
 - charging: immediate full charge using each station's power and the frozen
-  derating factor;
+  derating factor; same-station reuse is route-local and resets at depot;
 - feasibility: customer uniqueness, cargo, time windows, operating horizon,
   battery, depot returns, and charging-assisted return paths;
 - final acceptance: independent replay by `route_validator.validate_routes`.
@@ -100,6 +101,9 @@ Reference and JIT masks now keep feasible station actions available, and the
 regression test replays `depot -> customer -> charger -> depot` through the
 independent verifier.
 
-Incomplete-rollout penalties and any published auxiliary shaping are
+Model-facing normalization uses one deterministic training-pool distance
+scale, operating horizon for time, battery capacity for energy, and full-charge
+time divided by horizon for each station. Validation/test reuse the training
+scale. Incomplete-rollout penalties and any published auxiliary shaping are
 training-only. Successful candidates are selected by minimum independently
 verified directed-road distance.

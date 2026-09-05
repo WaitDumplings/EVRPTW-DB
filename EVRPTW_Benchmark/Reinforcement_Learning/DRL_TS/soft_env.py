@@ -75,7 +75,10 @@ class DRLTSSoftConstraintEnv(EVRPTWVectorEnvFast):
                 if not self.visited[trajectory, node]:
                     mask[trajectory, node] = True
             if self._is_customer(start):
-                mask[trajectory, self.station_nodes] = True
+                available_stations = ~self.cs_visited_current_route[
+                    trajectory, self.station_nodes
+                ]
+                mask[trajectory, self.station_nodes] = available_stations
         return mask
 
     def _normalized_violations(

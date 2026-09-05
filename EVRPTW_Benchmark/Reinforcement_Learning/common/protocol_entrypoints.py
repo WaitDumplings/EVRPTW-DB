@@ -14,11 +14,21 @@ def _max_steps(envs: list[Any]) -> int:
     return max(env.unwrapped.max_steps for env in envs)
 
 
+def _training_reward_scale(args: Any, pool: Any) -> float:
+    mode = "single_customer_repair_median"
+    scale = float(pool.reward_distance_scale_km(mode))
+    args.reward_distance_scale_mode = f"dataset_{mode}"
+    args.reward_distance_scale_km = scale
+    args.reward_distance_scale_metadata = dict(pool.reward_scale_metadata)
+    return scale
+
+
 def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..AM_EVRPTW.rollout import rollout
 
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
+    reward_distance_scale_km = _training_reward_scale(args, pool)
 
     def solve(
         active, instances, decode_type, seed, max_steps=None, candidate_count=None,
@@ -36,6 +46,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                 if candidate_count is not None or decode_type == "greedy"
                 else "light"
             ),
+            reward_distance_scale_km=reward_distance_scale_km,
         )
         return rollout(
             active,
@@ -64,7 +75,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         make_baseline=lambda active, instances, _soft, seed: solve(
             active, instances, "greedy", seed, training_rollout_steps
         ),
-        training_cost=lambda result: result.cost_km,
+        training_cost=lambda result: result.cost_km / reward_distance_scale_km,
         objective_distance=objective,
         feasible=lambda result: result.feasible,
         validation_solve=lambda active, instance, seed: solve(
@@ -83,6 +94,7 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
 
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
+    reward_distance_scale_km = _training_reward_scale(args, pool)
 
     def solve(
         active, instances, decode_type, seed, max_steps=None, candidate_count=None,
@@ -100,6 +112,7 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                 if candidate_count is not None or decode_type == "greedy"
                 else "light"
             ),
+            reward_distance_scale_km=reward_distance_scale_km,
         )
         return rollout(
             active,
@@ -144,6 +157,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
 
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
+    reward_distance_scale_km = _training_reward_scale(args, pool)
 
     def solve(
         active, instances, soft, decode_type, seed, max_steps=None,
@@ -167,6 +181,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                         if candidate_count is not None or decode_type == "greedy"
                         else "light"
                     ),
+                    reward_distance_scale_km=reward_distance_scale_km,
                 )
                 for instance in instances
             ]
@@ -183,6 +198,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                         if candidate_count is not None or decode_type == "greedy"
                         else "light"
                     ),
+                    reward_distance_scale_km=reward_distance_scale_km,
                 )
                 for instance in instances
             ]

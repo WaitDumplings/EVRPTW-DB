@@ -253,11 +253,14 @@ class stateWrapper:
 
         time_window = self.states["time_window"].float()
         time_window_internal = time_window.index_select(1, self.internal_to_external)
+        charging_time_ratio = self.states["charging_time_ratio"].float()
+        station_charging_time_ratio = charging_time_ratio[:, 1 + n_cus :]
 
         self.states["observations"] = {
             "depot_loc": depot_loc,
             "cus_loc": self.states["cus_loc"].float(),
             "rs_loc": self.states["rs_loc"].float(),
+            "rs_charging_time_ratio": station_charging_time_ratio,
             "time_window": time_window_internal,
             "demand": demand_internal,
         }

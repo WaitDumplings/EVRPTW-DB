@@ -150,7 +150,7 @@ class EVRPTWRLPolicy(nn.Module):
         )
         time_window = _tensor(observation["time_window"], self.device).float()
         service = _tensor(observation["service_time"], self.device).float()
-        charging_power = _tensor(observation["charging_power"], self.device).float()
+        charging_time_ratio = _tensor(observation["charging_time_ratio"], self.device).float()
         remaining_demand = _tensor(observation["remaining_demand"], self.device).float()
         batch_size, n_traj, num_nodes = remaining_demand.shape
         static = torch.cat(
@@ -158,7 +158,7 @@ class EVRPTWRLPolicy(nn.Module):
                 coordinates,
                 time_window,
                 service[..., None],
-                charging_power[..., None],
+                charging_time_ratio[..., None],
             ),
             dim=-1,
         )

@@ -117,6 +117,7 @@ if NUMBA_AVAILABLE:
         station_start: int,
         last: np.ndarray,
         visited: np.ndarray,
+        cs_visited_current_route: np.ndarray,
         terminated: np.ndarray,
         truncated: np.ndarray,
         served_customers: np.ndarray,
@@ -211,7 +212,7 @@ if NUMBA_AVAILABLE:
                     mask[t, customer] = True
 
             for station in range(station_start, num_nodes):
-                if station == start:
+                if station == start or cs_visited_current_route[t, station]:
                     continue
                 battery_after = battery_used_kwh[t] + energy_kwh[start, station]
                 if battery_after > battery_capacity_kwh + 1e-9:
@@ -259,6 +260,7 @@ def compute_action_mask_jit(
     station_start: int,
     last: np.ndarray,
     visited: np.ndarray,
+    cs_visited_current_route: np.ndarray,
     terminated: np.ndarray,
     truncated: np.ndarray,
     served_customers: np.ndarray,
@@ -290,6 +292,7 @@ def compute_action_mask_jit(
         int(station_start),
         last,
         visited,
+        cs_visited_current_route,
         terminated,
         truncated,
         served_customers,

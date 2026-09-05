@@ -134,7 +134,7 @@ def test_terran_completion_at_rollout_horizon_gets_success_not_failure() -> None
     assert np.isclose(info["reward_components"]["terminal_heuristic"][0], 0.1)
 
 
-def test_terran_allows_revisiting_the_same_charging_station() -> None:
+def test_terran_station_revisit_resets_only_after_depot() -> None:
     env = make_terran_env(
         instance=_instance(),
         n_traj=1,
@@ -150,9 +150,9 @@ def test_terran_allows_revisiting_the_same_charging_station() -> None:
     observation, _, _, _, _ = env.step(np.asarray([station]))
     assert not observation["action_mask"][0, station]
     observation, _, _, _, _ = env.step(np.asarray([1]))
+    assert not observation["action_mask"][0, station]
+    observation, _, _, _, _ = env.step(np.asarray([0]))
     assert observation["action_mask"][0, station]
-    observation, _, _, _, _ = env.step(np.asarray([station]))
-    assert env.unwrapped.get_routes()[0][0].count(station) == 2
 
 
 def test_pbrs_keeps_distance_as_named_base_reward() -> None:

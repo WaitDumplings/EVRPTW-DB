@@ -30,8 +30,9 @@ class EVRPTWRLRollout:
 def _normalized_travel_time(envs: Sequence[Any]) -> np.ndarray:
     rows = []
     for env in envs:
-        matrix = np.asarray(env.unwrapped.travel_time_s, dtype=np.float32)
-        rows.append(matrix / max(float(np.max(matrix)), 1e-12))
+        unwrapped = env.unwrapped
+        matrix = np.asarray(unwrapped.travel_time_s, dtype=np.float32)
+        rows.append(matrix / max(float(unwrapped.horizon_s), 1e-12))
     return np.stack(rows, axis=0)
 
 

@@ -84,6 +84,8 @@ class Stage2TaskPool:
         self.rng = np.random.default_rng(int(self.seed))
         self._cache: OrderedDict[str, EVRPTWInstance] = OrderedDict()
         self._task_by_view_id = {task.view_id: task for task in self.tasks}
+        self._reward_scale_cache: dict[tuple[str, int, int], float] = {}
+        self.reward_scale_metadata: dict[str, int | float | str] = {}
 
     def __len__(self) -> int:
         return len(self.tasks)
@@ -102,6 +104,81 @@ class Stage2TaskPool:
     def sample(self, batch_size: int) -> list[EVRPTWInstance]:
         indices = self.rng.integers(0, len(self.tasks), size=int(batch_size))
         return [self.instance(self.tasks[int(index)]) for index in indices]
+
+    def reward_distance_scale_km(
+        self,
+        mode: str = "single_customer_repair_median",
+        *,
+        target_customer_repairs: int = 32_000,
+        calibration_seed: int = 20_260_904,
+    ) -> float:
+        """Estimate one deterministic, training-pool-only distance scale.
+
+        A single positive scale preserves the minimum-distance objective while
+        avoiding the city/instance reweighting caused by per-instance scales.
+        The bounded deterministic sample keeps startup practical for Cus1000.
+        """
+
+        mode = str(mode)
+        key = (mode, int(target_customer_repairs), int(calibration_seed))
+        cached = self._reward_scale_cache.get(key)
+        if cached is not None:
+            return cached
+        customer_count = int(self.tasks[0].customer_count)
+        views_needed = min(
+            len(self.tasks),
+            max(1, int(np.ceil(target_customer_repairs / max(customer_count, 1)))),
+        )
+        rng = np.random.default_rng(int(calibration_seed))
+        indices = np.sort(rng.choice(len(self.tasks), size=views_needed, replace=False))
+        values: list[float] = []
+        per_instance: list[float] = []
+        for index in indices:
+            instance = self.instance(self.tasks[int(index)])
+            distance = np.asarray(instance.distance_matrix_km, dtype=np.float64)
+            if mode == "max_edge":
+                finite = distance[np.isfinite(distance)]
+                if finite.size:
+                    values.append(float(finite.max()))
+                continue
+            if mode not in {
+                "single_customer_repair_sum",
+                "single_customer_repair_mean",
+                "single_customer_repair_median",
+            }:
+                raise ValueError(f"Unsupported dataset reward scale mode: {mode}")
+            repairs = distance[0, 1 : customer_count + 1] + distance[
+                1 : customer_count + 1, 0
+            ]
+            repairs = repairs[np.isfinite(repairs)]
+            if not repairs.size:
+                continue
+            if mode == "single_customer_repair_sum":
+                per_instance.append(float(repairs.sum()))
+            else:
+                values.extend(float(value) for value in repairs)
+        if mode == "single_customer_repair_sum":
+            values = per_instance
+        if not values:
+            scale = 1.0
+        elif mode.endswith(("_mean", "_sum")):
+            scale = float(np.mean(values))
+        elif mode.endswith("_median"):
+            scale = float(np.median(values))
+        else:
+            scale = float(np.max(values))
+        scale = max(scale, 1e-9)
+        self._reward_scale_cache[key] = scale
+        self.reward_scale_metadata = {
+            "mode": mode,
+            "scale_km": scale,
+            "calibration_seed": int(calibration_seed),
+            "sampled_views": int(views_needed),
+            "sampled_customer_repairs": int(len(values)),
+            "pool_views": int(len(self.tasks)),
+            "source_split": "training_pool_only",
+        }
+        return scale
 
     def first(self, limit: int | None = None) -> Iterable[EVRPTWInstance]:
         tasks = self.tasks if limit is None else self.tasks[: int(limit)]
@@ -155,6 +232,7 @@ def make_envs(
     n_traj: int,
     info_level: str,
     use_jit_mask: bool = True,
+    reward_distance_scale_km: float | None = None,
 ) -> list[EVRPTWVectorEnvFast]:
     """Create environments under the canonical Stage-2 physical contract."""
 
@@ -167,6 +245,7 @@ def make_envs(
             matrix_mode="canonical",
             info_level=info_level,
             use_jit_mask=use_jit_mask,
+            reward_distance_scale_km=reward_distance_scale_km,
         )
         for instance in instances
     ]

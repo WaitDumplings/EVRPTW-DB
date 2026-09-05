@@ -92,7 +92,7 @@ def _three_customer_instance():
     )
 
 
-def test_paper_station_mask_blocks_full_battery_but_allows_revisit() -> None:
+def test_station_mask_blocks_same_station_revisit_within_route() -> None:
     instance = _three_customer_instance()
     canonical = EVRPTWVectorEnvFast(instance, n_traj=1, use_jit_mask=False)
     canonical_observation, _ = canonical.reset(seed=5)
@@ -110,7 +110,7 @@ def test_paper_station_mask_blocks_full_battery_but_allows_revisit() -> None:
     assert not observation["action_mask"][0, station]
 
     observation, _, _, _, _ = hard.step(np.asarray([2], dtype=np.int64))
-    assert observation["action_mask"][0, station]
+    assert not observation["action_mask"][0, station]
 
 
 def test_rollout_has_gradient_and_hard_result_passes_verifier() -> None:
@@ -154,6 +154,10 @@ def test_drl_ts_rollout_reports_training_budget_exhaustion() -> None:
 def test_drl_ts_scaling_is_a_frozen_implementation_contract() -> None:
     env = EVRPTWVectorEnvFast(_instance(), n_traj=1, use_jit_mask=False)
     distance, travel_time, energy = normalized_edge_matrices([env])
-    assert distance.min() == 0.0 and distance.max() == 1.0
-    assert travel_time.min() == 0.0 and travel_time.max() == 1.0
-    assert energy.min() == 0.0 and energy.max() == 1.0
+    np.testing.assert_allclose(
+        distance[0], env.distance_km / env.reward_distance_scale_km
+    )
+    np.testing.assert_allclose(travel_time[0], env.travel_time_s / env.horizon_s)
+    np.testing.assert_allclose(
+        energy[0], env.energy_kwh / env.battery_capacity_kwh
+    )

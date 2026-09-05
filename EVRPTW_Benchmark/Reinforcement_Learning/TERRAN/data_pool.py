@@ -84,6 +84,13 @@ class Stage2TERRANPool:
         self.sample_count += 1
         return self.pool.instance(task)
 
+    @property
+    def reward_scale_metadata(self) -> dict[str, int | float | str]:
+        return self.pool.reward_scale_metadata
+
+    def reward_distance_scale_km(self, mode: str = "single_customer_repair_median") -> float:
+        return self.pool.reward_distance_scale_km(mode)
+
     def usage_summary(self) -> list[dict[str, Any]]:
         return [
             {

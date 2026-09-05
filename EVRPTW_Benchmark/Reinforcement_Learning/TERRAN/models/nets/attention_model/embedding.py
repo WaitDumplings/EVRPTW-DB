@@ -24,7 +24,7 @@ class EVRPTWEmbedding(nn.Module):
         super().__init__()
         self.depot_embedding = nn.Linear(2, embedding_dim)
         self.nodes_embedding = nn.Linear(2 + extra_dim, embedding_dim)
-        self.rs_embedding = nn.Linear(2, embedding_dim)
+        self.rs_embedding = nn.Linear(3, embedding_dim)
         self.context_dim = embedding_dim + 3
 
     def forward(self, x):
@@ -43,7 +43,12 @@ class EVRPTWEmbedding(nn.Module):
         cus_nodes = self.nodes_embedding(
             torch.cat((x["cus_loc"], cus_demand, cus_time_window), dim=-1)
         )
-        rs_nodes = self.rs_embedding(x["rs_loc"])
+        rs_nodes = self.rs_embedding(
+            torch.cat(
+                (x["rs_loc"], x["rs_charging_time_ratio"].unsqueeze(-1)),
+                dim=-1,
+            )
+        )
         depot_node = self.depot_embedding(depot_loc.unsqueeze(1))
 
         return torch.cat((depot_node, rs_nodes, cus_nodes), dim=-2)

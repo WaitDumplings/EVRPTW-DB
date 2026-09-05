@@ -40,9 +40,13 @@ def normalized_edge_matrices(
         distance = np.asarray(unwrapped.distance_km, dtype=np.float32)
         travel_time = np.asarray(unwrapped.travel_time_s, dtype=np.float32)
         energy = np.asarray(unwrapped.energy_kwh, dtype=np.float32)
-        distance_rows.append(distance / max(float(np.max(distance)), 1e-12))
-        time_rows.append(travel_time / max(float(np.max(travel_time)), 1e-12))
-        energy_rows.append(energy / max(float(np.max(energy)), 1e-12))
+        distance_rows.append(
+            distance / max(float(unwrapped.reward_distance_scale_km), 1e-12)
+        )
+        time_rows.append(travel_time / max(float(unwrapped.horizon_s), 1e-12))
+        energy_rows.append(
+            energy / max(float(unwrapped.battery_capacity_kwh), 1e-12)
+        )
     return (
         np.stack(distance_rows, axis=0),
         np.stack(time_rows, axis=0),

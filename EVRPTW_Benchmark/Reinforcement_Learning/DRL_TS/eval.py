@@ -104,6 +104,9 @@ def main() -> None:
                         charging_mode="station_power_full",
                         matrix_mode="canonical",
                         info_level="full",
+                        reward_distance_scale_km=model_args.get(
+                            "reward_distance_scale_km"
+                        ),
                     )
                 ]
                 with torch.no_grad():

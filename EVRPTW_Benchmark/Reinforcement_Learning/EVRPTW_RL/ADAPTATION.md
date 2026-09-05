@@ -46,11 +46,13 @@ included in every run manifest.
 | Data | fresh synthetic batch per update | sampling with replacement from the frozen training split |
 
 The published training reward already uses route distance as its main term.
-For physical instances, distance is divided by the per-instance median
-depot-customer-depot repair distance before combining it with the published
-station coefficient 0.3. This scale is an explicit benchmark adapter, not a
-normalization stated in the paper. The station-visit penalty is retained as
-method-specific auxiliary shaping.
+For physical instances, distance is divided by one deterministic median
+depot-customer-depot repair scale estimated from the frozen training pool
+before combining it with the published station coefficient 0.3. Directed
+travel-time edges are divided by the operating horizon. The fixed training
+scale is reused for validation/test and avoids reweighting cities or instances;
+it is an explicit benchmark adapter, not a normalization stated in the paper.
+The station-visit penalty is retained as method-specific auxiliary shaping.
 The published excess-fleet penalty is structurally present but identically zero
 under the benchmark's unlimited-fleet/nonbinding-`N` representation.  Negative
 battery is prevented by the canonical hard mask, so its published soft penalty

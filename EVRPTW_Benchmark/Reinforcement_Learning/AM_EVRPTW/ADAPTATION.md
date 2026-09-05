@@ -36,12 +36,14 @@ code because upstream AM does not define this problem.
 | Travel physics | Euclidean norm | exported directed distance/time/energy matrices |
 | Fleet | CVRP depot returns | each depot return closes one route; unlimited homogeneous fleet |
 
-The objective-facing training cost remains raw directed-road distance in km.
-Shared inputs use the documented benchmark normalization (per-instance
-coordinate min-max, capacity/horizon fractions, and relative station power);
-that complete normalization is an adapter choice because upstream AM has no
-EVRPTW state. No auxiliary step reward is added to successful AM rollouts. An
-explicitly configured incomplete
+The objective-facing cost remains directed-road distance in km and formal
+policy-gradient training divides the complete cost by one deterministic scale
+estimated from the frozen training pool. Shared inputs use the documented
+benchmark normalization (per-instance coordinate min-max, capacity/horizon
+fractions, and full-charge-time/horizon station features); that complete
+normalization is an adapter choice because upstream AM has no EVRPTW state. No
+auxiliary step reward is added to successful AM rollouts. An explicitly
+configured incomplete
 rollout penalty provides a finite training signal when a rollout is truncated;
 it is not used to rank solutions and is reported as an adaptation rather than
 an upstream AM component.

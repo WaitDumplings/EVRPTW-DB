@@ -186,6 +186,7 @@ class EVRPTWVectorEnv(Env):
             "time_window": spaces.Box(0.0, np.inf, shape=(n, 2), dtype=np.float32),
             "service_time": spaces.Box(0.0, np.inf, shape=(n,), dtype=np.float32),
             "charging_power": spaces.Box(0.0, np.inf, shape=(n,), dtype=np.float32),
+            "charging_time_ratio": spaces.Box(0.0, np.inf, shape=(n,), dtype=np.float32),
             "remaining_demand": spaces.Box(
                 0.0,
                 np.inf,
@@ -244,6 +245,12 @@ class EVRPTWVectorEnv(Env):
         self.battery_used_kwh = np.zeros(self.n_traj, dtype=np.float64)
         self.visited = np.zeros((self.n_traj, self.num_nodes), dtype=bool)
         self.visited[:, 0] = True
+        # A physical station may be reused by another vehicle/route, but not
+        # repeatedly within one route. This matches the original benchmark
+        # convention and prevents station-to-station decoding cycles.
+        self.cs_visited_current_route = np.zeros(
+            (self.n_traj, self.num_nodes), dtype=bool
+        )
         self.served_customers = np.zeros(self.n_traj, dtype=np.int32)
         self.objective_distance_km = np.zeros(self.n_traj, dtype=np.float64)
         self.vehicle_count = np.zeros(self.n_traj, dtype=np.int32)
@@ -318,6 +325,7 @@ class EVRPTWVectorEnv(Env):
             )
             self.battery_used_kwh[traj_idx] = 0.0
             self.visited[traj_idx, destination] = True
+            self.cs_visited_current_route[traj_idx, destination] = True
         elif destination == 0:
             self._close_route_at_depot(traj_idx)
 
@@ -348,6 +356,7 @@ class EVRPTWVectorEnv(Env):
         self.current_time_s[traj_idx] = self.working_start_s
         self.load_cm3[traj_idx] = 0.0
         self.battery_used_kwh[traj_idx] = 0.0
+        self.cs_visited_current_route[traj_idx].fill(False)
 
     def _compute_action_mask(self) -> np.ndarray:
         mask = np.zeros((self.n_traj, self.num_nodes), dtype=bool)
@@ -375,7 +384,7 @@ class EVRPTWVectorEnv(Env):
 
             for station in self.station_nodes:
                 s = int(station)
-                if s == start:
+                if s == start or self.cs_visited_current_route[t, s]:
                     continue
                 if self._station_action_feasible(t, s):
                     mask[t, s] = True
@@ -501,10 +510,18 @@ class EVRPTWVectorEnv(Env):
         tw_norm = ((self.tw_s - self.working_start_s) / self.horizon_s).astype(np.float32)
         service_norm = (self.service_time_s / self.horizon_s).astype(np.float32)
         charging_power = np.zeros(self.num_nodes, dtype=np.float32)
+        charging_time_ratio = np.zeros(self.num_nodes, dtype=np.float32)
         if self.num_stations:
             power_scale = max(float(np.max(self.charging_power_kw)), 1e-12)
             charging_power[self.station_start :] = (
                 self.charging_power_kw / power_scale
+            ).astype(np.float32)
+            usable_power_kw = np.maximum(
+                self.charging_power_kw * self.charging_power_derating_factor,
+                1e-12,
+            )
+            charging_time_ratio[self.station_start :] = (
+                3600.0 * self.battery_capacity_kwh / usable_power_kw / self.horizon_s
             ).astype(np.float32)
         current_battery = (self.battery_used_kwh / max(self.battery_capacity_kwh, 1e-12)).astype(np.float32)
         remaining = (1.0 - current_battery).astype(np.float32)
@@ -529,6 +546,7 @@ class EVRPTWVectorEnv(Env):
             "time_window": tw_norm,
             "service_time": service_norm,
             "charging_power": charging_power,
+            "charging_time_ratio": charging_time_ratio,
             "remaining_demand": remaining_demand,
             "action_mask": action_mask,
             "last_node_idx": self.last.copy(),

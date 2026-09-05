@@ -96,8 +96,9 @@ def test_evrptw_rl_normalization_and_reward_match_adapter_contract() -> None:
     station_penalty = 0.3
     env = EVRPTWVectorEnv(_instance(), n_traj=2)
     normalized_time = _normalized_travel_time([env])
-    assert normalized_time.min() == 0.0
-    assert normalized_time.max() == 1.0
+    np.testing.assert_allclose(
+        normalized_time[0], env.travel_time_s / env.horizon_s
+    )
 
     result = rollout(
         _policy(),

@@ -85,7 +85,14 @@ def main() -> None:
         for batch_start in range(0, len(instances), args.batch_size):
             batch_instances = instances[batch_start : batch_start + args.batch_size]
             def solve_one(instance, candidate_seed):
-                envs = make_envs([instance], n_traj=1, info_level="full")
+                envs = make_envs(
+                    [instance],
+                    n_traj=1,
+                    info_level="full",
+                    reward_distance_scale_km=model_args.get(
+                        "reward_distance_scale_km"
+                    ),
+                )
                 with torch.no_grad():
                     single = rollout(
                         policy,

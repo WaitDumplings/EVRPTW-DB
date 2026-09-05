@@ -76,8 +76,22 @@ charge_time_s = 3600 * energy_added_kWh /
 ```
 
 The generator has already capped station power by the reference vehicle's
-AC/DC intake limit.  Legacy fixed-duration modes are retained only for
-diagnostic replay and are not canonical benchmark settings.
+AC/DC intake limit. The model-facing station scalar is the time required to
+charge the full vehicle battery at that station, divided by the operating-day
+horizon; relative power within one instance is retained only as a diagnostic
+observation. Legacy fixed-duration modes are retained only for diagnostic
+replay and are not canonical benchmark settings.
+
+A charging station is masked after its first visit in the current vehicle
+route. Returning to the depot closes that route and clears the station mask, so
+the same physical station remains available to later vehicles. This is a
+route-local anti-cycle rule, not a global station-copy limit.
+
+Formal training uses one deterministic distance scale estimated only from its
+frozen training pool. Distance edges use that scale, travel-time edges use the
+operating horizon, and energy edges use battery capacity. Validation and test
+reuse the scale persisted in the training checkpoint; reported objectives
+remain physical directed-road kilometres.
 
 ## Route Export
 

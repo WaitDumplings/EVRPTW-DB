@@ -38,18 +38,16 @@ the EVRPTW-DB RQ launchers retain the same compute budget.
 ## Charging-station semantics
 
 The paper explicitly says that recharging stations can be visited any number
-of times. It does not define a charging-station visit or revisit reward. Its
-Stage-1 tour mask instead blocks a station whenever the preceding node is the
-depot or another station, because the vehicle is full in those states. Thus:
+of times and does not define a charging-station revisit reward. The shared
+benchmark nevertheless freezes a route-local anti-cycle rule: a given physical
+station may be used at most once by one vehicle route, and becomes available
+again after a depot return. This is disclosed as a benchmark safety adaptation,
+not attributed to the paper and not a global station-copy limit.
 
-- a station may be revisited later after customer service;
-- `depot -> station` is masked;
-- `station -> station` is masked, including a different station;
-- no global one-visit station restriction and no invented CS reward are used.
-
-`DRLTSSoftConstraintEnv` and `DRLTSHardConstraintEnv` implement this mask. The
-hard class adds it on top of canonical Stage-2 safe-continuation feasibility so
-training, validation, and evaluation have the same station behavior.
+The paper's additional mask remains active: `depot -> station` and consecutive
+`station -> station` actions are blocked because the vehicle is already full.
+`DRLTSSoftConstraintEnv` and `DRLTSHardConstraintEnv` combine that rule with the
+shared route-local station mask. No invented CS reward is used.
 
 ## Benchmark adaptations
 
@@ -78,14 +76,15 @@ reduces to total distance. There is no CS visit term.
 The adapter preserves these four semantic terms, but uses explicit benchmark
 scaling:
 
-- directed-road distance is divided by the instance distance scale for training;
+- directed-road distance is divided by one deterministic training-pool scale;
 - excess demand is divided by vehicle cargo capacity;
 - lateness is divided by the operating-horizon duration;
 - energy deficit is divided by battery capacity.
 
-Edge distance, time, and energy inputs are each divided by their finite
-per-instance maximum. The paper does not specify this complete normalization,
-so it is a documented benchmark adaptation rather than paper-exact behavior.
+Edge distance, time, and energy inputs are divided respectively by the fixed
+training-pool distance scale, operating horizon, and battery capacity. The paper
+does not specify this complete normalization, so it is a documented benchmark
+adaptation rather than paper-exact behavior.
 A separately named incomplete-rollout guard supplies a finite training signal
 when the registered step budget is exhausted; it never ranks reported routes.
 

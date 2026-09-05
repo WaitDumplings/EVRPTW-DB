@@ -167,7 +167,7 @@ class AMEVRPTWPolicy(nn.Module):
         demand = _tensor(observation["demand"], device).float()
         time_window = _tensor(observation["time_window"], device).float()
         service = _tensor(observation["service_time"], device).float()
-        charging_power = _tensor(observation["charging_power"], device).float()
+        charging_time_ratio = _tensor(observation["charging_time_ratio"], device).float()
 
         if depot.ndim == 2:
             depot = depot[:, None, :]
@@ -192,7 +192,7 @@ class AMEVRPTWPolicy(nn.Module):
                 demand[..., None],
                 time_window,
                 service[..., None],
-                charging_power[..., None],
+                charging_time_ratio[..., None],
                 node_type,
             ),
             dim=-1,
