@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import numpy as np
 import torch
 
 from .protocol_trainers import train_reinforce_data_passes
+from .route_info import finalize_route_infos
 from .stage2_data import make_envs
 from .training_protocol import require_training_rollout_steps, require_validation_decoding
 
 
 def _max_steps(envs: list[Any]) -> int:
     return max(env.unwrapped.max_steps for env in envs)
+
+
+def _finalize_validation_result(envs: list[Any], result: Any) -> None:
+    # Full-info route export used to run inside the timed rollout loop. Keep
+    # its deferred terminal cost in the same reported inference-time boundary.
+    started = time.perf_counter()
+    result.infos = finalize_route_infos(envs, result.infos)
+    result.runtime_s += time.perf_counter() - started
 
 
 def _training_reward_scale(args: Any, pool: Any) -> float:
@@ -41,21 +51,23 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         envs = make_envs(
             instances,
             n_traj=n_traj,
-            info_level=(
-                "full"
-                if candidate_count is not None or decode_type == "greedy"
-                else "light"
-            ),
+            info_level="light",
             reward_distance_scale_km=reward_distance_scale_km,
         )
-        return rollout(
+        result = rollout(
             active,
             envs,
             decode_type=decode_type,
             max_steps=_max_steps(envs) if max_steps is None else int(max_steps),
             seed=seed,
+            compute_log_likelihood=(
+                candidate_count is None and decode_type == "sampling"
+            ),
             incomplete_penalty_km=args.incomplete_penalty_km,
         )
+        if candidate_count is not None:
+            _finalize_validation_result(envs, result)
+        return result
 
     def objective(result):
         values = np.stack(
@@ -107,22 +119,24 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         envs = make_envs(
             instances,
             n_traj=n_traj,
-            info_level=(
-                "full"
-                if candidate_count is not None or decode_type == "greedy"
-                else "light"
-            ),
+            info_level="light",
             reward_distance_scale_km=reward_distance_scale_km,
         )
-        return rollout(
+        result = rollout(
             active,
             envs,
             decode_type=decode_type,
             max_steps=_max_steps(envs) if max_steps is None else int(max_steps),
             seed=seed,
+            compute_log_likelihood=(
+                candidate_count is None and decode_type == "sampling"
+            ),
             station_visit_penalty=args.station_visit_penalty,
             incomplete_penalty=args.incomplete_penalty,
         )
+        if candidate_count is not None:
+            _finalize_validation_result(envs, result)
+        return result
 
     train_reinforce_data_passes(
         method="EVRPTW-RL",
@@ -176,11 +190,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                     reward_mode="distance",
                     charging_mode="station_power_full",
                     matrix_mode="canonical",
-                    info_level=(
-                        "full"
-                        if candidate_count is not None or decode_type == "greedy"
-                        else "light"
-                    ),
+                    info_level="light",
                     reward_distance_scale_km=reward_distance_scale_km,
                 )
                 for instance in instances
@@ -193,27 +203,29 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                     reward_mode="distance",
                     charging_mode="station_power_full",
                     matrix_mode="canonical",
-                    info_level=(
-                        "full"
-                        if candidate_count is not None or decode_type == "greedy"
-                        else "light"
-                    ),
+                    info_level="light",
                     reward_distance_scale_km=reward_distance_scale_km,
                 )
                 for instance in instances
             ]
-        return rollout(
+        result = rollout(
             active,
             envs,
             decode_type=decode_type,
             max_steps=_max_steps(envs) if max_steps is None else int(max_steps),
             seed=seed,
+            compute_log_likelihood=(
+                candidate_count is None and decode_type == "sampling"
+            ),
             soft_constraints=soft,
             capacity_penalty=args.capacity_penalty,
             time_penalty=args.time_penalty,
             energy_penalty=args.energy_penalty,
             incomplete_penalty=args.incomplete_penalty,
         )
+        if candidate_count is not None:
+            _finalize_validation_result(envs, result)
+        return result
 
     train_reinforce_data_passes(
         method="DRL-TS",

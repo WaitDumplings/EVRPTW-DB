@@ -45,6 +45,8 @@ def rollout(
     seed: int,
     station_visit_penalty: float = 0.3,
     incomplete_penalty: float = 100.0,
+    use_static_cache: bool = True,
+    compute_log_likelihood: bool = True,
 ) -> EVRPTWRLRollout:
     if decode_type not in {"sampling", "greedy"}:
         raise ValueError("decode_type must be sampling or greedy")
@@ -54,22 +56,28 @@ def rollout(
         observation, info = env.reset(seed=int(seed) + index)
         observations.append(observation)
         infos.append(info)
+    # Include static-cache construction so cached/uncached timings are comparable.
+    # Instance/env reset remains outside the reported setup-plus-decode interval.
+    start = time.perf_counter()
     batch = stack_observations(observations)
     batch_size = len(envs)
     n_traj = int(envs[0].unwrapped.n_traj)
     state = policy.initial_state(batch_size, n_traj)
     travel_time = _normalized_travel_time(envs)
+    fixed = policy.encode_static(batch, travel_time) if use_static_cache else None
     done = np.zeros((batch_size, n_traj), dtype=bool)
     environment_transitions = 0
     trajectory_steps = np.zeros_like(done, dtype=np.int64)
     station_visits = np.zeros((batch_size, n_traj), dtype=np.int64)
     log_likelihood = torch.zeros(batch_size, n_traj, device=policy.device)
-    start = time.perf_counter()
-
     for _ in range(int(max_steps)):
         batch = stack_observations(observations)
-        logits, state = policy.logits(batch, travel_time, state)
-        distribution = torch.distributions.Categorical(logits=logits)
+        logits, state = policy.logits(batch, travel_time, state, fixed=fixed)
+        distribution = (
+            torch.distributions.Categorical(logits=logits)
+            if decode_type == "sampling" or compute_log_likelihood
+            else None
+        )
         actions = (
             torch.argmax(logits, dim=-1)
             if decode_type == "greedy"
@@ -77,8 +85,9 @@ def rollout(
         )
         environment_transitions += int(np.count_nonzero(~done))
         trajectory_steps += (~done).astype(np.int64)
-        active = torch.as_tensor(~done, device=policy.device)
-        log_likelihood = log_likelihood + distribution.log_prob(actions) * active
+        if compute_log_likelihood:
+            active = torch.as_tensor(~done, device=policy.device)
+            log_likelihood = log_likelihood + distribution.log_prob(actions) * active
         action_array = actions.detach().cpu().numpy().astype(np.int64)
 
         next_observations: list[dict[str, np.ndarray]] = []

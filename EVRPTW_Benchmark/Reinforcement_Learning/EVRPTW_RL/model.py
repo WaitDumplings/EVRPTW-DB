@@ -20,6 +20,15 @@ class RecurrentState:
     cell: torch.Tensor
 
 
+@dataclass(frozen=True)
+class EVRPTWRLFixedContext:
+    """Static inputs and parameter-dependent edge messages for one rollout."""
+
+    static_features: torch.Tensor
+    node_type: torch.Tensor
+    edge_message: torch.Tensor
+
+
 class EVRPTWRLPolicy(nn.Module):
     """Structure2Vec, context attention, and LSTM decoder from Lin et al.
 
@@ -86,8 +95,10 @@ class EVRPTWRLPolicy(nn.Module):
         observation: dict[str, Any],
         normalized_travel_time: Any,
         state: RecurrentState,
+        *,
+        fixed: EVRPTWRLFixedContext | None = None,
     ) -> tuple[torch.Tensor, RecurrentState]:
-        local = self._local_features(observation)
+        local = self._local_features(observation, fixed=fixed)
         batch_size, n_traj, num_nodes, _ = local.shape
         global_state = self._global_features(observation)
         if global_state.shape[:2] != (batch_size, n_traj):
@@ -95,12 +106,11 @@ class EVRPTWRLPolicy(nn.Module):
 
         local_hat = self.local_projection(local)
         global_hat = self.global_projection(global_state)[:, :, None, :]
-        edge_time = _tensor(normalized_travel_time, self.device).float()
-        if edge_time.shape != (batch_size, num_nodes, num_nodes):
-            raise ValueError("normalized travel-time matrix has an invalid shape")
-        edge_row_sum = edge_time.sum(dim=-1)[:, None, :, None]
-        edge_message = torch.relu(edge_row_sum * self.edge_direction)
-        edge_message = self.edge_projection(edge_message)
+        edge_message = (
+            fixed.edge_message
+            if fixed is not None
+            else self._edge_message(normalized_travel_time, batch_size, num_nodes)
+        )
 
         embedding = local_hat
         for _ in range(self.structure2vec_rounds):
@@ -139,11 +149,42 @@ class EVRPTWRLPolicy(nn.Module):
         ).squeeze(-1)
         return logits.masked_fill(~action_mask, -torch.inf), next_state
 
-    def _local_features(self, observation: dict[str, Any]) -> torch.Tensor:
+    def encode_static(
+        self, observation: dict[str, Any], normalized_travel_time: Any
+    ) -> EVRPTWRLFixedContext:
+        """Prepare immutable data once; do not detach parameter-dependent values.
+
+        Demand/global features, Structure2Vec and the recurrent state remain
+        dynamic. The context is caller-owned and must not cross optimizer steps.
+        """
+        static, node_type = self._static_local_features(observation)
+        batch_size, _, num_nodes, _ = static.shape
+        return EVRPTWRLFixedContext(
+            static_features=static,
+            node_type=node_type,
+            edge_message=self._edge_message(
+                normalized_travel_time, batch_size, num_nodes
+            ),
+        )
+
+    def _edge_message(
+        self, normalized_travel_time: Any, batch_size: int, num_nodes: int
+    ) -> torch.Tensor:
+        edge_time = _tensor(normalized_travel_time, self.device).float()
+        if edge_time.shape != (batch_size, num_nodes, num_nodes):
+            raise ValueError("normalized travel-time matrix has an invalid shape")
+        edge_row_sum = edge_time.sum(dim=-1)[:, None, :, None]
+        edge_message = torch.relu(edge_row_sum * self.edge_direction)
+        return self.edge_projection(edge_message)
+
+    def _static_local_features(
+        self, observation: dict[str, Any]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        customers = _tensor(observation["cus_loc"], self.device).float()
         coordinates = torch.cat(
             (
                 _tensor(observation["depot_loc"], self.device).float(),
-                _tensor(observation["cus_loc"], self.device).float(),
+                customers,
                 _tensor(observation["rs_loc"], self.device).float(),
             ),
             dim=1,
@@ -151,8 +192,7 @@ class EVRPTWRLPolicy(nn.Module):
         time_window = _tensor(observation["time_window"], self.device).float()
         service = _tensor(observation["service_time"], self.device).float()
         charging_time_ratio = _tensor(observation["charging_time_ratio"], self.device).float()
-        remaining_demand = _tensor(observation["remaining_demand"], self.device).float()
-        batch_size, n_traj, num_nodes = remaining_demand.shape
+        batch_size, num_nodes, _ = coordinates.shape
         static = torch.cat(
             (
                 coordinates,
@@ -162,20 +202,44 @@ class EVRPTWRLPolicy(nn.Module):
             ),
             dim=-1,
         )
-        static = static[:, None, :, :].expand(-1, n_traj, -1, -1)
+        static = static[:, None, :, :]
         node_type = torch.zeros(
             batch_size,
-            n_traj,
+            1,
             num_nodes,
             3,
             device=self.device,
             dtype=static.dtype,
         )
-        customer_count = int(_tensor(observation["cus_loc"], self.device).shape[1])
+        customer_count = int(customers.shape[1])
         node_type[:, :, 0, 0] = 1.0
         node_type[:, :, 1 : 1 + customer_count, 1] = 1.0
         node_type[:, :, 1 + customer_count :, 2] = 1.0
-        return torch.cat((static, remaining_demand[..., None], node_type), dim=-1)
+        return static, node_type
+
+    def _local_features(
+        self,
+        observation: dict[str, Any],
+        *,
+        fixed: EVRPTWRLFixedContext | None = None,
+    ) -> torch.Tensor:
+        remaining_demand = _tensor(observation["remaining_demand"], self.device).float()
+        batch_size, n_traj, num_nodes = remaining_demand.shape
+        static, node_type = (
+            (fixed.static_features, fixed.node_type)
+            if fixed is not None
+            else self._static_local_features(observation)
+        )
+        if static.shape[:3] != (batch_size, 1, num_nodes):
+            raise ValueError("static and dynamic local feature dimensions do not match")
+        return torch.cat(
+            (
+                static.expand(-1, n_traj, -1, -1),
+                remaining_demand[..., None],
+                node_type.expand(-1, n_traj, -1, -1),
+            ),
+            dim=-1,
+        )
 
     def _global_features(self, observation: dict[str, Any]) -> torch.Tensor:
         current_time = _tensor(observation["current_time"], self.device).float()

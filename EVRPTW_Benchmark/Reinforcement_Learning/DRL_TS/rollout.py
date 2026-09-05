@@ -66,6 +66,7 @@ def rollout(
     time_penalty: float = 1.0,
     energy_penalty: float = 1.0,
     incomplete_penalty: float = 100.0,
+    compute_log_likelihood: bool = True,
 ) -> DRLTSRollout:
     if decode_type not in {"sampling", "greedy"}:
         raise ValueError("decode_type must be sampling or greedy")
@@ -75,6 +76,8 @@ def rollout(
         observation, info = env.reset(seed=int(seed) + index)
         observations.append(observation)
         infos.append(info)
+    # Report edge normalization/encoding and decoding, excluding env reset.
+    started = time.perf_counter()
     batch = stack_observations(observations)
     distance, travel_time, energy = normalized_edge_matrices(envs)
     fixed = policy.encode(batch, distance, travel_time, energy)
@@ -85,12 +88,14 @@ def rollout(
     environment_transitions = 0
     trajectory_steps = np.zeros_like(done, dtype=np.int64)
     log_likelihood = torch.zeros(batch_size, n_traj, device=policy.device)
-    started = time.perf_counter()
-
     for _ in range(int(max_steps)):
         batch = stack_observations(observations)
         logits, state = policy.logits(batch, fixed, state)
-        distribution = torch.distributions.Categorical(logits=logits)
+        distribution = (
+            torch.distributions.Categorical(logits=logits)
+            if compute_log_likelihood or decode_type == "sampling"
+            else None
+        )
         actions = (
             torch.argmax(logits, dim=-1)
             if decode_type == "greedy"
@@ -98,8 +103,9 @@ def rollout(
         )
         environment_transitions += int(np.count_nonzero(~done))
         trajectory_steps += (~done).astype(np.int64)
-        active = torch.as_tensor(~done, device=policy.device)
-        log_likelihood = log_likelihood + distribution.log_prob(actions) * active
+        if compute_log_likelihood:
+            active = torch.as_tensor(~done, device=policy.device)
+            log_likelihood = log_likelihood + distribution.log_prob(actions) * active
         action_array = actions.detach().cpu().numpy().astype(np.int64)
 
         next_observations: list[dict[str, np.ndarray]] = []

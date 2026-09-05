@@ -82,3 +82,12 @@ If the restored dataset is elsewhere, override its parent root:
 ```bash
 export EVRPTW_RESTORE_ROOT="../../../evrptw_runtime"
 ```
+
+## Runtime optimizations (2026-09-04)
+
+New launches use rollout-local static caches, final-only route export during
+online validation, and compact TERRAN observations. The v10 budgets, seeds,
+batches, dropout/update schedules and best-of-100 evaluation are unchanged.
+See [performance implementation and verification](../../PERFORMANCE_OPTIMIZATION.md)
+for equivalence tests, timing boundaries, an optional idle-GPU diagnostic and
+cross-commit resume precautions. No formal training was launched by this patch.

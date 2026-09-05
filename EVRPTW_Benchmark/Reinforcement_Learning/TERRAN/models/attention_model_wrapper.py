@@ -11,6 +11,19 @@ from .nets.attention_model.embedding import AutoEmbedding
 from .nets.attention_model.encoder import GraphAttentionEncoder
 
 
+# Only these fields are consumed by the TERRAN embedding/context adapters.
+# Keep the shared environment's richer observation contract intact; in particular
+# remaining_demand is needed by other methods but not by this static-demand model.
+STATIC_OBSERVATION_KEYS = (
+    "cus_loc", "depot_loc", "rs_loc", "demand", "time_window",
+    "charging_time_ratio", "battery_capacity", "loading_capacity", "instance_mask",
+)
+DYNAMIC_OBSERVATION_KEYS = (
+    "action_mask", "last_node_idx", "current_load", "current_battery", "current_time",
+)
+MODEL_OBSERVATION_KEYS = frozenset(STATIC_OBSERVATION_KEYS + DYNAMIC_OBSERVATION_KEYS)
+
+
 class Problem:
     def __init__(self, name: str):
         self.NAME = name
@@ -26,7 +39,9 @@ def prepare_observation_batch(obs: dict[str, Any]) -> dict[str, Any]:
     """Add the outer environment batch dimension expected by TERRAN."""
     out: dict[str, Any] = {}
     for key, value in obs.items():
-        arr = np.asarray(value)
+        # Static inputs may already reside on the model device. Inspect shape
+        # without attempting NumPy conversion (which cannot accept CUDA tensors).
+        arr = value if isinstance(value, torch.Tensor) else np.asarray(value)
         if key in {"cus_loc", "rs_loc"}:
             out[key] = arr[None, ...] if arr.ndim == 2 else value
         elif key == "depot_loc":
@@ -224,7 +239,11 @@ class stateWrapper:
     def __init__(self, states, device, problem: str = "evrptw"):
         self.device = device
         states = prepare_observation_batch(states)
-        self.states = {k: _to_tensor(v, device=self.device) for k, v in states.items()}
+        self.states = {
+            k: _to_tensor(v, device=self.device)
+            for k, v in states.items()
+            if problem != "evrptw" or k in MODEL_OBSERVATION_KEYS
+        }
         if problem != "evrptw":
             return
 

@@ -34,7 +34,12 @@ class DRLTSSoftConstraintEnv(EVRPTWVectorEnvFast):
 
     def step(self, action):
         action_arr = np.asarray(action, dtype=np.int64).reshape(self.n_traj)
-        mask = self._compute_action_mask()
+        # The fast parent stores the observation's pre-action mask. Penalties
+        # and the actual transition must use that same soft-rule mask.
+        mask = self._current_action_mask
+        if mask is None:
+            mask = self._compute_action_mask()
+            self._current_action_mask = mask
         for trajectory, destination in enumerate(action_arr):
             if self.terminated[trajectory] or self.truncated[trajectory]:
                 continue
@@ -60,25 +65,22 @@ class DRLTSSoftConstraintEnv(EVRPTWVectorEnvFast):
 
     def _compute_action_mask(self) -> np.ndarray:
         mask = np.zeros((self.n_traj, self.num_nodes), dtype=bool)
-        for trajectory in range(self.n_traj):
-            if self.terminated[trajectory] or self.truncated[trajectory]:
-                mask[trajectory, 0] = True
-                continue
-            start = int(self.last[trajectory])
-            if self.served_customers[trajectory] == self.num_customers:
-                mask[trajectory, 0] = True
-                continue
-            if start != 0:
-                mask[trajectory, 0] = True
-            for customer in self.customer_nodes:
-                node = int(customer)
-                if not self.visited[trajectory, node]:
-                    mask[trajectory, node] = True
-            if self._is_customer(start):
-                available_stations = ~self.cs_visited_current_route[
-                    trajectory, self.station_nodes
-                ]
-                mask[trajectory, self.station_nodes] = available_stations
+        active = ~(
+            self.terminated
+            | self.truncated
+            | (self.served_customers == self.num_customers)
+        )
+        mask[:, 0] = ~active | (self.last != 0)
+        mask[:, self.customer_nodes] = (
+            active[:, None] & ~self.visited[:, self.customer_nodes]
+        )
+        at_customer = (self.last >= self.customer_start) & (
+            self.last < self.station_start
+        )
+        mask[:, self.station_nodes] = (
+            (active & at_customer)[:, None]
+            & ~self.cs_visited_current_route[:, self.station_nodes]
+        )
         return mask
 
     def _normalized_violations(

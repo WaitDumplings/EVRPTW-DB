@@ -28,6 +28,10 @@ from ..common.training_protocol import append_jsonl, atomic_json
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
 from .models import Agent
+from .models.attention_model_wrapper import (
+    DYNAMIC_OBSERVATION_KEYS,
+    STATIC_OBSERVATION_KEYS,
+)
 from .pbrs import PotentialRewardConfig
 from .rollout import collect_rollout, compute_returns, rollout_eval_batch
 
@@ -569,14 +573,34 @@ def evaluate_policy_loss(
     # each step supplies its own dynamic state. For large Cus1000-style graphs,
     # callers can invoke this function on time chunks to avoid retaining all
     # decoder graphs until a single backward pass.
-    cached_state = agent.backbone.encode(_slice_obs_by_env(batch.observations[0], env_indices))
+    first_obs = batch.observations[0]
+    static_mb = _slice_obs_by_env(
+        {key: first_obs[key] for key in STATIC_OBSERVATION_KEYS if key in first_obs},
+        env_indices,
+    )
+    # Reuse the immutable instance tensors within this exact PPO time chunk.
+    # The encoder is still run once per chunk, with unchanged training dropout;
+    # no encoded state is reused across chunks or optimizer updates.
+    static_device = {
+        key: torch.as_tensor(value, device=agent.backbone.device)
+        for key, value in static_mb.items()
+    }
+
+    def model_observation(obs):
+        dynamic_mb = _slice_obs_by_env(
+            {key: obs[key] for key in DYNAMIC_OBSERVATION_KEYS if key in obs},
+            env_indices,
+        )
+        return {**static_device, **dynamic_mb}
+
+    cached_state = agent.backbone.encode(model_observation(first_obs))
 
     policy_losses = []
     value_losses = []
     entropy_losses = []
     for step in range(step_start, step_end):
         obs = batch.observations[step]
-        obs_mb = _slice_obs_by_env(obs, env_indices)
+        obs_mb = model_observation(obs)
         actions = batch.actions[step, env_indices].long()
         old_logprob = batch.old_logprobs[step, env_indices]
         _, new_logprob, entropy, value, _ = agent.get_action_and_value_cached(

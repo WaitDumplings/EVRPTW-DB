@@ -23,6 +23,8 @@ class AMFixedContext:
     glimpse_key: torch.Tensor
     glimpse_value: torch.Tensor
     logit_key: torch.Tensor
+    attention_key: torch.Tensor | None = None
+    attention_value: torch.Tensor | None = None
 
 
 def _tensor(value: Any, device: torch.device) -> torch.Tensor:
@@ -90,19 +92,71 @@ class AMEVRPTWPolicy(nn.Module):
     def device(self) -> torch.device:
         return next(self.parameters()).device
 
-    def encode(self, observation: dict[str, Any]) -> AMFixedContext:
+    def encode(
+        self, observation: dict[str, Any], *, cache_decoder: bool = True
+    ) -> AMFixedContext:
         node_embeddings = self._initial_embeddings(observation)
         encoded, graph_embedding = self.encoder(node_embeddings)
         glimpse_key, glimpse_value, logit_key = self.project_node_embeddings(
             encoded
         ).chunk(3, dim=-1)
+        attention_key, attention_value = (
+            self._project_glimpse_memory(encoded)
+            if cache_decoder
+            else (None, None)
+        )
         return AMFixedContext(
             node_embeddings=encoded,
             graph_context=self.project_fixed_context(graph_embedding)[:, None, :],
             glimpse_key=glimpse_key,
             glimpse_value=glimpse_value,
             logit_key=logit_key,
+            attention_key=attention_key,
+            attention_value=attention_value,
         )
+
+    def _project_glimpse_memory(
+        self, nodes: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Cache the actual glimpse weights, retaining the rollout autograd graph.
+
+        The legacy ``glimpse_key/value`` fields use different parameters and
+        cannot substitute for MultiHeadAttention's W_key and W_val. No cache is
+        stored on the module, so it cannot outlive a rollout/optimizer update.
+        """
+        batch_size, graph_size, input_dim = nodes.shape
+        flat = nodes.contiguous().view(-1, input_dim)
+        shape = (self.glimpse.n_heads, batch_size, graph_size, -1)
+        return (
+            torch.matmul(flat, self.glimpse.W_key).view(shape),
+            torch.matmul(flat, self.glimpse.W_val).view(shape),
+        )
+
+    def _cached_glimpse(
+        self, query: torch.Tensor, fixed: AMFixedContext, mask: torch.Tensor
+    ) -> torch.Tensor:
+        """The upstream attention operations with only fixed K/V reused."""
+        batch_size, n_query, input_dim = query.shape
+        q = torch.matmul(
+            query.contiguous().view(-1, input_dim), self.glimpse.W_query
+        ).view(self.glimpse.n_heads, batch_size, n_query, -1)
+        compatibility = self.glimpse.norm_factor * torch.matmul(
+            q, fixed.attention_key.transpose(2, 3)
+        )
+        expanded_mask = mask.view(1, batch_size, n_query, -1).expand_as(
+            compatibility
+        )
+        compatibility = compatibility.masked_fill(expanded_mask, -torch.inf)
+        attention = torch.softmax(compatibility, dim=-1)
+        # Match the upstream all-masked-row handling exactly.
+        attention = attention.masked_fill(expanded_mask, 0.0)
+        heads = torch.matmul(attention, fixed.attention_value)
+        return torch.mm(
+            heads.permute(1, 2, 0, 3).contiguous().view(
+                -1, self.glimpse.n_heads * self.glimpse.val_dim
+            ),
+            self.glimpse.W_out.view(-1, self.glimpse.embed_dim),
+        ).view(batch_size, n_query, self.glimpse.embed_dim)
 
     def logits(
         self,
@@ -147,11 +201,12 @@ class AMEVRPTWPolicy(nn.Module):
         )
         query = fixed.graph_context + self.project_step_context(step_context)
         infeasible = ~action_mask
-        glimpse = self.glimpse(
-            query,
-            fixed.node_embeddings,
-            mask=infeasible,
-        )
+        if fixed.attention_key is not None and fixed.attention_value is not None:
+            glimpse = self._cached_glimpse(query, fixed, infeasible)
+        else:
+            glimpse = self.glimpse(
+                query, fixed.node_embeddings, mask=infeasible
+            )
         compatibility = torch.matmul(
             glimpse,
             fixed.logit_key.transpose(-2, -1),
