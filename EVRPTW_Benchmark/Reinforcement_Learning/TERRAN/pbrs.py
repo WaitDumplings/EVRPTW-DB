@@ -76,26 +76,57 @@ class PotentialRewardWrapper(Wrapper):
         prev_info = self._last_info
         prev_finished = self._last_finished.copy()
         prev_repair = self._remaining_repair_ratio()
+        prev_objective_distance = np.asarray(
+            self.unwrapped.objective_distance_km, dtype=np.float64
+        ).copy()
 
         obs, base_reward, terminated, truncated, info = self.env.step(action)
 
-        customer = self._customer_pbrs(prev_info, info)
-        repair = self._repair_distance_pbrs(prev_repair)
-        feasible = self._feasible_ratio_pbrs(prev_obs, obs)
+        distance_delta = np.asarray(
+            self.unwrapped.objective_distance_km, dtype=np.float64
+        ) - prev_objective_distance
+        if bool(getattr(self.unwrapped, "normalize_reward", False)):
+            distance_reward = -distance_delta / max(
+                float(self.unwrapped.reward_distance_scale_km), 1e-12
+            )
+        else:
+            distance_reward = -distance_delta
+        distance_reward = distance_reward.astype(np.float32)
+        base_non_distance = (
+            base_reward.astype(np.float32) - distance_reward
+        ).astype(np.float32)
+
+        now_finished = np.asarray(terminated, dtype=bool) | np.asarray(truncated, dtype=bool)
+        active = ~prev_finished
+        newly_finished = now_finished & active
+        customer = self._customer_pbrs(
+            prev_info, info, active=active, newly_finished=newly_finished
+        )
+        repair = self._repair_distance_pbrs(
+            prev_repair, active=active, newly_finished=newly_finished
+        )
+        feasible = self._feasible_ratio_pbrs(
+            prev_obs, obs, active=active, newly_finished=newly_finished
+        )
         terminal = self._terminal_heuristic(info, terminated, truncated, prev_finished)
         scale = float(self.reward_scale)
         customer = (scale * customer).astype(np.float32)
         repair = (scale * repair).astype(np.float32)
         feasible = (scale * feasible).astype(np.float32)
-        terminal = (scale * terminal).astype(np.float32)
+        # Completion/failure is part of the task objective, not an auxiliary
+        # potential.  Annealing it together with PBRS made failures progressively
+        # cheaper and caused large-scale policies to collapse to short episodes.
+        terminal = terminal.astype(np.float32)
         shaped = base_reward.astype(np.float32) + customer + repair + feasible + terminal
 
         self._last_obs = obs
         self._last_info = info
-        self._last_finished = np.asarray(terminated, dtype=bool) | np.asarray(truncated, dtype=bool)
+        self._last_finished = now_finished
         out_info = dict(info)
         out_info["reward_components"] = {
             "base": base_reward.astype(np.float32).copy(),
+            "distance": distance_reward.copy(),
+            "base_non_distance": base_non_distance.copy(),
             "pbrs_customer": customer.copy(),
             "pbrs_repair_distance": repair.copy(),
             "pbrs_feasible_ratio": feasible.copy(),
@@ -126,18 +157,38 @@ class PotentialRewardWrapper(Wrapper):
         current_to_depot = self._node_to_depot_repair_dist[env.last]
         return np.maximum((remaining_customer + current_to_depot) / self._total_customer_repair_dist, 0.0).astype(np.float32)
 
-    def _repair_distance_pbrs(self, prev_repair_ratio: np.ndarray) -> np.ndarray:
+    def _repair_distance_pbrs(
+        self,
+        prev_repair_ratio: np.ndarray,
+        *,
+        active: np.ndarray,
+        newly_finished: np.ndarray,
+    ) -> np.ndarray:
         cfg = self.config
         reward = np.zeros_like(prev_repair_ratio, dtype=np.float32)
         if not cfg.use_repair_distance_pbrs or cfg.repair_progress_coef == 0.0:
             return reward
         post_repair_ratio = self._remaining_repair_ratio()
-        prev_phi = 1.0 - prev_repair_ratio
-        post_phi = 1.0 - post_repair_ratio
+        # A negative remaining-work potential has Phi=0 on success and avoids
+        # the -(1-gamma) constant introduced by the previous positive-progress
+        # representation.  Both encode the same ordering only when gamma=1.
+        prev_phi = -prev_repair_ratio
+        post_phi = -post_repair_ratio
+        # Episodic PBRS requires one shared terminal potential.  Set it to zero
+        # for every newly finished trajectory, including failed truncations.
+        post_phi = np.where(newly_finished, 0.0, post_phi)
         reward = float(cfg.repair_progress_coef) * (float(cfg.gamma) * post_phi - prev_phi)
+        reward = np.where(active, reward, 0.0)
         return self._clip(reward.astype(np.float32))
 
-    def _customer_pbrs(self, prev_info: dict[str, Any], next_info: dict[str, Any]) -> np.ndarray:
+    def _customer_pbrs(
+        self,
+        prev_info: dict[str, Any],
+        next_info: dict[str, Any],
+        *,
+        active: np.ndarray,
+        newly_finished: np.ndarray,
+    ) -> np.ndarray:
         cfg = self.config
         served_prev = np.asarray(prev_info["served_customers"], dtype=np.float32)
         served_next = np.asarray(next_info["served_customers"], dtype=np.float32)
@@ -158,22 +209,40 @@ class PotentialRewardWrapper(Wrapper):
         progress_budget = float(cfg.customer_pbrs_coef) * float(cfg.customer_progress_budget)
         if cfg.customer_pbrs_mode == "progress":
             prev_ratio = (served_prev / n).clip(0.0, 1.0)
-            prev_progress = (1.0 - mix) * prev_ratio + mix * prev_phi
             next_ratio = (served_next / n).clip(0.0, 1.0)
-            next_progress = (1.0 - mix) * next_ratio + mix * next_phi
-            reward = progress_budget * (float(cfg.gamma) * next_progress - prev_progress)
+            # Use negative remaining work rather than positive completed work.
+            # This keeps success at Phi=0 and preserves a positive local signal
+            # for serving a customer on long horizons when gamma < 1.
+            prev_remaining = (1.0 - mix) * (1.0 - prev_ratio) + mix * (1.0 - prev_phi)
+            next_remaining = (1.0 - mix) * (1.0 - next_ratio) + mix * (1.0 - next_phi)
+            prev_potential = -prev_remaining
+            next_potential = -next_remaining
+            next_potential = np.where(newly_finished, 0.0, next_potential)
+            reward = progress_budget * (
+                float(cfg.gamma) * next_potential - prev_potential
+            )
         else:
             reward = progress_budget * progress_delta
+        reward = np.where(active, reward, 0.0)
         return reward.astype(np.float32)
 
-    def _feasible_ratio_pbrs(self, prev_obs: dict[str, np.ndarray], next_obs: dict[str, np.ndarray]) -> np.ndarray:
+    def _feasible_ratio_pbrs(
+        self,
+        prev_obs: dict[str, np.ndarray],
+        next_obs: dict[str, np.ndarray],
+        *,
+        active: np.ndarray,
+        newly_finished: np.ndarray,
+    ) -> np.ndarray:
         cfg = self.config
         reward = np.zeros(prev_obs["action_mask"].shape[0], dtype=np.float32)
         if not cfg.use_feasible_ratio_pbrs or cfg.feasible_ratio_coef == 0.0:
             return reward
         prev_phi = self._feasible_customer_ratio(prev_obs)
         next_phi = self._feasible_customer_ratio(next_obs)
+        next_phi = np.where(newly_finished, 0.0, next_phi)
         reward = float(cfg.feasible_ratio_coef) * (float(cfg.gamma) * next_phi - prev_phi)
+        reward = np.where(active, reward, 0.0)
         return self._clip(reward.astype(np.float32))
 
     def _terminal_heuristic(self, next_info: dict[str, Any], terminated: np.ndarray, truncated: np.ndarray, prev_finished: np.ndarray) -> np.ndarray:
@@ -215,6 +284,8 @@ class PotentialRewardWrapper(Wrapper):
         info = dict(info)
         info["reward_components"] = {
             "base": reward.copy(),
+            "distance": reward.copy(),
+            "base_non_distance": reward.copy(),
             "pbrs_customer": reward.copy(),
             "pbrs_repair_distance": reward.copy(),
             "pbrs_feasible_ratio": reward.copy(),

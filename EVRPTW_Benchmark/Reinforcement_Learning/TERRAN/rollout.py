@@ -120,6 +120,7 @@ class RolloutBatch:
     timings: dict[str, float]
     trajectory_steps: torch.Tensor
     rollout_budget_exhausted: torch.Tensor
+    reward_diagnostics: dict[str, float]
 
 
 def reset_envs(envs, seed: int | None = None):
@@ -173,6 +174,7 @@ def collect_rollout(
     profile_timing: bool = False,
     compact_observations: bool = True,
     cache_static_embeddings: bool = True,
+    reward_discount_factor: float = 1.0,
 ) -> RolloutBatch:
     total_start = time.perf_counter()
     reset_start = time.perf_counter()
@@ -193,8 +195,31 @@ def collect_rollout(
     static_obs = None
     static_device = None
     cached_state = None
+    reward_component_keys = (
+        "base",
+        "distance",
+        "base_non_distance",
+        "pbrs_customer",
+        "pbrs_repair_distance",
+        "pbrs_feasible_ratio",
+        "terminal_heuristic",
+        "shaped",
+        "pbrs_total",
+        "shaping_total",
+    )
+    reward_diagnostics = {
+        "active_count": 0.0,
+        "customer_action_count": 0.0,
+        "noncustomer_action_count": 0.0,
+    }
+    for key in reward_component_keys:
+        reward_diagnostics[f"{key}_sum"] = 0.0
+        reward_diagnostics[f"{key}_discounted_sum"] = 0.0
+        reward_diagnostics[f"{key}_abs_sum"] = 0.0
+        reward_diagnostics[f"{key}_customer_action_sum"] = 0.0
+        reward_diagnostics[f"{key}_noncustomer_action_sum"] = 0.0
 
-    for _ in range(int(rollout_steps)):
+    for step_index in range(int(rollout_steps)):
         valid = ~done
         stack_start = time.perf_counter()
         if compact_observations:
@@ -231,6 +256,70 @@ def collect_rollout(
         env_start = time.perf_counter()
         next_observations, reward_np, step_done, infos = step_envs(envs, action_np)
         env_step_time_s += time.perf_counter() - env_start
+
+        # Aggregate reward components while the pre-step active mask is still
+        # available.  Keeping only float64 sums adds negligible memory and makes
+        # scale failures observable in every formal epoch.
+        for env_index, (env, info) in enumerate(zip(envs, infos)):
+            active = np.asarray(valid[env_index], dtype=bool)
+            active_count = int(active.sum())
+            if active_count == 0:
+                continue
+            components = info.get("reward_components")
+            if components is None:
+                base = np.asarray(reward_np[env_index], dtype=np.float64)
+                arrays = {
+                    "base": base,
+                    "distance": base,
+                    "base_non_distance": np.zeros_like(base),
+                    "pbrs_customer": np.zeros_like(base),
+                    "pbrs_repair_distance": np.zeros_like(base),
+                    "pbrs_feasible_ratio": np.zeros_like(base),
+                    "terminal_heuristic": np.zeros_like(base),
+                    "shaped": base,
+                }
+            else:
+                arrays = {
+                    key: np.asarray(components[key], dtype=np.float64)
+                    for key in reward_component_keys
+                    if key not in {"pbrs_total", "shaping_total"}
+                }
+            arrays["pbrs_total"] = (
+                arrays["pbrs_customer"]
+                + arrays["pbrs_repair_distance"]
+                + arrays["pbrs_feasible_ratio"]
+            )
+            arrays["shaping_total"] = arrays["shaped"] - arrays["base"]
+            num_customers = int(getattr(env.unwrapped, "num_customers", 0))
+            customer_action = (
+                active
+                & (action_np[env_index] >= 1)
+                & (action_np[env_index] <= num_customers)
+            )
+            noncustomer_action = active & ~customer_action
+            reward_diagnostics["active_count"] += active_count
+            reward_diagnostics["customer_action_count"] += int(
+                customer_action.sum()
+            )
+            reward_diagnostics["noncustomer_action_count"] += int(
+                noncustomer_action.sum()
+            )
+            for key, array in arrays.items():
+                active_values = array[active]
+                reward_diagnostics[f"{key}_sum"] += float(active_values.sum())
+                reward_diagnostics[f"{key}_discounted_sum"] += float(
+                    (float(reward_discount_factor) ** step_index)
+                    * active_values.sum()
+                )
+                reward_diagnostics[f"{key}_abs_sum"] += float(
+                    np.abs(active_values).sum()
+                )
+                reward_diagnostics[f"{key}_customer_action_sum"] += float(
+                    array[customer_action].sum()
+                )
+                reward_diagnostics[f"{key}_noncustomer_action_sum"] += float(
+                    array[noncustomer_action].sum()
+                )
 
         obs_steps.append(obs_batch)
         actions_steps.append(actions.detach())
@@ -278,6 +367,7 @@ def collect_rollout(
         rollout_budget_exhausted=tensor_from_array(
             rollout_budget_exhausted, device
         ).bool(),
+        reward_diagnostics=reward_diagnostics,
         timings={
             "rollout_total_time_s": float(total_time_s),
             "rollout_reset_time_s": float(reset_time_s),

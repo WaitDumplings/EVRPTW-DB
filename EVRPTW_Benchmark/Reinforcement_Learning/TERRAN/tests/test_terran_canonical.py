@@ -26,6 +26,9 @@ from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.pbrs import (
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import protocol as terran_protocol
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import trainer as terran_trainer
+from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.trainer import (
+    pbrs_scale_for_epoch,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import DataPassState
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import (
     collect_rollout, rollout_eval_batch,
@@ -173,8 +176,187 @@ def test_pbrs_keeps_distance_as_named_base_reward() -> None:
     _, reward, _, _, info = env.step([customer])
     components = info["reward_components"]
     assert components["base"][0] < 0.0
+    assert components["distance"][0] < 0.0
+    assert np.isclose(components["base_non_distance"][0], 0.0)
+    assert np.isclose(
+        components["base"][0],
+        components["distance"][0] + components["base_non_distance"][0],
+    )
     assert reward[0] == components["shaped"][0]
     assert env.unwrapped.objective_distance_km[0] > 0.0
+
+
+def test_reward_components_separate_invalid_penalty_from_distance() -> None:
+    env = make_terran_env(
+        instance=_instance(),
+        n_traj=1,
+        charging_mode="station_power_full",
+        matrix_mode="canonical",
+        info_level="full",
+        use_jit_mask=False,
+        invalid_action_penalty=-1.0,
+        pbrs_config=PotentialRewardConfig(use_customer_pbrs=True),
+    )
+    env.reset(seed=50)
+    _, _, _, truncated, info = env.step(np.asarray([999]))
+    components = info["reward_components"]
+
+    assert truncated[0]
+    assert components["distance"].tolist() == [0.0]
+    assert components["base_non_distance"].tolist() == [-1.0]
+    assert components["base"].tolist() == [-1.0]
+
+
+def test_strict_pbrs_uses_zero_terminal_and_telescopes() -> None:
+    gamma = 0.999
+    env = make_terran_env(
+        instance=_instance(),
+        n_traj=1,
+        charging_mode="station_power_full",
+        matrix_mode="canonical",
+        info_level="full",
+        use_jit_mask=False,
+        pbrs_config=PotentialRewardConfig(
+            use_customer_pbrs=True,
+            use_repair_distance_pbrs=True,
+            gamma=gamma,
+            customer_progress_budget=0.5,
+            repair_progress_coef=0.5,
+        ),
+    )
+    env.reset(seed=47)
+    pbrs_rewards = []
+    for action in (1, 2, 0):
+        _, _, _, _, info = env.step(np.asarray([action]))
+        components = info["reward_components"]
+        pbrs_rewards.append(
+            float(
+                components["pbrs_customer"][0]
+                + components["pbrs_repair_distance"][0]
+            )
+        )
+
+    # Phi(initial)=-1 across the two 0.5-budget potentials and Phi(terminal)=0.
+    discounted = sum((gamma**step) * value for step, value in enumerate(pbrs_rewards))
+    assert np.isclose(discounted, 1.0, atol=1e-6)
+    # Stepping an already-finished trajectory must not leak potential reward.
+    _, _, _, _, info = env.step(np.asarray([0]))
+    assert info["reward_components"]["pbrs_customer"].tolist() == [0.0]
+    assert info["reward_components"]["pbrs_repair_distance"].tolist() == [0.0]
+
+
+def test_terminal_objective_is_not_annealed_with_pbrs() -> None:
+    env = make_terran_env(
+        instance=_instance(),
+        n_traj=1,
+        charging_mode="station_power_full",
+        matrix_mode="canonical",
+        info_level="full",
+        use_jit_mask=False,
+        rollout_horizon_steps=1,
+        pbrs_config=PotentialRewardConfig(
+            use_customer_pbrs=True,
+            use_repair_distance_pbrs=True,
+            use_terminal_heuristic=True,
+            gamma=0.999,
+            failure_penalty=0.5,
+        ),
+    )
+    env.set_reward_scale(0.2)
+    env.reset(seed=48)
+    _, _, _, _, info = env.step(np.asarray([1]))
+    components = info["reward_components"]
+
+    assert np.isclose(components["terminal_heuristic"][0], -0.25)
+    assert np.isclose(
+        components["pbrs_customer"][0]
+        + components["pbrs_repair_distance"][0],
+        0.2,
+        atol=1e-6,
+    )
+
+
+def test_reward_diagnostics_match_active_rollout_rewards() -> None:
+    agent = Agent(
+        embedding_dim=32,
+        tanh_clipping=10.0,
+        n_encode_layers=1,
+        device="cpu",
+    )
+    env = make_terran_env(
+        instance=_instance(),
+        n_traj=4,
+        charging_mode="station_power_full",
+        matrix_mode="canonical",
+        info_level="full",
+        use_jit_mask=False,
+        pbrs_config=PotentialRewardConfig(
+            use_customer_pbrs=True,
+            use_repair_distance_pbrs=True,
+            use_terminal_heuristic=True,
+        ),
+    )
+    batch = collect_rollout(
+        agent, [env], rollout_steps=16, decode_mode="sample", device="cpu", seed=49
+    )
+    diagnostics = batch.reward_diagnostics
+    assert diagnostics["active_count"] == int(batch.valid.sum())
+    assert np.isclose(
+        diagnostics["shaped_sum"],
+        float(batch.rewards[batch.valid].sum()),
+        atol=1e-6,
+    )
+    assert np.isclose(
+        diagnostics["pbrs_total_sum"],
+        diagnostics["shaped_sum"]
+        - diagnostics["base_sum"]
+        - diagnostics["terminal_heuristic_sum"],
+        atol=1e-6,
+    )
+    assert np.isclose(
+        diagnostics["base_sum"],
+        diagnostics["distance_sum"] + diagnostics["base_non_distance_sum"],
+        atol=1e-6,
+    )
+    assert np.isclose(
+        diagnostics["shaping_total_sum"],
+        diagnostics["shaped_sum"] - diagnostics["base_sum"],
+        atol=1e-6,
+    )
+
+
+def test_formal_pbrs_schedule_reaches_tail_scale_at_minimum_budget() -> None:
+    cfg = {
+        "pbrs": {
+            "use_customer_pbrs": True,
+            "annealing": {
+                "enabled": True,
+                "start_scale": 1.0,
+                "end_scale": 0.2,
+                "start_epoch": 1,
+                "end_epoch": 5000,
+                "schedule": "cosine",
+            },
+        }
+    }
+    values = [pbrs_scale_for_epoch(cfg, epoch, 10000) for epoch in (1, 300, 2500, 5000, 6000)]
+    assert values[0] == 1.0
+    assert values[-2:] == [0.2, 0.2]
+    assert values == sorted(values, reverse=True)
+
+
+def test_stage2_terran_config_uses_cus1000_reward_calibration() -> None:
+    cfg = terran_trainer.load_config(
+        REPO_ROOT
+        / "EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/configs/stage2_cus100_terran.yaml"
+    )
+    assert (
+        cfg["env"]["reward_distance_scale_mode"]
+        == "dataset_single_customer_repair_sum"
+    )
+    assert cfg["env"]["invalid_action_penalty"] == -1.0
+    assert cfg["training"]["gamma"] == 0.999
+    assert cfg["pbrs"]["annealing"]["end_epoch"] == 5000
 
 
 def test_terran_training_env_uses_registered_rollout_horizon(monkeypatch) -> None:

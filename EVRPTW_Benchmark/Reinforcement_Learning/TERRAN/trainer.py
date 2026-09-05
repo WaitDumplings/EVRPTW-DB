@@ -833,6 +833,29 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     train_fields = [
         "epoch",
         "reward_mean",
+        "reward_base_mean",
+        "reward_distance_mean",
+        "reward_base_non_distance_mean",
+        "reward_pbrs_customer_mean",
+        "reward_pbrs_repair_distance_mean",
+        "reward_terminal_heuristic_mean",
+        "reward_pbrs_total_mean",
+        "reward_shaping_total_mean",
+        "reward_base_abs_mean",
+        "reward_distance_abs_mean",
+        "reward_pbrs_total_abs_mean",
+        "reward_pbrs_to_base_abs_ratio",
+        "reward_pbrs_to_distance_abs_ratio",
+        "reward_base_per_trajectory",
+        "reward_distance_per_trajectory",
+        "reward_pbrs_total_per_trajectory",
+        "reward_terminal_heuristic_per_trajectory",
+        "reward_discounted_distance_per_trajectory",
+        "reward_discounted_pbrs_total_per_trajectory",
+        "reward_discounted_terminal_heuristic_per_trajectory",
+        "customer_action_reward_base_mean",
+        "customer_action_reward_pbrs_total_mean",
+        "noncustomer_action_reward_pbrs_total_mean",
         "policy_loss",
         "value_loss",
         "entropy",
@@ -939,6 +962,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             trajectory_parts: list[np.ndarray] = []
             reward_sum = 0.0
             reward_count = 0
+            reward_diagnostics: dict[str, float] = {}
             environment_transitions = 0
             rollout_budget_exhausted_count = 0
             for microbatch_index in range(logical_microbatches_per_epoch):
@@ -951,6 +975,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     seed=seed + epoch * 100_000 + microbatch_index,
                     profile_timing=profile_timing,
                     cache_static_embeddings=cache_rollout_encoder,
+                    reward_discount_factor=gamma,
                 )
                 returns = compute_returns(batch.rewards, batch.dones, gamma=gamma)
                 advantages = returns - batch.values
@@ -960,6 +985,29 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 reward_count += valid_count
                 if valid_count:
                     reward_sum += float(batch.rewards[batch.valid].sum().detach().cpu())
+                batch_reward_diagnostics = getattr(
+                    batch, "reward_diagnostics", None
+                )
+                if batch_reward_diagnostics is None:
+                    fallback_reward_sum = float(
+                        batch.rewards[batch.valid].sum().detach().cpu()
+                    )
+                    fallback_reward_abs_sum = float(
+                        batch.rewards[batch.valid].abs().sum().detach().cpu()
+                    )
+                    batch_reward_diagnostics = {
+                        "active_count": float(valid_count),
+                        "base_sum": fallback_reward_sum,
+                        "base_abs_sum": fallback_reward_abs_sum,
+                        "distance_sum": fallback_reward_sum,
+                        "distance_abs_sum": fallback_reward_abs_sum,
+                        "shaped_sum": fallback_reward_sum,
+                        "shaped_abs_sum": fallback_reward_abs_sum,
+                    }
+                for key, value in batch_reward_diagnostics.items():
+                    reward_diagnostics[key] = (
+                        reward_diagnostics.get(key, 0.0) + float(value)
+                    )
                 trajectory_parts.append(
                     batch.trajectory_steps.detach().cpu().numpy().reshape(-1)
                 )
@@ -1142,6 +1190,61 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 _sync_cuda(device)
             ppo_update_time_s = time.perf_counter() - ppo_start
             reward_mean = reward_sum / max(reward_count, 1)
+            component_count = max(reward_diagnostics.get("active_count", 0.0), 1.0)
+            customer_action_count = max(
+                reward_diagnostics.get("customer_action_count", 0.0), 1.0
+            )
+            noncustomer_action_count = max(
+                reward_diagnostics.get("noncustomer_action_count", 0.0), 1.0
+            )
+            reward_base_mean = (
+                reward_diagnostics.get("base_sum", 0.0) / component_count
+            )
+            reward_distance_mean = (
+                reward_diagnostics.get("distance_sum", 0.0) / component_count
+            )
+            reward_base_non_distance_mean = (
+                reward_diagnostics.get("base_non_distance_sum", 0.0)
+                / component_count
+            )
+            reward_pbrs_customer_mean = (
+                reward_diagnostics.get("pbrs_customer_sum", 0.0)
+                / component_count
+            )
+            reward_pbrs_repair_distance_mean = (
+                reward_diagnostics.get("pbrs_repair_distance_sum", 0.0)
+                / component_count
+            )
+            reward_terminal_heuristic_mean = (
+                reward_diagnostics.get("terminal_heuristic_sum", 0.0)
+                / component_count
+            )
+            reward_pbrs_total_mean = (
+                reward_diagnostics.get("pbrs_total_sum", 0.0)
+                / component_count
+            )
+            reward_shaping_total_mean = (
+                reward_diagnostics.get("shaping_total_sum", 0.0)
+                / component_count
+            )
+            reward_base_abs_mean = (
+                reward_diagnostics.get("base_abs_sum", 0.0) / component_count
+            )
+            reward_distance_abs_mean = (
+                reward_diagnostics.get("distance_abs_sum", 0.0)
+                / component_count
+            )
+            reward_pbrs_total_abs_mean = (
+                reward_diagnostics.get("pbrs_total_abs_sum", 0.0)
+                / component_count
+            )
+            reward_pbrs_to_base_abs_ratio = (
+                reward_pbrs_total_abs_mean / max(reward_base_abs_mean, 1e-12)
+            )
+            reward_pbrs_to_distance_abs_ratio = (
+                reward_pbrs_total_abs_mean
+                / max(reward_distance_abs_mean, 1e-12)
+            )
             loss_arr = np.asarray(losses, dtype=float)
             train_summary = summarize_train_infos(final_infos)
             if epoch % debug_log_every == 0:
@@ -1151,6 +1254,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "[Train] "
                     f"epoch={epoch}/{epochs} samples={pool.sample_count} "
                     f"reward={_format_float(reward_mean)} "
+                    f"distance={_format_float(reward_distance_mean, 6)} "
+                    f"base_other={_format_float(reward_base_non_distance_mean, 6)} "
+                    f"pbrs={_format_float(reward_pbrs_total_mean, 6)} "
+                    f"pbrs_abs/distance_abs={_format_float(reward_pbrs_to_distance_abs_ratio, 3)} "
                     f"policy_loss={_format_float(loss_arr[:, 0].mean())} "
                     f"value_loss={_format_float(loss_arr[:, 1].mean())} "
                     f"entropy={_format_float(loss_arr[:, 2].mean())} "
@@ -1289,6 +1396,67 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 {
                     "epoch": epoch,
                     "reward_mean": reward_mean,
+                    "reward_base_mean": reward_base_mean,
+                    "reward_distance_mean": reward_distance_mean,
+                    "reward_base_non_distance_mean": reward_base_non_distance_mean,
+                    "reward_pbrs_customer_mean": reward_pbrs_customer_mean,
+                    "reward_pbrs_repair_distance_mean": reward_pbrs_repair_distance_mean,
+                    "reward_terminal_heuristic_mean": reward_terminal_heuristic_mean,
+                    "reward_pbrs_total_mean": reward_pbrs_total_mean,
+                    "reward_shaping_total_mean": reward_shaping_total_mean,
+                    "reward_base_abs_mean": reward_base_abs_mean,
+                    "reward_distance_abs_mean": reward_distance_abs_mean,
+                    "reward_pbrs_total_abs_mean": reward_pbrs_total_abs_mean,
+                    "reward_pbrs_to_base_abs_ratio": reward_pbrs_to_base_abs_ratio,
+                    "reward_pbrs_to_distance_abs_ratio": reward_pbrs_to_distance_abs_ratio,
+                    "reward_base_per_trajectory": (
+                        reward_diagnostics.get("base_sum", 0.0)
+                        / max(trajectory_count, 1)
+                    ),
+                    "reward_distance_per_trajectory": (
+                        reward_diagnostics.get("distance_sum", 0.0)
+                        / max(trajectory_count, 1)
+                    ),
+                    "reward_pbrs_total_per_trajectory": (
+                        reward_diagnostics.get("pbrs_total_sum", 0.0)
+                        / max(trajectory_count, 1)
+                    ),
+                    "reward_terminal_heuristic_per_trajectory": (
+                        reward_diagnostics.get("terminal_heuristic_sum", 0.0)
+                        / max(trajectory_count, 1)
+                    ),
+                    "reward_discounted_distance_per_trajectory": (
+                        reward_diagnostics.get("distance_discounted_sum", 0.0)
+                        / max(trajectory_count, 1)
+                    ),
+                    "reward_discounted_pbrs_total_per_trajectory": (
+                        reward_diagnostics.get("pbrs_total_discounted_sum", 0.0)
+                        / max(trajectory_count, 1)
+                    ),
+                    "reward_discounted_terminal_heuristic_per_trajectory": (
+                        reward_diagnostics.get(
+                            "terminal_heuristic_discounted_sum", 0.0
+                        )
+                        / max(trajectory_count, 1)
+                    ),
+                    "customer_action_reward_base_mean": (
+                        reward_diagnostics.get(
+                            "base_customer_action_sum", 0.0
+                        )
+                        / customer_action_count
+                    ),
+                    "customer_action_reward_pbrs_total_mean": (
+                        reward_diagnostics.get(
+                            "pbrs_total_customer_action_sum", 0.0
+                        )
+                        / customer_action_count
+                    ),
+                    "noncustomer_action_reward_pbrs_total_mean": (
+                        reward_diagnostics.get(
+                            "pbrs_total_noncustomer_action_sum", 0.0
+                        )
+                        / noncustomer_action_count
+                    ),
                     "policy_loss": float(loss_arr[:, 0].mean()),
                     "value_loss": float(loss_arr[:, 1].mean()),
                     "entropy": float(loss_arr[:, 2].mean()),

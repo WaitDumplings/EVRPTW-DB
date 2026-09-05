@@ -16,7 +16,12 @@ env:
   use_fast_env: true
   use_jit_mask: true
   normalize_reward: true
-  reward_distance_scale_mode: dataset_single_customer_repair_median
+  # Normalize by the mean per-instance repair sum so a complete route and the
+  # O(1) PBRS budgets remain comparable as the customer count grows.
+  reward_distance_scale_mode: dataset_single_customer_repair_sum
+  # Dead-end/invalid termination is an episode-level event.  Keep it above a
+  # complete normalized route cost without the 20x outlier produced by -10.
+  invalid_action_penalty: -1.0
   charging_mode: station_power_full
   matrix_mode: canonical
 
@@ -36,7 +41,9 @@ training:
   ppo_step_chunk_size: 64
   ppo_update_epochs: 3
   num_minibatches: 4
-  gamma: 0.99
+  # Cus1000 rollouts are up to 1200 steps; 0.99 has an effective horizon of
+  # only about 100 steps and makes terminal completion effectively invisible.
+  gamma: 0.999
   clip_coef: 0.2
   vf_coef: 0.5
   ent_coef: 0.01
@@ -65,7 +72,9 @@ pbrs:
     start_scale: 1.0
     end_scale: 0.2
     start_epoch: 1
-    end_epoch: 300
+    # Keep dense guidance through the guaranteed training budget, then leave
+    # the optional early-stop tail at the objective-dominant end scale.
+    end_epoch: 5000
     schedule: cosine
 
 evaluation:
