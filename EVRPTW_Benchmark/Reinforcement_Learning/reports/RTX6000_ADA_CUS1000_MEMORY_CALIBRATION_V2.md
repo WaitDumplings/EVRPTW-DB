@@ -50,6 +50,38 @@ eight-view validation, took 595.890 seconds. At this rate, 5,000 and 10,000
 epochs require approximately 33 and 66 days of training respectively, before
 the full formal validation schedule is added.
 
+## TERRAN `n_traj=50` follow-up
+
+A follow-up on 2026-09-05 tested whether halving TERRAN's training trajectory
+count would permit a larger, faster batch. Validation/test remained at
+sample-100.
+
+| Batch x train trajectories | Process peak (GiB) | Result | Timing |
+|---|---:|---|---|
+| `4 x 50` | 1.738 | PASS | 62.2 s mean pure-training time per epoch |
+| `152 x 50` | 44.842 | PASS | 761.3 s pure training; 781.1 s including 8-view validation |
+| `168 x 50` | 47.346 | OOM | Failed in PPO loss evaluation after 602.5 s |
+
+`4 x 50` and the formal `2 x 100` both generate 200 trajectories per epoch,
+but they are not equivalent. The former uses four independent graph instances
+instead of two and triggers four PPO minibatches rather than two; with three PPO
+epochs this means 12 Adam updates instead of 6. Its measured epoch was about
+twice as slow as the approximately 30.3-second `2 x 100` short-run mean.
+
+At the memory target, `152 x 50` generates 7,600 trajectories per epoch. This
+is fewer than the 8,800 trajectories of `88 x 100`, yet its pure-training epoch
+was 34% slower than the 569.5-second `88 x 100` epoch because it encodes and
+steps many more independent graphs. The corresponding 5,000/10,000-epoch
+training-only estimates are approximately 44/88 days. It would also consume
+760M/1.52B customer exposures, 76 times the formal batch-two exposure at the
+same epoch checkpoint.
+
+Therefore `n_traj=50` does allow a larger numerical batch, but exchanging
+trajectories for base-instance batch is not a speed optimization in the current
+TERRAN implementation. The passing batch 152 result is only a one-epoch,
+eight-view boundary result and sits close to the upper memory limit; it is not
+a 500-view formal safety qualification.
+
 ## Why the target batches are not formal batches
 
 The registered Cus1000 protocol has a common logical/effective batch of 2. A
