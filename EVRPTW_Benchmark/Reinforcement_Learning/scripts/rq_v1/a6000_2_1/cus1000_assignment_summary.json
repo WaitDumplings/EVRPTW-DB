@@ -10,12 +10,12 @@
   "server": "a6000_2_1",
   "slot_queues": {
     "0": [
-      "terran"
-    ],
-    "1": [
       "drl_ts",
       "evrptw_rl",
       "am_evrptw"
+    ],
+    "1": [
+      "terran"
     ]
   }
 }

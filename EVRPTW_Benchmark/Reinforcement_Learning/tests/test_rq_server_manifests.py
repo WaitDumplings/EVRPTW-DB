@@ -194,10 +194,10 @@ def test_a6000_cus1000_priority_queue_uses_approved_two_gpu_order() -> None:
         (row["method"], row["global_slot"], row["queue_position"])
         for row in rows
     ] == [
-        ("terran", 0, 0),
-        ("drl_ts", 1, 0),
-        ("evrptw_rl", 1, 1),
-        ("am_evrptw", 1, 2),
+        ("terran", 1, 0),
+        ("drl_ts", 0, 0),
+        ("evrptw_rl", 0, 1),
+        ("am_evrptw", 0, 2),
     ]
     assert {row["scale"] for row in rows} == {"Cus1000"}
     assert {row["seed"] for row in rows} == {1234}

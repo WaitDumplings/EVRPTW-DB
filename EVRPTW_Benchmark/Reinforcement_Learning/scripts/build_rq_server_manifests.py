@@ -22,10 +22,10 @@ METHODS = {
     "terran": "EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train",
 }
 CUS1000_PRIORITY_SCHEDULE = (
-    ("terran", 0),
-    ("drl_ts", 1),
-    ("evrptw_rl", 1),
-    ("am_evrptw", 1),
+    ("terran", 1),
+    ("drl_ts", 0),
+    ("evrptw_rl", 0),
+    ("am_evrptw", 0),
 )
 SERVERS = {
     "2080ti_4_1": ("2080ti", 4, "RTX 2080 Ti"),
@@ -381,8 +381,8 @@ def main() -> None:
         "formal_launch_allowed": True,
         "launch_policy": "direct_full",
         "slot_queues": {
-            "0": ["terran"],
-            "1": ["drl_ts", "evrptw_rl", "am_evrptw"],
+            "0": ["drl_ts", "evrptw_rl", "am_evrptw"],
+            "1": ["terran"],
         },
     }
     (a6000_destination / "cus1000_assignment_summary.json").write_text(

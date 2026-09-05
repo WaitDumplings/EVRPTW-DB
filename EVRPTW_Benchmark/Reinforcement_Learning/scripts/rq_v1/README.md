@@ -75,8 +75,8 @@ GPUs.
 ### Cus1000 priority profile on A6000
 
 The generated `a6000_2_1/cus1000_jobs.jsonl` is a scheduling-only projection of
-the same four canonical Cus1000 jobs. It changes no scientific field. GPU 0 runs
-TERRAN; GPU 1 runs DRL-TS, EVRPTW-RL, then AM-EVRPTW sequentially. Launch only
+the same four canonical Cus1000 jobs. It changes no scientific field. GPU 1 runs
+TERRAN; GPU 0 runs DRL-TS, EVRPTW-RL, then AM-EVRPTW sequentially. Launch only
 this profile—not the eight-job `full.sh` queue—when prioritizing Cus1000:
 
 ```bash
