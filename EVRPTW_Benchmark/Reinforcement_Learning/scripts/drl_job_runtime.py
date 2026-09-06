@@ -13,8 +13,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
+TERRAN_CONFIG = ROOT / "TERRAN" / "configs" / "stage2_cus100_terran.yaml"
+METHODS = {"am_evrptw", "evrptw_rl", "drl_ts", "terran"}
 REQUIRED_ENV = (
     "EVRPTW_REPO_ROOT",
     "EVRPTW_DATASET_ROOT",
@@ -94,6 +98,7 @@ def load_jobs(
     *,
     seeds: set[int] | None = None,
     scales: set[str] | None = None,
+    methods: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     jobs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     jobs = [job for job in jobs if int(job["global_slot"]) in slots and job.get("enabled", True)]
@@ -101,6 +106,8 @@ def load_jobs(
         jobs = [job for job in jobs if str(job.get("scale")) in scales]
     if seeds is not None:
         jobs = [job for job in jobs if int(job.get("seed", -1)) in seeds]
+    if methods is not None:
+        jobs = [job for job in jobs if str(job.get("method")) in methods]
     if mode in {"full", "resume"}:
         jobs = [job for job in jobs if job["run_mode"] == "full"]
     elif mode == "evaluate":
@@ -121,7 +128,40 @@ def gpu_name_matches(name: str, accepted_patterns: str) -> bool:
     return bool(patterns) and any(pattern in name.lower() for pattern in patterns)
 
 
+def training_contract(job: dict[str, Any]) -> dict[str, Any]:
+    """Keep the reward revision local to versioned TERRAN jobs, not data streams."""
+    if job.get("method") != "terran" or not any(
+        field in job for field in ("reward_contract_id", "training_gamma")
+    ):
+        return {}
+    return {
+        "reward_contract_id": job.get("reward_contract_id"),
+        "training_gamma": job.get("training_gamma"),
+    }
+
+
+def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
+    terran_jobs = [
+        job for job in jobs if job.get("method") == "terran" and job["kind"] == "train"
+    ]
+    if not terran_jobs:
+        return
+    training = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))["training"]
+    expected = {
+        "reward_contract_id": training["reward_contract_id"],
+        "training_gamma": float(training["gamma"]),
+    }
+    for job in terran_jobs:
+        if training_contract(job) != expected:
+            raise RuntimeError(
+                f"TERRAN manifest/config reward contract mismatch for {job['job_id']}: "
+                f"manifest={training_contract(job)} config={expected}; "
+                "regenerate the RQ manifests before launching"
+            )
+
+
 def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str, Any]:
+    validate_terran_training_contracts(jobs)
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
     if missing:
         raise RuntimeError(f"missing required environment variables: {', '.join(missing)}")
@@ -216,7 +256,7 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             "-m",
             job["train_module"],
             "--config",
-            str(ROOT / "TERRAN" / "configs" / "stage2_cus100_terran.yaml"),
+            str(TERRAN_CONFIG),
             "--seed",
             str(job["seed"]),
             "--device",
@@ -447,6 +487,18 @@ def job_complete(job: dict[str, Any], out: Path) -> bool:
     payload = json.loads(result.read_text(encoding="utf-8"))
     if payload.get("status") != "passed":
         return False
+    contract = training_contract(job)
+    if contract:
+        provenance_path = out / "provenance.json"
+        if not provenance_path.is_file():
+            return False
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        if any(payload.get(key) != value for key, value in contract.items()):
+            return False
+        if any(provenance.get(key) != value for key, value in contract.items()):
+            return False
+        if training_contract(provenance.get("job", {})) != contract:
+            return False
     if job["kind"] == "train":
         return all(path.is_file() for path in required_training_artifacts(job, out))
     return (out / "summary.csv").is_file() and (out / "routes.jsonl").is_file()
@@ -465,12 +517,40 @@ def should_resume_job(job: dict[str, Any], out: Path, requested: bool) -> bool:
     return state and checkpoint
 
 
+def existing_training_state(out: Path) -> list[Path]:
+    """Ignore launcher-only files while protecting checkpoints and training history."""
+    patterns = (
+        "data_pass_state.json", "training_result.json", "checkpoint*.pt", "best*.ckpt",
+        "*history.jsonl", "validation_summary*.json", "early_stop_state.json",
+        "logs/train_log.csv", "checkpoints/*",
+    )
+    return sorted({path for pattern in patterns for path in out.glob(pattern) if path.is_file()})
+
+
 def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume: bool, dry_run: bool) -> bool:
     out = output_dir(job, context)
     out.mkdir(parents=True, exist_ok=True)
     if job_complete(job, out):
         return True
     resume_this_job = should_resume_job(job, out, resume)
+    contract = training_contract(job)
+    provenance_path = out / "provenance.json"
+    if resume_this_job and contract and provenance_path.is_file():
+        previous_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        if training_contract(previous_provenance.get("job", {})) != contract or any(
+            previous_provenance.get(key) != value for key, value in contract.items()
+        ):
+            raise RuntimeError(
+                f"TERRAN resume provenance reward contract mismatch for {job['job_id']}; "
+                "start fresh without reusing the old training directory"
+            )
+    if job["kind"] == "train" and not resume_this_job:
+        previous_state = existing_training_state(out)
+        if previous_state:
+            raise RuntimeError(
+                f"refusing fresh training over existing state for {job['job_id']}: "
+                f"{previous_state[:3]}; use matching-config resume or a fresh run directory"
+            )
     command = command_for(job, context, out, resume_this_job)
     provenance = {
         "schema": "drl_job_provenance_v1",
@@ -484,6 +564,7 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         "conda_env": context["conda_env"],
         "resume_requested": bool(resume),
         "resumed_from_checkpoint": bool(resume_this_job),
+        **training_contract(job),
         "started_at": time.time(),
     }
     atomic_json(out / "provenance.json", provenance)
@@ -541,6 +622,7 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         "completed_at": time.time(),
         "failure_reason": "OOM_UNCHANGED_CONFIG" if oom else None,
         "overflow_manifest": str(overflow_manifest) if overflow_manifest else None,
+        **training_contract(job),
     }
     atomic_json(out / "job_result.json", result)
     return passed
@@ -550,7 +632,12 @@ def worker(slot: int, jobs: list[dict[str, Any]], context: dict[str, Any], local
     for job in jobs:
         if STOP.is_set():
             return
-        if not run_job(job, context, local_gpu, resume, dry_run):
+        try:
+            passed = run_job(job, context, local_gpu, resume, dry_run)
+        except Exception as exc:
+            print(f"job {job['job_id']} refused or failed: {exc}", file=sys.stderr)
+            passed = False
+        if not passed:
             failures.append(job["job_id"])
             return
 
@@ -577,6 +664,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-free-gib", type=float, default=20.0)
     parser.add_argument("--seeds", default="1234")
     parser.add_argument("--scales", default="Cus50,Cus100,Cus500,Cus1000")
+    parser.add_argument("--methods", default=None, help="Optional comma-separated method filter.")
     parser.add_argument("--skip-gpu-preflight", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -587,15 +675,22 @@ def main() -> None:
     slots = {int(value) for value in args.slots.split(",") if value.strip()}
     seeds = {int(value) for value in args.seeds.split(",") if value.strip()}
     scales = {value.strip() for value in args.scales.split(",") if value.strip()}
+    methods = (
+        {value.strip() for value in args.methods.split(",") if value.strip()}
+        if args.methods is not None else None
+    )
     if not seeds:
         raise ValueError("--seeds must select at least one seed")
     if not scales:
         raise ValueError("--scales must select at least one scale")
-    jobs = load_jobs(args.manifest, slots, args.mode, seeds=seeds, scales=scales)
+    if methods is not None and (not methods or methods - METHODS):
+        raise ValueError(f"--methods must select from {sorted(METHODS)}")
+    jobs = load_jobs(args.manifest, slots, args.mode, seeds=seeds, scales=scales, methods=methods)
     if args.mode != "status" and not jobs:
         raise ValueError(
             f"no {args.mode} jobs match seeds={sorted(seeds)} "
-            f"and scales={sorted(scales)} in {args.manifest}"
+            f"and scales={sorted(scales)} methods={sorted(methods) if methods is not None else 'all'} "
+            f"in {args.manifest}"
         )
     context = preflight(args, jobs)
     if args.mode == "status":
@@ -604,7 +699,7 @@ def main() -> None:
         for mode in ("full", "evaluate"):
             mode_rows = []
             for job in load_jobs(
-                args.manifest, slots, mode, seeds=seeds, scales=scales
+                args.manifest, slots, mode, seeds=seeds, scales=scales, methods=methods
             ):
                 row = {
                     "job_id": job["job_id"],

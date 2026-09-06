@@ -173,6 +173,82 @@ def test_ppo_compact_transport_preserves_loss_and_gradients(step_start):
             torch.testing.assert_close(parameter.grad, expected, rtol=0, atol=0)
 
 
+def test_ppo_reencodes_with_gradients_after_each_optimizer_update(monkeypatch):
+    agent = _agent(training=True)
+    torch.manual_seed(41)
+    batch = collect_rollout(agent, _envs(), 8, "sample", "cpu", seed=41)
+    returns = compute_returns(batch.rewards, batch.dones, 1.0)
+    advantages = returns - batch.values
+    indices = np.asarray([1, 0], dtype=np.int64)
+    step_end = min(4, len(batch.observations))
+    assert step_end >= 2
+    assert not batch.old_logprobs.requires_grad
+    assert not batch.values.requires_grad
+
+    encoder_calls, encoded_snapshots, parameter_snapshots = [], [], []
+    current_cache = [None]
+    original_encode = agent.backbone.encode
+    original_decode = agent.backbone.decode
+    embedding_parameter = agent.backbone.embedding.nodes_embedding.weight
+
+    def audited_encode(*args, **kwargs):
+        assert torch.is_grad_enabled()
+        state = original_encode(*args, **kwargs)
+        assert all(t.requires_grad and t.grad_fn is not None for t in state)
+        current_cache[0] = state
+        encoded_snapshots.append(state[0].detach().clone())
+        parameter_snapshots.append(embedding_parameter.detach().clone())
+        return state
+
+    def audited_decode(observation, state):
+        # Re-encoding alone is insufficient if a caller still decodes with an
+        # older cache. Every time step must use this loss call's fresh graph.
+        assert current_cache[0] is not None and state is current_cache[0]
+        return original_decode(observation, state)
+
+    monkeypatch.setattr(agent.backbone, "encode", audited_encode)
+    monkeypatch.setattr(agent.backbone, "decode", audited_decode)
+    hook = agent.backbone.encoder.register_forward_hook(
+        lambda *_: encoder_calls.append(1)
+    )
+    optimizer = torch.optim.AdamW(
+        agent.parameters(), lr=1e-3, eps=1e-5, weight_decay=0.0,
+    )
+    try:
+        # Reuse the same observations across two real parameter updates. The
+        # third loss therefore has to encode parameters updated twice already.
+        for iteration in range(3):
+            current_cache[0] = None
+            optimizer.zero_grad(set_to_none=True)
+            loss, *_ = evaluate_policy_loss(
+                agent, batch, returns, advantages, {"training": {}}, "cpu",
+                env_indices=indices, step_end=step_end,
+            )
+            assert len(encoder_calls) == len(encoded_snapshots) == iteration + 1
+            assert torch.isfinite(loss)
+            loss.backward()
+            encoder_gradients = [
+                p.grad for p in agent.backbone.encoder.parameters()
+                if p.grad is not None
+            ]
+            assert encoder_gradients
+            assert all(torch.isfinite(grad).all() for grad in encoder_gradients)
+            assert sum(float(grad.abs().sum()) for grad in encoder_gradients) > 0.0
+            assert embedding_parameter.grad is not None
+            assert torch.isfinite(embedding_parameter.grad).all()
+            assert float(embedding_parameter.grad.abs().sum()) > 0.0
+            if iteration < 2:
+                optimizer.step()
+    finally:
+        hook.remove()
+
+    for before, after in zip(parameter_snapshots, parameter_snapshots[1:]):
+        assert not torch.equal(before, after)
+    for before, after in zip(encoded_snapshots, encoded_snapshots[1:]):
+        assert torch.isfinite(after).all()
+        assert not torch.equal(before, after)
+
+
 def test_ppo_logprob_ratio_is_one_before_parameter_update():
     agent = _agent(training=True)
     batch = collect_rollout(agent, _envs(), 8, "sample", "cpu", seed=33)

@@ -16,7 +16,7 @@ class PotentialRewardConfig:
     use_feasible_ratio_pbrs: bool = False
     use_terminal_heuristic: bool = False
     customer_pbrs_mode: str = "progress"  # strict PBRS: gamma * Phi(s_next) - Phi(s)
-    gamma: float = 0.99
+    gamma: float = 1.0
     alpha: float = 2.0
     beta: float = 0.5
     customer_pbrs_coef: float = 1.0
@@ -29,6 +29,8 @@ class PotentialRewardConfig:
     failure_penalty: float = 0.5
 
     def __post_init__(self) -> None:
+        if not 0.0 <= float(self.gamma) <= 1.0:
+            raise ValueError("gamma must be finite and in [0, 1]")
         mode = self.customer_pbrs_mode.lower()
         if mode in {"serve", "served", "ratio_progress"}:
             mode = "progress"

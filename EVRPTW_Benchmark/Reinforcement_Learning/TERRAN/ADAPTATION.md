@@ -38,6 +38,12 @@ configuration.
 
 ## Reward boundary
 
+The current Stage-2 revision is
+`terran_undiscounted_distance_pbrs_v1`, with `training.gamma=1.0` for both
+finite-episode returns and strict PBRS. This is a recorded training adaptation,
+not a claim of equivalence to historical discounted training. Existing discounted
+checkpoints must not be continued or relabelled as results of this revision.
+
 The base reward minimizes directed-road distance. TERRAN's auxiliary shaping
 is retained when enabled, and the checkpoint records each coefficient and its
 annealing schedule. Final benchmark ordering ignores shaped return: only
@@ -53,7 +59,8 @@ adds
 -failure_penalty * (remaining_customers / num_customers)
 ```
 
-to the final training transition (and applies the recorded PBRS annealing scale).
+to the final training transition. The terminal heuristic is not multiplied by
+the PBRS annealing scale; only the potential-difference terms are annealed.
 A trajectory completing exactly on the horizon receives the configured success
 bonus instead. This shaping is not used for fixed-set benchmark evaluation.
 A physical charging station is usable at most once within the current vehicle

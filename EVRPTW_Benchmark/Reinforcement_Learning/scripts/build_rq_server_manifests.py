@@ -12,6 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs" / "drl_rq_runtime_candidates_v2.yaml"
+TERRAN_CONFIG = ROOT / "TERRAN" / "configs" / "stage2_cus100_terran.yaml"
 SCRIPT_ROOT = ROOT / "scripts" / "rq_v1"
 GATE = "EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_rq_formal_launch_gate_v1.json"
 ARTIFACTS = "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts"
@@ -189,6 +190,12 @@ def job(
         ),
         "file_hash_validation_performed": False,
     }
+    if method == "terran":
+        training = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))["training"]
+        payload.update(
+            reward_contract_id=training["reward_contract_id"],
+            training_gamma=float(training["gamma"]),
+        )
     training_overrides = (
         cfg.get("training_overrides_by_method_scale", {})
         .get(method, {})

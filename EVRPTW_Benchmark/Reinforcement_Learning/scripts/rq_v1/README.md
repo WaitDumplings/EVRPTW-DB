@@ -16,6 +16,49 @@ This is a fresh candidate budget: start it with `full.sh`; do not use a v8, v9,
 v10, v11, or v12 checkpoint as a v13 resume source. `resume.sh` is for interruption
 recovery within the same v13 job and commit.
 
+### TERRAN undiscounted restart
+
+The active TERRAN reward revision is
+`terran_undiscounted_distance_pbrs_v1` (`training.gamma=1.0` in both returns and
+PBRS). This changes the training return, not the shared sample budget, ID stream,
+validation protocol, model architecture, or distance evaluation objective.
+Electricity and vehicle fees are **not** enabled by this revision.
+
+After stopping any old queue on the server and pulling the new commit, restart
+TERRAN from scratch, without loading an older checkpoint:
+
+```bash
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/full.sh --seed 1234 --methods terran
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/status.sh --seed 1234 --methods terran
+```
+
+Replace `<server>` with the matching server bundle below. The method filter
+prevents unnecessary retraining of AM, EVRPTW-RL and DRL-TS. It retains the
+existing TERRAN coverage and Euclidean conditions: the four bundles select
+2, 2, 1 and 2 jobs for `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1` and `a6000_2_1`.
+For Cus1000 only on the two-GPU large-scale server, use the following instead of
+its full queue; do not launch both queues together:
+
+```bash
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/cus1000_full.sh --seed 1234 --methods terran
+```
+
+Each run writes under
+`$EVRPTW_OUTPUT_ROOT/<representation>/<condition>/terran/<scale>/seed_1234/<git-commit>/`.
+The new commit provides a new output root; old results remain untouched. Shared
+artifacts are still under the unchanged v13 budget, so this update does not
+require dataset or stream regeneration. Only use `resume.sh --methods terran`
+to recover an interrupted run of this same revision and commit. A mismatched
+gamma/reward contract or a fresh launch over existing training history is rejected.
+
+Local verification of this revision: 254 CPU tests passed, including finite
+returns/PBRS, two real optimizer updates with encoder gradients, manifest
+consistency, filtered queues and restart protections. All RQ shell scripts passed
+`bash -n`. The CPU command excludes vendored `reference_materials` and
+`tests/test_rq_server_environment.py`: the latter needs Linux utilities
+(`flock`, GNU `realpath -m`) unavailable on the macOS test host. No GPU training
+or full Linux server launch was performed by this patch.
+
 The manifests contain seed 1234 only. The 2080 Ti servers own Cus50/Cus100;
 the two RTX 6000 Ada GPUs own Cus500/Cus1000.
 

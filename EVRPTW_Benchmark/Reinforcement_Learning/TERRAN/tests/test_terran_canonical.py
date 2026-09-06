@@ -5,8 +5,10 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
+import pytest
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -31,8 +33,175 @@ from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.trainer import (
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import DataPassState
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import (
-    collect_rollout, rollout_eval_batch,
+    collect_rollout, compute_returns, rollout_eval_batch,
 )
+
+
+def test_undiscounted_complete_returns_sum_remaining_rewards() -> None:
+    rewards = torch.tensor([[[2.0, -1.0]], [[-3.0, -2.0]], [[5.0, -4.0]]])
+    dones = torch.zeros_like(rewards, dtype=torch.bool)
+    dones[-1] = True
+
+    returns = compute_returns(rewards, dones, gamma=1.0)
+
+    torch.testing.assert_close(
+        returns,
+        torch.tensor([[[4.0, -7.0]], [[2.0, -6.0]], [[5.0, -4.0]]]),
+    )
+
+
+@pytest.mark.parametrize("gamma", [1.0, 0.999])
+def test_returns_stop_at_each_trajectory_terminal_mask(gamma: float) -> None:
+    # Nonzero later entries expose reward leakage across each trajectory's own
+    # terminal boundary; the collector's valid mask excludes those later rows.
+    rewards = torch.tensor(
+        [[[1.0, 10.0]], [[2.0, 20.0]], [[100.0, 30.0]], [[200.0, 400.0]]]
+    )
+    dones = torch.tensor(
+        [[[False, False]], [[True, False]], [[True, True]], [[True, True]]]
+    )
+
+    returns = compute_returns(rewards, dones, gamma=gamma)
+
+    torch.testing.assert_close(
+        returns[0],
+        torch.tensor([[1.0 + gamma * 2.0, 10.0 + gamma * 20.0 + gamma**2 * 30.0]]),
+    )
+    assert returns[1, 0, 0].item() == 2.0
+    assert returns[2, 0, 1].item() == 30.0
+
+
+def test_default_training_and_pbrs_gamma_are_undiscounted() -> None:
+    cfg = {"pbrs": {"use_customer_pbrs": True}}
+    pbrs_config = terran_trainer.build_pbrs_config(cfg)
+
+    assert terran_trainer.training_gamma(cfg) == 1.0
+    assert PotentialRewardConfig().gamma == 1.0
+    assert pbrs_config is not None and pbrs_config.gamma == 1.0
+
+
+@pytest.mark.parametrize("gamma", [-0.01, 1.01, float("nan"), float("inf"), -float("inf")])
+def test_invalid_gamma_is_rejected_by_training_and_pbrs(gamma: float) -> None:
+    with pytest.raises(ValueError, match="gamma must be finite and in"):
+        terran_trainer.training_gamma({"training": {"gamma": gamma}})
+    with pytest.raises(ValueError, match="gamma must be finite and in"):
+        PotentialRewardConfig(gamma=gamma)
+
+
+@pytest.mark.parametrize("gamma", [0.0, 0.999, 1.0])
+@pytest.mark.parametrize("contract", [None, "terran_undiscounted_distance_pbrs_v1"])
+def test_resume_accepts_matching_gamma_and_reward_contract(
+    gamma: float, contract: str | None
+) -> None:
+    training = {"gamma": gamma}
+    if contract is not None:
+        training["reward_contract_id"] = contract
+
+    terran_trainer.validate_resume_reward_contract(
+        {"training": dict(training)}, {"config": {"training": dict(training)}}
+    )
+
+
+@pytest.mark.parametrize(
+    ("saved_training", "message"),
+    [
+        ({}, "missing training.gamma"),
+        ({"gamma": 0.999}, "gamma mismatch"),
+        ({"gamma": 1.0}, "reward contract mismatch"),
+        (
+            {"gamma": 1.0, "reward_contract_id": "different-contract"},
+            "reward contract mismatch",
+        ),
+    ],
+)
+def test_resume_rejects_missing_or_changed_reward_contract(
+    saved_training: dict, message: str
+) -> None:
+    cfg = {
+        "training": {
+            "gamma": 1.0,
+            "reward_contract_id": "terran_undiscounted_distance_pbrs_v1",
+        }
+    }
+    with pytest.raises(ValueError, match=message):
+        terran_trainer.validate_resume_reward_contract(
+            cfg, {"config": {"training": saved_training}}
+        )
+
+
+def test_fresh_output_allows_launcher_only_records(tmp_path: Path) -> None:
+    for name, content in (
+        ("provenance.json", '{"schema": "drl_job_provenance_v1"}'),
+        ("stdout.log", "launching\n"),
+        ("stderr.log", ""),
+    ):
+        (tmp_path / name).write_text(content, encoding="utf-8")
+    (tmp_path / "checkpoints").mkdir()
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()}
+
+    terran_trainer.validate_fresh_training_output({"output_dir": str(tmp_path)})
+
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()} == before
+    assert not list((tmp_path / "checkpoints").iterdir())
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        "validation_history.jsonl",
+        "checkpoints/checkpoint_0001.pt",
+        "data_pass_state.json",
+        "logs/train_log.csv",
+    ],
+)
+def test_fresh_output_rejects_existing_training_evidence(
+    tmp_path: Path, artifact: str
+) -> None:
+    path = tmp_path / artifact
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("prior training evidence", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="already contains training evidence"):
+        terran_trainer.validate_fresh_training_output({"output_dir": str(tmp_path)})
+
+    assert path.read_text(encoding="utf-8") == "prior training evidence"
+
+
+@pytest.mark.parametrize("mode", ["fresh_history", "resume_gamma_mismatch"])
+def test_training_contract_rejection_precedes_model_and_environment_creation(
+    tmp_path: Path, monkeypatch, mode: str
+) -> None:
+    agent_factory = Mock(side_effect=AssertionError("Agent must not be created"))
+    env_factory = Mock(side_effect=AssertionError("Environments must not be created"))
+    monkeypatch.setattr(terran_trainer, "Agent", agent_factory)
+    monkeypatch.setattr(terran_trainer, "make_envs", env_factory)
+    cfg = {
+        "output_dir": str(tmp_path),
+        "training": {"gamma": 1.0},
+        "data": {"num_customers": 2, "num_charging_stations": 1},
+    }
+    if mode == "fresh_history":
+        artifact = tmp_path / "validation_history.jsonl"
+        artifact.write_text('{"logical_epoch": 1}\n', encoding="utf-8")
+        expected_error = FileExistsError
+        message = "already contains training evidence"
+    else:
+        artifact = tmp_path / "checkpoint_latest.pt"
+        # No model/optimizer payload is necessary: validation must reject the
+        # incompatible reward contract before trying to initialize/load either.
+        torch.save({"config": {"training": {"gamma": 0.999}}}, artifact)
+        cfg["protocol"] = {"resume_checkpoint": str(artifact)}
+        expected_error = ValueError
+        message = "gamma mismatch"
+    before = artifact.read_bytes()
+
+    with pytest.raises(expected_error, match=message):
+        terran_trainer.train_from_config(cfg, seed=1234, device="cpu")
+
+    agent_factory.assert_not_called()
+    env_factory.assert_not_called()
+    assert artifact.read_bytes() == before
+    assert not (tmp_path / "logs").exists()
 
 
 def test_canonical_terran_rollout_passes_shared_verifier() -> None:
@@ -207,8 +376,17 @@ def test_reward_components_separate_invalid_penalty_from_distance() -> None:
     assert components["base"].tolist() == [-1.0]
 
 
-def test_strict_pbrs_uses_zero_terminal_and_telescopes() -> None:
-    gamma = 0.999
+@pytest.mark.parametrize("gamma", [1.0, 0.999])
+@pytest.mark.parametrize("reward_scale", [1.0, 0.2])
+@pytest.mark.parametrize("ending", ["success", "horizon_truncation", "invalid_truncation"])
+def test_strict_pbrs_uses_zero_terminal_and_telescopes(
+    gamma: float, reward_scale: float, ending: str
+) -> None:
+    actions = {
+        "success": (1, 2, 0),
+        "horizon_truncation": (1,),
+        "invalid_truncation": (1, 999),
+    }[ending]
     env = make_terran_env(
         instance=_instance(),
         n_traj=1,
@@ -216,6 +394,7 @@ def test_strict_pbrs_uses_zero_terminal_and_telescopes() -> None:
         matrix_mode="canonical",
         info_level="full",
         use_jit_mask=False,
+        rollout_horizon_steps=1 if ending == "horizon_truncation" else 3,
         pbrs_config=PotentialRewardConfig(
             use_customer_pbrs=True,
             use_repair_distance_pbrs=True,
@@ -224,10 +403,11 @@ def test_strict_pbrs_uses_zero_terminal_and_telescopes() -> None:
             repair_progress_coef=0.5,
         ),
     )
+    env.set_reward_scale(reward_scale)
     env.reset(seed=47)
     pbrs_rewards = []
-    for action in (1, 2, 0):
-        _, _, _, _, info = env.step(np.asarray([action]))
+    for action in actions:
+        _, _, terminated, truncated, info = env.step(np.asarray([action]))
         components = info["reward_components"]
         pbrs_rewards.append(
             float(
@@ -236,16 +416,22 @@ def test_strict_pbrs_uses_zero_terminal_and_telescopes() -> None:
             )
         )
 
-    # Phi(initial)=-1 across the two 0.5-budget potentials and Phi(terminal)=0.
+    assert bool(terminated[0]) == (ending == "success")
+    assert bool(truncated[0]) == (ending != "success")
+    assert bool(info["success"][0]) == (ending == "success")
+    assert bool(info["rollout_budget_exhausted"][0]) == (ending == "horizon_truncation")
+    # Phi(initial)=-1 across the two 0.5-budget potentials. Every ending,
+    # including failure, has Phi(terminal)=0 and the same scaled offset.
     discounted = sum((gamma**step) * value for step, value in enumerate(pbrs_rewards))
-    assert np.isclose(discounted, 1.0, atol=1e-6)
+    assert np.isclose(discounted, reward_scale, atol=1e-6)
     # Stepping an already-finished trajectory must not leak potential reward.
     _, _, _, _, info = env.step(np.asarray([0]))
     assert info["reward_components"]["pbrs_customer"].tolist() == [0.0]
     assert info["reward_components"]["pbrs_repair_distance"].tolist() == [0.0]
 
 
-def test_terminal_objective_is_not_annealed_with_pbrs() -> None:
+@pytest.mark.parametrize("gamma", [1.0, 0.999])
+def test_terminal_objective_is_not_annealed_with_pbrs(gamma: float) -> None:
     env = make_terran_env(
         instance=_instance(),
         n_traj=1,
@@ -258,7 +444,7 @@ def test_terminal_objective_is_not_annealed_with_pbrs() -> None:
             use_customer_pbrs=True,
             use_repair_distance_pbrs=True,
             use_terminal_heuristic=True,
-            gamma=0.999,
+            gamma=gamma,
             failure_penalty=0.5,
         ),
     )
@@ -355,11 +541,16 @@ def test_stage2_terran_config_uses_cus1000_reward_calibration() -> None:
         == "dataset_single_customer_repair_sum"
     )
     assert cfg["env"]["invalid_action_penalty"] == -1.0
-    assert cfg["training"]["gamma"] == 0.999
+    assert cfg["training"]["gamma"] == 1.0
+    assert (
+        cfg["training"]["reward_contract_id"]
+        == "terran_undiscounted_distance_pbrs_v1"
+    )
     assert cfg["pbrs"]["annealing"]["end_epoch"] == 5000
 
 
-def test_terran_training_env_uses_registered_rollout_horizon(monkeypatch) -> None:
+@pytest.mark.parametrize("gamma", [1.0, 0.999])
+def test_terran_training_env_uses_registered_rollout_horizon(monkeypatch, gamma: float) -> None:
     class Pool:
         def sample(self):
             return _instance()
@@ -382,7 +573,12 @@ def test_terran_training_env_uses_registered_rollout_horizon(monkeypatch) -> Non
             "num_customers": 2,
             "num_charging_stations": 1,
         },
-        "training": {"num_envs_per_gpu": 2, "n_traj": 3, "rollout_steps": 140},
+        "training": {
+            "num_envs_per_gpu": 2,
+            "n_traj": 3,
+            "rollout_steps": 140,
+            "gamma": gamma,
+        },
         "env": {"use_fast_env": False},
         "pbrs": {"use_terminal_heuristic": True, "failure_penalty": 0.5},
     }
@@ -393,6 +589,7 @@ def test_terran_training_env_uses_registered_rollout_horizon(monkeypatch) -> Non
     assert [call["rollout_horizon_steps"] for call in captured] == [140, 140]
     assert all(call["pbrs_config"].use_terminal_heuristic for call in captured)
     assert all(call["pbrs_config"].failure_penalty == 0.5 for call in captured)
+    assert all(call["pbrs_config"].gamma == gamma for call in captured)
 
 
 def test_fixed_epoch_protocol_does_not_expand_to_a_full_data_pass(
@@ -447,8 +644,9 @@ def test_fixed_epoch_protocol_does_not_expand_to_a_full_data_pass(
     assert meta["effective_batch_size"] == 2
 
 
+@pytest.mark.parametrize("gamma", [1.0, 0.999])
 def test_terran_effective_batch_two_accumulates_before_optimizer_step(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, gamma: float
 ) -> None:
     class Pool:
         sample_count = 0
@@ -458,8 +656,15 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
 
     pool = Pool()
     collect_calls = []
+    return_gammas = []
+    real_compute_returns = terran_trainer.compute_returns
+
+    def capture_returns(rewards, dones, *, gamma):
+        return_gammas.append(gamma)
+        return real_compute_returns(rewards, dones, gamma=gamma)
 
     def fake_collect(_agent, _envs, **_kwargs):
+        assert _kwargs["reward_discount_factor"] == gamma
         pool.sample_count += 1
         collect_calls.append(pool.sample_count)
         return SimpleNamespace(
@@ -495,6 +700,7 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
         terran_trainer, "make_envs", lambda _cfg, _seed: ([object()], pool)
     )
     monkeypatch.setattr(terran_trainer, "collect_rollout", fake_collect)
+    monkeypatch.setattr(terran_trainer, "compute_returns", capture_returns)
     monkeypatch.setattr(terran_trainer, "evaluate_policy_loss", fake_loss)
 
     cfg = {
@@ -506,6 +712,7 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
         "pbrs": {},
         "evaluation": {"eval_interval": 0},
         "training": {
+            "gamma": gamma,
             "epochs": 1,
             "num_envs_per_gpu": 1,
             "logical_microbatches_per_epoch": 2,
@@ -521,7 +728,9 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
     )
 
     assert collect_calls == [1, 2]
+    assert return_gammas == [gamma, gamma]
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    assert payload["config"]["training"]["gamma"] == gamma
     optimizer_steps = [
         int(state["step"]) for state in payload["optimizer_state_dict"]["state"].values()
     ]

@@ -3,6 +3,16 @@
 2026-09-04, branch `drl-benchmark-adapters`.
 Baseline: `6ea2419bdab4c69e41009863c54a079546737b5b`.
 
+**Historical performance report.** The table below describes the original
+optimization patch. Later TERRAN revisions set encoder dropout to zero and
+enabled collection-time encoder caching. The current
+`terran_undiscounted_distance_pbrs_v1` revision also uses gamma 1.0. Those are
+recorded training changes, not performance-equivalent continuations of this
+baseline. The [active TERRAN contract](TERRAN/README.md) and
+[server runbook](scripts/rq_v1/README.md) take precedence for new launches.
+PPO parameter-dependent encodings are always recomputed after optimizer updates;
+the regression suite checks two actual updates and nonzero encoder gradients.
+
 This patch removes repeated work in training and online validation. It does not
 change the then-active v10 budget, physical/logical batches, shared ID stream,
 seeds,

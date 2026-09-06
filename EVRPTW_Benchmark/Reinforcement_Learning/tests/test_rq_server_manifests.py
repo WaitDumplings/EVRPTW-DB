@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from collections import Counter
 
+import yaml
+
+from EVRPTW_Benchmark.Reinforcement_Learning.scripts import build_rq_server_manifests as MANIFESTS
 from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import (
     SERVERS,
     SCRIPT_ROOT,
@@ -46,6 +49,39 @@ def test_shared_stream_is_method_independent_within_condition_scale_seed() -> No
         key = (row["representation"], row["condition"], row["scale"], row["seed"])
         grouped.setdefault(key, set()).add(row["training_stream_path"])
     assert all(len(paths) == 1 for paths in grouped.values())
+
+
+def test_reward_contract_is_terran_only_and_derived_from_formal_yaml(tmp_path, monkeypatch) -> None:
+    baseline = build()
+    formal = yaml.safe_load(MANIFESTS.TERRAN_CONFIG.read_text(encoding="utf-8"))
+    training = formal["training"]
+    terran_count = 0
+    for queue in baseline.values():
+        for row in queue:
+            if row["method"] == "terran":
+                terran_count += 1
+                assert row["reward_contract_id"] == training["reward_contract_id"]
+                assert row["training_gamma"] == training["gamma"] == 1.0
+            else:
+                assert "reward_contract_id" not in row
+                assert "training_gamma" not in row
+    assert terran_count == 7
+
+    # A method-only reward revision changes no stream, budget, schedule or peer row.
+    alternate = tmp_path / "terran.yaml"
+    alternate.write_text("training:\n  gamma: 0.999\n  reward_contract_id: reference-only\n")
+    monkeypatch.setattr(MANIFESTS, "TERRAN_CONFIG", alternate)
+    revised = build()
+    for server, baseline_rows in baseline.items():
+        for before, after in zip(baseline_rows, revised[server], strict=True):
+            if before["method"] != "terran":
+                assert before == after
+            else:
+                assert after["training_gamma"] == 0.999
+                assert after["reward_contract_id"] == "reference-only"
+                assert {k: v for k, v in before.items() if k not in {"training_gamma", "reward_contract_id"}} == {
+                    k: v for k, v in after.items() if k not in {"training_gamma", "reward_contract_id"}
+                }
 
 
 def test_scale_aware_hardware_assignment_is_strict() -> None:

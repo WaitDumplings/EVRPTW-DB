@@ -56,6 +56,52 @@ def deep_update(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return out
 
 
+def training_gamma(cfg: dict[str, Any]) -> float:
+    """Use the same finite-episode discount for returns and potential shaping."""
+    gamma = float(cfg.get("training", {}).get("gamma", 1.0))
+    if not 0.0 <= gamma <= 1.0:
+        raise ValueError("training.gamma must be finite and in [0, 1]")
+    return gamma
+
+
+def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
+    """Do not silently continue a discounted/older reward run as a new protocol."""
+    saved_training = payload.get("config", {}).get("training", {})
+    if "gamma" not in saved_training:
+        raise ValueError("TERRAN resume checkpoint is missing training.gamma; start a fresh run")
+    if training_gamma(payload["config"]) != training_gamma(cfg):
+        raise ValueError("TERRAN resume gamma mismatch; start a fresh run in a new output directory")
+    current_contract = cfg.get("training", {}).get("reward_contract_id")
+    if saved_training.get("reward_contract_id") != current_contract:
+        raise ValueError("TERRAN resume reward contract mismatch; start a fresh run")
+
+
+def validate_fresh_training_output(cfg: dict[str, Any]) -> None:
+    """A fresh launch may have launcher logs, but must not inherit training history."""
+    if not cfg.get("output_dir"):
+        return
+    output = Path(cfg["output_dir"])
+    evidence = [
+        output / name
+        for name in (
+            "checkpoint_latest.pt", "checkpoint_selected.pt", "data_pass_state.json",
+            "best.ckpt", "best_overall.ckpt", "best_within_5000.ckpt",
+            "training_result.json", "validation_history.jsonl", "validation_summary.json",
+            "validation_summary_overall.json", "validation_summary_within_5000.json",
+            "logs/train_log.csv", "logs/eval_log.csv",
+        )
+        if (output / name).exists()
+    ]
+    checkpoint_dir = output / "checkpoints"
+    if checkpoint_dir.is_dir():
+        evidence.extend(checkpoint_dir.iterdir())
+    if evidence:
+        raise FileExistsError(
+            "TERRAN fresh training output already contains training evidence: "
+            f"{evidence[0]}. Use same-contract --resume or a new output directory."
+        )
+
+
 def masked_mean(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     mask_f = mask.float()
     denom = torch.clamp(mask_f.sum(), min=1.0)
@@ -171,7 +217,7 @@ def build_pbrs_config(cfg: dict[str, Any]) -> PotentialRewardConfig | None:
         use_feasible_ratio_pbrs=bool(pbrs.get("use_feasible_ratio_pbrs", False)),
         use_terminal_heuristic=bool(pbrs.get("use_terminal_heuristic", False)),
         customer_pbrs_mode=str(pbrs.get("customer_pbrs_mode", "progress")),
-        gamma=float(cfg.get("training", {}).get("gamma", 0.99)),
+        gamma=training_gamma(cfg),
         alpha=float(pbrs.get("alpha", 2.0)),
         beta=float(pbrs.get("beta", 0.5)),
         customer_pbrs_coef=float(pbrs.get("customer_pbrs_coef", 1.0)),
@@ -643,6 +689,18 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     cfg = deep_update(cfg, overrides or {})
     set_seed(seed)
     train_cfg = cfg["training"]
+    gamma = training_gamma(cfg)
+    # Persist the resolved value even for callers using the default. Resume
+    # must never guess which discount produced an existing checkpoint.
+    train_cfg["gamma"] = gamma
+    protocol_cfg = cfg.get("protocol", {})
+    resume_checkpoint = protocol_cfg.get("resume_checkpoint")
+    resume_payload = None
+    if resume_checkpoint:
+        resume_payload = torch.load(resume_checkpoint, map_location="cpu", weights_only=False)
+        validate_resume_reward_contract(cfg, resume_payload)
+    else:
+        validate_fresh_training_output(cfg)
     training_started = time.perf_counter()
     eval_cfg = cfg.get("evaluation", {})
     model_cfg = cfg.get("model", {})
@@ -669,7 +727,6 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     initial_env_start = time.perf_counter()
     envs, pool = make_envs(cfg, seed)
     initial_env_pool_time_s = time.perf_counter() - initial_env_start
-    gamma = float(train_cfg.get("gamma", 0.99))
     epochs = int(train_cfg.get("epochs", 1000))
     rollout_steps = int(train_cfg.get("rollout_steps", 64))
     ppo_epochs = int(train_cfg.get("ppo_update_epochs", 4))
@@ -686,7 +743,6 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     profile_timing = bool(train_cfg.get("profile_timing", False))
     ppo_step_chunk_size = int(train_cfg.get("ppo_step_chunk_size", 0) or 0)
     cache_rollout_encoder = bool(train_cfg.get("cache_rollout_encoder", True))
-    protocol_cfg = cfg.get("protocol", {})
     registered_effective_batch = int(
         protocol_cfg.get(
             "logical_environments_per_epoch",
@@ -704,12 +760,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     )
     optimizer_steps_total = int(protocol_cfg.get("optimizer_steps", 0) or 0)
     start_epoch = 1
-    resume_checkpoint = protocol_cfg.get("resume_checkpoint")
-    if resume_checkpoint:
-        payload = torch.load(resume_checkpoint, map_location=device, weights_only=False)
-        agent.load_state_dict(payload["model_state_dict"])
-        optimizer.load_state_dict(payload["optimizer_state_dict"])
-        start_epoch = int(payload["epoch"]) + 1
+    if resume_payload is not None:
+        agent.load_state_dict(resume_payload["model_state_dict"])
+        optimizer.load_state_dict(resume_payload["optimizer_state_dict"])
+        start_epoch = int(resume_payload["epoch"]) + 1
+        del resume_payload
 
     if cfg.get("output_dir"):
         out_root = Path(cfg["output_dir"])

@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "drl_job_runtime.py"
@@ -299,3 +301,198 @@ def test_job_loading_filters_formal_seed_and_scale(
         manifest, {0}, "full", seeds={2345}, scales={"Cus50"}
     )
     assert [row["job_id"] for row in formal] == ["full-2345-Cus50"]
+
+
+def _terran_job():
+    job = _job("full__G__Full-support__terran__Cus100__seed1234")
+    job.update(
+        method="terran",
+        training_gamma=1.0,
+        reward_contract_id="terran_undiscounted_distance_pbrs_v1",
+    )
+    return job
+
+
+def test_terran_manifest_contract_is_checked_before_preflight_side_effects(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    config = tmp_path / "terran.yaml"
+    config.write_text(
+        "training:\n  gamma: 1.0\n"
+        "  reward_contract_id: terran_undiscounted_distance_pbrs_v1\n"
+    )
+    monkeypatch.setattr(RUNTIME, "TERRAN_CONFIG", config)
+    RUNTIME.validate_terran_training_contracts([_terran_job(), _job()])
+    for updates in (
+        {"training_gamma": 0.999},
+        {"reward_contract_id": "old-contract"},
+        {"reward_contract_id": None, "training_gamma": None},
+    ):
+        stale = {**_terran_job(), **updates}
+        # The minimal object intentionally has no runtime options: contract
+        # rejection precedes output writes, GPU checks, or dataset discovery.
+        with pytest.raises(RuntimeError, match="manifest/config reward contract mismatch"):
+            RUNTIME.preflight(object(), [stale])
+    legacy = {key: value for key, value in _terran_job().items()
+              if key not in {"training_gamma", "reward_contract_id"}}
+    with pytest.raises(RuntimeError, match="manifest/config reward contract mismatch"):
+        RUNTIME.validate_terran_training_contracts([legacy])
+    # Unaffected methods do not require or load the TERRAN YAML.
+    monkeypatch.setattr(RUNTIME, "TERRAN_CONFIG", tmp_path / "missing.yaml")
+    RUNTIME.validate_terran_training_contracts([_job()])
+
+
+def test_versioned_terran_completion_requires_matching_saved_contract(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context["dataset"].mkdir()
+    job = _terran_job()
+    output = RUNTIME.output_dir(job, context)
+    job["test_command"] = _artifact_command(output)
+    assert RUNTIME.run_job(job, context, 0, False, False)
+    assert RUNTIME.job_complete(job, output)
+    result_path = output / "job_result.json"
+    provenance_path = output / "provenance.json"
+    result = json.loads(result_path.read_text())
+    provenance = json.loads(provenance_path.read_text())
+    for field in ("training_gamma", "reward_contract_id"):
+        assert result[field] == provenance[field] == provenance["job"][field] == job[field]
+        missing = dict(result)
+        missing.pop(field)
+        result_path.write_text(json.dumps(missing))
+        assert not RUNTIME.job_complete(job, output)
+        result_path.write_text(json.dumps(result))
+        missing = dict(provenance)
+        missing.pop(field)
+        provenance_path.write_text(json.dumps(missing))
+        assert not RUNTIME.job_complete(job, output)
+        provenance_path.write_text(json.dumps(provenance))
+    stale = {**result, "training_gamma": 0.999}
+    result_path.write_text(json.dumps(stale))
+    assert not RUNTIME.job_complete(job, output)
+    # A mismatched completed directory must neither skip nor start over it.
+    with pytest.raises(RuntimeError, match="refusing fresh training"):
+        RUNTIME.run_job(job, context, 0, False, False)
+    assert json.loads(result_path.read_text()) == stale
+    assert json.loads(provenance_path.read_text()) == provenance
+    result_path.write_text(json.dumps(result))
+    provenance["job"]["training_gamma"] = 0.999
+    provenance_path.write_text(json.dumps(provenance))
+    assert not RUNTIME.job_complete(job, output)
+
+
+@pytest.mark.parametrize("relative", [
+    "checkpoint_latest.pt", "data_pass_state.json", "validation_history.jsonl",
+    "validation_summary_overall.json", "best_overall.ckpt", "training_result.json",
+    "logs/train_log.csv", "checkpoints/checkpoint_epoch_0001.pt",
+    "logical_epoch_history.jsonl", "train_history.jsonl",
+])
+def test_full_refuses_existing_training_state_without_overwriting(
+    tmp_path: Path, relative: str,
+) -> None:
+    context = _context(tmp_path)
+    job = _terran_job()
+    output = RUNTIME.output_dir(job, context)
+    marker = output / relative
+    marker.parent.mkdir(parents=True)
+    marker.write_bytes(b"original-training-evidence")
+    job["test_command"] = [sys.executable, "-c", "raise SystemExit(99)"]
+    with pytest.raises(RuntimeError, match="refusing fresh training"):
+        RUNTIME.run_job(job, context, 0, False, False)
+    assert marker.read_bytes() == b"original-training-evidence"
+    assert not (output / "provenance.json").exists()
+
+
+def test_launcher_only_files_allow_fresh_start_and_commit_changes_root(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context["dataset"].mkdir()
+    job = _terran_job()
+    output = RUNTIME.output_dir(job, context)
+    output.mkdir(parents=True)
+    (output / "stdout.log").write_text("launcher only")
+    (output / "provenance.json").write_text("{}")
+    job["test_command"] = _artifact_command(output)
+    assert RUNTIME.run_job(job, context, 0, False, False)
+    new_context = {**context, "commit": "gamma1-commit"}
+    assert RUNTIME.output_dir(job, new_context) != output
+    assert not RUNTIME.existing_training_state(RUNTIME.output_dir(job, new_context))
+
+
+def test_resume_with_matching_evidence_remains_allowed(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context["dataset"].mkdir()
+    job = _terran_job()
+    output = RUNTIME.output_dir(job, context)
+    output.mkdir(parents=True)
+    (output / "data_pass_state.json").write_text("{}")
+    (output / "checkpoint_latest.pt").write_bytes(b"checkpoint")
+    job["test_command"] = _artifact_command(output)
+    assert RUNTIME.run_job(job, context, 0, True, False)
+    provenance = json.loads((output / "provenance.json").read_text())
+    assert provenance["resumed_from_checkpoint"]
+
+
+@pytest.mark.parametrize("stale_field", ["training_gamma", "reward_contract_id", "missing_contract"])
+def test_resume_rejects_stale_provenance_before_overwriting(
+    tmp_path: Path, stale_field: str,
+) -> None:
+    context = _context(tmp_path)
+    job = _terran_job()
+    output = RUNTIME.output_dir(job, context)
+    output.mkdir(parents=True)
+    (output / "data_pass_state.json").write_text("original-state")
+    (output / "checkpoint_latest.pt").write_bytes(b"original-checkpoint")
+    stale_job = dict(job)
+    if stale_field == "missing_contract":
+        stale_job.pop("training_gamma")
+        stale_job.pop("reward_contract_id")
+    else:
+        stale_job[stale_field] = 0.999 if stale_field == "training_gamma" else "old-contract"
+    provenance = {"job": stale_job, **RUNTIME.training_contract(stale_job)}
+    provenance_path = output / "provenance.json"
+    original = json.dumps(provenance)
+    provenance_path.write_text(original)
+    with pytest.raises(RuntimeError, match="resume provenance reward contract mismatch"):
+        RUNTIME.run_job(job, context, 0, True, False)
+    assert provenance_path.read_text() == original
+    assert (output / "data_pass_state.json").read_text() == "original-state"
+    assert (output / "checkpoint_latest.pt").read_bytes() == b"original-checkpoint"
+    assert not (output / "job_result.json").exists()
+
+
+def test_refused_training_is_reported_as_queue_failure(tmp_path: Path, capsys) -> None:
+    context = _context(tmp_path)
+    job = _terran_job()
+    output = RUNTIME.output_dir(job, context)
+    output.mkdir(parents=True)
+    (output / "validation_history.jsonl").write_text("old-history")
+    failures = []
+    RUNTIME.STOP.clear()
+    RUNTIME.worker(0, [job], context, 0, False, False, failures)
+    assert failures == [job["job_id"]]
+    assert "refusing fresh training" in capsys.readouterr().err
+
+
+def test_method_filter_applies_to_full_resume_and_status(tmp_path: Path, monkeypatch, capsys) -> None:
+    rows = []
+    for method in ("am_evrptw", "terran"):
+        for mode in ("full", "evaluate"):
+            row = _job(f"{mode}-{method}")
+            row.update(method=method, run_mode=mode, enabled=True)
+            if mode == "evaluate":
+                row.update(kind="eval", test_id="test1", decode_budget="sample100")
+            rows.append(row)
+    manifest = tmp_path / "jobs.jsonl"
+    manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    for mode in ("full", "resume", "evaluate", "status"):
+        selected = RUNTIME.load_jobs(manifest, {0}, mode, methods={"terran"})
+        assert selected and all(row["method"] == "terran" for row in selected)
+    assert len(RUNTIME.load_jobs(manifest, {0}, "full")) == 2
+    monkeypatch.setattr(sys, "argv", [
+        "drl_job_runtime.py", "status", "--manifest", str(manifest), "--slots", "0",
+        "--local-gpu-count", "1", "--gpu-name-pattern", "unused", "--methods", "terran",
+    ])
+    monkeypatch.setattr(RUNTIME, "preflight", lambda args, jobs: _context(tmp_path))
+    RUNTIME.main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["jobs"] == 2
+    assert {row["job_id"] for row in payload["rows"]} == {"full-terran", "evaluate-terran"}

@@ -11,6 +11,30 @@ as the objective-facing reward, retain configured auxiliary shaping, and replay
 all reported routes through the shared verifier. See
 [`ADAPTATION.md`](ADAPTATION.md) for the method boundary.
 
+## Active Stage-2 return and cache contract
+
+Formal Stage-2 runs use `training.gamma=1.0` and
+`reward_contract_id=terran_undiscounted_distance_pbrs_v1`. Returns are finite-episode
+reward sums; the PBRS wrapper uses the same discount. A registered rollout-budget
+failure is a terminal outcome, not a collection slice to bootstrap. Terminal
+potentials are zero for both completion and failure. Auxiliary terminal bonuses
+and penalties remain separate from strict potential shaping. This revision does
+not introduce electricity prices or per-vehicle fees: benchmark selection still
+uses verified feasibility followed by directed distance.
+
+Static encoder outputs are cached during collection only while parameters stay
+fixed. PPO recomputes a differentiable encoding for every minibatch/time chunk;
+it never reuses collection embeddings or embeddings from before an optimizer
+update. Static input tensors and frozen behavior-policy log-probabilities may
+be retained. Encoder dropout is zero in the current implementation.
+
+Start this revision from scratch. Checkpoints with a different gamma or reward
+contract cannot be resumed, and a fresh launch refuses old training history.
+Server output directories already include the Git commit, so pulling the new
+commit and using `full.sh` separates the new run without rebuilding shared ID
+streams. See the [server restart instructions](../scripts/rq_v1/README.md).
+Explicit legacy configurations retain their historical gamma values.
+
 ## Components
 
 - `models/`: migrated TERRAN attention backbone, actor, and critic.

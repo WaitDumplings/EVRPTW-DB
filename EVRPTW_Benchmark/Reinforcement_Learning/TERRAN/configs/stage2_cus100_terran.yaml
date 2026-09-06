@@ -41,9 +41,10 @@ training:
   ppo_step_chunk_size: 64
   ppo_update_epochs: 3
   num_minibatches: 4
-  # Cus1000 rollouts are up to 1200 steps; 0.99 has an effective horizon of
-  # only about 100 steps and makes terminal completion effectively invisible.
-  gamma: 0.999
+  # Finite routing episodes use undiscounted returns: late distance costs and
+  # completion feedback have the same weight as early ones. PBRS shares gamma.
+  gamma: 1.0
+  reward_contract_id: terran_undiscounted_distance_pbrs_v1
   clip_coef: 0.2
   vf_coef: 0.5
   ent_coef: 0.01
