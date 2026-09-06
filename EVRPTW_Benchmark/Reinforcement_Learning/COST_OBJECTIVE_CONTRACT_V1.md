@@ -5,9 +5,6 @@ training in the formal RQ queues. It supersedes the distance-only objective for
 these new runs, not the historical results or the physical dataset contract.
 The sole parameter source is
 [`configs/rivian_energy_vehicle_cost_v1.json`](configs/rivian_energy_vehicle_cost_v1.json).
-The subsequent independent action revision
-[`drl_no_consecutive_cs_v1`](ACTION_CONSTRAINT_CONTRACT_V1.md) forbids CS-to-CS
-visits in all four DRL methods without changing these economic coefficients.
 
 ## 1. Objective and reference parameters
 

@@ -14,7 +14,6 @@ from ..common.protocol_entrypoints import run_am
 from ..common.training_protocol import add_data_pass_arguments
 from ..common.objective import objective_from_args
 from ..common.protocol_trainers import prepare_training_objective
-from ..common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 
 from .data import Stage2TaskPool, make_envs
 from .model import AMEVRPTWPolicy
@@ -175,7 +174,6 @@ def main() -> None:
             baseline.load_state_dict(policy.state_dict())
         row = {
             "epoch": epoch,
-            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             ("train_cost_normalized" if objective_config.is_cost else "train_cost_km"): float(np.mean(epoch_costs)),
             "objective_mode": objective_config.mode,
             "objective_unit": objective_config.unit,
@@ -197,7 +195,6 @@ def main() -> None:
                 "optimizer": optimizer.state_dict(),
                 "args": vars(args),
                 "objective_config": objective_config.to_dict(),
-                "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             },
             args.output_dir / "checkpoint_latest.pt",
         )

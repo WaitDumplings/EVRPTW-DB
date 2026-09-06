@@ -19,7 +19,6 @@ from EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.tests.test_am_model impor
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.env import DRLTSHardConstraintEnv
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.soft_env import DRLTSSoftConstraintEnv
 from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_entrypoints, protocol_trainers
-from EVRPTW_Benchmark.Reinforcement_Learning.common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
 from EVRPTW_Benchmark.Reinforcement_Learning.common.stage2_data import make_envs
 
@@ -188,8 +187,6 @@ def test_reinforce_checkpoint_freezes_objective_and_rejects_changed_resume(tmp_p
     )
     payload = torch.load(path, map_location="cpu", weights_only=False)
     assert payload["objective_config"] == objective.to_dict()
-    assert payload["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-    assert payload["args"]["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
     before = policy.weight.detach().clone()
     with pytest.raises(ValueError, match="objective mismatch"):
         protocol_trainers._load_checkpoint(
@@ -267,13 +264,11 @@ def test_real_policy_backpropagates_finite_cost_rollout(method, soft):
     assert any(torch.count_nonzero(gradient) for gradient in gradients)
 
 
-@pytest.mark.parametrize("cost", [False, True])
-def test_fresh_training_guard_allows_launcher_logs_but_rejects_training_history(tmp_path, cost):
-    args = SimpleNamespace(output_dir=tmp_path, objective=_objective(cost).to_dict(), resume=False)
+def test_fresh_cost_guard_allows_launcher_logs_but_rejects_training_history(tmp_path):
+    args = SimpleNamespace(output_dir=tmp_path, objective=_objective().to_dict(), resume=False)
     (tmp_path / "stdout.log").write_text("launching\n")
     (tmp_path / "provenance.json").write_text("{}")
-    assert protocol_trainers.prepare_training_objective(args).is_cost == cost
-    assert args.action_constraint_contract_id == ACTION_CONSTRAINT_CONTRACT_ID
+    assert protocol_trainers.prepare_training_objective(args).is_cost
     history = tmp_path / "validation_history.jsonl"
     history.write_text("old run\n")
     with pytest.raises(FileExistsError, match="new output directory"):
@@ -287,20 +282,19 @@ def test_standalone_resume_is_rejected_and_formal_cost_resume_is_checked(tmp_pat
         protocol_trainers.prepare_training_objective(args)
     args.training_epochs = 2
     checkpoint = tmp_path / "checkpoint_latest.pt"
-    torch.save({"objective_config": _objective(False).to_dict(), "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID}, checkpoint)
+    torch.save({"objective_config": _objective(False).to_dict()}, checkpoint)
     with pytest.raises(ValueError, match="objective mismatch"):
         protocol_trainers.prepare_training_objective(args)
-    torch.save({"objective_config": _objective().to_dict(), "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID}, checkpoint)
+    torch.save({"objective_config": _objective().to_dict()}, checkpoint)
     assert protocol_trainers.prepare_training_objective(args).is_cost
 
 
-@pytest.mark.parametrize("cost", [False, True])
 @pytest.mark.parametrize("method", ["AM_EVRPTW", "EVRPTW_RL", "DRL_TS"])
-def test_standalone_evaluation_uses_checkpoint_objective_and_action_contract(tmp_path, monkeypatch, method, cost):
+def test_standalone_evaluation_uses_checkpoint_cost_contract(tmp_path, monkeypatch, method):
     module = importlib.import_module(
         f"EVRPTW_Benchmark.Reinforcement_Learning.{method}.eval"
     )
-    objective = _objective(cost)
+    objective = _objective()
     instance = _instance()
     args = SimpleNamespace(
         checkpoint=tmp_path / "checkpoint.pt", objective_config=None,
@@ -311,10 +305,7 @@ def test_standalone_evaluation_uses_checkpoint_objective_and_action_contract(tmp
         incomplete_penalty_km=123.0,
     )
     policy = _ScriptedPolicy(method, (1, 2, 0))
-    torch.save({
-        "model": policy.state_dict(), "args": {}, "objective_config": objective.to_dict(),
-        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
-    }, args.checkpoint)
+    torch.save({"model": policy.state_dict(), "args": {}, "objective_config": objective.to_dict()}, args.checkpoint)
     monkeypatch.setattr(module, "parse_args", lambda: args)
     policy_name = {"AM_EVRPTW": "AMEVRPTWPolicy", "EVRPTW_RL": "EVRPTWRLPolicy", "DRL_TS": "DRLTSPolicy"}[method]
     monkeypatch.setattr(module, policy_name, lambda **_kwargs: policy)
@@ -323,141 +314,6 @@ def test_standalone_evaluation_uses_checkpoint_objective_and_action_contract(tmp
     row = json.loads((args.output_dir / "routes.jsonl").read_text())
     assert row["verifier_passed"] is True
     assert row["objective_mode"] == objective.mode
-    assert row["objective_unit"] == objective.unit
+    assert row["objective_unit"] == "USD"
     assert row["objective_value"] == pytest.approx(objective.value(row["objective_distance_km"], 1))
     assert row["vehicles_started"] == 1
-    assert row["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-
-
-@pytest.mark.parametrize("cost", [False, True])
-@pytest.mark.parametrize("contract_fields", [
-    {},
-    {"action_constraint_contract_id": "drl_previous_rules_v0"},
-    {"action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
-     "args": {"action_constraint_contract_id": "drl_previous_rules_v0"}},
-    {"action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
-     "config": {"action_constraint_contract_id": "drl_previous_rules_v0"}},
-])
-def test_reinforce_resume_rejects_missing_old_or_conflicting_action_contract(
-    tmp_path, monkeypatch, cost, contract_fields
-):
-    objective = _objective(cost)
-    path = tmp_path / "checkpoint_latest.pt"
-    torch.save({
-        "protocol_id": "action-test", "objective_config": objective.to_dict(),
-        **contract_fields,
-    }, path)
-    args = SimpleNamespace(
-        output_dir=tmp_path, objective=objective.to_dict(), resume=True, training_epochs=2,
-    )
-    with pytest.raises(ValueError, match="action constraint contract mismatch"):
-        protocol_trainers.prepare_training_objective(args)
-
-    def unexpected_load(*_args, **_kwargs):
-        pytest.fail("incompatible action contract must fail before loading any model or optimizer")
-
-    policy = torch.nn.Linear(1, 1)
-    baseline = deepcopy(policy)
-    optimizer = torch.optim.Adam(policy.parameters())
-    for target in (policy, baseline, optimizer):
-        monkeypatch.setattr(target, "load_state_dict", unexpected_load)
-    with pytest.raises(ValueError, match="action constraint contract mismatch"):
-        protocol_trainers._load_checkpoint(
-            path, policy=policy, baseline=baseline, optimizer=optimizer,
-            protocol_id="action-test", objective_config=objective,
-        )
-
-
-@pytest.mark.parametrize("cost", [False, True])
-@pytest.mark.parametrize("method", ["AM_EVRPTW", "EVRPTW_RL", "DRL_TS"])
-@pytest.mark.parametrize("contract", [None, "drl_previous_rules_v0"])
-def test_evaluation_rejects_legacy_action_contract_before_model_or_data(
-    tmp_path, monkeypatch, cost, method, contract
-):
-    module = importlib.import_module(
-        f"EVRPTW_Benchmark.Reinforcement_Learning.{method}.eval"
-    )
-    checkpoint = tmp_path / "checkpoint.pt"
-    payload = {"objective_config": _objective(cost).to_dict()}
-    if contract is not None:
-        payload["action_constraint_contract_id"] = contract
-    torch.save(payload, checkpoint)
-    args = SimpleNamespace(
-        checkpoint=checkpoint, decode_type="greedy", candidates=1, device="cpu",
-    )
-    monkeypatch.setattr(module, "parse_args", lambda: args)
-
-    def unexpected_construction(*_args, **_kwargs):
-        pytest.fail("incompatible action contract must fail before model or data construction")
-
-    policy_name = {
-        "AM_EVRPTW": "AMEVRPTWPolicy", "EVRPTW_RL": "EVRPTWRLPolicy", "DRL_TS": "DRLTSPolicy",
-    }[method]
-    monkeypatch.setattr(module, policy_name, unexpected_construction)
-    monkeypatch.setattr(module, "Stage2TaskPool", unexpected_construction)
-    with pytest.raises(ValueError, match="action constraint contract mismatch"):
-        module.main()
-
-
-@pytest.mark.parametrize("cost", [False, True])
-@pytest.mark.parametrize("method", ["AM_EVRPTW", "EVRPTW_RL", "DRL_TS"])
-def test_standalone_training_saves_action_contract_in_checkpoint_and_history(
-    tmp_path, monkeypatch, cost, method
-):
-    module = importlib.import_module(
-        f"EVRPTW_Benchmark.Reinforcement_Learning.{method}.train"
-    )
-    argv = [
-        "train", "--dataset-path", str(tmp_path / "unused-dataset"),
-        "--output-dir", str(tmp_path / "train"), "--device", "cpu",
-        "--batch-size", "2", "--baseline-eval-size", "2", "--embedding-dim", "16",
-    ]
-    if method == "EVRPTW_RL":
-        argv += ["--iterations", "1", "--structure2vec-rounds", "1"]
-    else:
-        argv += ["--epochs", "1", "--n-encode-layers", "1", "--n-heads", "4"]
-        argv += ["--steps-per-epoch" if method == "AM_EVRPTW" else "--batches-per-epoch", "1"]
-    monkeypatch.setattr(sys, "argv", argv)
-    args = module.parse_args()
-    args.objective = _objective(cost).to_dict()
-    monkeypatch.setattr(module, "parse_args", lambda: args)
-    monkeypatch.setattr(module, "Stage2TaskPool", lambda **_kwargs: SimpleNamespace(
-        first=lambda *, limit: [_instance() for _ in range(limit)],
-        sample=lambda count: [_instance() for _ in range(count)],
-    ))
-    # This bounded synthetic test exercises real gradient/save paths, not the
-    # significance test (identical tiny instances have zero paired variance).
-    monkeypatch.setattr(module, "ttest_rel", lambda *_args, **_kwargs: SimpleNamespace(pvalue=1.0))
-    module.main()
-    payload = torch.load(args.output_dir / "checkpoint_latest.pt", map_location="cpu", weights_only=False)
-    assert payload["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-    assert payload["args"]["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-    assert payload["objective_config"] == _objective(cost).to_dict()
-    history = json.loads((args.output_dir / "train_history.jsonl").read_text())
-    assert history["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-
-
-@pytest.mark.parametrize("cost", [False, True])
-@pytest.mark.parametrize("method", ["AM_EVRPTW", "EVRPTW_RL", "DRL_TS"])
-def test_formal_training_main_rejects_old_action_contract_before_data_or_model(
-    tmp_path, monkeypatch, cost, method
-):
-    module = importlib.import_module(
-        f"EVRPTW_Benchmark.Reinforcement_Learning.{method}.train"
-    )
-    torch.save({"objective_config": _objective(cost).to_dict()}, tmp_path / "checkpoint_latest.pt")
-    args = SimpleNamespace(
-        output_dir=tmp_path, objective=_objective(cost).to_dict(), resume=True, training_epochs=2,
-    )
-    monkeypatch.setattr(module, "parse_args", lambda: args)
-
-    def unexpected_construction(*_args, **_kwargs):
-        pytest.fail("old action contract must fail before training data or model construction")
-
-    policy_name = {
-        "AM_EVRPTW": "AMEVRPTWPolicy", "EVRPTW_RL": "EVRPTWRLPolicy", "DRL_TS": "DRLTSPolicy",
-    }[method]
-    monkeypatch.setattr(module, policy_name, unexpected_construction)
-    monkeypatch.setattr(module, "Stage2TaskPool", unexpected_construction)
-    with pytest.raises(ValueError, match="action constraint contract mismatch"):
-        module.main()

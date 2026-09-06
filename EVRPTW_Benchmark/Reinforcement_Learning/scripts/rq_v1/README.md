@@ -18,13 +18,6 @@ recovery within the same v13 job and commit.
 
 ### All-method electricity + vehicle-cost restart
 
-All four methods additionally use `drl_no_consecutive_cs_v1`: no consecutive
-CS-to-CS actions in training or evaluation. This is a DRL search-space
-restriction, separate from the unchanged objective/data contract. See
-[`ACTION_CONSTRAINT_CONTRACT_V1.md`](../../ACTION_CONSTRAINT_CONTRACT_V1.md).
-Checkpoints from the preceding cost-only revision lack this action-contract ID
-and must not be resumed or silently evaluated as the new revision.
-
 All four methods now use `rivian_energy_vehicle_cost_v1`:
 `cost_USD = 0.1341 * (100 / 257) * distance_km + 33.56 * vehicles_started`.
 Fixed vehicle cost is charged once on a valid departure from the depot.
@@ -61,7 +54,7 @@ The new commit provides a new output root; old results remain untouched. Shared
 artifacts are still under the unchanged v13 budget, so this update does not
 require dataset or stream regeneration. Only use `resume.sh`
 to recover an interrupted run of this same revision and commit. A mismatched
-objective, action-constraint or gamma/reward contract, or a fresh launch over existing training
+objective or gamma/reward contract, or a fresh launch over existing training
 history, is rejected. The launcher passes the same versioned objective JSON to
 every method and records its resolved values in each job's provenance.
 
@@ -69,10 +62,7 @@ The local CPU regression suite excludes vendored `reference_materials` and
 `tests/test_rq_server_environment.py`: the latter needs Linux utilities
 (`flock`, GNU `realpath -m`) unavailable on the macOS test host. Local CPU
 validation does not establish GPU convergence or a full Linux server launch.
-The current no-consecutive-CS revision passed **523 local CPU tests**; current
-scope and restart boundaries are recorded in
-[`NO_CONSECUTIVE_CS_V1_LOCAL_VERIFICATION.md`](../../reports/NO_CONSECUTIVE_CS_V1_LOCAL_VERIFICATION.md).
-The preceding cost-only revision passed 409 local CPU tests; its historical scope and
+The integrated cost revision passed 409 local CPU tests; the exact scope and
 command are recorded in
 [`COST_OBJECTIVE_V1_LOCAL_VERIFICATION.md`](../../reports/COST_OBJECTIVE_V1_LOCAL_VERIFICATION.md).
 

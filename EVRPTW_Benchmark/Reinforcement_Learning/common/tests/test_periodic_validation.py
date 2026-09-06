@@ -7,7 +7,6 @@ import torch
 import pytest
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_trainers, training_protocol
-from EVRPTW_Benchmark.Reinforcement_Learning.common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
 
 
@@ -182,11 +181,6 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
     assert overall_payload["logical_epoch"] == 6
     assert selected_payload["logical_epoch"] == 6
     assert selected_payload["objective_config"] == objective.to_dict()
-    for payload in (within_payload, overall_payload, selected_payload):
-        assert payload["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-        assert payload["args"]["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-    terminal = json.loads((output / "training_result.json").read_text())
-    assert terminal["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
     final_audit = json.loads(
         (output / "validation_final_audit.json").read_text()
     )

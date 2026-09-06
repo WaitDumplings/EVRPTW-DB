@@ -1,10 +1,5 @@
 # AM-EVRPTW Adaptation Record
 
-Current benchmark action adaptation: all DRL methods forbid consecutive
-`CS -> CS` visits under
-[`drl_no_consecutive_cs_v1`](../ACTION_CONSTRAINT_CONTRACT_V1.md).
-This is a shared search-space restriction, not an upstream architecture change.
-
 ## Upstream method retained
 
 The baseline is adapted from Kool, van Hoof, and Welling, *Attention, Learn to

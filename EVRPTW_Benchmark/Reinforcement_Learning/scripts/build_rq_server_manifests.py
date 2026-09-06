@@ -95,7 +95,6 @@ def job(
     payload = {
         "schema": "drl_rq_job_manifest_v1",
         "protocol_id": "drl_rq_protocol_frozen_v1",
-        "action_constraint_contract_id": cfg["action_constraint_contract_id"],
         "runtime_budget_id": cfg["runtime_budget_id"],
         "job_id": f"full__{representation}__{condition}__{method}__{scale}__seed{seed}",
         "enabled": True,

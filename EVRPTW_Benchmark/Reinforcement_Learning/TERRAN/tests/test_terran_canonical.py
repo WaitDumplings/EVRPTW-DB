@@ -32,7 +32,6 @@ from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.trainer import (
     pbrs_scale_for_epoch,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import DataPassState
-from EVRPTW_Benchmark.Reinforcement_Learning.common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import (
     collect_rollout, compute_returns, rollout_eval_batch,
 )
@@ -99,10 +98,7 @@ def test_resume_accepts_matching_gamma_and_reward_contract(
         training["reward_contract_id"] = contract
 
     terran_trainer.validate_resume_reward_contract(
-        {"training": dict(training)}, {
-            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
-            "config": {"training": dict(training)},
-        }
+        {"training": dict(training)}, {"config": {"training": dict(training)}}
     )
 
 
@@ -129,10 +125,7 @@ def test_resume_rejects_missing_or_changed_reward_contract(
     }
     with pytest.raises(ValueError, match=message):
         terran_trainer.validate_resume_reward_contract(
-            cfg, {
-                "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
-                "config": {"training": saved_training},
-            }
+            cfg, {"config": {"training": saved_training}}
         )
 
 
@@ -196,10 +189,7 @@ def test_training_contract_rejection_precedes_model_and_environment_creation(
         artifact = tmp_path / "checkpoint_latest.pt"
         # No model/optimizer payload is necessary: validation must reject the
         # incompatible reward contract before trying to initialize/load either.
-        torch.save({
-            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
-            "config": {"training": {"gamma": 0.999}},
-        }, artifact)
+        torch.save({"config": {"training": {"gamma": 0.999}}}, artifact)
         cfg["protocol"] = {"resume_checkpoint": str(artifact)}
         expected_error = ValueError
         message = "gamma mismatch"
@@ -740,8 +730,6 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
     assert collect_calls == [1, 2]
     assert return_gammas == [gamma, gamma]
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    assert payload["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-    assert payload["config"]["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
     assert payload["config"]["training"]["gamma"] == gamma
     optimizer_steps = [
         int(state["step"]) for state in payload["optimizer_state_dict"]["state"].values()
@@ -751,7 +739,6 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
         row = list(csv.DictReader(stream))[-1]
     assert int(row["samples_seen"]) == 2
     assert int(row["effective_instances_per_optimizer_step"]) == 2
-    assert row["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
 
 
 @pytest.mark.parametrize("cost_mode", [False, True])
@@ -863,8 +850,6 @@ def test_terran_online_selection_publishes_tail_best_as_formal_aliases(
     )
     assert selected["epoch"] == best["epoch"] == overall["epoch"] == (2 if cost_mode else 3)
     assert selected["config"]["objective"]["mode"] == ("energy_vehicle_cost" if cost_mode else "distance")
-    assert selected["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-    assert selected["config"]["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
     assert within["epoch"] == 2
     assert json.loads((tmp_path / "validation_summary.json").read_text())[
         "logical_epoch"
@@ -915,7 +900,6 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
         json.dumps(
             {
                 "logical_epoch": 75,
-                "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
                 "complete_and_feasible_rate": 1.0,
                 "mean_verified_distance_km": 8.0,
             }
@@ -951,14 +935,14 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
         with (audit_dir / "summary.csv").open("w", newline="") as stream:
             writer = csv.DictWriter(
                 stream,
-                fieldnames=["verifier_passed", "objective_distance_km", "action_constraint_contract_id"],
+                fieldnames=["verifier_passed", "objective_distance_km"],
             )
             writer.writeheader()
             writer.writerow(
-                {"verifier_passed": "true", "objective_distance_km": 8.0, "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID}
+                {"verifier_passed": "true", "objective_distance_km": 8.0}
             )
             writer.writerow(
-                {"verifier_passed": "false", "objective_distance_km": 9.0, "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID}
+                {"verifier_passed": "false", "objective_distance_km": 9.0}
             )
         return SimpleNamespace(returncode=0)
 
@@ -998,8 +982,6 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
     assert audit["instances"] == 2
     assert audit["selection_logical_epoch"] == 75
     assert audit["selection_changed"] is False
-    assert audit["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
-    assert json.loads((output / "training_result.json").read_text())["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
     assert (output / "checkpoint_selected.pt").read_bytes() == b"overall"
     assert (output / "best.ckpt").read_bytes() == b"overall"
     assert (output / "best_within_5000.ckpt").read_bytes() == b"within"

@@ -1,10 +1,5 @@
 # DRL-TS Adaptation Record
 
-Current benchmark action adaptation: the paper's consecutive-CS restriction
-is now shared by all four methods under
-[`drl_no_consecutive_cs_v1`](../ACTION_CONSTRAINT_CONTRACT_V1.md).
-DRL-TS retains its additional depot-to-CS mask and its existing stage schedule.
-
 ## Publication and code status
 
 This baseline follows Jinbiao Chen, Huanhuan Huang, Zizhen Zhang, and Jiahai

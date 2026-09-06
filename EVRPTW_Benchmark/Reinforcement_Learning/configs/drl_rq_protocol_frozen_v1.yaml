@@ -8,7 +8,6 @@ supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
 objective_revision: rivian_energy_vehicle_cost_v1
-action_constraint_contract_id: drl_no_consecutive_cs_v1
 historical_distance_runs_are_cost_optimized: false
 
 methods: [am_evrptw, evrptw_rl, drl_ts, terran]

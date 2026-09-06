@@ -14,7 +14,6 @@ import torch
 from .data_pass import DataPassState
 from .evaluation import select_min_verified_objective
 from .objective import resolve_objective
-from .action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from .stage2_data import Stage2TaskPool
 
 
@@ -217,7 +216,6 @@ def verified_validation(
                 "verifier_passed": bool(verification["passed"]),
                 "objective_distance_km": float(verification["objective_distance_km"]),
                 "vehicle_count": len(routes),
-                "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
                 **current_objective.fields(
                     verification["objective_distance_km"], verification["vehicles_started"]
                 ),
@@ -238,7 +236,6 @@ def verified_validation(
         "objective_profile_id": active_objective.profile_id,
         "objective_unit": active_objective.unit,
         "objective_config": active_objective.to_dict(),
-        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "mean_verified_objective": (
             float(np.mean([row["objective_value"] for row in passed])) if passed else None
         ),

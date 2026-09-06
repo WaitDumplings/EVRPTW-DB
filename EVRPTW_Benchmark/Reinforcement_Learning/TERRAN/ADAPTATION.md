@@ -1,11 +1,5 @@
 # TERRAN Canonical-Stage-2 Adaptation Record
 
-Current benchmark action adaptation: all DRL methods forbid consecutive
-`CS -> CS` visits under
-[`drl_no_consecutive_cs_v1`](../ACTION_CONSTRAINT_CONTRACT_V1.md).
-This changes the admissible actions, not the encoder, PPO update, economic
-objective or auxiliary shaping.
-
 ## Retained method
 
 This adapter migrates the repository's existing TERRAN implementation; it does

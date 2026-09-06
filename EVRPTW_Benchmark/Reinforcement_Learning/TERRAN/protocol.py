@@ -24,17 +24,11 @@ from ..common.training_protocol import (
     validation_key,
 )
 from ..common.objective import resolve_objective
-from ..common.action_constraints import (
-    ACTION_CONSTRAINT_CONTRACT_ID, require_checkpoint_action_contract,
-)
 from ..common.data_pass import DataPassState
 from ..common.training_stream import read_stream_view_ids
 
 
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    overrides = dict(overrides)
-    overrides.setdefault("action_constraint_contract_id", ACTION_CONSTRAINT_CONTRACT_ID)
-    require_checkpoint_action_contract({"config": overrides})
     if getattr(args, "training_epochs", None) is None and args.data_passes is None:
         return overrides, None
     if args.stage2_dataset_path is None or args.output_dir is None:
@@ -258,7 +252,6 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "gpu_hour_checkpoints": list(parse_float_checkpoints(getattr(args, "gpu_hour_checkpoints", ""))),
     }
     return configured, {
-        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "objective": resolve_objective(configured.get("objective")).to_dict(),
         "views_per_pass": len(pool),
         "epochs_per_pass": epochs_per_pass,
@@ -275,12 +268,9 @@ def _validation_summary(
 ) -> dict[str, Any]:
     with path.open("r", newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
-    for row in rows:
-        require_checkpoint_action_contract(row)
     passed = [row for row in rows if row["verifier_passed"].lower() == "true"]
     return {
         "schema": "drl_validation_summary_v1",
-        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "split": "validation",
         "data_pass": int(data_pass),
         "logical_epoch": logical_epoch,
@@ -347,7 +337,6 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
         selected_summary = json.loads(
             overall_summary_path.read_text(encoding="utf-8")
         )
-        require_checkpoint_action_contract(selected_summary)
         shutil.copy2(best_overall_checkpoint, output / "checkpoint_selected.pt")
         shutil.copy2(best_overall_checkpoint, output / "best.ckpt")
     else:
@@ -511,7 +500,6 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
         output / "training_result.json",
         {
             "schema": "drl_training_result_v1",
-            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             "status": "pilot_partial" if getattr(args, "pilot_mode", False) else ("early_stopped" if early_stopped else "passed"),
             "method": "TERRAN",
             "protocol_id": args.protocol_id,

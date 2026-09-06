@@ -8,11 +8,11 @@ from ..EVRPTW_Env import EVRPTWVectorEnvFast
 class DRLTSHardConstraintEnv(EVRPTWVectorEnvFast):
     """Canonical hard environment with the station mask from Chen et al.
 
-    The paper-specific depot-to-station mask is retained in addition to the
-    shared no-consecutive-CS rule. The shared environment also disallows
-    revisiting a physical station within the same vehicle route; returning to
-    the depot resets that record for the next vehicle. These are explicit
-    search restrictions, not claims of dominance on directed road matrices.
+    DRL-TS permits a station to be revisited later in a route, but masks every
+    station while the vehicle is at the depot or another station because the
+    vehicle is already fully charged in those states. This rules out depot-to-
+    station and consecutive station-to-station actions without imposing a
+    global one-visit restriction.
     """
 
     def _compute_action_mask(self) -> np.ndarray:

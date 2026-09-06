@@ -13,10 +13,6 @@ import torch
 from scipy.stats import ttest_rel
 
 from .objective import objective_from_args, objective_from_checkpoint
-from .action_constraints import (
-    ACTION_CONSTRAINT_CONTRACT_ID,
-    require_checkpoint_action_contract,
-)
 from .training_protocol import (
     append_jsonl,
     atomic_json,
@@ -34,10 +30,9 @@ from .training_protocol import (
 
 
 def prepare_training_objective(args: Any):
-    """Freeze objective/action contracts and reject incompatible training state."""
+    """Freeze objective values and prevent a new cost run inheriting old output."""
     config = objective_from_args(args)
     args.objective = config.to_dict()
-    args.action_constraint_contract_id = ACTION_CONSTRAINT_CONTRACT_ID
     resume = bool(getattr(args, "resume", False))
     formal = (
         getattr(args, "data_passes", None) is not None
@@ -48,9 +43,8 @@ def prepare_training_objective(args: Any):
     output = Path(args.output_dir)
     if resume and (output / "checkpoint_latest.pt").is_file():
         payload = torch.load(output / "checkpoint_latest.pt", map_location="cpu", weights_only=False)
-        require_checkpoint_action_contract(payload)
         objective_from_checkpoint(payload, override=config)
-    if not resume:
+    if config.is_cost and not resume:
         evidence = list(output.glob("checkpoint*.pt")) + list(output.glob("best*.ckpt"))
         evidence.extend(
             output / name for name in (
@@ -61,7 +55,7 @@ def prepare_training_objective(args: Any):
         if (output / "checkpoints").is_dir():
             evidence.extend((output / "checkpoints").iterdir())
         if evidence:
-            raise FileExistsError("fresh training requires a new output directory without training history")
+            raise FileExistsError("fresh cost training requires a new output directory without training history")
     return config
 
 
@@ -124,7 +118,6 @@ def _save_checkpoint(
     args: Any,
     extra: dict[str, Any] | None = None,
 ) -> None:
-    args.action_constraint_contract_id = ACTION_CONSTRAINT_CONTRACT_ID
     payload = {
         "method": method,
         "data_pass": int(data_pass),
@@ -134,7 +127,6 @@ def _save_checkpoint(
         "args": vars(args),
         "protocol_id": args.protocol_id,
         "objective_config": objective_from_args(args).to_dict(),
-        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
     }
     payload.update(extra or {})
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -157,7 +149,6 @@ def _load_checkpoint(
     payload = torch.load(path, map_location=policy_device, weights_only=False)
     if payload.get("protocol_id") != protocol_id:
         raise ValueError("checkpoint protocol does not match requested protocol")
-    require_checkpoint_action_contract(payload)
     objective_from_checkpoint(payload, override=objective_config)
     policy.load_state_dict(payload["model"])
     baseline.load_state_dict(payload["baseline"])
@@ -1039,7 +1030,6 @@ def train_reinforce_data_passes(
         "method": method,
         "protocol_id": args.protocol_id,
         "objective_config": objective_config.to_dict(),
-        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "objective_mode": objective_config.mode,
         "objective_unit": objective_config.unit,
         "budget_mode": (

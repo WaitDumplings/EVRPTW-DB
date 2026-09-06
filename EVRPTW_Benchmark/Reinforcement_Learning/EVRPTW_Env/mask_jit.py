@@ -72,7 +72,6 @@ if NUMBA_AVAILABLE:
         travel_time_s: np.ndarray,
         energy_kwh: np.ndarray,
         stop_to_depot_time_s: np.ndarray,
-        unavailable_stations: np.ndarray,
         battery_capacity_kwh: float,
         full_charge_time_s: float,
         charging_power_kw: np.ndarray,
@@ -85,12 +84,8 @@ if NUMBA_AVAILABLE:
             return True
         if battery_used_kwh + energy_kwh[start, 0] <= battery_capacity_kwh + 1e-9:
             return current_time_s + travel_time_s[start, 0] <= working_end_s + 1e-9
-        if start >= station_start:
-            return False
 
         for first in range(station_start, num_nodes):
-            if unavailable_stations[first]:
-                continue
             battery_at_first = battery_used_kwh + energy_kwh[start, first]
             if battery_at_first > battery_capacity_kwh + 1e-9:
                 continue
@@ -206,7 +201,6 @@ if NUMBA_AVAILABLE:
                     travel_time_s,
                     energy_kwh,
                     stop_to_depot_time_s,
-                    cs_visited_current_route[t],
                     battery_capacity_kwh,
                     full_charge_time_s,
                     charging_power_kw,
@@ -217,8 +211,6 @@ if NUMBA_AVAILABLE:
                 ):
                     mask[t, customer] = True
 
-            if start >= station_start:
-                continue
             for station in range(station_start, num_nodes):
                 if station == start or cs_visited_current_route[t, station]:
                     continue
@@ -248,7 +240,6 @@ if NUMBA_AVAILABLE:
                     travel_time_s,
                     energy_kwh,
                     stop_to_depot_time_s,
-                    cs_visited_current_route[t],
                     battery_capacity_kwh,
                     full_charge_time_s,
                     charging_power_kw,

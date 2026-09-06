@@ -5,7 +5,6 @@ runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
 formal_launch_allowed: true
 launch_policy: direct_full_user_authorized_2026-09-04
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
-action_constraint_contract_id: drl_no_consecutive_cs_v1
 
 # Common publication inference budget. Each candidate is independently checked
 # by the canonical verifier; selection is feasible-first, then minimum total cost.
