@@ -52,6 +52,7 @@ def test_shared_stream_is_method_independent_within_condition_scale_seed() -> No
 
 
 def test_every_formal_job_uses_the_same_versioned_cost_objective() -> None:
+    from EVRPTW_Benchmark.Reinforcement_Learning.common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
     cfg = yaml.safe_load(MANIFESTS.CONFIG.read_text())
     profile_path = cfg["objective_config_path"]
     expected = json.loads((MANIFESTS.ROOT.parents[1] / profile_path).read_text())["objective"]
@@ -62,15 +63,18 @@ def test_every_formal_job_uses_the_same_versioned_cost_objective() -> None:
     rows = [row for queue in queues.values() for row in queue]
     assert len(rows) == 24
     for row in rows:
+        assert row["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
         assert row["objective_config"] == expected
         assert row["objective_config_path"] == profile_path
         assert row["candidate_selection"] == "verifier_feasible_then_min_total_cost_usd"
     frozen = yaml.safe_load((MANIFESTS.ROOT / "configs/drl_rq_protocol_frozen_v1.yaml").read_text())
     assert frozen["objective_config_path"] == profile_path
     assert frozen["objective_revision"] == expected["profile_id"]
+    assert frozen["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
     assert frozen["model_selection"]["secondary_metric"] == "mean_verified_cost_usd"
     terran = yaml.safe_load(MANIFESTS.TERRAN_CONFIG.read_text())
     assert terran["objective"] == profile_path
+    assert terran["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
 
 
 def test_reward_contract_is_terran_only_and_derived_from_formal_yaml(tmp_path, monkeypatch) -> None:

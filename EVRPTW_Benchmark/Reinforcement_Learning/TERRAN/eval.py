@@ -19,6 +19,9 @@ from evrptw_core.schema import merge_route_sequences
 
 from ..common.evaluation import select_min_verified_objective
 from ..common.objective import objective_from_checkpoint
+from ..common.action_constraints import (
+    ACTION_CONSTRAINT_CONTRACT_ID, require_checkpoint_action_contract,
+)
 from .env_factory import make_terran_env
 from .models import Agent
 from .rollout import rollout_eval_batch
@@ -89,6 +92,7 @@ def main() -> None:
     args = parse_args()
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
+    require_checkpoint_action_contract(checkpoint)
     cfg = checkpoint.get("config", {})
     objective_config = objective_from_checkpoint(checkpoint, args.objective_config)
     model_cfg = cfg.get("model", {})
@@ -166,6 +170,7 @@ def main() -> None:
 
     feasible_rows = [row for row in rows if row["feasible"]]
     summary = {
+        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "solver_name": solver_name,
         "seed": args.seed,
         "checkpoint": str(args.checkpoint_path),

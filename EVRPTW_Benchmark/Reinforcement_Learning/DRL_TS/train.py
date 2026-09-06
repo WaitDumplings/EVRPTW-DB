@@ -16,6 +16,7 @@ from ..common.protocol_entrypoints import run_drl_ts
 from ..common.training_protocol import add_data_pass_arguments
 from ..common.objective import objective_from_args
 from ..common.protocol_trainers import prepare_training_objective
+from ..common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from .env import DRLTSHardConstraintEnv
 from .model import DRLTSPolicy
 from .rollout import rollout
@@ -252,6 +253,7 @@ def main() -> None:
             baseline_instances = pool.sample(args.baseline_eval_size)
         row = {
             "epoch": epoch,
+            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             "training_stage": "soft" if soft else "hard",
             "training_cost": float(np.mean(epoch_costs)),
             "objective_mode": objective_config.mode,
@@ -281,6 +283,7 @@ def main() -> None:
                 "optimizer": optimizer.state_dict(),
                 "args": vars(args),
                 "objective_config": objective_config.to_dict(),
+                "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             },
             args.output_dir / "checkpoint_latest.pt",
         )

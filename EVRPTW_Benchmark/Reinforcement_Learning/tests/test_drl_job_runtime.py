@@ -351,7 +351,7 @@ def test_cost_eval_and_transfer_also_require_the_checkpoint_objective(tmp_path, 
         RUNTIME.validate_objective_contracts([job])
 
 
-@pytest.mark.parametrize("field", ["missing", "coefficient", "path", "selection"])
+@pytest.mark.parametrize("field", ["missing", "coefficient", "path", "selection", "action_policy"])
 def test_objective_preflight_rejects_stale_scientific_metadata(field):
     job = _cost_job()
     if field == "missing":
@@ -360,6 +360,8 @@ def test_objective_preflight_rejects_stale_scientific_metadata(field):
         job["objective_config"] = {**job["objective_config"], "vehicle_fixed_cost_usd": 0.0}
     elif field == "path":
         job["objective_config_path"] = "old-profile.json"
+    elif field == "action_policy":
+        job.pop("action_constraint_contract_id")
     else:
         job["candidate_selection"] = "verifier_feasible_then_min_directed_distance"
     with pytest.raises(RuntimeError, match="objective contract mismatch"):

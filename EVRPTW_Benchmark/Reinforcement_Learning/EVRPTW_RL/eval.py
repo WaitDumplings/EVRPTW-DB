@@ -14,6 +14,10 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_objective
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import objective_from_checkpoint
+from EVRPTW_Benchmark.Reinforcement_Learning.common.action_constraints import (
+    ACTION_CONSTRAINT_CONTRACT_ID,
+    require_checkpoint_action_contract,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.common.candidate_protocol import independent_candidate_batch
 
 from ..common import Stage2TaskPool, make_envs
@@ -47,6 +51,7 @@ def main() -> None:
     if args.decode_type == "greedy" and args.candidates != 1:
         raise ValueError("greedy evaluation has exactly one candidate")
     checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
+    require_checkpoint_action_contract(checkpoint)
     model_args = checkpoint.get("args", {})
     objective_config = objective_from_checkpoint(
         checkpoint, override=getattr(args, "objective_config", None)
@@ -113,6 +118,7 @@ def main() -> None:
                 row = {
                     "instance_id": instance.instance_id,
                     "solver": "EVRPTW-RL",
+                    "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
                     "decode_type": args.decode_type,
                     "candidate_count": args.candidates,
                     "selected_traj_idx": selected,

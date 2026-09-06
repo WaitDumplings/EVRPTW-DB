@@ -17,7 +17,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
     semantics while removing repeated work that dominates larger Cus/CS settings:
 
     - cache the previous action mask and reuse it to validate the next action;
-    - precompute stop-node shortest return times to depot once per instance;
+    - precompute direct station-to-depot return times once per instance;
     - cache static observation arrays that do not change during a rollout;
     - optionally compute action masks through a numba JIT array kernel;
     - optionally return light training info without route reconstruction.
@@ -88,15 +88,14 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             if int(node) == 0:
                 out[int(node)] = 0.0
                 continue
-            value = super()._shortest_stop_time(int(node), 0)
-            if value is not None:
-                out[int(node)] = float(value)
+            if self.energy_kwh[int(node), 0] <= self.battery_capacity_kwh + 1e-9:
+                out[int(node)] = float(self.travel_time_s[int(node), 0])
         self._stop_to_depot_time_s = out
 
     def _compute_action_mask(self) -> np.ndarray:
         if not self.use_jit_mask or self._stop_to_depot_time_s is None:
             return super()._compute_action_mask()
-        return compute_action_mask_jit(
+        mask = compute_action_mask_jit(
             n_traj=self.n_traj,
             num_nodes=self.num_nodes,
             num_customers=self.num_customers,
@@ -126,6 +125,20 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             station_power_full=self.charging_mode == "station_power_full",
             legacy_fixed_full=self.charging_mode == "legacy_fixed_full",
         )
+        # The JIT kernel handles the whole mask and all direct-return stations.
+        # Only rejected station candidates may need the dynamic customer bridge;
+        # physically unreachable stations fail its cheap arrival checks first.
+        active_nonstation = (~self.terminated) & (~self.truncated) & (self.last < self.station_start)
+        candidates = (
+            active_nonstation[:, None]
+            & ~mask[:, self.station_start:]
+            & ~self.cs_visited_current_route[:, self.station_start:]
+        )
+        for t, station_offset in zip(*np.nonzero(candidates)):
+            station = self.station_start + int(station_offset)
+            if self._station_action_feasible(int(t), station):
+                mask[t, station] = True
+        return mask
 
     def _build_static_observation_cache(self) -> None:
         coords = self._normalized_coords().astype(np.float32)
@@ -145,14 +158,21 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             "loading_capacity": np.array([1.0], dtype=np.float32),
         }
 
-    def _can_return_to_depot(self, start: int, current_time_s: float, battery_used_kwh: float) -> bool:
+    def _can_return_to_depot(
+        self, start: int, current_time_s: float, battery_used_kwh: float,
+        *, unavailable_stations: np.ndarray | None = None, excluded_station: int = -1,
+    ) -> bool:
         if start == 0:
             return True
         if battery_used_kwh + self.energy_kwh[start, 0] <= self.battery_capacity_kwh + 1e-9:
             return current_time_s + self.travel_time_s[start, 0] <= self.working_end_s + 1e-9
+        if self._is_station(start):
+            return False
         stop_to_depot = self._stop_to_depot_time_s
         for first_station in self.station_nodes:
             first = int(first_station)
+            if first == excluded_station or (unavailable_stations is not None and unavailable_stations[first]):
+                continue
             battery_at_first = battery_used_kwh + self.energy_kwh[start, first]
             if battery_at_first > self.battery_capacity_kwh + 1e-9:
                 continue

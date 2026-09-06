@@ -18,6 +18,7 @@ from evrptw_core.schema import merge_route_sequences
 
 from ..common.route_info import finalize_route_infos
 from ..common.objective import resolve_objective
+from ..common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from .models.attention_model_wrapper import (
     DYNAMIC_OBSERVATION_KEYS,
     STATIC_OBSERVATION_KEYS,
@@ -425,6 +426,7 @@ def select_best_trajectory(info: dict[str, Any], include_routes: bool = True) ->
         selected = int(candidates[np.argmin(objective[candidates])]) if candidates.size else 0
         feasible = False
     row = {
+        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "selected_traj_idx": selected,
         "feasible": feasible,
         "objective_distance_km": float(distance[selected]),

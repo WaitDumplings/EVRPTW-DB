@@ -8,6 +8,9 @@ not standardize each paper's auxiliary shaping or training strategy. Fresh
 formal runs now share the electricity-plus-vehicle objective specified in
 [`COST_OBJECTIVE_CONTRACT_V1.md`](COST_OBJECTIVE_CONTRACT_V1.md); historical
 distance-only runs keep their original objective metadata.
+The active DRL action restriction is
+[`ACTION_CONSTRAINT_CONTRACT_V1.md`](ACTION_CONSTRAINT_CONTRACT_V1.md):
+consecutive charging-station visits are forbidden in all four learning methods.
 
 ## Canonical matrices and units
 
@@ -61,12 +64,15 @@ An action is exposed only when:
 - customer demand fits the remaining cargo capacity;
 - customer service can start within its hard time window;
 - the target transition finishes within the operating horizon; and
-- after the target, a directed energy- and time-feasible path exists to the
-  depot, through zero or more full-charge station visits when necessary.
+- the bounded safe-continuation check finds a return certificate consistent
+  with the no-CS-to-CS restriction, including a customer bridge after charging
+  when needed (details in the action contract).
 
 This is a safe-continuation check, not a proof that all remaining customers can
-be jointly served.  Charging-station revisits are allowed.  Customer revisits
-are forbidden after service.
+be jointly served or that every feasible future sequence has been enumerated.
+Charging-station visits must be separated by a customer or depot; the same
+station cannot be revisited within one route under the existing anti-cycle
+rule. Customer revisits are forbidden after service.
 
 ## Reward and evaluation boundary
 

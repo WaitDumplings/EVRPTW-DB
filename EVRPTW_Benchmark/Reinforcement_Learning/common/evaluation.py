@@ -6,6 +6,25 @@ import numpy as np
 
 from EVRPTW_Benchmark.Exact.Gurobi_Solver.route_validator import validate_routes
 from .objective import resolve_objective, route_dispatch_count
+from .action_constraints import ACTION_CONSTRAINT_CONTRACT_ID, consecutive_cs_arcs
+
+
+def _verify_drl_routes(instance, routes) -> dict[str, Any]:
+    verification = dict(validate_routes(instance, routes))
+    forbidden_arcs = consecutive_cs_arcs(instance, routes)
+    physical_passed = bool(verification["passed"])
+    verification.update(
+        physical_verifier_passed=physical_passed,
+        drl_policy_passed=not forbidden_arcs,
+        action_constraint_contract_id=ACTION_CONSTRAINT_CONTRACT_ID,
+        passed=physical_passed and not forbidden_arcs,
+    )
+    if forbidden_arcs:
+        verification["violations"] = list(verification.get("violations", [])) + [
+            f"DRL action constraint forbids consecutive CS visits: route {route}, {origin}->{destination}"
+            for route, origin, destination in forbidden_arcs
+        ]
+    return verification
 
 
 def select_min_verified_distance(
@@ -20,14 +39,14 @@ def select_min_verified_distance(
     successful = np.flatnonzero(success)
     for selected in successful[np.argsort(objective[successful])]:
         routes = info["routes"][int(selected)]
-        verification = validate_routes(instance, routes)
+        verification = _verify_drl_routes(instance, routes)
         if verification["passed"]:
             return int(selected), routes, verification
 
     candidates = np.flatnonzero(served == served.max())
     selected = int(candidates[np.argmin(objective[candidates])])
     routes = info["routes"][selected]
-    return selected, routes, validate_routes(instance, routes)
+    return selected, routes, _verify_drl_routes(instance, routes)
 
 
 def select_min_verified_objective(
@@ -70,7 +89,7 @@ def select_min_verified_objective(
     successful = np.flatnonzero(success)
     for index in successful[np.argsort(scores[successful], kind="stable")]:
         routes = info["routes"][int(index)]
-        verification = validate_routes(instance, routes)
+        verification = _verify_drl_routes(instance, routes)
         if verification["passed"]:
             verification = dict(verification)
             verification.update(config.fields(verification["objective_distance_km"], route_dispatch_count(routes)))
@@ -89,7 +108,7 @@ def select_min_verified_objective(
     incurred = config.value(distances, dispatches)
     selected = int(candidates[np.argmin(incurred[candidates])])
     routes = info["routes"][selected]
-    verification = dict(validate_routes(instance, routes))
+    verification = _verify_drl_routes(instance, routes)
     verification["route_verifier_passed"] = bool(verification["passed"])
     verification["passed"] = False
     verification["violations"] = list(verification.get("violations", []))

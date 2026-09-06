@@ -18,6 +18,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.tests.test_am_model impor
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import (
     ObjectiveConfig, objective_from_checkpoint, resolve_objective,
 )
+from EVRPTW_Benchmark.Reinforcement_Learning.common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import rollout as terran_rollout
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import trainer
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import train as train_entrypoint
@@ -229,6 +230,7 @@ def test_protocol_csv_summary_averages_only_verified_cost_rows(tmp_path: Path) -
     objective = _objective()
     path = tmp_path / "summary.csv"
     rows = [{
+        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "verifier_passed": passed, "objective_distance_km": distance,
         "vehicle_count": vehicles, **objective.fields(distance, vehicles),
     } for passed, distance, vehicles in [(True, 20, 1), (True, 10, 2), (False, 0, 0)]]
@@ -248,6 +250,7 @@ def test_protocol_csv_summary_averages_only_verified_cost_rows(tmp_path: Path) -
 @pytest.mark.parametrize("changed", ["legacy", "electricity_price_usd_per_kwh", "consumption_kwh_per_km", "vehicle_fixed_cost_usd", "profile_id"])
 def test_resume_rejects_different_objective_even_with_same_gamma_and_contract(changed: str) -> None:
     cfg = {
+        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "objective": _objective().to_dict(),
         "training": {"gamma": 1.0, "reward_contract_id": "terran_undiscounted_energy_vehicle_pbrs_v1"},
     }
@@ -271,6 +274,7 @@ def test_legacy_checkpoint_stays_distance_and_cannot_be_relabelled_cost() -> Non
 @pytest.mark.parametrize("malformed", ["mutable-path", "inconsistent-snapshots"])
 def test_resume_rejects_mutable_or_inconsistent_checkpoint_objective(malformed: str) -> None:
     cfg = {
+        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "objective": _objective().to_dict(),
         "training": {"gamma": 1.0, "reward_contract_id": "terran_undiscounted_energy_vehicle_pbrs_v1"},
     }
@@ -308,11 +312,13 @@ def test_cli_default_keeps_yaml_objective_and_explicit_override_is_honored(
     monkeypatch.setattr(train_entrypoint, "finalize_protocol", lambda *_args: None)
     train_entrypoint.main()
     assert captured["objective"] == expected
+    assert captured["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
 
 
 def test_formal_yaml_resolves_shared_cost_profile_and_gamma_one() -> None:
     cfg = trainer.load_config(Path(__file__).resolve().parents[1] / "configs" / "stage2_cus100_terran.yaml")
     assert isinstance(cfg["objective"], str)
+    assert cfg["action_constraint_contract_id"] == ACTION_CONSTRAINT_CONTRACT_ID
     assert resolve_objective(cfg["objective"]).to_dict() == _objective().to_dict()
     assert cfg["training"]["gamma"] == 1.0
     assert cfg["training"]["reward_contract_id"] == "terran_undiscounted_energy_vehicle_pbrs_v1"

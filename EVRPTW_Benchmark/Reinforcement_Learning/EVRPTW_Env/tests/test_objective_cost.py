@@ -138,21 +138,21 @@ def test_station_departure_open_failure_keeps_fee_without_duplicate_charge(env_c
     obs, _ = env.reset(seed=11)
     total_distance = 0.0
     last = 0
-    for action in [3, 4]:
+    for action in [3]:
         assert obs["action_mask"][0, action]
         total_distance += env.distance_km[last, action]
         obs, _, _, _, info = env.step([action])
         assert_cost_ledger(env, info, [total_distance], [1])
         assert info["vehicle_count"][0] == 0
         last = action
-    # Reusing the same station is invalid: neither movement nor another fee.
+    # An adjacent station is invalid: neither movement nor another fee.
     assert not obs["action_mask"][0, 4]
     _, reward, terminated, truncated, info = env.step([4])
     assert truncated[0] and not terminated[0]
     np.testing.assert_array_equal(reward, [env.invalid_action_penalty])
     assert_cost_ledger(env, info, [total_distance], [1])
-    assert info["routes"] == [[[0, 3, 4, 0]]]
-    assert env.current_routes == [[0, 3, 4]]  # Export does not mutate the ledger.
+    assert info["routes"] == [[[0, 3, 0]]]
+    assert env.current_routes == [[0, 3]]  # Export does not mutate the ledger.
     _, reward, _, _, info = env.step([1])
     np.testing.assert_array_equal(reward, [0])
     assert_cost_ledger(env, info, [total_distance], [1])
@@ -182,7 +182,7 @@ def test_slow_fast_cost_ledgers_physics_masks_and_rewards_match(use_jit_mask, in
     )
     slow_obs, _ = slow.reset(seed=17)
     fast_obs, _ = fast.reset(seed=17)
-    for actions in [[3, 1], [4, 3], [1, 0], [0, 2], [2, 0], [0, 1]]:
+    for actions in [[3, 1], [1, 3], [4, 0], [0, 2], [2, 0], [0, 1]]:
         np.testing.assert_array_equal(slow_obs["action_mask"], fast_obs["action_mask"])
         slow_obs, slow_reward, slow_done, slow_trunc, slow_info = slow.step(actions)
         fast_obs, fast_reward, fast_done, fast_trunc, fast_info = fast.step(actions)
@@ -206,7 +206,7 @@ def test_distance_default_retains_legacy_rewards_physics_and_route_exports(env_c
     cost = make_env(env_cls, objective_config=cost_objective())
     legacy_obs, legacy_info = legacy.reset(seed=19)
     cost_obs, _ = cost.reset(seed=19)
-    for action in [3, 4, 1, 0, 2, 0]:
+    for action in [3, 1, 4, 0, 2, 0]:
         np.testing.assert_array_equal(legacy_obs["action_mask"], cost_obs["action_mask"])
         previous = int(legacy.last[0])
         legacy_obs, reward, _, _, legacy_info = legacy.step([action])
@@ -216,13 +216,13 @@ def test_distance_default_retains_legacy_rewards_physics_and_route_exports(env_c
         np.testing.assert_array_equal(legacy.objective_distance_km, cost.objective_distance_km)
         for field in ["current_time_s", "battery_used_kwh", "load_cm3", "last", "visited"]:
             np.testing.assert_array_equal(getattr(legacy, field), getattr(cost, field))
-        if action in [3, 4]:
+        if action == 3:
             assert legacy_info["routes"] == [[]]  # Historical charger-only omission.
         assert legacy_info["objective_cost_usd"] is None
         assert legacy_info["electricity_cost_usd"] is None
         assert legacy_info["vehicle_cost_usd"] is None
         np.testing.assert_array_equal(legacy_info["objective_value"], legacy.objective_distance_km)
-    assert legacy_info["routes"] == [[[0, 3, 4, 1, 0], [0, 2, 0]]]
+    assert legacy_info["routes"] == [[[0, 3, 1, 4, 0], [0, 2, 0]]]
 
 
 @pytest.mark.parametrize("scale_mode", [

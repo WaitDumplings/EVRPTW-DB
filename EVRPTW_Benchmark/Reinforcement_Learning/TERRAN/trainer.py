@@ -27,6 +27,9 @@ from ..common import Stage2TaskPool
 from ..common.data_pass import DataPassState
 from ..common.evaluation import select_min_verified_objective
 from ..common.objective import objective_from_checkpoint, resolve_objective
+from ..common.action_constraints import (
+    ACTION_CONSTRAINT_CONTRACT_ID, require_checkpoint_action_contract,
+)
 from ..common.training_protocol import append_jsonl, atomic_json, validation_key
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
@@ -74,6 +77,7 @@ def training_gamma(cfg: dict[str, Any]) -> float:
 
 def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
     """Do not silently continue a discounted/older reward run as a new protocol."""
+    require_checkpoint_action_contract(payload)
     saved_training = payload.get("config", {}).get("training", {})
     if "gamma" not in saved_training:
         raise ValueError("TERRAN resume checkpoint is missing training.gamma; start a fresh run")
@@ -392,6 +396,7 @@ def evaluate_fixed_dataset(
     ) or objective_config.is_cost
     if eval_path is None or not eval_path.exists():
         return {
+            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             "eval_num_instances": 0,
             "eval_complete_and_feasible": 0,
             "eval_n_traj": n_traj,
@@ -496,6 +501,7 @@ def evaluate_fixed_dataset(
         agent.train()
     if not rows:
         return {
+            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             "eval_num_instances": 0,
             "eval_complete_and_feasible": 0,
             "eval_n_traj": n_traj,
@@ -513,6 +519,7 @@ def evaluate_fixed_dataset(
 
     feasible_rows = [row for row in rows if row["feasible"]]
     return {
+        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
         "eval_num_instances": len(rows),
         "eval_complete_and_feasible": len(feasible_rows),
         "eval_n_traj": n_traj,
@@ -707,10 +714,12 @@ def evaluate_policy_loss(
 
 
 def save_checkpoint(path: Path, agent: Agent, optimizer: torch.optim.Optimizer, cfg: dict[str, Any], epoch: int, seed: int) -> None:
+    require_checkpoint_action_contract({"config": cfg})
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
             "epoch": int(epoch),
+            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             "seed": int(seed),
             "config": cfg,
             "model_state_dict": agent.state_dict(),
@@ -722,6 +731,8 @@ def save_checkpoint(path: Path, agent: Agent, optimizer: torch.optim.Optimizer, 
 
 def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None, overrides: dict[str, Any] | None = None) -> Path:
     cfg = deep_update(cfg, overrides or {})
+    cfg.setdefault("action_constraint_contract_id", ACTION_CONSTRAINT_CONTRACT_ID)
+    require_checkpoint_action_contract({"config": cfg})
     set_seed(seed)
     train_cfg = cfg["training"]
     gamma = training_gamma(cfg)
@@ -998,6 +1009,8 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "eval_status",
     ]
     train_fields.extend(["train_avg_best_objective", "objective_mode", "objective_unit", "reward_objective_scale"])
+    train_fields.append("action_constraint_contract_id")
+    eval_fields.append("action_constraint_contract_id")
     train_fields.extend(OBJECTIVE_EVAL_FIELDS)
     eval_fields.extend(OBJECTIVE_EVAL_FIELDS)
     train_fields.extend(
@@ -1375,6 +1388,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     )
                     validation = {
                         "schema": "drl_validation_summary_v1",
+                        "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
                         "split": "validation",
                         "logical_epoch": epoch,
                         "validation_seed": validation_seed,
@@ -1498,6 +1512,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         )
                     },
                     "objective_mode": objective_config.mode,
+                    "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
                     "objective_unit": objective_config.unit,
                     "reward_objective_scale": float(getattr(getattr(envs[0], "unwrapped", envs[0]), "reward_objective_scale", 1.0)),
                     "train_avg_best_objective": train_summary.get("train_avg_best_objective"),

@@ -10,6 +10,9 @@ import torch
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_objective
 from ..common.objective import objective_from_checkpoint
+from ..common.action_constraints import (
+    ACTION_CONSTRAINT_CONTRACT_ID, require_checkpoint_action_contract,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.common.candidate_protocol import independent_candidate_batch
 
 from ..common import Stage2TaskPool
@@ -60,6 +63,7 @@ def main() -> None:
         map_location=args.device,
         weights_only=False,
     )
+    require_checkpoint_action_contract(checkpoint)
     cfg = checkpoint.get("config", {})
     objective_config = objective_from_checkpoint(checkpoint, args.objective_config)
     model_cfg = cfg.get("model", {})
@@ -133,6 +137,7 @@ def main() -> None:
                     instance, result.pop("_final_info"), objective_config
                 )
                 row = {
+                    "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
                     "instance_id": instance.instance_id,
                     "solver": "TERRAN",
                     "decode_mode": args.decode_mode,

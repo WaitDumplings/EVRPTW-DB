@@ -6,6 +6,7 @@ from typing import Any
 
 from ..common.training_protocol import add_data_pass_arguments
 from ..common.objective import objective_from_args, resolve_objective
+from ..common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from .protocol import configure_protocol, finalize_protocol
 
 from .trainer import load_config, train_from_config
@@ -83,6 +84,9 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
     overrides: dict[str, Any] = {"data": {}, "training": {}, "evaluation": {}}
+    overrides["action_constraint_contract_id"] = cfg.get(
+        "action_constraint_contract_id", ACTION_CONSTRAINT_CONTRACT_ID
+    )
     if getattr(args, "objective_config", None) is not None:
         overrides["objective"] = objective_from_args(args).to_dict()
     else:

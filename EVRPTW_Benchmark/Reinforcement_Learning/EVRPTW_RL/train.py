@@ -16,6 +16,7 @@ from ..common.protocol_entrypoints import run_evrptw_rl
 from ..common.training_protocol import add_data_pass_arguments
 from ..common.objective import objective_from_args
 from ..common.protocol_trainers import prepare_training_objective
+from ..common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
 from .model import EVRPTWRLPolicy
 from .rollout import rollout
 
@@ -187,6 +188,7 @@ def main() -> None:
 
         row = {
             "iteration": iteration,
+            "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
             "loss": float(loss.detach().cpu()),
             "training_cost": float(actor.training_cost.mean().detach().cpu()),
             "objective_value": float(actor.objective_value.mean().detach().cpu()),
@@ -217,6 +219,7 @@ def main() -> None:
                     "optimizer": optimizer.state_dict(),
                     "args": vars(args),
                     "objective_config": objective_config.to_dict(),
+                    "action_constraint_contract_id": ACTION_CONSTRAINT_CONTRACT_ID,
                 },
                 args.output_dir / "checkpoint_latest.pt",
             )

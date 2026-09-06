@@ -64,9 +64,11 @@ class EVRPTWVectorEnv(Env):
     ) -> None:
         super().__init__()
         # Import at construction time: common also exposes environment factories.
+        from ..common.action_constraints import ACTION_CONSTRAINT_CONTRACT_ID
         from ..common.objective import resolve_objective
 
         self.objective_config = resolve_objective(objective_config)
+        self.action_constraint_contract_id = ACTION_CONSTRAINT_CONTRACT_ID
         if reward_mode not in {"distance", "distance_success"}:
             raise ValueError(f"Unsupported reward_mode: {reward_mode}")
         if charging_mode not in {"station_power_full", "legacy_proportional_full", "legacy_fixed_full"}:
@@ -408,6 +410,8 @@ class EVRPTWVectorEnv(Env):
                 if self._customer_action_feasible(t, c):
                     mask[t, c] = True
 
+            if self._is_station(start):
+                continue
             for station in self.station_nodes:
                 s = int(station)
                 if s == start or self.cs_visited_current_route[t, s]:
@@ -430,10 +434,15 @@ class EVRPTWVectorEnv(Env):
         service_departure = service_start + float(self.service_time_s[customer])
         if service_start > float(due) + 1e-9 or service_departure > self.working_end_s + 1e-9:
             return False
-        return self._can_return_to_depot(customer, service_departure, battery_after)
+        return self._can_return_to_depot(
+            customer, service_departure, battery_after,
+            unavailable_stations=self.cs_visited_current_route[traj_idx],
+        )
 
     def _station_action_feasible(self, traj_idx: int, station: int) -> bool:
         start = int(self.last[traj_idx])
+        if self._is_station(start) or self.cs_visited_current_route[traj_idx, station]:
+            return False
         battery_after = float(self.battery_used_kwh[traj_idx] + self.energy_kwh[start, station])
         if battery_after > self.battery_capacity_kwh + 1e-9:
             return False
@@ -441,7 +450,41 @@ class EVRPTWVectorEnv(Env):
         departure = arrival + self._charge_time_s(battery_after, station)
         if departure > self.working_end_s + 1e-9:
             return False
-        return self._can_return_to_depot(station, departure, 0.0)
+        if self._can_return_to_depot(station, departure, 0.0):
+            return True
+        return self._station_customer_continuation_feasible(traj_idx, station, departure)
+
+    def _station_customer_continuation_feasible(
+        self, traj_idx: int, station: int, departure_time_s: float,
+    ) -> bool:
+        """Bounded dynamic continuation after a full charge, never a CS chain.
+
+        A station that cannot return directly may still serve one unvisited
+        customer and then return directly or through one available station.
+        This is a sufficient local check, not a complete route search.
+        """
+        for customer in self.customer_nodes:
+            customer = int(customer)
+            if self.visited[traj_idx, customer]:
+                continue
+            battery_after = float(self.energy_kwh[station, customer])
+            if battery_after > self.battery_capacity_kwh + 1e-9:
+                continue
+            if self.load_cm3[traj_idx] + self.demand_cm3[customer] > self.cargo_capacity_cm3 + 1e-9:
+                continue
+            arrival = departure_time_s + float(self.travel_time_s[station, customer])
+            ready, due = self.tw_s[customer]
+            service_start = max(arrival, float(ready))
+            service_departure = service_start + float(self.service_time_s[customer])
+            if service_start > float(due) + 1e-9 or service_departure > self.working_end_s + 1e-9:
+                continue
+            if self._can_return_to_depot(
+                customer, service_departure, battery_after,
+                unavailable_stations=self.cs_visited_current_route[traj_idx],
+                excluded_station=station,
+            ):
+                return True
+        return False
 
     def _direct_depot_feasible(self, traj_idx: int) -> bool:
         start = int(self.last[traj_idx])
@@ -449,13 +492,20 @@ class EVRPTWVectorEnv(Env):
         arrival = float(self.current_time_s[traj_idx] + self.travel_time_s[start, 0])
         return battery_after <= self.battery_capacity_kwh + 1e-9 and arrival <= self.working_end_s + 1e-9
 
-    def _can_return_to_depot(self, start: int, current_time_s: float, battery_used_kwh: float) -> bool:
+    def _can_return_to_depot(
+        self, start: int, current_time_s: float, battery_used_kwh: float,
+        *, unavailable_stations: np.ndarray | None = None, excluded_station: int = -1,
+    ) -> bool:
         if start == 0:
             return True
         if battery_used_kwh + self.energy_kwh[start, 0] <= self.battery_capacity_kwh + 1e-9:
             return current_time_s + self.travel_time_s[start, 0] <= self.working_end_s + 1e-9
+        if self._is_station(start):
+            return False
         for first_station in self.station_nodes:
             first = int(first_station)
+            if first == excluded_station or (unavailable_stations is not None and unavailable_stations[first]):
+                continue
             battery_at_first = battery_used_kwh + self.energy_kwh[start, first]
             if battery_at_first > self.battery_capacity_kwh + 1e-9:
                 continue
@@ -472,7 +522,7 @@ class EVRPTWVectorEnv(Env):
         adjacency: dict[int, list[tuple[int, float]]] = {node: [] for node in self.stop_nodes}
         for i in self.stop_nodes:
             for j in self.stop_nodes:
-                if i == j:
+                if i == j or (self._is_station(i) and self._is_station(j)):
                     continue
                 energy = float(self.energy_kwh[i, j])
                 if energy > self.battery_capacity_kwh + 1e-9:
@@ -629,6 +679,7 @@ class EVRPTWVectorEnv(Env):
             ),
             "vehicles_started": self.vehicles_started.copy(),
             "objective_config": objective.to_dict(),
+            "action_constraint_contract_id": self.action_constraint_contract_id,
             "reward_objective_scale": self.reward_objective_scale,
         }
 

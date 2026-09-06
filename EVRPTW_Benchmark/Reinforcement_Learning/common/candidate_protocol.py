@@ -49,7 +49,7 @@ def merge_single_candidate_infos(infos: list[dict[str, Any]]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     for key in infos[0]:
         values = [info[key] for info in infos]
-        if key == "objective_config":
+        if key in {"objective_config", "action_constraint_contract_id"}:
             if any(value != values[0] for value in values[1:]):
                 raise ValueError("cannot merge candidates with different objective configs")
             merged[key] = values[0]

@@ -87,6 +87,13 @@ route. Returning to the depot closes that route and clears the station mask, so
 the same physical station remains available to later vehicles. This is a
 route-local anti-cycle rule, not a global station-copy limit.
 
+All four DRL methods additionally forbid consecutive `CS -> CS` actions under
+`drl_no_consecutive_cs_v1`; `CS -> customer -> CS` is not prohibited. The slow,
+Fast and JIT environments and the DRL route selector enforce this restriction.
+Return screening cannot use a forbidden CS chain. See
+[`ACTION_CONSTRAINT_CONTRACT_V1.md`](../ACTION_CONSTRAINT_CONTRACT_V1.md)
+for the conservative customer-bridge lookahead and checkpoint compatibility.
+
 Formal training uses one deterministic distance scale estimated only from its
 frozen training pool. Distance edges use that scale, travel-time edges use the
 operating horizon, and energy edges use battery capacity. Validation and test

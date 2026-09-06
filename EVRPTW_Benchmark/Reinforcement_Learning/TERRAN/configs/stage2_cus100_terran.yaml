@@ -1,6 +1,7 @@
 run_name: TERRAN
 dataset_name: EVRPTW-DB-Stage2
 objective: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
+action_constraint_contract_id: drl_no_consecutive_cs_v1
 
 data:
   stage2_dataset_path: null

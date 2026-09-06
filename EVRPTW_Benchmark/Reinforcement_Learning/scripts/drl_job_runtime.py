@@ -134,6 +134,8 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
     contract = {}
     if "objective_config" in job:
         contract["objective_config"] = job["objective_config"]
+    if "action_constraint_contract_id" in job:
+        contract["action_constraint_contract_id"] = job["action_constraint_contract_id"]
     if job.get("method") == "terran" and any(
         field in job for field in ("reward_contract_id", "training_gamma")
     ):
@@ -178,6 +180,7 @@ def validate_objective_contracts(jobs: list[dict[str, Any]]) -> None:
     for job in scoped_jobs:
         if (job.get("objective_config_path") != relative_path
                 or job.get("objective_config") != expected
+                or job.get("action_constraint_contract_id") != cfg["action_constraint_contract_id"]
                 or job.get("candidate_selection") != cfg["evaluation"]["selection"]):
             raise RuntimeError(
                 f"manifest/config objective contract mismatch for {job['job_id']}; "
