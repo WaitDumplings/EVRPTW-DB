@@ -28,23 +28,31 @@ training-pool calibration metadata, and the resulting objective denominator
 
 ```text
 C = distance_unit_cost * distance_km + vehicle_unit_cost * vehicles_started
-S = distance_unit_cost * distance_reference_km + vehicle_unit_cost * K_reference
+S_N = median(C_ref) on the frozen, verified training-reference cohort
+L_task = C / S_N + I[incomplete] * (b_N + lambda_u * unserved_fraction)
 ```
 
-AM/EVRPTW-RL/DRL-TS retain a training-pool median singleton round-trip distance
-with `K_reference = 1`. TERRAN retains a training-pool mean singleton-repair sum
-with `K_reference = N`. No normalizer is fitted using validation/test outcomes.
-These scales are not necessarily equal between methods or training conditions.
-Normalization does not imply that rewards, returns or costs lie in `[0, 1]`.
+The frozen `drl_energy_vehicle_reference_scale_v2` contract supplies one
+`S_N`, `b_N`, and `lambda_u` per calibrated scale. The same values are used by
+all four methods and conditions at that scale; distance and vehicle count in
+each reference cost come from the same independently replayed route set. No
+normalizer is fitted using validation/test outcomes, and normalization does not
+imply that rewards, returns or total training costs lie in `[0, 1]`.
+
+The floor rule `b_N = Q_0.99(C_ref / S_N) + 1` is an empirical calibration
+candidate, not a mathematical feasibility-first guarantee. The frozen floors
+are above the maximum normalized cost in each 500-reference calibration cohort,
+but that is only an in-sample fact. Diagnostics must not report it as a global
+upper bound on feasible solution cost.
 
 ## What the observations mean
 
 | Family | Training quantity | Additional observations |
 |---|---|---|
-| AM-EVRPTW | Positive trajectory cost `(C + converted incomplete penalty) / S` | Incomplete penalty in training units; actual actor/baseline costs and cost advantage |
-| EVRPTW-RL | Positive trajectory cost `C / S + station penalty + incomplete penalty` | Each auxiliary penalty separately; actual actor/baseline costs and cost advantage |
-| DRL-TS | Positive trajectory cost `C / S + resource penalties + incomplete penalty` | Capacity/time/energy and incomplete penalties separately; actual actor/baseline costs and cost advantage |
-| TERRAN | Negative step cost `-delta_C / S` plus native shaping/terminal terms | Active-step base/shaped rewards, return-to-go and initial trajectory return, advantages before/after PPO normalization, reward-component totals |
+| AM-EVRPTW | Shared positive task cost `C / S_N + terminal task cost` | Task base/failure terms; actual actor/baseline costs and cost advantage |
+| EVRPTW-RL | Shared positive task cost plus its separately versioned station auxiliary | Task and station-profile terms separately; actual actor/baseline costs and cost advantage |
+| DRL-TS | Shared positive task cost plus the separately versioned bounded Stage-1 soft auxiliary | Raw/clipped capacity, time, and energy observations; task and soft-profile terms separately; actual actor/baseline costs and cost advantage |
+| TERRAN | Equivalent negative task reward `-delta_C / S_N` plus terminal task reward and native PBRS | Active-step base/shaped rewards, return-to-go and initial trajectory return, advantages before/after PPO normalization, reward-component totals |
 
 The REINFORCE cost advantage is `actor_cost - baseline_cost`: positive means
 worse than the baseline. TERRAN's return advantage is `return - value`:
@@ -58,6 +66,34 @@ values must not be relabelled as electricity dollars. Auxiliary penalties and
 PBRS terms have training units, not raw USD. Shaped returns are not the
 benchmark's evaluation objective. Truncated trajectory returns remain partial
 training returns, not verified complete-solution costs.
+
+For DRL-TS Stage 1, each normalized raw transition excess `x_j,t` is retained,
+while the training component is
+
+```text
+v_bar_j = min(component_clip,
+              sum_{t in A_j} min(x_j,t, step_clip) / N)
+soft_auxiliary_total = alpha * v_bar_capacity
+                     + beta  * v_bar_time
+                     + gamma * v_bar_energy
+```
+
+`N` is the fixed instance customer count. `A_capacity` contains customer
+arrivals; `A_time` and `A_energy` contain every valid travel transition. The
+frozen profile uses `step_clip=1`, `component_clip=1`, and unit weights, so each
+component is in `[0, 1]`. The applicable-transition counters are diagnostic
+only: dividing by them would let extra zero-violation travel dilute an incurred
+violation and is therefore forbidden.
+
+The `soft_*_raw_sum` fields are unclipped and remain the feasibility/audit
+signal. The `soft_*_clipped_sum` fields show the numerator used for training,
+and `soft_*_component_unweighted` shows the fixed-`N`, component-clipped value
+before its method weight. A structurally complete soft rollout with a nonzero
+raw sum is labelled `completed_with_soft_violation`; it receives its soft
+auxiliary but no `terminal_failure_base` or `terminal_unserved` term. Every
+incomplete rollout receives those common task terms once. This distinction is
+why raw feasibility, structural completion, and bounded training auxiliary must
+not be inferred from one another.
 
 ## Distributions and gradients
 
@@ -100,18 +136,19 @@ throughput.
 
 ## Local verification
 
-The logging-only revision based on `1f62ef3` passed **440 CPU tests**, with
-**one CUDA-specific test skipped** on the macOS host. The existing exclusions
-are vendored reference implementations and the Linux server-environment tests
-(which require `flock` and GNU `realpath -m`). The final suite took 10.80 s.
+Reward-contract checks cover the frozen common scale/floor provenance, task
+component identities, and the rule that a completed DRL-TS soft violation does
+not pay the hard failure floor. DRL-TS-specific checks cover hand-computed
+per-step clipping, fixed-customer normalization, component clipping, resistance
+to zero-violation action dilution, raw feasibility, profile loading, and
+checkpoint/provenance fields.
 
-New checks cover hand-computed masked distributions and cost decomposition,
-empty/nonfinite populations, bounded statistics, actual pre-clipping norms,
-both PPO accumulation paths, all three REINFORCE methods in fixed-budget and
-data-pass modes, and append-only resume-session semantics. Enabling/disabling
-diagnostics preserves the tested actions/rewards, model and optimizer updates,
-rollout counts and RNG states. No server training or GPU throughput run was
-launched by this change.
+The observational logging checks continue to cover masked distributions and
+cost decomposition, empty/nonfinite populations, bounded statistics, actual
+pre-clipping norms, both PPO accumulation paths, all three REINFORCE methods,
+and append-only resume-session semantics. Enabling/disabling diagnostics must
+preserve actions/rewards, model and optimizer updates, rollout counts, and RNG
+states. CPU tests do not establish GPU convergence or throughput.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m pytest \

@@ -27,7 +27,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
 )
 from .data_pass import pass_batches
 from .euclidean import euclidean_instance, load_euclidean_manifest
-from .training_stream import read_stream_view_ids
+from .training_stream import load_training_stream_contract, read_stream_view_ids
 
 
 def _csv_set(value: str | None) -> set[str] | None:
@@ -209,11 +209,18 @@ class Stage2TaskPool:
         start: int = 0,
         stop: int | None = None,
         logical_batch_size: int | None = None,
+        training_stream_contract_sha256: str | None = None,
     ) -> Iterable[list[EVRPTWInstance]]:
         """Consume an explicit method-independent training ID stream."""
 
         if int(physical_batch_size) <= 0:
             raise ValueError("physical_batch_size must be positive")
+        if training_stream_contract_sha256 is not None:
+            actual_contract = load_training_stream_contract(stream_path)
+            if actual_contract["sha256"] != str(training_stream_contract_sha256):
+                raise ValueError(
+                    "training stream changed after protocol configuration"
+                )
         view_ids = read_stream_view_ids(stream_path, start=start, stop=stop)
         missing = sorted(set(view_ids).difference(self._task_by_view_id))
         if missing:
@@ -248,6 +255,8 @@ def make_envs(
     reward_distance_scale_km: float | None = None,
     objective_config: Any = None,
     reward_distance_scale_mode: str = "single_customer_repair_median",
+    reward_objective_scale: float | None = None,
+    invalid_action_penalty: float = -10.0,
 ) -> list[EVRPTWVectorEnvFast]:
     """Create environments under the canonical Stage-2 physical contract."""
 
@@ -262,6 +271,8 @@ def make_envs(
             use_jit_mask=use_jit_mask,
             reward_distance_scale_km=reward_distance_scale_km,
             reward_distance_scale_mode=reward_distance_scale_mode,
+            reward_objective_scale=reward_objective_scale,
+            invalid_action_penalty=invalid_action_penalty,
             objective_config=objective_config,
         )
         for instance in instances

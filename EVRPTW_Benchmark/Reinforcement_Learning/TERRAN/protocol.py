@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import torch
@@ -20,12 +20,149 @@ from ..common.training_protocol import (
     require_registered_batches,
     require_training_rollout_steps,
     require_validation_decoding,
+    resolved_training_signature_digest,
     validation_epochs,
     validation_key,
 )
 from ..common.objective import resolve_objective
+from ..common.reward_contract import RewardContract
 from ..common.data_pass import DataPassState
-from ..common.training_stream import read_stream_view_ids
+from ..common.training_stream import (
+    read_stream_view_ids,
+    training_stream_contract_digest,
+    training_stream_contract_from_args,
+)
+
+
+def _checkpoint_reward_contract_provenance(
+    checkpoint: Path,
+    *,
+    scale: str,
+    objective: Any,
+) -> dict[str, Any] | None:
+    """Read the reward contract actually frozen into a TERRAN checkpoint.
+
+    The launcher manifest is an intent record.  This helper turns the completed
+    checkpoint into the post-run source of truth and rejects internally
+    inconsistent derived fields before ``training_result.json`` is published.
+    """
+
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    config = payload.get("config")
+    if not isinstance(config, Mapping):
+        raise RuntimeError(f"TERRAN checkpoint is missing its frozen config: {checkpoint}")
+    checkpoint_objective = resolve_objective(config.get("objective"))
+    if checkpoint_objective.to_dict() != resolve_objective(objective).to_dict():
+        raise RuntimeError(
+            f"TERRAN checkpoint objective does not match the completed run: {checkpoint}"
+        )
+    snapshot = config.get("reward_contract")
+    if snapshot is None:
+        return None
+    try:
+        contract = RewardContract.from_payload(snapshot)
+        terms = contract.for_scale(scale, resolve_objective(objective))
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"TERRAN checkpoint contains an invalid reward contract: {checkpoint}"
+        ) from error
+
+    expected = {
+        ("training", "reward_contract_id"): terms.contract_id,
+        ("normalization", "reward_contract_id"): terms.contract_id,
+        ("normalization", "reward_contract_sha256"): terms.digest,
+        ("normalization", "reward_contract_scale"): terms.scale_label,
+        ("normalization", "reward_objective_scale"): terms.objective_scale,
+        ("normalization", "failure_base"): terms.failure_base,
+        ("normalization", "unserved_coefficient"): terms.unserved_coefficient,
+        ("env", "normalize_reward"): True,
+        ("env", "reward_objective_scale"): terms.objective_scale,
+        ("env", "invalid_action_penalty"): 0.0,
+        ("env", "success_bonus"): 0.0,
+        ("pbrs", "use_terminal_heuristic"): False,
+        ("pbrs", "use_terminal_task_penalty"): True,
+        ("pbrs", "success_bonus"): 0.0,
+        ("pbrs", "failure_base"): terms.failure_base,
+        ("pbrs", "unserved_coefficient"): terms.unserved_coefficient,
+    }
+    for (section, field), expected_value in expected.items():
+        actual = (config.get(section) or {}).get(field)
+        if actual != expected_value:
+            raise RuntimeError(
+                "TERRAN checkpoint reward-contract field mismatch: "
+                f"{section}.{field}={actual!r}, expected {expected_value!r}"
+            )
+    return {
+        "reward_contract_id": terms.contract_id,
+        "reward_contract_sha256": terms.digest,
+        "reward_contract_scale": terms.scale_label,
+        "reward_contract_snapshot": contract.to_dict(),
+        "reward_objective_scale": terms.objective_scale,
+        "reward_failure_base": terms.failure_base,
+        "reward_unserved_coefficient": terms.unserved_coefficient,
+    }
+
+
+def _checkpoint_training_stream_provenance(checkpoint: Path) -> dict[str, Any] | None:
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    config = payload.get("config")
+    if not isinstance(config, Mapping):
+        raise RuntimeError(f"TERRAN checkpoint is missing its frozen config: {checkpoint}")
+    protocol = config.get("protocol")
+    if protocol is None:
+        return None
+    if not isinstance(protocol, Mapping):
+        raise RuntimeError(f"TERRAN checkpoint is missing protocol provenance: {checkpoint}")
+    snapshot = protocol.get("training_stream_contract_snapshot")
+    digest = protocol.get("training_stream_contract_sha256")
+    if snapshot is None and digest is None:
+        return None
+    if not isinstance(snapshot, Mapping):
+        raise RuntimeError(f"TERRAN checkpoint has an invalid stream snapshot: {checkpoint}")
+    if snapshot.get("sha256") != training_stream_contract_digest(snapshot):
+        raise RuntimeError(f"TERRAN checkpoint stream snapshot is corrupt: {checkpoint}")
+    if digest != snapshot["sha256"]:
+        raise RuntimeError(f"TERRAN checkpoint stream digest is inconsistent: {checkpoint}")
+    return {
+        "training_stream_contract_sha256": digest,
+        "training_stream_contract_snapshot": dict(snapshot),
+    }
+
+
+def _checkpoint_training_signature_provenance(
+    checkpoint: Path,
+) -> dict[str, Any] | None:
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    config = payload.get("config")
+    if not isinstance(config, Mapping):
+        raise RuntimeError(f"TERRAN checkpoint is missing its frozen config: {checkpoint}")
+    protocol = config.get("protocol")
+    if protocol is None:
+        return None
+    if not isinstance(protocol, Mapping):
+        raise RuntimeError(f"TERRAN checkpoint is missing protocol provenance: {checkpoint}")
+    signature = protocol.get("resolved_training_signature")
+    digest = protocol.get("resolved_training_signature_sha256")
+    method_fields = protocol.get("resolved_training_method_fields")
+    if signature is None and digest is None and method_fields is None:
+        return None
+    if not isinstance(signature, Mapping) or not isinstance(digest, str):
+        raise RuntimeError(
+            f"TERRAN checkpoint has an incomplete resolved training signature: {checkpoint}"
+        )
+    signature_dict = dict(signature)
+    if (
+        signature.get("sha256") != resolved_training_signature_digest(signature_dict)
+        or digest != signature.get("sha256")
+        or method_fields != signature.get("method_specific")
+    ):
+        raise RuntimeError(
+            f"TERRAN checkpoint resolved training signature is inconsistent: {checkpoint}"
+        )
+    return {
+        "resolved_training_signature_sha256": digest,
+        "resolved_training_signature": signature_dict,
+    }
 
 
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -86,6 +223,10 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     if early_stop_start_epoch and not fixed_epochs:
         raise ValueError("delayed early stopping requires --training-epochs")
     stream_path = getattr(args, "training_stream_path", None)
+    stream_contract = training_stream_contract_from_args(
+        args,
+        required=(args.protocol_id == "drl_rq_protocol_frozen_v1"),
+    )
     if fixed_epochs:
         if args.data_passes is not None or args.max_batches_per_pass is not None:
             raise ValueError("fixed TERRAN epochs cannot be combined with data-pass options")
@@ -248,6 +389,13 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "optimizer_steps": optimizer_steps,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
         "training_stream_path": str(stream_path) if stream_path is not None else None,
+        "training_stream_contract_sha256": (
+            stream_contract["sha256"] if stream_contract is not None else None
+        ),
+        "training_stream_contract_snapshot": stream_contract,
+        "final_validation_limit": int(
+            getattr(args, "final_validation_limit", 0) or 0
+        ),
         "exposure_checkpoints": list(parse_int_checkpoints(getattr(args, "exposure_checkpoints", ""))),
         "gpu_hour_checkpoints": list(parse_float_checkpoints(getattr(args, "gpu_hour_checkpoints", ""))),
     }
@@ -496,6 +644,87 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
     )
     if samples_seen != expected:
         raise RuntimeError(f"TERRAN exposure mismatch: {samples_seen} != {expected}")
+    active_objective = resolve_objective(meta.get("objective"))
+    reward_contract_provenance = _checkpoint_reward_contract_provenance(
+        final_checkpoint,
+        scale=str(args.stage2_scale),
+        objective=active_objective,
+    )
+    selected_reward_contract_provenance = _checkpoint_reward_contract_provenance(
+        output / "checkpoint_selected.pt",
+        scale=str(args.stage2_scale),
+        objective=active_objective,
+    )
+    if reward_contract_provenance != selected_reward_contract_provenance:
+        raise RuntimeError(
+            "TERRAN final and selected checkpoints disagree on the reward contract"
+        )
+    if (
+        getattr(args, "reward_contract", None) is not None
+        and reward_contract_provenance is None
+    ):
+        raise RuntimeError(
+            "TERRAN was launched with a reward contract, but completed checkpoints "
+            "do not contain one"
+        )
+    reward_contract_fields = reward_contract_provenance or {
+        "reward_contract_id": None,
+        "reward_contract_sha256": None,
+        "reward_contract_scale": None,
+        "reward_contract_snapshot": None,
+        "reward_objective_scale": None,
+        "reward_failure_base": None,
+        "reward_unserved_coefficient": None,
+    }
+    stream_contract_provenance = _checkpoint_training_stream_provenance(
+        final_checkpoint
+    )
+    selected_stream_contract_provenance = _checkpoint_training_stream_provenance(
+        output / "checkpoint_selected.pt"
+    )
+    if stream_contract_provenance != selected_stream_contract_provenance:
+        raise RuntimeError(
+            "TERRAN final and selected checkpoints disagree on the training stream"
+        )
+    expected_stream_snapshot = getattr(
+        args, "training_stream_contract_snapshot", None
+    )
+    expected_stream_sha = getattr(args, "training_stream_contract_sha256", None)
+    if expected_stream_snapshot is not None and stream_contract_provenance != {
+        "training_stream_contract_sha256": expected_stream_sha,
+        "training_stream_contract_snapshot": expected_stream_snapshot,
+    }:
+        raise RuntimeError(
+            "TERRAN completed checkpoints do not contain the requested training stream"
+        )
+    stream_contract_fields = stream_contract_provenance or {
+        "training_stream_contract_sha256": None,
+        "training_stream_contract_snapshot": None,
+    }
+    training_signature_provenance = _checkpoint_training_signature_provenance(
+        final_checkpoint
+    )
+    selected_training_signature_provenance = (
+        _checkpoint_training_signature_provenance(
+            output / "checkpoint_selected.pt"
+        )
+    )
+    if training_signature_provenance != selected_training_signature_provenance:
+        raise RuntimeError(
+            "TERRAN final and selected checkpoints disagree on the resolved "
+            "training signature"
+        )
+    if (
+        args.protocol_id == "drl_rq_protocol_frozen_v1"
+        and training_signature_provenance is None
+    ):
+        raise RuntimeError(
+            "formal TERRAN checkpoints are missing the resolved training signature"
+        )
+    training_signature_fields = training_signature_provenance or {
+        "resolved_training_signature_sha256": None,
+        "resolved_training_signature": None,
+    }
     atomic_json(
         output / "training_result.json",
         {
@@ -503,9 +732,12 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             "status": "pilot_partial" if getattr(args, "pilot_mode", False) else ("early_stopped" if early_stopped else "passed"),
             "method": "TERRAN",
             "protocol_id": args.protocol_id,
-            "objective_config": resolve_objective(meta.get("objective")).to_dict(),
-            "objective_mode": resolve_objective(meta.get("objective")).mode,
-            "objective_unit": resolve_objective(meta.get("objective")).unit,
+            "objective_config": active_objective.to_dict(),
+            "objective_mode": active_objective.mode,
+            "objective_unit": active_objective.unit,
+            **reward_contract_fields,
+            **stream_contract_fields,
+            **training_signature_fields,
             "budget_mode": (
                 "fixed_customer_exposure" if getattr(args, "training_stream_path", None) is not None else
                 ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
 
+import pytest
 import yaml
 
 from EVRPTW_Benchmark.Reinforcement_Learning.scripts import build_rq_server_manifests as MANIFESTS
@@ -14,27 +16,21 @@ from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests i
 )
 
 
-def test_four_server_queues_encode_exact_four_scale_one_seed_design() -> None:
+def test_four_server_queues_enable_only_two_calibrated_scales() -> None:
     queues = build()
     assert set(queues) == set(SERVERS)
     rows = [row for queue in queues.values() for row in queue]
     formal = [row for row in rows if row["run_mode"] == "full"]
-    assert len(formal) == 24
+    assert len(formal) == 8
     assert rows == formal
-    assert len({row["job_id"] for row in formal}) == 24
+    assert len({row["job_id"] for row in formal}) == 8
     assert {row["seed"] for row in rows} == {1234}
     assert Counter((row["representation"], row["condition"]) for row in formal) == {
-        ("G", "Full-support"): 16,
-        ("G", "Random-10%-support"): 2,
-        ("G", "Coverage-10%-support"): 2,
-        ("E", "Full-support"): 4,
+        ("G", "Full-support"): 8,
     }
-    assert all(row["formal_gate_file"] for row in formal)
+    assert {row["formal_gate_file"] for row in formal} == {MANIFESTS.GATE}
     assert all(not row["training_stream_path"].startswith("/") for row in rows)
-    assert all(
-        row["scale"] in {"Cus50", "Cus100", "Cus500", "Cus1000"}
-        for row in rows
-    )
+    assert {row["scale"] for row in rows} == {"Cus500", "Cus1000"}
 
 
 def test_shared_stream_is_method_independent_within_condition_scale_seed() -> None:
@@ -44,11 +40,96 @@ def test_shared_stream_is_method_independent_within_condition_scale_seed() -> No
         for row in queue
         if row["run_mode"] == "full"
     ]
-    grouped: dict[tuple[str, str, str, int], set[str]] = {}
+    grouped: dict[tuple[str, str, str, int], set[tuple[str, str, str]]] = {}
     for row in rows:
         key = (row["representation"], row["condition"], row["scale"], row["seed"])
-        grouped.setdefault(key, set()).add(row["training_stream_path"])
+        snapshot = row["training_stream_contract_snapshot"]
+        actual = MANIFESTS.load_training_stream_contract(
+            MANIFESTS.ROOT.parents[1] / row["training_stream_path"]
+        )
+        assert actual == snapshot
+        assert snapshot["sha256"] == row["training_stream_contract_sha256"]
+        assert snapshot["sample_count"] == row["target_environments"]
+        assert snapshot["source_index_sha256"]
+        assert row["file_hash_validation_performed"] is True
+        grouped.setdefault(key, set()).add(
+            (
+                row["training_stream_path"],
+                row["training_stream_contract_sha256"],
+                json.dumps(snapshot, sort_keys=True),
+            )
+        )
     assert all(len(paths) == 1 for paths in grouped.values())
+    assert all(
+        {row["method"] for row in rows if (
+            row["representation"], row["condition"], row["scale"], row["seed"]
+        ) == key} == set(MANIFESTS.METHODS)
+        for key in grouped
+    )
+
+
+def test_checked_in_formal_decision_is_three_way_consistent_and_closed() -> None:
+    gate = json.loads(
+        (MANIFESTS.ROOT.parents[1] / MANIFESTS.GATE).read_text(encoding="utf-8")
+    )
+    runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
+    protocol = yaml.safe_load(
+        (MANIFESTS.ROOT / "configs/drl_rq_protocol_frozen_v1.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    def decision(document):
+        statuses = {
+            key: value["status"] if isinstance(value, dict) else value
+            for key, value in document["formal_launch_gates"].items()
+        }
+        return (
+            document["protocol_id"],
+            document["formal_launch_allowed"],
+            document["launch_policy"],
+            statuses,
+        )
+
+    assert decision(gate) == decision(runtime) == decision(protocol)
+    assert gate["formal_launch_allowed"] is False
+    assert "pending_user_authorization" in gate["launch_policy"]
+    assert set(gate["formal_launch_gates"]) == {
+        f"G{index}" for index in range(1, 9)
+    }
+
+
+def test_checked_in_stream_registry_binds_marker_manifest_and_all_methods() -> None:
+    rows = [row for queue in build().values() for row in queue]
+    assert rows
+    assert len({row["training_stream_registry_path"] for row in rows}) == 1
+    registry_path = MANIFESTS.ROOT.parents[1] / rows[0][
+        "training_stream_registry_path"
+    ]
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    canonical = {key: value for key, value in registry.items() if key != "sha256"}
+    digest = hashlib.sha256(
+        json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert registry["sha256"] == digest
+    assert {row["training_stream_registry_sha256"] for row in rows} == {digest}
+    assert {
+        row["artifact_preparation_marker_sha256"] for row in rows
+    } == {registry["artifact_preparation_marker_sha256"]}
+    for row in rows:
+        key = (
+            f'{row["representation"]}/{row["condition"]}/'
+            f'{row["scale"]}/seed_{row["seed"]}'
+        )
+        assert registry["streams"][key] == {
+            "path": row["training_stream_path"],
+            "snapshot": row["training_stream_contract_snapshot"],
+        }
 
 
 def test_every_formal_job_uses_the_same_versioned_cost_objective() -> None:
@@ -60,7 +141,7 @@ def test_every_formal_job_uses_the_same_versioned_cost_objective() -> None:
     assert expected["vehicle_fixed_cost_usd"] == 33.56
     queues = build()
     rows = [row for queue in queues.values() for row in queue]
-    assert len(rows) == 24
+    assert len(rows) == 8
     for row in rows:
         assert row["objective_config"] == expected
         assert row["objective_config_path"] == profile_path
@@ -90,25 +171,56 @@ def test_every_formal_job_uses_the_same_adamw_contract() -> None:
     assert terran["training"]["weight_decay"] == expected["weight_decay"]
 
 
-def test_reward_contract_is_terran_only_and_derived_from_formal_yaml(tmp_path, monkeypatch) -> None:
+def test_reward_contract_is_shared_by_every_formal_method(tmp_path, monkeypatch) -> None:
     baseline = build()
+    cfg = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
+    reward_contract = MANIFESTS.load_reward_contract(
+        MANIFESTS.ROOT.parents[1] / cfg["reward_contract_config_path"]
+    )
     formal = yaml.safe_load(MANIFESTS.TERRAN_CONFIG.read_text(encoding="utf-8"))
     training = formal["training"]
     terran_count = 0
     for queue in baseline.values():
         for row in queue:
+            terms = reward_contract.for_scale(row["scale"], row["objective_config"])
+            assert (
+                row["reward_contract_config_path"]
+                == cfg["reward_contract_config_path"]
+            )
+            assert row["reward_contract_id"] == terms.contract_id
+            assert row["reward_contract_sha256"] == terms.digest
+            assert row["reward_objective_scale"] == terms.objective_scale
+            assert row["reward_failure_base"] == terms.failure_base
+            assert row["reward_unserved_coefficient"] == terms.unserved_coefficient
             if row["method"] == "terran":
                 terran_count += 1
                 assert row["reward_contract_id"] == training["reward_contract_id"]
                 assert row["training_gamma"] == training["gamma"] == 1.0
             else:
-                assert "reward_contract_id" not in row
                 assert "training_gamma" not in row
-    assert terran_count == 7
+    assert terran_count == 2
 
-    # A method-only reward revision changes no stream, budget, schedule or peer row.
+    assert set(reward_contract.scales) == {"Cus500", "Cus1000"}
+    assert set(cfg["enabled_scales"]) == set(cfg["reward_contract_calibrated_scales"])
+    assert set(cfg["reward_contract_blocked_scales"]) == {"Cus50", "Cus100"}
+    frozen = yaml.safe_load(
+        (MANIFESTS.ROOT / "configs/drl_rq_protocol_frozen_v1.yaml").read_text()
+    )
+    assert frozen["training_scales"] == ["Cus50", "Cus100", "Cus500", "Cus1000"]
+    assert set(frozen["reward_contract_calibrated_scales"]) == set(
+        reward_contract.scales
+    )
+    assert set(frozen["reward_contract_launch_enabled_scales"]) == set(
+        reward_contract.scales
+    )
+    assert set(frozen["reward_contract_blocked_scales"]) == {"Cus50", "Cus100"}
+
+    # TERRAN keeps a method-specific gamma, but not a method-specific task contract.
     alternate = tmp_path / "terran.yaml"
-    alternate.write_text("training:\n  gamma: 0.999\n  reward_contract_id: reference-only\n")
+    alternate.write_text(
+        "training:\n  gamma: 0.999\n"
+        f"  reward_contract_id: {reward_contract.contract_id}\n"
+    )
     monkeypatch.setattr(MANIFESTS, "TERRAN_CONFIG", alternate)
     revised = build()
     for server, baseline_rows in baseline.items():
@@ -117,29 +229,43 @@ def test_reward_contract_is_terran_only_and_derived_from_formal_yaml(tmp_path, m
                 assert before == after
             else:
                 assert after["training_gamma"] == 0.999
-                assert after["reward_contract_id"] == "reference-only"
-                assert {k: v for k, v in before.items() if k not in {"training_gamma", "reward_contract_id"}} == {
-                    k: v for k, v in after.items() if k not in {"training_gamma", "reward_contract_id"}
+                assert after["reward_contract_id"] == reward_contract.contract_id
+                assert {k: v for k, v in before.items() if k != "training_gamma"} == {
+                    k: v for k, v in after.items() if k != "training_gamma"
                 }
+
+    alternate.write_text(
+        "training:\n  gamma: 1.0\n  reward_contract_id: stale-contract\n"
+    )
+    with pytest.raises(ValueError, match="common reward contract disagree"):
+        build()
+
+
+def test_manifest_build_fails_closed_for_an_uncalibrated_enabled_scale(
+    tmp_path, monkeypatch,
+) -> None:
+    cfg = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
+    cfg["enabled_scales"].append("Cus100")
+    cfg["scale_hardware"]["2080ti"] = ["Cus100"]
+    alternate = tmp_path / "runtime.yaml"
+    alternate.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(MANIFESTS, "CONFIG", alternate)
+    with pytest.raises(ValueError, match="no frozen reward calibration.*Cus100"):
+        build()
 
 
 def test_scale_aware_hardware_assignment_is_strict() -> None:
     queues = build()
-    assert all(any(row["run_mode"] == "full" for row in rows) for rows in queues.values())
     for server, rows in queues.items():
-        allowed = (
-            {"Cus50", "Cus100"}
-            if server.startswith("2080ti_")
-            else {"Cus500", "Cus1000"}
-        )
-        assert rows
-        assert all(row["scale"] in allowed for row in rows)
+        if server.startswith("2080ti_"):
+            assert rows == []
+        else:
+            assert rows
+            assert all(row["scale"] in {"Cus500", "Cus1000"} for row in rows)
 
 
 def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() -> None:
     expected = {
-        "Cus50": (10_000, 1_024, 10_240_000, 512_000_000),
-        "Cus100": (10_000, 256, 2_560_000, 256_000_000),
         "Cus500": (10_000, 64, 640_000, 320_000_000),
         "Cus1000": (10_000, 2, 20_000, 20_000_000),
     }
@@ -196,32 +322,20 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
 
 
 def test_scale_rollout_limits_match_current_protocol() -> None:
-    expected = {"Cus50": 65, "Cus100": 120, "Cus500": 580, "Cus1000": 1200}
+    expected = {"Cus500": 580, "Cus1000": 1200}
     rows = [row for queue in build().values() for row in queue]
     assert rows
     for row in rows:
         assert row["training_rollout_steps"] == expected[row["scale"]]
 
 
-def test_2080ti_jobs_use_only_measured_safe_sample100_batches() -> None:
-    safe_batches = {
-        "am_evrptw": {"Cus50": 1024, "Cus100": 256},
-        "evrptw_rl": {"Cus50": 224, "Cus100": 68},
-        "drl_ts": {"Cus50": 132, "Cus100": 34},
-        "terran": {"Cus50": 256, "Cus100": 128},
-    }
+def test_2080ti_jobs_are_blocked_until_small_scales_are_calibrated() -> None:
     queues = build()
-    rows = [
-        row
+    assert all(
+        not queue
         for server, queue in queues.items()
         if server.startswith("2080ti_")
-        for row in queue
-    ]
-    assert rows
-    for row in rows:
-        assert row["validation_decode_type"] == "sampling"
-        assert row["validation_candidate_count"] == 100
-        assert row["physical_batch_size"] == safe_batches[row["method"]][row["scale"]]
+    )
 
 
 def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
@@ -325,16 +439,38 @@ def test_checked_in_server_manifests_match_builder() -> None:
         assert checked_in == expected
 
 
+def test_checked_in_assignment_summaries_mark_empty_2080_queues_blocked() -> None:
+    runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
+    for server, rows in build().items():
+        summary = json.loads(
+            (SCRIPT_ROOT / server / "assignment_summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert summary["formal_jobs"] == len(rows)
+        assert summary["formal_launch_allowed"] is (
+            bool(rows) and bool(runtime["formal_launch_allowed"])
+        )
+        assert summary["launch_policy"] == (
+            runtime["launch_policy"]
+            if rows
+            else "blocked_no_calibrated_reward_scale"
+        )
+
+
 def test_artifact_preparation_uses_v12_manifest_exposure_budgets() -> None:
     script = (SCRIPT_ROOT / "prepare_artifacts.sh").read_text(encoding="utf-8")
     assert "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50" in script
     assert "drl_rq_runtime_budget_v11_min5000_max6000_tailval50" not in script
     assert "drl_rq_runtime_budget_v10_min5000_max10000_tailval50" not in script
     for scale, exposure in {
-        "Cus50": 512_000_000,
-        "Cus100": 256_000_000,
         "Cus500": 320_000_000,
         "Cus1000": 20_000_000,
     }.items():
         assert f"[{scale}]={exposure}" in script
-    assert '--customer-exposures "${FORMAL_EXPOSURE[Cus100]}"' in script
+    assert "for scale in Cus500 Cus1000" in script
+    assert "file_hash_validation_performed\": True" in script
+    assert '"training_stream_contracts": contracts' in script
+    assert '"marker_sha256"' in script
+    assert "load_training_stream_contract" in script
+    assert '--customer-exposures "${FORMAL_EXPOSURE[$scale]}"' in script

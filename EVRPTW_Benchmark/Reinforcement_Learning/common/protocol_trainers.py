@@ -4,6 +4,7 @@ import json
 import math
 import shutil
 import time
+from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
@@ -12,11 +13,25 @@ import numpy as np
 import torch
 from scipy.stats import ttest_rel
 
+from .method_auxiliary import (
+    assert_checkpoint_method_auxiliary,
+    method_auxiliary_from_args,
+)
 from .objective import objective_from_args, objective_from_checkpoint
+from .reward_contract import (
+    assert_checkpoint_reward_contract,
+    reward_contract_from_args,
+)
 from .training_diagnostics import summarize_values
+from .training_stream import (
+    assert_checkpoint_training_stream_contract,
+    training_stream_contract_from_args,
+)
 from .training_protocol import (
+    assert_checkpoint_training_signature,
     append_jsonl,
     atomic_json,
+    freeze_resolved_training_signature,
     grouped_batches,
     load_state,
     make_validation_pool,
@@ -34,17 +49,42 @@ def prepare_training_objective(args: Any):
     """Freeze objective values and prevent a new cost run inheriting old output."""
     config = objective_from_args(args)
     args.objective = config.to_dict()
+    active_reward_contract = reward_contract_from_args(
+        args, objective=config, scale=getattr(args, "scale", None)
+    )
+    training_stream_contract_from_args(
+        args,
+        required=(getattr(args, "protocol_id", None) == "drl_rq_protocol_frozen_v1"),
+    )
+    if (
+        getattr(args, "validation_seed", None) is None
+        and getattr(args, "seed", None) is not None
+    ):
+        args.validation_seed = int(args.seed) + 910_000_000
+    freeze_resolved_training_signature(args)
     resume = bool(getattr(args, "resume", False))
     formal = (
         getattr(args, "data_passes", None) is not None
         or getattr(args, "training_epochs", None) is not None
     )
+    if formal and config.is_cost and active_reward_contract is None:
+        raise ValueError(
+            "formal cost training requires a frozen reward contract"
+        )
     if resume and not formal:
         raise ValueError("standalone training does not implement --resume; use a formal training protocol")
     output = Path(args.output_dir)
     if resume and (output / "checkpoint_latest.pt").is_file():
         payload = torch.load(output / "checkpoint_latest.pt", map_location="cpu", weights_only=False)
         objective_from_checkpoint(payload, override=config)
+        assert_checkpoint_reward_contract(payload, args)
+        assert_checkpoint_training_stream_contract(payload, args)
+        assert_checkpoint_training_signature(payload, args)
+        expected_auxiliary_method = getattr(args, "method_auxiliary_method", None)
+        if expected_auxiliary_method is not None:
+            assert_checkpoint_method_auxiliary(
+                payload, args, expected_method=expected_auxiliary_method
+            )
     if config.is_cost and not resume:
         evidence = list(output.glob("checkpoint*.pt")) + list(output.glob("best*.ckpt"))
         evidence.extend(
@@ -108,6 +148,12 @@ def _collect_reinforce_diagnostics(
         )
     for name, values in (getattr(actor, "training_cost_components", None) or {}).items():
         _collect_diagnostic_values(components, name, values)
+    for name, values in (getattr(actor, "soft_violation_diagnostics", None) or {}).items():
+        _collect_diagnostic_values(distributions, name, values)
+    for name, values in (
+        getattr(actor, "method_auxiliary_diagnostics", None) or {}
+    ).items():
+        _collect_diagnostic_values(distributions, name, values)
     _collect_diagnostic_values(scales, "objective_scale", getattr(actor, "reward_objective_scale", None))
 
 
@@ -150,6 +196,60 @@ def _append_reinforce_diagnostics(
             "reward_distance_scale_km": getattr(args, "reward_distance_scale_km", None),
             "reward_distance_scale_mode": getattr(args, "reward_distance_scale_mode", None),
             "reward_distance_scale_metadata": getattr(args, "reward_distance_scale_metadata", None),
+            "reward_contract_id": getattr(args, "reward_contract_id", None),
+            "reward_contract_sha256": getattr(args, "reward_contract_sha256", None),
+            "failure_base": getattr(args, "reward_failure_base", None),
+            "unserved_coefficient": getattr(
+                args, "reward_unserved_coefficient", None
+            ),
+            "method_auxiliary_profile_id": getattr(
+                args, "method_auxiliary_profile_id", None
+            ),
+            "method_auxiliary_sha256": getattr(
+                args, "method_auxiliary_sha256", None
+            ),
+            "method_auxiliary_applicability": getattr(
+                args, "method_auxiliary_applicability", None
+            ),
+            "method_auxiliary_aggregation": getattr(
+                args, "method_auxiliary_aggregation", None
+            ),
+            "method_auxiliary_denominator": getattr(
+                args, "method_auxiliary_denominator", None
+            ),
+            "method_auxiliary_step_clip": getattr(
+                args, "method_auxiliary_step_clip", None
+            ),
+            "method_auxiliary_component_clip": getattr(
+                args, "method_auxiliary_component_clip", None
+            ),
+            "method_auxiliary_weights": getattr(
+                args, "method_auxiliary_weights", None
+            ),
+            "method_auxiliary_formula": (
+                "weight*executed_legal_station_visits/num_customers"
+                if getattr(args, "method_auxiliary_method", None) == "evrptw_rl"
+                else None
+            ),
+            "soft_violation_contract_id": getattr(
+                args, "soft_violation_contract_id", None
+            ),
+            "soft_violation_step_clip": getattr(
+                args, "soft_violation_step_clip", None
+            ),
+            "soft_violation_component_clip": getattr(
+                args, "soft_violation_component_clip", None
+            ),
+            "soft_violation_denominator": getattr(
+                args, "soft_violation_denominator", None
+            ),
+            "soft_violation_formula": (
+                "weight*min(component_clip,"
+                "sum_valid_transitions(min(normalized_excess,step_clip))"
+                "/num_customers)"
+                if getattr(args, "soft_violation_contract_id", None)
+                else None
+            ),
         },
         "distributions": _summarize_diagnostic_groups(distributions),
         "components": component_summaries,
@@ -158,8 +258,26 @@ def _append_reinforce_diagnostics(
             "base_objective": ["base_distance_term", "base_vehicle_term"],
             "training_cost": [
                 name for name in component_summaries
-                if name not in {"base_distance_term", "base_vehicle_term"}
+                if name not in {
+                    "base_distance_term",
+                    "base_vehicle_term",
+                    "terminal_task_total",
+                    "terminal_failure_penalty",
+                    "soft_auxiliary_total",
+                }
             ],
+            "terminal_task_total": [
+                "terminal_failure_base", "terminal_unserved"
+            ],
+            "soft_auxiliary_total": [
+                name for name in (
+                    "capacity_penalty", "time_penalty", "energy_penalty"
+                ) if name in component_summaries
+            ],
+            "station_visit_auxiliary": [
+                "station_visits_raw", "station_visit_denominator",
+                "station_visits_normalized",
+            ] if "station_visit_auxiliary" in component_summaries else [],
             "base_distance_term_meaning": "electricity_cost_normalized" if objective_config.is_cost else "distance_normalized",
             "base_vehicle_term_meaning": "vehicle_cost_normalized" if objective_config.is_cost else "zero_no_vehicle_term",
         },
@@ -223,6 +341,84 @@ def _customer_count(scale: str) -> int:
     return int(value)
 
 
+def _resolve_soft_stage_contract(
+    *,
+    method: str,
+    fixed_epochs: int | None,
+    total_passes: int,
+    soft_stage_fraction: float,
+    soft_stage_end_epoch: int | None,
+) -> dict[str, Any] | None:
+    """Freeze the exact DRL-TS soft-to-hard reward-stage boundary.
+
+    An absolute epoch boundary takes precedence over the legacy fraction.  In
+    that mode the fraction is deliberately recorded as inactive, so changing
+    an ignored CLI default cannot invalidate a checkpoint.  When the fraction
+    determines the boundary, both the exact fraction and its resolved integer
+    boundary are frozen.
+    """
+
+    if method != "DRL-TS":
+        return None
+    fraction = float(soft_stage_fraction)
+    if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        raise ValueError("soft-stage fraction must be finite and in [0, 1]")
+    if soft_stage_end_epoch is not None:
+        if fixed_epochs is None:
+            raise ValueError("an absolute soft-stage boundary requires --training-epochs")
+        end_epoch = int(soft_stage_end_epoch)
+        if not 0 <= end_epoch <= fixed_epochs:
+            raise ValueError("soft-stage end epoch must be in [0, training epochs]")
+        return {
+            "schema": "drl_ts_soft_stage_contract_v1",
+            "mode": "absolute_epoch",
+            "soft_stage_end_epoch": end_epoch,
+            "soft_stage_fraction": None,
+            "resolved_soft_stage_end_epoch": end_epoch,
+            "resolved_soft_stage_end_data_pass": None,
+        }
+    if fixed_epochs is not None:
+        resolved_end = int(fixed_epochs * fraction)
+        return {
+            "schema": "drl_ts_soft_stage_contract_v1",
+            "mode": "fraction_of_training_epochs",
+            "soft_stage_end_epoch": None,
+            "soft_stage_fraction": fraction,
+            "resolved_soft_stage_end_epoch": resolved_end,
+            "resolved_soft_stage_end_data_pass": None,
+        }
+    resolved_pass = int(total_passes * fraction)
+    return {
+        "schema": "drl_ts_soft_stage_contract_v1",
+        "mode": "fraction_of_data_passes",
+        "soft_stage_end_epoch": None,
+        "soft_stage_fraction": fraction,
+        "resolved_soft_stage_end_epoch": None,
+        "resolved_soft_stage_end_data_pass": resolved_pass,
+    }
+
+
+def _assert_checkpoint_soft_stage_contract(payload: dict[str, Any], args: Any) -> None:
+    expected = getattr(args, "soft_stage_contract_snapshot", None)
+    checkpoint = payload.get("soft_stage_contract")
+    checkpoint_args = payload.get("args", {})
+    embedded = (
+        checkpoint_args.get("soft_stage_contract_snapshot")
+        if isinstance(checkpoint_args, dict)
+        else None
+    )
+    if expected is None:
+        if checkpoint is not None or embedded is not None:
+            raise ValueError(
+                "checkpoint soft-stage contract mismatch; start a fresh run"
+            )
+        return
+    if checkpoint != expected or embedded != expected:
+        raise ValueError(
+            "checkpoint soft-stage contract mismatch; start a fresh run"
+        )
+
+
 def _peak_gpu_bytes(device: str) -> int:
     return int(torch.cuda.max_memory_allocated(device)) if str(device).startswith("cuda") else 0
 
@@ -238,6 +434,17 @@ def _save_checkpoint(
     args: Any,
     extra: dict[str, Any] | None = None,
 ) -> None:
+    reward_contract_from_args(
+        args,
+        objective=objective_from_args(args),
+        scale=getattr(args, "scale", None),
+    )
+    freeze_resolved_training_signature(args)
+    expected_auxiliary_method = getattr(args, "method_auxiliary_method", None)
+    if expected_auxiliary_method is not None:
+        method_auxiliary_from_args(
+            args, expected_method=expected_auxiliary_method
+        )
     payload = {
         "method": method,
         "data_pass": int(data_pass),
@@ -247,6 +454,19 @@ def _save_checkpoint(
         "args": vars(args),
         "protocol_id": args.protocol_id,
         "objective_config": objective_from_args(args).to_dict(),
+        "reward_contract": getattr(args, "reward_contract_snapshot", None),
+        "method_auxiliary_profile": getattr(
+            args, "method_auxiliary_snapshot", None
+        ),
+        "training_stream_contract": getattr(
+            args, "training_stream_contract_snapshot", None
+        ),
+        "resolved_training_signature": getattr(
+            args, "resolved_training_signature", None
+        ),
+        "soft_stage_contract": getattr(
+            args, "soft_stage_contract_snapshot", None
+        ),
     }
     payload.update(extra or {})
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -264,6 +484,7 @@ def _load_checkpoint(
     objective_config: Any = None,
     optimizer_name: str | None = None,
     optimizer_weight_decay: float | None = None,
+    reward_contract_args: Any = None,
 ) -> dict[str, Any]:
     policy_device = getattr(policy, "device", None)
     if policy_device is None:
@@ -272,6 +493,25 @@ def _load_checkpoint(
     if payload.get("protocol_id") != protocol_id:
         raise ValueError("checkpoint protocol does not match requested protocol")
     objective_from_checkpoint(payload, override=objective_config)
+    if reward_contract_args is not None:
+        assert_checkpoint_reward_contract(payload, reward_contract_args)
+        assert_checkpoint_training_stream_contract(payload, reward_contract_args)
+        _assert_checkpoint_soft_stage_contract(payload, reward_contract_args)
+        assert_checkpoint_training_signature(payload, reward_contract_args)
+        expected_auxiliary_method = getattr(
+            reward_contract_args, "method_auxiliary_method", None
+        )
+        checkpoint_auxiliary = payload.get("method_auxiliary_profile")
+        if expected_auxiliary_method is not None:
+            assert_checkpoint_method_auxiliary(
+                payload,
+                reward_contract_args,
+                expected_method=expected_auxiliary_method,
+            )
+        elif checkpoint_auxiliary is not None:
+            raise ValueError(
+                "checkpoint has a method auxiliary profile but the run does not"
+            )
     if optimizer_name is not None or optimizer_weight_decay is not None:
         if optimizer_name is None or optimizer_weight_decay is None:
             raise ValueError("incomplete requested optimizer contract")
@@ -409,6 +649,17 @@ def train_reinforce_data_passes(
         if args.data_passes is None or args.data_passes <= 0:
             raise ValueError("protocol mode requires --training-epochs or --data-passes")
         total_passes = int(args.data_passes)
+    soft_stage_fraction = float(soft_stage_fraction)
+    soft_stage_contract = _resolve_soft_stage_contract(
+        method=method,
+        fixed_epochs=fixed_epochs,
+        total_passes=total_passes,
+        soft_stage_fraction=soft_stage_fraction,
+        soft_stage_end_epoch=soft_stage_end_epoch,
+    )
+    args.soft_stage_contract_snapshot = soft_stage_contract
+    if soft_stage_contract is not None:
+        soft_stage_end_epoch = soft_stage_contract["soft_stage_end_epoch"]
     if args.max_batches_per_pass is not None and not args.pilot_mode:
         raise ValueError("--max-batches-per-pass is allowed only with --pilot-mode")
     if fixed_epochs is not None and args.max_batches_per_pass is not None:
@@ -512,6 +763,7 @@ def train_reinforce_data_passes(
             objective_config=objective_config,
             optimizer_name=getattr(args, "optimizer", None),
             optimizer_weight_decay=getattr(args, "weight_decay", None),
+            reward_contract_args=args,
         )
         if int(resume_extra.get("data_pass", -1)) != state.completed_data_passes:
             raise ValueError("checkpoint and data-pass state disagree")
@@ -546,12 +798,6 @@ def train_reinforce_data_passes(
     early_stopped = False
     early_stop_epoch: int | None = None
     terminal_logical_epoch = completed_logical_epochs
-    if soft_stage_end_epoch is not None:
-        soft_stage_end_epoch = int(soft_stage_end_epoch)
-        if fixed_epochs is None:
-            raise ValueError("an absolute soft-stage boundary requires --training-epochs")
-        if not 0 <= soft_stage_end_epoch <= fixed_epochs:
-            raise ValueError("soft-stage end epoch must be in [0, training epochs]")
     baseline_probe_size = max(
         0, int(getattr(args, "baseline_eval_size", 64))
     )
@@ -605,6 +851,7 @@ def train_reinforce_data_passes(
         transition_count = 0
         trajectory_steps: list[int] = []
         rollout_budget_exhausted_count = 0
+        failure_reason_counts: Counter[str] = Counter()
         complete_pass = fixed_epochs is not None or args.max_batches_per_pass is None
         remaining_fixed_epochs = (
             fixed_epochs - completed_logical_epochs
@@ -627,6 +874,13 @@ def train_reinforce_data_passes(
                 start=completed_logical_epochs * effective,
                 stop=expected_fixed_instances,
                 logical_batch_size=effective,
+                **(
+                    {"training_stream_contract_sha256": str(
+                        args.training_stream_contract_sha256
+                    )}
+                    if getattr(args, "training_stream_contract_sha256", None)
+                    else {}
+                ),
             )
             if stream_path is not None
             else pool.data_pass_batches(data_pass, physical)
@@ -653,6 +907,7 @@ def train_reinforce_data_passes(
             group_transitions = 0
             group_trajectory_steps: list[int] = []
             group_exhausted = 0
+            group_failure_reason_counts: Counter[str] = Counter()
             diagnostic_distributions: dict[str, list[np.ndarray]] = {}
             diagnostic_components: dict[str, list[np.ndarray]] = {}
             diagnostic_scales: dict[str, list[np.ndarray]] = {}
@@ -717,6 +972,14 @@ def train_reinforce_data_passes(
                 group_trajectory_steps.extend(actor_steps)
                 rollout_budget_exhausted_count += actor_exhausted
                 group_exhausted += actor_exhausted
+                actor_failure_reasons = getattr(actor, "failure_reasons", None)
+                if actor_failure_reasons is not None:
+                    observed_reasons = Counter(
+                        str(value)
+                        for value in np.asarray(actor_failure_reasons, dtype=object).reshape(-1)
+                    )
+                    failure_reason_counts.update(observed_reasons)
+                    group_failure_reason_counts.update(observed_reasons)
             pre_clip_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
             optimizer.step()
             optimizer_steps += 1
@@ -832,6 +1095,9 @@ def train_reinforce_data_passes(
                         "mean_environment_feasible_rate": group_sums["feasible"] / group_size,
                         "mean_trajectory_steps": float(epoch_steps.mean()),
                         "rollout_budget_exhausted_rate": group_exhausted / max(epoch_steps.size, 1),
+                        "terminal_outcome_reason_counts": dict(
+                            sorted(group_failure_reason_counts.items())
+                        ),
                         "baseline_eval_due": paired_t_pvalue is not None,
                         "paired_t_pvalue": paired_t_pvalue,
                         "baseline_updated": baseline_updated,
@@ -1101,6 +1367,11 @@ def train_reinforce_data_passes(
             "physical_batch_size": physical,
             "training_rollout_steps": int(args.training_rollout_steps),
             "soft_stage_end_epoch": soft_stage_end_epoch,
+            "soft_stage_fraction": (
+                soft_stage_contract["soft_stage_fraction"]
+                if soft_stage_contract is not None else None
+            ),
+            "soft_stage_contract_snapshot": soft_stage_contract,
             "trajectory_count": trajectory_count,
             "mean_trajectory_steps": float(observed_steps.mean()),
             "trajectory_steps_p50": float(np.quantile(observed_steps, 0.50)),
@@ -1110,6 +1381,9 @@ def train_reinforce_data_passes(
             "rollout_budget_exhausted_count": rollout_budget_exhausted_count,
             "rollout_budget_exhausted_rate": (
                 rollout_budget_exhausted_count / trajectory_count
+            ),
+            "terminal_outcome_reason_counts": dict(
+                sorted(failure_reason_counts.items())
             ),
             "effective_batch_size": effective,
             "mean_loss": sums["loss"] / instances_seen,
@@ -1180,6 +1454,7 @@ def train_reinforce_data_passes(
             objective_config=objective_config,
             optimizer_name=getattr(args, "optimizer", None),
             optimizer_weight_decay=getattr(args, "weight_decay", None),
+            reward_contract_args=args,
         )
         policy.eval()
         final_validation = verified_validation(
@@ -1222,6 +1497,57 @@ def train_reinforce_data_passes(
         "reward_distance_scale_km": getattr(args, "reward_distance_scale_km", None),
         "reward_distance_scale_mode": getattr(args, "reward_distance_scale_mode", None),
         "reward_distance_scale_metadata": getattr(args, "reward_distance_scale_metadata", None),
+        "reward_contract_id": getattr(args, "reward_contract_id", None),
+        "reward_contract_sha256": getattr(args, "reward_contract_sha256", None),
+        "reward_contract_scale": getattr(args, "reward_contract_scale", None),
+        "reward_contract_snapshot": getattr(args, "reward_contract_snapshot", None),
+        "reward_objective_scale": getattr(args, "reward_objective_scale", None),
+        "reward_failure_base": getattr(args, "reward_failure_base", None),
+        "reward_unserved_coefficient": getattr(
+            args, "reward_unserved_coefficient", None
+        ),
+        "method_auxiliary_profile_id": getattr(
+            args, "method_auxiliary_profile_id", None
+        ),
+        "method_auxiliary_sha256": getattr(
+            args, "method_auxiliary_sha256", None
+        ),
+        "method_auxiliary_snapshot": getattr(
+            args, "method_auxiliary_snapshot", None
+        ),
+        "method_auxiliary_method": getattr(
+            args, "method_auxiliary_method", None
+        ),
+        "method_auxiliary_applicability": getattr(
+            args, "method_auxiliary_applicability", None
+        ),
+        "method_auxiliary_aggregation": getattr(
+            args, "method_auxiliary_aggregation", None
+        ),
+        "method_auxiliary_denominator": getattr(
+            args, "method_auxiliary_denominator", None
+        ),
+        "method_auxiliary_step_clip": getattr(
+            args, "method_auxiliary_step_clip", None
+        ),
+        "method_auxiliary_component_clip": getattr(
+            args, "method_auxiliary_component_clip", None
+        ),
+        "method_auxiliary_weights": getattr(
+            args, "method_auxiliary_weights", None
+        ),
+        "soft_violation_contract_id": getattr(
+            args, "soft_violation_contract_id", None
+        ),
+        "soft_violation_step_clip": getattr(
+            args, "soft_violation_step_clip", None
+        ),
+        "soft_violation_component_clip": getattr(
+            args, "soft_violation_component_clip", None
+        ),
+        "soft_violation_denominator": getattr(
+            args, "soft_violation_denominator", None
+        ),
         "budget_mode": (
             "fixed_customer_exposure" if stream_path is not None else
             ("fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes")
@@ -1235,9 +1561,26 @@ def train_reinforce_data_passes(
         "completed_data_passes": int(state.completed_data_passes),
         "training_rollout_steps": int(args.training_rollout_steps),
         "soft_stage_end_epoch": soft_stage_end_epoch,
+        "soft_stage_fraction": (
+            soft_stage_contract["soft_stage_fraction"]
+            if soft_stage_contract is not None else None
+        ),
+        "soft_stage_contract_snapshot": soft_stage_contract,
         "instances_seen": int(state.instances_seen),
         "customer_exposures": int(state.customer_exposures),
         "training_stream_path": str(stream_path) if stream_path is not None else None,
+        "training_stream_contract_sha256": getattr(
+            args, "training_stream_contract_sha256", None
+        ),
+        "training_stream_contract_snapshot": getattr(
+            args, "training_stream_contract_snapshot", None
+        ),
+        "resolved_training_signature_sha256": getattr(
+            args, "resolved_training_signature_sha256", None
+        ),
+        "resolved_training_signature": getattr(
+            args, "resolved_training_signature", None
+        ),
         "optimizer_steps": int(optimizer_steps),
         "baseline_eval_count": baseline_eval_count,
         "baseline_update_count": baseline_update_count,

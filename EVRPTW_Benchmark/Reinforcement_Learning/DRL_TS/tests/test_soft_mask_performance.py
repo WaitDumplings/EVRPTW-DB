@@ -52,9 +52,13 @@ class LegacySoftEnv(DRLTSSoftConstraintEnv):
             capacity, time_window, energy = self._normalized_violations(
                 trajectory, int(destination)
             )
-            self.capacity_violation[trajectory] += capacity
-            self.time_violation[trajectory] += time_window
-            self.energy_violation[trajectory] += energy
+            self._record_normalized_violations(
+                trajectory,
+                int(destination),
+                capacity,
+                time_window,
+                energy,
+            )
         observation, reward, terminated, truncated, info = EVRPTWVectorEnvFast.step(
             self, action_arr
         )

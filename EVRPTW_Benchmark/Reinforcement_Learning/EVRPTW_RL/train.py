@@ -19,6 +19,7 @@ from ..common.training_protocol import (
     require_adamw,
 )
 from ..common.objective import objective_from_args
+from ..common.method_auxiliary import method_auxiliary_from_args
 from ..common.protocol_trainers import prepare_training_objective
 from .model import EVRPTWRLPolicy
 from .rollout import rollout
@@ -62,6 +63,46 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _configure_station_auxiliary(args) -> None:
+    """Freeze the formal station-visit scale independently of task reward."""
+
+    profile = method_auxiliary_from_args(args, expected_method="evrptw_rl")
+    if profile is None:
+        if getattr(args, "reward_contract", None) is not None:
+            raise ValueError(
+                "formal EVRPTW-RL reward-contract training requires "
+                "--method-auxiliary-profile"
+            )
+        return
+    expected = {
+        "profile_id": "evrptw_rl_legal_station_fraction_v1",
+        "applicability": "formal_training_with_shared_reward_contract",
+        "aggregation": "executed_legal_station_visit_count",
+        "denominator": "num_customers",
+        "step_clip": None,
+        "component_clip": None,
+        "weights": {"station_visit": 0.3},
+    }
+    actual = {
+        "profile_id": profile.profile_id,
+        "applicability": profile.applicability,
+        "aggregation": profile.aggregation,
+        "denominator": profile.denominator,
+        "step_clip": profile.step_clip,
+        "component_clip": profile.component_clip,
+        "weights": dict(profile.weights),
+    }
+    if actual != expected:
+        raise ValueError(
+            f"unsupported EVRPTW-RL station auxiliary profile: {actual!r}"
+        )
+    if getattr(args, "reward_contract", None) is None:
+        raise ValueError(
+            "EVRPTW-RL formal method auxiliary profile requires a reward contract"
+        )
+    args.station_visit_penalty = float(profile.weights["station_visit"])
+
+
 def _max_steps(envs) -> int:
     return max(env.unwrapped.max_steps for env in envs)
 
@@ -83,6 +124,7 @@ def _greedy_costs(policy, instances, args) -> np.ndarray:
 
 def main() -> None:
     args = parse_args()
+    _configure_station_auxiliary(args)
     objective_config = prepare_training_objective(args)
     args.objective = objective_config.to_dict()
     set_seed(args.seed)

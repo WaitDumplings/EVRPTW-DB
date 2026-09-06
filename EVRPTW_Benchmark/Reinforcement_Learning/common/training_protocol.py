@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -20,6 +21,19 @@ from .stage2_data import Stage2TaskPool
 def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--objective-config", type=Path, help="Versioned objective JSON; omitted means legacy distance.")
     parser.add_argument(
+        "--reward-contract",
+        type=Path,
+        help="Self-verifying frozen reward scale and terminal-failure contract.",
+    )
+    parser.add_argument(
+        "--method-auxiliary-profile",
+        type=Path,
+        help=(
+            "Self-verifying method-specific auxiliary objective profile; "
+            "independent of the shared task reward contract."
+        ),
+    )
+    parser.add_argument(
         "--optimizer",
         choices=("adamw",),
         default="adamw",
@@ -35,6 +49,13 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--training-epochs", type=int)
     parser.add_argument("--training-rollout-steps", type=int)
     parser.add_argument("--training-stream-path", type=Path)
+    parser.add_argument(
+        "--training-stream-contract-sha256",
+        help=(
+            "Expected self-verifying logical training-stream contract SHA256. "
+            "Required by the frozen formal protocol."
+        ),
+    )
     parser.add_argument("--customer-exposure-budget", type=int)
     parser.add_argument("--exposure-checkpoints", default="")
     parser.add_argument("--gpu-hour-checkpoints", default="")
@@ -64,6 +85,181 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--max-batches-per-pass", type=int)
     parser.add_argument("--pilot-mode", action="store_true")
+
+
+TRAINING_SIGNATURE_SCHEMA = "drl_resolved_training_signature_v1"
+
+
+def _signature_sha256(payload: dict[str, Any]) -> str:
+    canonical = {key: value for key, value in payload.items() if key != "sha256"}
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def resolved_training_signature_digest(payload: dict[str, Any]) -> str:
+    """Hash a resolved signature, excluding only its self-hash field."""
+
+    return _signature_sha256(payload)
+
+
+def resolved_training_signature_from_args(args: Any) -> dict[str, Any]:
+    """Freeze trainer-resolved fields that can change scientific conclusions."""
+
+    scale = getattr(args, "scale", None) or getattr(args, "stage2_scale", None)
+    trajectories = getattr(args, "samples_per_instance", None)
+    if trajectories is None:
+        trajectories = getattr(args, "n_traj", None)
+    path_fields = (
+        "training_stream_path",
+        "validation_dataset_path",
+        "euclidean_manifest",
+    )
+    raw_method_fields = getattr(args, "resolved_training_method_fields", None)
+    if raw_method_fields is not None and not isinstance(raw_method_fields, dict):
+        raise ValueError("resolved training method fields must be a JSON object")
+    # JSON round-trip both detaches the snapshot from mutable config objects and
+    # rejects tensors, NaN, and other values that cannot be frozen portably.
+    method_fields = (
+        json.loads(json.dumps(raw_method_fields, sort_keys=True, allow_nan=False))
+        if raw_method_fields is not None
+        else None
+    )
+    payload: dict[str, Any] = {
+        "schema": TRAINING_SIGNATURE_SCHEMA,
+        "protocol_id": str(getattr(args, "protocol_id", "")),
+        "seed": (
+            int(getattr(args, "seed"))
+            if getattr(args, "seed", None) is not None
+            else None
+        ),
+        "scale": str(scale),
+        "training_representation": str(
+            getattr(args, "training_representation", "G")
+        ),
+        "training_epochs": getattr(args, "training_epochs", None),
+        "minimum_training_epochs": getattr(args, "minimum_training_epochs", None),
+        "training_rollout_steps": getattr(args, "training_rollout_steps", None),
+        "physical_batch_size": getattr(args, "physical_batch_size", None),
+        "effective_batch_size": getattr(args, "effective_batch_size", None),
+        "training_trajectory_count": trajectories,
+        "customer_exposure_budget": getattr(args, "customer_exposure_budget", None),
+        "training_stream_contract_sha256": getattr(
+            args, "training_stream_contract_sha256", None
+        ),
+        "validation_limit": getattr(args, "validation_limit", None),
+        "validation_decode_type": getattr(args, "validation_decode_type", None),
+        "validation_candidates": getattr(args, "validation_candidates", None),
+        "validation_seed": getattr(args, "validation_seed", None),
+        "validation_every_epochs": getattr(args, "validation_every_epochs", None),
+        "post_minimum_validation_every_epochs": getattr(
+            args, "post_minimum_validation_every_epochs", None
+        ),
+        "validation_checkpoints": getattr(args, "validation_checkpoints", None),
+        "early_stop_patience_validations": getattr(
+            args, "early_stop_patience_validations", None
+        ),
+        "early_stop_start_epoch": getattr(args, "early_stop_start_epoch", None),
+        "final_validation_limit": getattr(args, "final_validation_limit", None),
+        "soft_stage_end_epoch": getattr(args, "soft_stage_end_epoch", None),
+        "optimizer": getattr(args, "optimizer", None),
+        "weight_decay": getattr(args, "weight_decay", None),
+        "reward_contract_sha256": getattr(args, "reward_contract_sha256", None),
+        "method_auxiliary_sha256": getattr(args, "method_auxiliary_sha256", None),
+        "method_specific": method_fields,
+    }
+    for field in path_fields:
+        value = getattr(args, field, None)
+        payload[field] = str(Path(value).resolve()) if value is not None else None
+    for field in (
+        "training_epochs",
+        "minimum_training_epochs",
+        "training_rollout_steps",
+        "physical_batch_size",
+        "effective_batch_size",
+        "training_trajectory_count",
+        "customer_exposure_budget",
+        "validation_limit",
+        "validation_candidates",
+        "validation_seed",
+        "validation_every_epochs",
+        "post_minimum_validation_every_epochs",
+        "validation_checkpoints",
+        "early_stop_patience_validations",
+        "early_stop_start_epoch",
+        "final_validation_limit",
+        "soft_stage_end_epoch",
+    ):
+        if payload[field] is not None:
+            payload[field] = int(payload[field])
+    if payload["weight_decay"] is not None:
+        payload["weight_decay"] = float(payload["weight_decay"])
+    payload["sha256"] = resolved_training_signature_digest(payload)
+    return payload
+
+
+def freeze_resolved_training_signature(args: Any) -> dict[str, Any]:
+    signature = resolved_training_signature_from_args(args)
+    setattr(args, "resolved_training_signature", signature)
+    setattr(args, "resolved_training_signature_sha256", signature["sha256"])
+    return signature
+
+
+def assert_checkpoint_training_signature(payload: dict[str, Any], args: Any) -> None:
+    expected = resolved_training_signature_from_args(args)
+    saved = payload.get("resolved_training_signature")
+    if not isinstance(saved, dict):
+        raise ValueError("checkpoint resolved training signature mismatch")
+    if saved.get("sha256") != resolved_training_signature_digest(saved):
+        raise ValueError("checkpoint resolved training signature SHA256 mismatch")
+    saved_args = payload.get("args", {}) or {}
+    if not isinstance(saved_args, dict):
+        saved_args = vars(saved_args)
+    if (
+        saved_args.get("resolved_training_signature") != saved
+        or saved_args.get("resolved_training_signature_sha256") != saved["sha256"]
+    ):
+        raise ValueError("checkpoint args resolved training signature mismatch")
+    if saved == expected:
+        return
+    # Historical custom protocols explicitly support extending a deterministic
+    # stream prefix.  Keep that narrow compatibility while the frozen formal
+    # protocol remains immutable.  Every non-budget field, including the
+    # stream digest, validation seed/decoding, and method-specific semantics,
+    # must still match byte-for-byte.
+    if expected.get("protocol_id") == "drl_rq_protocol_frozen_v1":
+        raise ValueError("checkpoint resolved training signature mismatch")
+    extension_fields = {
+        "training_epochs",
+        "customer_exposure_budget",
+        "validation_checkpoints",
+    }
+    saved_without_budget = {
+        key: value
+        for key, value in saved.items()
+        if key not in extension_fields | {"sha256"}
+    }
+    expected_without_budget = {
+        key: value
+        for key, value in expected.items()
+        if key not in extension_fields | {"sha256"}
+    }
+    if saved_without_budget != expected_without_budget:
+        raise ValueError("checkpoint resolved training signature mismatch")
+    for field in extension_fields:
+        saved_value = saved.get(field)
+        expected_value = expected.get(field)
+        if (
+            saved_value is None
+            or expected_value is None
+            or int(expected_value) < int(saved_value)
+        ):
+            raise ValueError("checkpoint resolved training signature mismatch")
 
 
 def require_adamw(args: argparse.Namespace) -> float:
@@ -241,12 +437,23 @@ def verified_validation(
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     active_objective = resolve_objective(objective_config)
+    # Sampling decoders draw from Torch's process-global generators.  Scope
+    # those draws to the registered validation seed so validation is
+    # repeatable and cannot advance the training RNG stream.  Saving every
+    # visible CUDA generator is intentional: ``torch.manual_seed`` seeds all
+    # of them, and ``fork_rng`` restores them even when ``solve`` raises.
+    cuda_rng_devices = (
+        list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    )
     for index, instance in enumerate(instances):
+        instance_seed = int(seed) + index
         # Validation is selection-only. Retaining an autograd graph for every
         # sampled trajectory wastes GPU memory and can make best-of-K OOM even
         # though the corresponding training batch fits.
-        with torch.no_grad():
-            info = solve(instance, int(seed) + index)
+        with torch.random.fork_rng(devices=cuda_rng_devices, enabled=True):
+            torch.manual_seed(instance_seed)
+            with torch.no_grad():
+                info = solve(instance, instance_seed)
         current_objective = resolve_objective(
             objective_config if objective_config is not None else info.get("objective_config")
         )
@@ -353,6 +560,7 @@ __all__ = [
     "make_validation_pool",
     "parse_float_checkpoints",
     "parse_int_checkpoints",
+    "resolved_training_signature_digest",
     "require_registered_batches",
     "require_training_rollout_steps",
     "validation_epochs",

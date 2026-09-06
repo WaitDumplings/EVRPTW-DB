@@ -49,13 +49,30 @@ The published training reward uses route distance as its main term. New formal
 runs adapt that term to the shared electricity-plus-vehicle cost in
 [`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md).
 The existing median depot-customer-depot training-pool scale is converted to
-cost units before combining the normalized objective with the unchanged
-published station coefficient 0.3. Legacy distance configurations retain the
-prior distance normalization. Directed
+cost units before combining the normalized objective with the station
+auxiliary. Legacy distance configurations retain the prior distance
+normalization. Directed
 travel-time edges are divided by the operating horizon. The fixed training
 scale is reused for validation/test and avoids reweighting cities or instances;
 it is an explicit benchmark adapter, not a normalization stated in the paper.
-The station-visit penalty is retained as method-specific auxiliary shaping.
+The publication assigns `0.3` to every station visit. Applying that unchanged
+per-visit coefficient at Cus1000 made the auxiliary grow with problem size and
+dominate the frozen economic objective. Formal cost-contract runs therefore
+retain `0.3` as an explicit *dimensionless station-fraction weight*:
+
+`0.3 * executed_legal_station_visits / num_customers`.
+
+This is a scale adapter rather than a claim of numerical reproduction of the
+paper reward: at fixed `N`, the per-visit coefficient is `0.3 / N`. It preserves
+the strict ordering by legal station-visit count because the denominator is a
+fixed instance property and the component is not clipped. The independent
+profile
+`EVRPTW_Benchmark/Reinforcement_Learning/configs/evrptw_rl_station_auxiliary_v1.json`
+freezes the weight, legal-action count definition, denominator, lack of
+clipping, and its own SHA-256; it is intentionally not part of the shared task
+reward contract SHA. Every formal manifest, checkpoint, resume, diagnostic,
+and training result records both contracts. The station-visit term remains
+method-specific auxiliary shaping.
 The published excess-fleet penalty is structurally present but identically zero
 under the benchmark's unlimited-fleet/nonbinding-`N` representation.  Negative
 battery is prevented by the canonical hard mask, so its published soft penalty

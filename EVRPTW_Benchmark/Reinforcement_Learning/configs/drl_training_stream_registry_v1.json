@@ -1,0 +1,42 @@
+{
+  "artifact_preparation_marker_sha256": "a4dc4158eaee08806cd21e8c76c6b401420d5d7bc61eece62a7910fe4820fbff",
+  "registry_id": "drl_rq_formal_training_streams_v1",
+  "runtime_budget_id": "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50",
+  "schema": "drl_training_stream_registry_v1",
+  "sha256": "65653ce92932dec5e70de9d58daab74a33f3ae467569e25998bb8d22b6e1405d",
+  "source_scope": "training_split_and_track_only",
+  "streams": {
+    "G/Full-support/Cus1000/seed_1234": {
+      "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Full-support/Cus1000/seed_1234.parquet",
+      "snapshot": {
+        "allowed_family_ids_sha256": null,
+        "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+        "manifest_sha256": "2b93758076737b34a29e2c3846b6498c5e98d5d306377d59cf6bd2f288a4aabb",
+        "sample_count": 20000,
+        "scale": "Cus1000",
+        "schema": "drl_training_stream_contract_v1",
+        "seed": 1234,
+        "sha256": "9dbee00958705f6cd10842ffb9c199aa9499e3e9b2c38f7341e4cdf0be9e79f1",
+        "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+        "stream_content_sha256": "b83ba1275cc6fcdb71daadc43fdf1308c279dab43c90ddbcfa7d0f38f2538e83",
+        "stream_schema": "drl_training_id_stream_v3"
+      }
+    },
+    "G/Full-support/Cus500/seed_1234": {
+      "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Full-support/Cus500/seed_1234.parquet",
+      "snapshot": {
+        "allowed_family_ids_sha256": null,
+        "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+        "manifest_sha256": "89bf07b871602935bbaa0014f9cb4f95c1357091ff77b0bf9126e55567b4a23c",
+        "sample_count": 640000,
+        "scale": "Cus500",
+        "schema": "drl_training_stream_contract_v1",
+        "seed": 1234,
+        "sha256": "7be15b658af71fa3f04f9f41577ba2524b68b30a29e12bee47bf4bb13ac01712",
+        "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+        "stream_content_sha256": "aa098be4afcec914acde374559532938acbabf64a26d7ef65b737d0a606c2cc7",
+        "stream_schema": "drl_training_id_stream_v3"
+      }
+    }
+  }
+}

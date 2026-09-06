@@ -60,6 +60,7 @@ class EVRPTWVectorEnv(Env):
         normalize_reward: bool = True,
         reward_distance_scale_km: float | None = None,
         reward_distance_scale_mode: str = "single_customer_repair_median",
+        reward_objective_scale: float | None = None,
         objective_config: ObjectiveConfig | dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
@@ -84,6 +85,14 @@ class EVRPTWVectorEnv(Env):
         self.matrix_mode = matrix_mode
         self.normalize_reward = bool(normalize_reward)
         self.reward_distance_scale_km_override = reward_distance_scale_km
+        if reward_objective_scale is not None and (
+            not math.isfinite(float(reward_objective_scale))
+            or float(reward_objective_scale) <= 0.0
+        ):
+            raise ValueError("reward_objective_scale must be finite and positive")
+        self.reward_objective_scale_override = (
+            None if reward_objective_scale is None else float(reward_objective_scale)
+        )
         self.reward_distance_scale_mode = str(reward_distance_scale_mode)
         valid_scale_modes = {
             "max_edge",
@@ -117,10 +126,14 @@ class EVRPTWVectorEnv(Env):
 
         self.distance_km = np.asarray(instance.distance_matrix_km, dtype=np.float64)
         self.reward_distance_scale_km = self._compute_reward_distance_scale_km()
-        self.reward_objective_scale = self.objective_config.reward_scale(
-            self.reward_distance_scale_km,
-            self.num_customers,
-            self.reward_distance_scale_mode,
+        self.reward_objective_scale = (
+            self.reward_objective_scale_override
+            if self.reward_objective_scale_override is not None
+            else self.objective_config.reward_scale(
+                self.reward_distance_scale_km,
+                self.num_customers,
+                self.reward_distance_scale_mode,
+            )
         )
         self.coords_raw = np.vstack(
             [
@@ -275,6 +288,7 @@ class EVRPTWVectorEnv(Env):
         self.terminated = np.zeros(self.n_traj, dtype=bool)
         self.truncated = np.zeros(self.n_traj, dtype=bool)
         self.invalid_action = np.zeros(self.n_traj, dtype=bool)
+        self.failure_reason = np.full(self.n_traj, "in_progress", dtype=object)
         self.routes: list[list[list[int]]] = [[] for _ in range(self.n_traj)]
         self.current_routes: list[list[int]] = [[0] for _ in range(self.n_traj)]
 
@@ -295,6 +309,7 @@ class EVRPTWVectorEnv(Env):
             if destination < 0 or destination >= self.num_nodes or not mask_before[t, destination]:
                 self.invalid_action[t] = True
                 self.truncated[t] = True
+                self.failure_reason[t] = "invalid_action"
                 reward[t] += self.invalid_action_penalty
                 continue
             reward[t] += self._apply_action(t, destination)
@@ -303,12 +318,16 @@ class EVRPTWVectorEnv(Env):
         if self.step_count >= self.max_steps:
             unfinished = ~self.terminated
             self.truncated[unfinished] = True
+            self.failure_reason[
+                unfinished & (self.failure_reason == "in_progress")
+            ] = "environment_step_limit"
 
         obs = self._make_observation()
         action_mask = obs["action_mask"]
         no_action = (~action_mask.any(axis=1)) & (~self.terminated) & (~self.truncated)
         if np.any(no_action):
             self.truncated[no_action] = True
+            self.failure_reason[no_action] = "no_feasible_action"
             reward[no_action] += self.invalid_action_penalty
             obs = self._make_observation()
             action_mask = obs["action_mask"]
@@ -357,6 +376,7 @@ class EVRPTWVectorEnv(Env):
 
         if destination == 0 and self.served_customers[traj_idx] == self.num_customers:
             self.terminated[traj_idx] = True
+            self.failure_reason[traj_idx] = "success"
             if self.reward_mode == "distance_success":
                 reward += self.success_bonus
         return float(reward)
@@ -601,6 +621,7 @@ class EVRPTWVectorEnv(Env):
             "success": success.copy(),
             "served_customers": self.served_customers.copy(),
             "invalid_action": self.invalid_action.copy(),
+            "failure_reason": self.failure_reason.copy(),
             "travel_time_source": self.travel_time_source,
             "energy_source": self.energy_source,
             "charging_power_source": self.charging_power_source,

@@ -100,6 +100,19 @@ def test_epoch_log_distinguishes_steps_initial_returns_and_gradients_without_mut
     assert result["normalization"]["training_pool_metadata"]["sampled_view_ids"] == ["a", "b"]
     assert result["components"]["base"]["active_step_mean"] == 2.1
     assert result["components"]["base"]["mean_sum_per_trajectory"] == 5.25
+    relationships = result["component_relationships"]
+    assert relationships["terminal_task_total"] == [
+        "terminal_failure_base", "terminal_unserved",
+    ]
+    assert relationships["shaping_total"] == [
+        "pbrs_total", "terminal_heuristic",
+    ]
+    assert relationships["shaped"] == [
+        "base", "shaping_total", "terminal_task_total",
+    ]
+    assert "terminal_task_total" in relationships[
+        "derived_totals_not_additional_components"
+    ]
     assert result["resume_from"] == "saved.pt" and result["start_epoch"] == 6
     json.dumps(result, allow_nan=False)
     torch.testing.assert_close(batch.rewards, before, rtol=0, atol=0)

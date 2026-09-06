@@ -55,6 +55,14 @@ def _load_manifest(path: Path) -> list[dict[str, Any]]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    if any(
+        job.get("historical_only") is True or job.get("enabled") is False
+        for job in jobs
+    ):
+        raise ValueError(
+            "historical RTX 2080 Ti calibration manifests are audit-only and "
+            "not executable under the current reward contract"
+        )
     slots = [int(job["global_slot"]) for job in jobs]
     if not jobs or len(jobs) > 4 or len(slots) != len(set(slots)):
         raise ValueError("calibration manifest requires one to four unique slots")

@@ -1,20 +1,23 @@
 # DRL RQ server launch bundles
 
-These bundles launch the formal training queues directly. The pilot queue and
-the local-pilot launch gate were removed on 2026-09-04; no pilot command or
-pilot completion artifact is required before `full.sh`.
+The pilot queue remains removed: there is no extra two-epoch pilot phase in a
+formal run.  The current reward-contract revision is nevertheless held behind
+an explicit fail-closed authorization gate while controlled and short-training
+validation is completed.  Until that gate is deliberately reopened,
+`full.sh`/`resume.sh` refuse to start a formal process.
 
 Defaults are derived from the checked-out repository. Dataset discovery uses
 the repository-relative `EVRPTW_Dataset/Instances_v2` tree, with optional
 `EVRPTW_RESTORE_ROOT` as a secondary search root. No machine-specific absolute
 data path is committed.
 
-## Active single-seed four-scale configuration
+## Active single-seed calibrated-scale configuration
 
 Runtime budget: `drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50`.
-This is a fresh candidate budget: start it with `full.sh`; do not use a v8, v9,
-v10, v11, or v12 checkpoint as a v13 resume source. `resume.sh` is for interruption
-recovery within the same v13 job and commit.
+This is a fresh candidate budget.  After explicit formal authorization, start
+it with `full.sh`; do not use a v8, v9, v10, v11, or v12 checkpoint as a v13
+resume source. `resume.sh` is only for interruption recovery within the same
+v13 job, commit and reward/auxiliary contracts.
 
 ### All-method electricity + vehicle-cost restart
 
@@ -25,7 +28,8 @@ Validation candidates and checkpoints are selected feasible-first, then by
 minimum total cost; raw distance and both cost components remain separate.
 See [`COST_OBJECTIVE_CONTRACT_V1.md`](../../COST_OBJECTIVE_CONTRACT_V1.md)
 for parameters, accounting, normalization and historical-comparison boundaries.
-TERRAN uses `terran_undiscounted_energy_vehicle_pbrs_v1`, with `gamma=1.0`
+The shared task-reward contract is
+`drl_energy_vehicle_reference_scale_v2`; TERRAN additionally uses `gamma=1.0`
 in both returns and PBRS. The other methods retain their native auxiliary
 shaping and training-stage schedules. Architectures, data and budgets are unchanged.
 All four trainers use AdamW with explicit decoupled `weight_decay=0.01`;
@@ -40,18 +44,25 @@ gradient statistics without changing training. See
 [`TRAINING_REWARD_DIAGNOSTICS.md`](../../TRAINING_REWARD_DIAGNOSTICS.md)
 for units, method-specific interpretation, sampling and resume boundaries.
 
-After stopping any old queue on the server and pulling the new commit, restart
-**all four methods** from scratch, without loading an older checkpoint:
+This contract revision has frozen training-reference calibrations only for
+Cus500 and Cus1000.  Consequently, the active formal queue is the A6000 bundle;
+the three checked-in 2080 Ti manifests are intentionally empty and fail closed
+until Cus50/Cus100 are calibrated.  Do not copy the large-scale denominator to
+those smaller scales.
+
+After all validation gates pass and formal launch is explicitly authorized,
+restart **all four methods** from scratch, without loading an older checkpoint:
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/full.sh --seed 1234
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/status.sh --seed 1234
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/full.sh --seed 1234
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/status.sh --seed 1234
 ```
 
-Replace `<server>` with the matching server bundle below. Do not use the prior
-`--methods terran` filter for the requested all-method restart. The four bundles
-contain 8, 5, 3 and 8 jobs for `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1` and
-`a6000_2_1`; the existing coverage and Euclidean controls are included.
+Do not use the prior `--methods terran` filter for the requested all-method
+restart. The four bundles contain 0, 0, 0 and 8 jobs for `2080ti_4_1`,
+`2080ti_4_2`, `2080ti_3_1` and `a6000_2_1`, respectively.  The frozen protocol
+continues to record the Cus100 coverage and Euclidean controls, but this runtime
+revision does not emit them without a Cus100 reward calibration.
 For Cus1000 only on the two-GPU large-scale server, use the following instead of
 its full queue; do not launch both queues together:
 
@@ -77,15 +88,16 @@ The integrated cost revision passed 409 local CPU tests; the exact scope and
 command are recorded in
 [`COST_OBJECTIVE_V1_LOCAL_VERIFICATION.md`](../../reports/COST_OBJECTIVE_V1_LOCAL_VERIFICATION.md).
 
-The manifests contain seed 1234 only. The 2080 Ti servers own Cus50/Cus100;
-the two RTX 6000 Ada GPUs own Cus500/Cus1000.
+The enabled manifests contain seed 1234 only. The two RTX 6000 Ada GPUs own
+Cus500/Cus1000. Cus50/Cus100 remain part of the frozen intended design but are
+not currently launchable.
 
-| Scale | Hardware | Minimum epochs | Hard cap | Environments/epoch | Maximum environments | Maximum customer exposures |
-|---|---|---:|---:|---:|---:|---:|
-| Cus50 | RTX 2080 Ti | 5,000 | 10,000 | 1,024 | 10,240,000 | 512,000,000 |
-| Cus100 | RTX 2080 Ti | 5,000 | 10,000 | 256 | 2,560,000 | 256,000,000 |
-| Cus500 | RTX 6000 Ada | 5,000 | 10,000 | 64 | 640,000 | 320,000,000 |
-| Cus1000 | RTX 6000 Ada | 5,000 | 10,000 | 2 | 20,000 | 20,000,000 |
+| Scale | Runtime status | Hardware | Minimum epochs | Hard cap | Environments/epoch | Maximum environments | Maximum customer exposures |
+|---|---|---|---:|---:|---:|---:|---:|
+| Cus50 | blocked: uncalibrated | RTX 2080 Ti | 5,000 | 10,000 | 1,024 | 10,240,000 | 512,000,000 |
+| Cus100 | blocked: uncalibrated | RTX 2080 Ti | 5,000 | 10,000 | 256 | 2,560,000 | 256,000,000 |
+| Cus500 | enabled | RTX 6000 Ada | 5,000 | 10,000 | 64 | 640,000 | 320,000,000 |
+| Cus1000 | enabled | RTX 6000 Ada | 5,000 | 10,000 | 2 | 20,000 | 20,000,000 |
 
 Physical batches use exact sample-weighted gradient accumulation. REINFORCE
 jobs may use a smaller final remainder microbatch; TERRAN keeps exact divisors:
@@ -159,8 +171,10 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/status.sh --
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/resume.sh --seed 1234
 ```
 
-`full.sh` prepares deterministic shared artifacts if necessary and launches the
-formal per-GPU queues through `nohup`/`setsid`. `status.sh` is read-only.
+Once the explicit gate is open, `full.sh` prepares deterministic shared
+artifacts if necessary and launches the formal per-GPU queues through
+`nohup`/`setsid`. While the gate is closed it fails before spawning a trainer.
+`status.sh` is read-only.
 `resume.sh` resumes only jobs with complete resume evidence. Launcher provenance
 records the actual Python executable, environment, branch, and commit. The
 scripts do not perform per-file SHA-256 hashing.

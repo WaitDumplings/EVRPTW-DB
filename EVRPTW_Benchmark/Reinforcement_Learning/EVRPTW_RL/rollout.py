@@ -9,6 +9,11 @@ import numpy as np
 import torch
 
 from ..AM_EVRPTW.rollout import rollout_objective_arrays, stack_observations
+from ..common.method_auxiliary import MethodAuxiliaryProfile
+from ..common.reward_contract import (
+    RewardScaleContract,
+    classify_rollout_failure_reasons,
+)
 from .model import EVRPTWRLPolicy
 
 
@@ -30,6 +35,8 @@ class EVRPTWRLRollout:
     # CPU-only diagnostics; never used to recompute the training objective.
     training_cost_components: dict[str, torch.Tensor] | None = None
     reward_objective_scale: torch.Tensor | None = None
+    failure_reasons: np.ndarray | None = None
+    method_auxiliary_diagnostics: dict[str, torch.Tensor] | None = None
 
 
 def _normalized_travel_time(envs: Sequence[Any]) -> np.ndarray:
@@ -52,9 +59,52 @@ def rollout(
     incomplete_penalty: float = 100.0,
     use_static_cache: bool = True,
     compute_log_likelihood: bool = True,
+    reward_contract: RewardScaleContract | None = None,
+    method_auxiliary_profile: MethodAuxiliaryProfile | None = None,
 ) -> EVRPTWRLRollout:
     if decode_type not in {"sampling", "greedy"}:
         raise ValueError("decode_type must be sampling or greedy")
+    if reward_contract is not None:
+        reward_contract.validate_envs(envs)
+        if method_auxiliary_profile is None:
+            raise ValueError(
+                "EVRPTW-RL reward-contract rollout requires its frozen method "
+                "auxiliary profile"
+            )
+    if method_auxiliary_profile is not None:
+        method_auxiliary_profile.require_method("evrptw_rl")
+        expected_profile = {
+            "profile_id": "evrptw_rl_legal_station_fraction_v1",
+            "applicability": "formal_training_with_shared_reward_contract",
+            "aggregation": "executed_legal_station_visit_count",
+            "denominator": "num_customers",
+            "step_clip": None,
+            "component_clip": None,
+            "weights": {"station_visit": 0.3},
+        }
+        actual_profile = {
+            "profile_id": method_auxiliary_profile.profile_id,
+            "applicability": method_auxiliary_profile.applicability,
+            "aggregation": method_auxiliary_profile.aggregation,
+            "denominator": method_auxiliary_profile.denominator,
+            "step_clip": method_auxiliary_profile.step_clip,
+            "component_clip": method_auxiliary_profile.component_clip,
+            "weights": dict(method_auxiliary_profile.weights),
+        }
+        if actual_profile != expected_profile:
+            raise ValueError(
+                "unsupported EVRPTW-RL method auxiliary profile semantics"
+            )
+        if reward_contract is None:
+            raise ValueError(
+                "EVRPTW-RL formal method auxiliary profile requires a reward contract"
+            )
+        if float(station_visit_penalty) != float(
+            method_auxiliary_profile.weights["station_visit"]
+        ):
+            raise ValueError(
+                "EVRPTW-RL station auxiliary weight disagrees with its frozen profile"
+            )
     observations: list[dict[str, np.ndarray]] = []
     infos: list[dict[str, Any]] = []
     for index, env in enumerate(envs):
@@ -99,9 +149,17 @@ def rollout(
         next_infos: list[dict[str, Any]] = []
         for env_index, (env, action) in enumerate(zip(envs, action_array)):
             station_start = int(env.unwrapped.station_start)
-            station_visits[env_index] += (
-                (~done[env_index]) & (action >= station_start)
-            ).astype(np.int64)
+            num_nodes = int(env.unwrapped.num_nodes)
+            active = ~done[env_index]
+            in_range = (action >= station_start) & (action < num_nodes)
+            legal = np.zeros_like(active)
+            candidates = np.flatnonzero(active & in_range)
+            if candidates.size:
+                action_mask = np.asarray(
+                    observations[env_index]["action_mask"], dtype=bool
+                )
+                legal[candidates] = action_mask[candidates, action[candidates]]
+            station_visits[env_index] += legal.astype(np.int64)
             observation, _, terminated, truncated, info = env.step(action)
             done[env_index] |= np.asarray(terminated) | np.asarray(truncated)
             next_observations.append(observation)
@@ -121,25 +179,64 @@ def rollout(
     customer_count = np.asarray(
         [env.unwrapped.num_customers for env in envs], dtype=np.float64
     )[:, None]
-    incomplete_fraction = 1.0 - served / np.maximum(customer_count, 1.0)
-    objective_value, objective_scale, vehicles_started, distance_unit_cost = rollout_objective_arrays(envs, infos)
-    training_cost = (
-        objective_value / np.maximum(objective_scale, 1e-12)
-        + float(station_visit_penalty) * station_visits
-        + (~feasible)
-        * (float(incomplete_penalty) * (1.0 + incomplete_fraction))
+    incomplete_fraction = np.clip(
+        1.0 - served / np.maximum(customer_count, 1.0), 0.0, 1.0
     )
+    objective_value, objective_scale, vehicles_started, distance_unit_cost = rollout_objective_arrays(envs, infos)
+    base_objective = objective_value / np.maximum(objective_scale, 1e-12)
+    if method_auxiliary_profile is None:
+        station_penalty = float(station_visit_penalty) * station_visits
+        station_component_name = "station_visit_penalty"
+        normalized_station_visits = station_visits.astype(np.float64)
+    else:
+        if not np.all(customer_count == customer_count[0, 0]):
+            raise ValueError(
+                "EVRPTW-RL station auxiliary requires fixed num_customers"
+            )
+        normalized_station_visits = station_visits / np.maximum(
+            customer_count, 1.0
+        )
+        station_penalty = float(station_visit_penalty) * normalized_station_visits
+        station_component_name = "station_visit_auxiliary"
+    if reward_contract is None:
+        terminal_penalty = (~feasible) * (
+            float(incomplete_penalty) * (1.0 + incomplete_fraction)
+        )
+        terminal_name = "incomplete_penalty"
+    else:
+        failed = (~feasible).astype(np.float64)
+        terminal_failure_base = failed * reward_contract.failure_base
+        terminal_unserved = (
+            failed * reward_contract.unserved_coefficient * incomplete_fraction
+        )
+        terminal_penalty = terminal_failure_base + terminal_unserved
+        terminal_name = None
+    training_cost = base_objective + station_penalty + terminal_penalty
     diagnostic_components = {
-        "base_objective": objective_value / np.maximum(objective_scale, 1e-12),
+        "base_objective": base_objective,
         "base_distance_term": objective * distance_unit_cost / np.maximum(objective_scale, 1e-12),
         "base_vehicle_term": (
             objective_value - objective * distance_unit_cost
         ) / np.maximum(objective_scale, 1e-12),
-        "station_visit_penalty": float(station_visit_penalty) * station_visits,
-        "incomplete_penalty": (~feasible) * (
-            float(incomplete_penalty) * (1.0 + incomplete_fraction)
-        ),
+        station_component_name: station_penalty,
     }
+    if terminal_name is not None:
+        diagnostic_components[terminal_name] = terminal_penalty
+    else:
+        diagnostic_components.update(
+            {
+                "terminal_failure_base": terminal_failure_base,
+                "terminal_unserved": terminal_unserved,
+                "terminal_task_total": terminal_penalty,
+            }
+        )
+    failure_reasons = classify_rollout_failure_reasons(
+        infos,
+        done=done,
+        success=feasible,
+        served_customers=served,
+        customer_count=customer_count,
+    )
     return EVRPTWRLRollout(
         training_cost=torch.as_tensor(training_cost, device=policy.device).float(),
         objective_value=torch.as_tensor(objective_value, device=policy.device).float(),
@@ -162,4 +259,16 @@ def rollout(
             name: torch.as_tensor(value) for name, value in diagnostic_components.items()
         },
         reward_objective_scale=torch.as_tensor(objective_scale),
+        failure_reasons=failure_reasons,
+        method_auxiliary_diagnostics=(
+            None
+            if method_auxiliary_profile is None
+            else {
+                "station_visits_raw": torch.as_tensor(station_visits),
+                "station_visit_denominator": torch.as_tensor(customer_count),
+                "station_visits_normalized": torch.as_tensor(
+                    normalized_station_visits
+                ),
+            }
+        ),
     )

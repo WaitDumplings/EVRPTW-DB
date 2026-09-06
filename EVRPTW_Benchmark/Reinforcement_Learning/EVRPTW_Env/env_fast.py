@@ -60,6 +60,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             if destination < 0 or destination >= self.num_nodes or not mask_before[t, destination]:
                 self.invalid_action[t] = True
                 self.truncated[t] = True
+                self.failure_reason[t] = "invalid_action"
                 reward[t] += self.invalid_action_penalty
                 continue
             reward[t] += self._apply_action(t, destination)
@@ -68,12 +69,16 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
         if self.step_count >= self.max_steps:
             unfinished = ~self.terminated
             self.truncated[unfinished] = True
+            self.failure_reason[
+                unfinished & (self.failure_reason == "in_progress")
+            ] = "environment_step_limit"
 
         obs = self._make_observation()
         action_mask = obs["action_mask"]
         no_action = (~action_mask.any(axis=1)) & (~self.terminated) & (~self.truncated)
         if np.any(no_action):
             self.truncated[no_action] = True
+            self.failure_reason[no_action] = "no_feasible_action"
             reward[no_action] += self.invalid_action_penalty
             obs = self._make_observation()
             action_mask = obs["action_mask"]
@@ -232,6 +237,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             "success": success.copy(),
             "served_customers": self.served_customers.copy(),
             "invalid_action": self.invalid_action.copy(),
+            "failure_reason": self.failure_reason.copy(),
             "travel_time_source": self.travel_time_source,
             "energy_source": self.energy_source,
             "charging_power_source": self.charging_power_source,

@@ -8,6 +8,9 @@ import pytest
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_trainers, training_protocol
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
+from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (
+    reward_contract_digest,
+)
 
 
 class _Pool:
@@ -39,6 +42,23 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         mode="energy_vehicle_cost" if cost_objective else "distance",
         profile_id="cost-test" if cost_objective else "distance_v1",
     )
+    reward_contract_path = None
+    if cost_objective:
+        reward_contract = {
+            "schema": "drl_reward_contract_v1",
+            "contract_id": "periodic-validation-test",
+            "objective": objective.to_dict(),
+            "scales": {
+                "Cus50": {
+                    "objective_scale": 1.0,
+                    "failure_base": 2.0,
+                    "unserved_coefficient": 1.0,
+                }
+            },
+        }
+        reward_contract["sha256"] = reward_contract_digest(reward_contract)
+        reward_contract_path = tmp_path / "reward_contract.json"
+        reward_contract_path.write_text(json.dumps(reward_contract), encoding="utf-8")
 
     def fake_validation(instances, _solve, *, seed, objective_config=None):
         assert objective_config.to_dict() == objective.to_dict()
@@ -84,6 +104,7 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
 
     args = SimpleNamespace(
         objective=objective.to_dict(),
+        reward_contract=reward_contract_path,
         training_epochs=6,
         data_passes=None,
         max_batches_per_pass=None,
@@ -433,3 +454,82 @@ def test_verified_validation_disables_autograd(monkeypatch) -> None:
     assert grad_states == [False]
     assert summary["complete_and_feasible"] == 1
     assert summary["mean_verified_distance_km"] == 7.5
+
+
+def test_verified_validation_scopes_sampling_rng_and_restores_cpu_state(
+    monkeypatch,
+) -> None:
+    instances = [
+        SimpleNamespace(instance_id="validation-instance-0"),
+        SimpleNamespace(instance_id="validation-instance-1"),
+    ]
+    monkeypatch.setattr(
+        training_protocol,
+        "select_min_verified_objective",
+        lambda _instance, _info, _objective: (
+            0,
+            [[0, 1, 0]],
+            {"passed": True, "objective_distance_km": 7.5, "vehicles_started": 1},
+        ),
+    )
+
+    def sampled_draws(caller_seed: int):
+        observed: list[tuple[int, torch.Tensor]] = []
+
+        def solve(_instance, registered_seed):
+            observed.append((registered_seed, torch.rand(4)))
+            return {"success": [True]}
+
+        torch.manual_seed(caller_seed)
+        caller_state = torch.random.get_rng_state().clone()
+        training_protocol.verified_validation(instances, solve, seed=12_345)
+        assert torch.equal(torch.random.get_rng_state(), caller_state)
+        return observed
+
+    first = sampled_draws(111)
+    second = sampled_draws(999)
+
+    assert [seed for seed, _ in first] == [12_345, 12_346]
+    assert [seed for seed, _ in second] == [12_345, 12_346]
+    assert all(
+        torch.equal(first_draw, second_draw)
+        for (_, first_draw), (_, second_draw) in zip(first, second, strict=True)
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_verified_validation_scopes_sampling_rng_and_restores_cuda_state(
+    monkeypatch,
+) -> None:
+    instance = SimpleNamespace(instance_id="validation-instance")
+    monkeypatch.setattr(
+        training_protocol,
+        "select_min_verified_objective",
+        lambda _instance, _info, _objective: (
+            0,
+            [[0, 1, 0]],
+            {"passed": True, "objective_distance_km": 7.5, "vehicles_started": 1},
+        ),
+    )
+
+    def sampled_draw(caller_seed: int) -> torch.Tensor:
+        observed: list[torch.Tensor] = []
+
+        def solve(_instance, _registered_seed):
+            observed.append(torch.rand(4, device="cuda:0").cpu())
+            return {"success": [True]}
+
+        torch.manual_seed(caller_seed)
+        caller_cpu_state = torch.random.get_rng_state().clone()
+        caller_cuda_states = [state.clone() for state in torch.cuda.get_rng_state_all()]
+        training_protocol.verified_validation([instance], solve, seed=54_321)
+        assert torch.equal(torch.random.get_rng_state(), caller_cpu_state)
+        assert all(
+            torch.equal(actual, expected)
+            for actual, expected in zip(
+                torch.cuda.get_rng_state_all(), caller_cuda_states, strict=True
+            )
+        )
+        return observed[0]
+
+    assert torch.equal(sampled_draw(222), sampled_draw(888))

@@ -16,6 +16,9 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_trainers
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
+from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (
+    reward_contract_digest,
+)
 
 
 class _TinyPool:
@@ -39,7 +42,7 @@ def _args(output, *, fixed, cost, ema=False):
         mode="energy_vehicle_cost" if cost else "distance",
         profile_id="diagnostic-cost-test" if cost else "distance_v1",
     )
-    return SimpleNamespace(
+    args = SimpleNamespace(
         objective=objective.to_dict(), output_dir=output, protocol_id="diagnostic-test",
         training_epochs=2 if fixed else None, data_passes=None if fixed else 1,
         training_stream_path=output.parent / "stream.parquet" if fixed else None,
@@ -57,6 +60,22 @@ def _args(output, *, fixed, cost, ema=False):
         reward_distance_scale_mode="dataset_single_customer_repair_median",
         reward_distance_scale_metadata={"source": "training_pool", "count": 3},
     )
+    if cost:
+        payload = {
+            "schema": "drl_reward_contract_v1",
+            "contract_id": "diagnostic-reference-scale-v1",
+            "objective": objective.to_dict(),
+            "scales": {
+                "Cus50": {
+                    "objective_scale": float(objective.value(5.0, 1)),
+                    "failure_base": 2.0,
+                    "unserved_coefficient": 1.0,
+                }
+            },
+        }
+        payload["sha256"] = reward_contract_digest(payload)
+        args.reward_contract_snapshot = payload
+    return args
 
 
 def _run(args, method):

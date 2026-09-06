@@ -27,6 +27,36 @@ explicit deviations, and
 [../CHARGING_ADAPTER_CONTRACT.md](../CHARGING_ADAPTER_CONTRACT.md) for shared
 physical semantics.
 
+## Formal reward contracts
+
+Formal economic-track runs keep two independently versioned layers. The shared
+[`drl_energy_vehicle_reference_scale_v2`](../configs/drl_reward_contract_energy_vehicle_v2.json)
+task contract supplies normalized electricity-plus-vehicle cost and the
+terminal incomplete-rollout term. The DRL-TS method profile supplies only the
+Stage-1 capacity, time-window, and energy auxiliary:
+
+```text
+v_bar_j = min(component_clip,
+              sum_t min(normalized_raw_excess_j,t, step_clip) / N)
+```
+
+`N` is the fixed customer count. Capacity applies only to customer arrivals;
+time and energy apply to all valid travel transitions. The frozen
+[`drl_ts_soft_auxiliary_v1`](../configs/drl_ts_soft_auxiliary_v1.json) profile
+uses per-step and per-component clips of 1 and unit weights. Raw, unclipped
+violation sums still determine feasibility and remain in diagnostics; action
+counts never replace `N` as the denominator.
+
+A rollout that completes the soft stage after a resource violation pays the
+bounded auxiliary but not the shared hard failure floor. An incomplete rollout
+pays that terminal term exactly once. The frozen empirical calibration
+candidate `Q_0.99(C_ref / S_N) + 1` is not a mathematical feasibility-first
+guarantee, and its being above every normalized cost in the 500 calibration
+references is only an in-sample observation. Formal manifests, checkpoints,
+resume checks, and diagnostics record the shared task contract and the separate
+method profile. See [ADAPTATION.md](ADAPTATION.md) for the full definitions and
+applicability rules.
+
 ## Train
 
 Run from the repository root. A training pool must contain one fixed scale and

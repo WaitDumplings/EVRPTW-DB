@@ -10,6 +10,8 @@ from .protocol_trainers import train_reinforce_data_passes
 from .route_info import finalize_route_infos
 from .stage2_data import make_envs
 from .objective import objective_from_args
+from .method_auxiliary import method_auxiliary_from_args
+from .reward_contract import reward_contract_from_args
 from .training_protocol import require_training_rollout_steps, require_validation_decoding
 
 
@@ -41,6 +43,9 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
     objective_config = objective_from_args(args)
+    reward_contract = reward_contract_from_args(
+        args, objective=objective_config, scale=getattr(args, "scale", None)
+    )
 
     def solve(
         active, instances, decode_type, seed, max_steps=None, candidate_count=None,
@@ -55,6 +60,10 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             n_traj=n_traj,
             info_level="light",
             reward_distance_scale_km=reward_distance_scale_km,
+            reward_objective_scale=(
+                reward_contract.objective_scale if reward_contract else None
+            ),
+            invalid_action_penalty=0.0 if reward_contract else -10.0,
             objective_config=objective_config,
         )
         result = rollout(
@@ -67,6 +76,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                 candidate_count is None and decode_type == "sampling"
             ),
             incomplete_penalty_km=args.incomplete_penalty_km,
+            reward_contract=reward_contract,
         )
         if candidate_count is not None:
             _finalize_validation_result(envs, result)
@@ -111,6 +121,17 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
     objective_config = objective_from_args(args)
+    reward_contract = reward_contract_from_args(
+        args, objective=objective_config, scale=getattr(args, "scale", None)
+    )
+    method_auxiliary_profile = method_auxiliary_from_args(
+        args, expected_method="evrptw_rl"
+    )
+    if reward_contract is not None and method_auxiliary_profile is None:
+        raise ValueError(
+            "formal EVRPTW-RL reward-contract training requires "
+            "--method-auxiliary-profile"
+        )
 
     def solve(
         active, instances, decode_type, seed, max_steps=None, candidate_count=None,
@@ -125,6 +146,10 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             n_traj=n_traj,
             info_level="light",
             reward_distance_scale_km=reward_distance_scale_km,
+            reward_objective_scale=(
+                reward_contract.objective_scale if reward_contract else None
+            ),
+            invalid_action_penalty=0.0 if reward_contract else -10.0,
             objective_config=objective_config,
         )
         result = rollout(
@@ -138,6 +163,8 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             ),
             station_visit_penalty=args.station_visit_penalty,
             incomplete_penalty=args.incomplete_penalty,
+            reward_contract=reward_contract,
+            method_auxiliary_profile=method_auxiliary_profile,
         )
         if candidate_count is not None:
             _finalize_validation_result(envs, result)
@@ -172,12 +199,95 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
 def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..DRL_TS.env import DRLTSHardConstraintEnv
     from ..DRL_TS.rollout import rollout
-    from ..DRL_TS.soft_env import DRLTSSoftConstraintEnv
+    from ..DRL_TS.soft_env import (
+        DEFAULT_SOFT_VIOLATION_COMPONENT_CLIP,
+        DEFAULT_SOFT_VIOLATION_STEP_CLIP,
+        DRLTSSoftConstraintEnv,
+        SOFT_VIOLATION_AGGREGATION,
+        SOFT_VIOLATION_APPLICABILITY,
+        SOFT_VIOLATION_CONTRACT_ID,
+        SOFT_VIOLATION_DENOMINATOR,
+    )
 
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
     objective_config = objective_from_args(args)
+    reward_contract = reward_contract_from_args(
+        args, objective=objective_config, scale=getattr(args, "scale", None)
+    )
+    method_auxiliary_profile = method_auxiliary_from_args(
+        args, expected_method="drl_ts"
+    )
+    if reward_contract is not None and method_auxiliary_profile is None:
+        raise ValueError(
+            "formal DRL-TS reward-contract training requires "
+            "--method-auxiliary-profile"
+        )
+    if reward_contract is None and method_auxiliary_profile is not None:
+        raise ValueError(
+            "DRL-TS formal method auxiliary profile requires a reward contract"
+        )
+    if method_auxiliary_profile is not None:
+        expected_profile = {
+            "profile_id": SOFT_VIOLATION_CONTRACT_ID,
+            "applicability": SOFT_VIOLATION_APPLICABILITY,
+            "aggregation": SOFT_VIOLATION_AGGREGATION,
+            "denominator": SOFT_VIOLATION_DENOMINATOR,
+            "weights": {
+                "capacity": 1.0,
+                "energy": 1.0,
+                "time_window": 1.0,
+            },
+        }
+        actual_profile = {
+            "profile_id": method_auxiliary_profile.profile_id,
+            "applicability": method_auxiliary_profile.applicability,
+            "aggregation": method_auxiliary_profile.aggregation,
+            "denominator": method_auxiliary_profile.denominator,
+            "weights": dict(method_auxiliary_profile.weights),
+        }
+        if (
+            actual_profile != expected_profile
+            or method_auxiliary_profile.step_clip is None
+            or method_auxiliary_profile.component_clip is None
+        ):
+            raise ValueError(
+                f"unsupported DRL-TS soft auxiliary profile: {actual_profile!r}"
+            )
+        args.soft_violation_contract_id = method_auxiliary_profile.profile_id
+        args.soft_violation_step_clip = float(method_auxiliary_profile.step_clip)
+        args.soft_violation_component_clip = float(
+            method_auxiliary_profile.component_clip
+        )
+        args.soft_violation_denominator = method_auxiliary_profile.denominator
+        args.capacity_penalty = float(method_auxiliary_profile.weights["capacity"])
+        args.time_penalty = float(method_auxiliary_profile.weights["time_window"])
+        args.energy_penalty = float(method_auxiliary_profile.weights["energy"])
+    soft_violation_kwargs = {
+        "soft_violation_contract_id": getattr(
+            args, "soft_violation_contract_id", SOFT_VIOLATION_CONTRACT_ID
+        ),
+        "soft_violation_step_clip": float(
+            getattr(
+                args,
+                "soft_violation_step_clip",
+                DEFAULT_SOFT_VIOLATION_STEP_CLIP,
+            )
+        ),
+        "soft_violation_component_clip": float(
+            getattr(
+                args,
+                "soft_violation_component_clip",
+                DEFAULT_SOFT_VIOLATION_COMPONENT_CLIP,
+            )
+        ),
+        "soft_violation_denominator": getattr(
+            args, "soft_violation_denominator", SOFT_VIOLATION_DENOMINATOR
+        ),
+    }
+    for field, value in soft_violation_kwargs.items():
+        setattr(args, field, value)
 
     def solve(
         active, instances, soft, decode_type, seed, max_steps=None,
@@ -198,7 +308,16 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                     matrix_mode="canonical",
                     info_level="light",
                     reward_distance_scale_km=reward_distance_scale_km,
+                    reward_objective_scale=(
+                        reward_contract.objective_scale if reward_contract else None
+                    ),
+                    invalid_action_penalty=0.0 if reward_contract else -10.0,
                     objective_config=objective_config,
+                    **{
+                        key: value
+                        for key, value in soft_violation_kwargs.items()
+                        if key != "soft_violation_component_clip"
+                    },
                 )
                 for instance in instances
             ]
@@ -212,6 +331,10 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                     matrix_mode="canonical",
                     info_level="light",
                     reward_distance_scale_km=reward_distance_scale_km,
+                    reward_objective_scale=(
+                        reward_contract.objective_scale if reward_contract else None
+                    ),
+                    invalid_action_penalty=0.0 if reward_contract else -10.0,
                     objective_config=objective_config,
                 )
                 for instance in instances
@@ -230,6 +353,8 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             time_penalty=args.time_penalty,
             energy_penalty=args.energy_penalty,
             incomplete_penalty=args.incomplete_penalty,
+            reward_contract=reward_contract,
+            **soft_violation_kwargs,
         )
         if candidate_count is not None:
             _finalize_validation_result(envs, result)

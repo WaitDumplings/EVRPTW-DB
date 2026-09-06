@@ -27,15 +27,15 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
     runtime = _runtime()
     gate_file = _formal_gate()
 
-    assert protocol["status"] == "method_frozen_formal_training_active"
-    assert runtime["status"] == "formal_runtime_active"
-    assert protocol["formal_launch_allowed"] is True
+    assert protocol["status"] == "reward_contract_v2_short_validation_active"
+    assert runtime["status"] == "reward_contract_v2_short_validation_active"
+    assert protocol["formal_launch_allowed"] is False
     assert (
         protocol["formal_launch_allowed"]
         == runtime["formal_launch_allowed"]
         == gate_file["formal_launch_allowed"]
     )
-    assert protocol["launch_mode"] == "direct_full"
+    assert protocol["launch_mode"] == "direct_full_after_user_authorization"
     assert (
         protocol["launch_policy"]
         == runtime["launch_policy"]
@@ -59,12 +59,39 @@ def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
     questions = protocol["research_questions"]
     assert protocol["methods"] == ["am_evrptw", "evrptw_rl", "drl_ts", "terran"]
     assert protocol["seeds"] == runtime["seeds"] == [1234]
-    assert protocol["training_scales"] == runtime["enabled_scales"] == [
+    assert protocol["method_auxiliary_profiles"] == runtime[
+        "method_auxiliary_profiles"
+    ] == {
+        "drl_ts": (
+            "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+            "drl_ts_soft_auxiliary_v1.json"
+        ),
+        "evrptw_rl": (
+            "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+            "evrptw_rl_station_auxiliary_v1.json"
+        ),
+    }
+    assert protocol["training_scales"] == [
         "Cus50",
         "Cus100",
         "Cus500",
         "Cus1000",
     ]
+    assert (
+        protocol["reward_contract_launch_enabled_scales"]
+        == runtime["enabled_scales"]
+        == runtime["reward_contract_calibrated_scales"]
+        == ["Cus500", "Cus1000"]
+    )
+    assert protocol["reward_contract_calibrated_scales"] == [
+        "Cus500",
+        "Cus1000",
+    ]
+    assert (
+        protocol["reward_contract_blocked_scales"]
+        == runtime["reward_contract_blocked_scales"]
+        == ["Cus50", "Cus100"]
+    )
     assert protocol["training_rollout_steps"] == runtime["rollout_steps"] == {
         "Cus50": 65,
         "Cus100": 120,
@@ -81,6 +108,7 @@ def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
     assert questions["RQ2"]["additional_core_training_runs"] == 4
     assert questions["RQ3"]["additional_core_training_runs"] == 4
     assert protocol["core_training_run_count"] == 24
+    assert protocol["currently_launchable_core_training_run_count"] == 8
     assert protocol["core_training_run_count"] == sum(
         (
             questions["RQ1"]["main_training_runs"],

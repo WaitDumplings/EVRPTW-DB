@@ -14,7 +14,11 @@ class PotentialRewardConfig:
     use_customer_pbrs: bool = False
     use_repair_distance_pbrs: bool = False
     use_feasible_ratio_pbrs: bool = False
+    # ``use_terminal_heuristic`` is retained only for replaying legacy runs.
+    # New cost training uses the separately named task penalty below; it is not
+    # a potential and is never annealed with PBRS.
     use_terminal_heuristic: bool = False
+    use_terminal_task_penalty: bool = False
     customer_pbrs_mode: str = "progress"  # strict PBRS: gamma * Phi(s_next) - Phi(s)
     gamma: float = 1.0
     alpha: float = 2.0
@@ -27,6 +31,8 @@ class PotentialRewardConfig:
     pbrs_clip: float | None = None
     success_bonus: float = 0.1
     failure_penalty: float = 0.5
+    failure_base: float = 0.0
+    unserved_coefficient: float = 1.0
 
     def __post_init__(self) -> None:
         if not 0.0 <= float(self.gamma) <= 1.0:
@@ -37,6 +43,14 @@ class PotentialRewardConfig:
         if mode not in {"progress", "direct_progress"}:
             raise ValueError("customer_pbrs_mode must be progress or direct_progress")
         object.__setattr__(self, "customer_pbrs_mode", mode)
+        if self.use_terminal_heuristic and self.use_terminal_task_penalty:
+            raise ValueError(
+                "legacy terminal heuristic and terminal task penalty are mutually exclusive"
+            )
+        for name in ("failure_base", "unserved_coefficient"):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
 
 
 class PotentialRewardWrapper(Wrapper):
@@ -131,7 +145,12 @@ class PotentialRewardWrapper(Wrapper):
         feasible = self._feasible_ratio_pbrs(
             prev_obs, obs, active=active, newly_finished=newly_finished
         )
-        terminal = self._terminal_heuristic(info, terminated, truncated, prev_finished)
+        legacy_terminal = self._terminal_heuristic(
+            info, terminated, truncated, prev_finished
+        )
+        terminal, terminal_base, terminal_unserved = self._terminal_task_components(
+            info, terminated, truncated, prev_finished
+        )
         scale = float(self.reward_scale)
         customer = (scale * customer).astype(np.float32)
         repair = (scale * repair).astype(np.float32)
@@ -139,8 +158,16 @@ class PotentialRewardWrapper(Wrapper):
         # Completion/failure is part of the task objective, not an auxiliary
         # potential.  Annealing it together with PBRS made failures progressively
         # cheaper and caused large-scale policies to collapse to short episodes.
+        legacy_terminal = legacy_terminal.astype(np.float32)
         terminal = terminal.astype(np.float32)
-        shaped = base_reward.astype(np.float32) + customer + repair + feasible + terminal
+        shaped = (
+            base_reward.astype(np.float32)
+            + customer
+            + repair
+            + feasible
+            + legacy_terminal
+            + terminal
+        )
 
         self._last_obs = obs
         self._last_info = info
@@ -157,7 +184,10 @@ class PotentialRewardWrapper(Wrapper):
             "pbrs_customer": customer.copy(),
             "pbrs_repair_distance": repair.copy(),
             "pbrs_feasible_ratio": feasible.copy(),
-            "terminal_heuristic": terminal.copy(),
+            "terminal_heuristic": legacy_terminal.copy(),
+            "terminal_task_total": terminal.copy(),
+            "terminal_failure_base": terminal_base.copy(),
+            "terminal_unserved": terminal_unserved.copy(),
             "shaped": shaped.copy(),
             "pbrs_scale": np.full_like(shaped, scale, dtype=np.float32),
         }
@@ -288,6 +318,44 @@ class PotentialRewardWrapper(Wrapper):
         reward[fail] -= float(cfg.failure_penalty) * (1.0 - served_ratio[fail])
         return reward.astype(np.float32)
 
+    def _terminal_task_components(
+        self,
+        next_info: dict[str, Any],
+        terminated: np.ndarray,
+        truncated: np.ndarray,
+        prev_finished: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return one failure cost at the first unsuccessful terminal transition.
+
+        The returned arrays use reward signs (negative costs).  In particular,
+        an episode that served every customer but did not return to the depot
+        receives ``-failure_base`` rather than escaping with zero penalty.
+        """
+
+        served = np.asarray(next_info["served_customers"], dtype=np.float32)
+        zero = np.zeros_like(served, dtype=np.float32)
+        if not self.config.use_terminal_task_penalty:
+            return zero, zero.copy(), zero.copy()
+        now_finished = np.asarray(terminated, dtype=bool) | np.asarray(
+            truncated, dtype=bool
+        )
+        newly_finished = now_finished & (~prev_finished)
+        success = np.asarray(next_info["success"], dtype=bool)
+        failed = newly_finished & (~success)
+        if not np.any(failed):
+            return zero, zero.copy(), zero.copy()
+        customer_count = max(
+            float(getattr(self.unwrapped, "num_customers", 1)), 1.0
+        )
+        unserved_fraction = np.clip(1.0 - served / customer_count, 0.0, 1.0)
+        base = np.zeros_like(zero)
+        unserved = np.zeros_like(zero)
+        base[failed] = -float(self.config.failure_base)
+        unserved[failed] = (
+            -float(self.config.unserved_coefficient) * unserved_fraction[failed]
+        )
+        return (base + unserved).astype(np.float32), base, unserved
+
     @staticmethod
     def _direct_progress_potential(served: np.ndarray, n: float, beta: float) -> np.ndarray:
         served_ratio = (served / n).clip(0.0, 1.0)
@@ -321,6 +389,9 @@ class PotentialRewardWrapper(Wrapper):
             "pbrs_repair_distance": reward.copy(),
             "pbrs_feasible_ratio": reward.copy(),
             "terminal_heuristic": reward.copy(),
+            "terminal_task_total": reward.copy(),
+            "terminal_failure_base": reward.copy(),
+            "terminal_unserved": reward.copy(),
             "shaped": reward.copy(),
             "pbrs_scale": np.ones_like(reward, dtype=np.float32),
         }

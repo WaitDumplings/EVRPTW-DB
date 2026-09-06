@@ -1,0 +1,16 @@
+{
+  "aggregation": "clipped_normalized_excess_sum_div_fixed_customers_then_component_clip",
+  "applicability": "stage1_soft_only_capacity_on_customer_time_energy_on_all_valid_travel",
+  "component_clip": 1.0,
+  "denominator": "num_customers",
+  "method": "drl_ts",
+  "profile_id": "drl_ts_soft_auxiliary_v1",
+  "schema": "drl_method_auxiliary_profile_v1",
+  "sha256": "4d43b6a36ebda5f73748fcf2c727bfb838b33416442ec21cd3b1eaa8420a3c7c",
+  "step_clip": 1.0,
+  "weights": {
+    "capacity": 1.0,
+    "energy": 1.0,
+    "time_window": 1.0
+  }
+}

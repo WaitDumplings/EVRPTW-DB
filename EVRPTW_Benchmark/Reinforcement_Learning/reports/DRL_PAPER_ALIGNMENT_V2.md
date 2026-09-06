@@ -15,7 +15,7 @@ labelled unresolved.
 |---|---|---|---|---|
 | AM-EVRPTW | Full paper and official code at `c9abf41ac2f878a55b20dc7e829bc942bb999631` | Encoder is byte-identical to the selected upstream file; local decoder is an EVRPTW adaptation | Paper route length becomes raw directed-road km; unfinished penalty is adapter-only | verified adaptation |
 | EVRPTW-RL | Full accepted manuscript | Structure2Vec, two attention stages and LSTM checked against equations | Paper distance and station penalty retained; physical km is scaled explicitly; fleet and negative-battery penalties are zero under benchmark semantics | verified paper-guided adaptation |
-| DRL-TS | Full PPSN chapter supplied by the user | Node/edge GAT, GRU/context decoder, masks and training equations checked; EVRPTW-DB feature additions documented | Paper distance and three Stage-1 violations retained with benchmark scaling; no CS penalty | verified paper-guided adaptation |
+| DRL-TS | Full PPSN chapter supplied by the user | Node/edge GAT, GRU/context decoder, masks and training equations checked; EVRPTW-DB feature additions documented | Common normalized task cost plus a separately versioned, bounded fixed-`N` Stage-1 violation profile; no CS penalty | verified paper-guided adaptation |
 | TERRAN | User-designated CaliRoute reference code | Target model tree and PBRS implementation checked against project source | Shared Stage-2 normalization is documented; distance/PBRS and remaining-customer horizon penalty are named separately | reference-code verified adaptation |
 | Edge-DIRECT-H | Full paper; no author code | Current scaled-dot-product/LayerNorm encoder does not match the published additive-GAT/BatchNorm encoder | Travel-time reward was intentionally changed to directed distance | **blocked and excluded from formal methods** |
 
@@ -78,10 +78,32 @@ no station-visit or station-revisit reward. Stations can be visited any number o
 times, but its tour mask forbids selecting a station immediately after the depot
 or another station.
 
-The adapter keeps those semantic terms and station mask. Distance and each
-violation are scaled by benchmark physical units, and incomplete rollouts receive
-a separately named training-only guard. These scaling and guard terms are
-documented adaptations, not paper-exact normalization.
+The adapter keeps those semantic terms and station mask but separates two
+contracts. The common task contract uses normalized electricity-plus-vehicle
+cost and charges every structurally incomplete rollout
+`b_N + lambda_u * unserved_fraction` exactly once. The frozen rule
+`b_N = Q_0.99(C_ref / S_N) + 1` is an empirical calibration candidate, not a
+mathematical feasibility-first guarantee. Its exceeding all normalized costs
+in each 500-reference calibration cohort is only an in-sample fact.
+
+The independently versioned DRL-TS Stage-1 profile defines, for each resource
+component,
+
+```text
+v_bar_j = min(component_clip,
+              sum_{t in A_j} min(normalized_raw_excess_j,t, step_clip) / N)
+```
+
+`N` is the fixed customer count, the two clips are 1, and the three weights are
+1. Capacity applies only on customer arrivals; time-window and energy apply on
+all valid travel transitions. Raw unclipped sums remain authoritative for
+feasibility and diagnostics. A structurally complete soft-stage rollout with a
+raw violation pays the bounded method auxiliary but not the common hard failure
+floor; an incomplete soft- or hard-stage rollout pays the common terminal term.
+Keeping the fixed-`N` method profile and shared task contract under separate
+identities prevents method shaping from being represented as part of the
+benchmark objective. The economic objective, scaling, clipping, aggregation,
+and terminal guard are documented adaptations, not paper-exact normalization.
 
 ### TERRAN
 

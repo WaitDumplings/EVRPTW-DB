@@ -9,6 +9,10 @@ import numpy as np
 import torch
 
 from ..common.objective import resolve_objective
+from ..common.reward_contract import (
+    RewardScaleContract,
+    classify_rollout_failure_reasons,
+)
 from .model import AMEVRPTWPolicy
 
 
@@ -67,6 +71,7 @@ class AMRollout:
     # CPU-only diagnostics; never used to recompute the training objective.
     training_cost_components: dict[str, torch.Tensor] | None = None
     reward_objective_scale: torch.Tensor | None = None
+    failure_reasons: np.ndarray | None = None
 
 
 def rollout(
@@ -79,9 +84,12 @@ def rollout(
     incomplete_penalty_km: float,
     use_static_cache: bool = True,
     compute_log_likelihood: bool = True,
+    reward_contract: RewardScaleContract | None = None,
 ) -> AMRollout:
     if decode_type not in {"sampling", "greedy"}:
         raise ValueError("decode_type must be sampling or greedy")
+    if reward_contract is not None:
+        reward_contract.validate_envs(envs)
     observations: list[dict[str, np.ndarray]] = []
     infos: list[dict[str, Any]] = []
     for index, env in enumerate(envs):
@@ -142,7 +150,9 @@ def rollout(
     customer_count = np.asarray(
         [env.unwrapped.num_customers for env in envs], dtype=np.float64
     )[:, None]
-    incomplete_fraction = 1.0 - served / np.maximum(customer_count, 1.0)
+    incomplete_fraction = np.clip(
+        1.0 - served / np.maximum(customer_count, 1.0), 0.0, 1.0
+    )
     legacy_cost_km = objective + (~feasible) * (
         float(incomplete_penalty_km) * (1.0 + incomplete_fraction)
     )
@@ -152,22 +162,43 @@ def rollout(
     # The AM auxiliary parameter retains its historical km-equivalent meaning.
     # Convert it to the active objective unit, then normalize base and penalty
     # together. Distance mode remains the original km cost divided by its scale.
-    training_cost = (
-        objective_value
-        + (~feasible) * float(incomplete_penalty_km)
-        * (1.0 + incomplete_fraction) * distance_unit_cost
-    ) / np.maximum(objective_scale, 1e-12)
-    diagnostic_components = {
+    base_components = {
         "base_objective": objective_value / np.maximum(objective_scale, 1e-12),
         "base_distance_term": objective * distance_unit_cost / np.maximum(objective_scale, 1e-12),
         "base_vehicle_term": (
             objective_value - objective * distance_unit_cost
         ) / np.maximum(objective_scale, 1e-12),
-        "incomplete_penalty": (
+    }
+    if reward_contract is None:
+        terminal_penalty = (
             (~feasible) * float(incomplete_penalty_km)
             * (1.0 + incomplete_fraction) * distance_unit_cost
-        ) / np.maximum(objective_scale, 1e-12),
-    }
+        ) / np.maximum(objective_scale, 1e-12)
+        diagnostic_components = {
+            **base_components,
+            "incomplete_penalty": terminal_penalty,
+        }
+    else:
+        failed = (~feasible).astype(np.float64)
+        terminal_failure_base = failed * reward_contract.failure_base
+        terminal_unserved = (
+            failed * reward_contract.unserved_coefficient * incomplete_fraction
+        )
+        terminal_penalty = terminal_failure_base + terminal_unserved
+        diagnostic_components = {
+            **base_components,
+            "terminal_failure_base": terminal_failure_base,
+            "terminal_unserved": terminal_unserved,
+            "terminal_task_total": terminal_penalty,
+        }
+    training_cost = base_components["base_objective"] + terminal_penalty
+    failure_reasons = classify_rollout_failure_reasons(
+        infos,
+        done=done,
+        success=feasible,
+        served_customers=served,
+        customer_count=customer_count,
+    )
     return AMRollout(
         cost_km=torch.as_tensor(legacy_cost_km, device=policy.device).float(),
         training_cost=torch.as_tensor(training_cost, device=policy.device).float(),
@@ -190,4 +221,5 @@ def rollout(
             name: torch.as_tensor(value) for name, value in diagnostic_components.items()
         },
         reward_objective_scale=torch.as_tensor(objective_scale),
+        failure_reasons=failure_reasons,
     )

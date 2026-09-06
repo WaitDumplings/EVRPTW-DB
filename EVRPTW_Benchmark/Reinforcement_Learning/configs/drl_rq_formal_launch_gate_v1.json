@@ -1,18 +1,18 @@
 {
   "schema": "drl_rq_formal_launch_gate_v1",
   "protocol_id": "drl_rq_protocol_frozen_v1",
-  "formal_launch_allowed": true,
-  "launch_policy": "direct_full_user_authorized_2026-09-04",
+  "formal_launch_allowed": false,
+  "launch_policy": "reward_contract_v2_short_validation_pending_user_authorization",
   "formal_launch_gates": {
     "G1": "PILOT_WAIVED_BY_USER",
-    "G2": "IMPLEMENTED_RELEASE_EXECUTION_REQUIRED",
+    "G2": "IMPLEMENTED_UNIT_TESTED",
     "G3": "PILOT_WAIVED_BY_USER",
     "G4": "PILOT_WAIVED_BY_USER",
     "G5": "PILOT_WAIVED_BY_USER",
     "G6": "PILOT_WAIVED_BY_USER",
-    "G7": "PARTIAL_IMPLEMENTATION_FEASIBILITY_AUDIT_REQUIRED",
+    "G7": "NOT_APPLICABLE_G_ONLY",
     "G8": "IMPLEMENTED_UNIT_TESTED"
   },
-  "note": "Pilot execution and the local-pilot launch gate were explicitly removed on 2026-09-04. Formal queues launch directly with the frozen runtime configuration.",
-  "file_hash_validation_performed": false
+  "note": "Pilot remains removed. Formal launch is fail-closed pending explicit user authorization. Opening requires the gate, runtime candidate, and frozen protocol to carry the same authorized policy and complete G1-G8 evidence.",
+  "file_hash_validation_performed": true
 }

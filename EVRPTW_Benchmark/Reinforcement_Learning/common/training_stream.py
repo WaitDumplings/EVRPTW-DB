@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import struct
 import tempfile
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
 
 
 STREAM_SCHEMA = "drl_training_id_stream_v3"
+STREAM_CONTRACT_SCHEMA = "drl_training_stream_contract_v1"
+STREAM_CONTENT_DIGEST_SCHEME = "sha256_length_prefixed_ordered_view_ids_v1"
 REQUIRED_INDEX_COLUMNS = {
     "view_id",
     "family_id",
@@ -55,7 +59,9 @@ def build_training_stream(
     stream with the same source/support/scale/seed therefore preserves the
     complete shorter stream as its prefix. Complete cycles reproduce the exact
     city/day-type composition of the eligible pool; a final partial cycle is a
-    seeded sample without replacement. No content hashes are computed.
+    seeded sample without replacement.  The exact ordered stream is frozen by
+    :func:`atomic_write_stream`; the logical digest deliberately does not
+    depend on a particular Parquet writer version.
     """
 
     missing = sorted(REQUIRED_INDEX_COLUMNS.difference(index.columns))
@@ -141,9 +147,190 @@ def build_training_stream(
         "prefix_stability_scope": "same_source_support_scale_seed",
         "method_independent": True,
         "strata": strata,
-        "file_hash_validation_performed": False,
+        "file_hash_validation_performed": True,
     }
     return stream, manifest
+
+
+def _canonical_sha256(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def stream_content_sha256(view_ids: Iterable[str]) -> str:
+    """Hash the exact ordered logical stream independently of file encoding."""
+
+    values = [str(value) for value in view_ids]
+    digest = hashlib.sha256()
+    digest.update((STREAM_CONTENT_DIGEST_SCHEME + "\0").encode("ascii"))
+    digest.update(struct.pack(">Q", len(values)))
+    for value in values:
+        encoded = value.encode("utf-8")
+        digest.update(struct.pack(">Q", len(encoded)))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def training_stream_manifest_digest(manifest: Mapping[str, Any]) -> str:
+    """Digest scientific manifest content, excluding machine-local locators."""
+
+    canonical = {
+        key: value
+        for key, value in manifest.items()
+        if key
+        not in {
+            "manifest_sha256",
+            "source_index",
+            "allowed_family_ids_source",
+        }
+    }
+    return _canonical_sha256(canonical)
+
+
+def training_stream_contract_digest(payload: Mapping[str, Any]) -> str:
+    canonical = {key: value for key, value in payload.items() if key != "sha256"}
+    return _canonical_sha256(canonical)
+
+
+def _validate_stream_frame(frame: pd.DataFrame) -> list[str]:
+    required = {"stream_position", "view_id"}
+    if not required.issubset(frame.columns):
+        raise ValueError(
+            f"training stream is missing columns: {sorted(required.difference(frame.columns))}"
+        )
+    if list(frame["stream_position"].astype(int)) != list(range(len(frame))):
+        raise ValueError("training stream positions are not contiguous and zero-based")
+    values = frame["view_id"].astype(str).tolist()
+    if any(not value for value in values):
+        raise ValueError("training stream contains an empty view_id")
+    return values
+
+
+def _contract_from_verified_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    payload = {
+        "schema": STREAM_CONTRACT_SCHEMA,
+        "stream_schema": manifest["schema"],
+        "content_digest_scheme": manifest["content_digest_scheme"],
+        "stream_content_sha256": manifest["stream_content_sha256"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "sample_count": int(manifest["sample_count"]),
+        "scale": str(manifest["scale"]),
+        "seed": int(manifest["seed"]),
+        "source_index_sha256": str(manifest["source_index_sha256"]),
+        "allowed_family_ids_sha256": manifest.get("allowed_family_ids_sha256"),
+    }
+    payload["sha256"] = training_stream_contract_digest(payload)
+    return payload
+
+
+def load_training_stream_contract(path: str | Path) -> dict[str, Any]:
+    """Load and fully verify a frozen stream and its sibling manifest."""
+
+    source = Path(path)
+    manifest_path = source.with_suffix(source.suffix + ".manifest.json")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"cannot read training-stream manifest: {manifest_path}"
+        ) from error
+    if not isinstance(manifest, dict) or manifest.get("schema") != STREAM_SCHEMA:
+        raise ValueError("invalid training-stream manifest schema")
+    required = {
+        "content_digest_scheme",
+        "stream_content_sha256",
+        "manifest_sha256",
+        "source_index_sha256",
+        "sample_count",
+        "scale",
+        "seed",
+    }
+    missing = sorted(required.difference(manifest))
+    if missing:
+        raise ValueError(f"training-stream manifest is missing fields: {missing}")
+    if manifest.get("content_digest_scheme") != STREAM_CONTENT_DIGEST_SCHEME:
+        raise ValueError("unsupported training-stream content digest scheme")
+    if manifest.get("file_hash_validation_performed") is not True:
+        raise ValueError("training-stream manifest did not freeze content hashes")
+    expected_manifest_sha = training_stream_manifest_digest(manifest)
+    if manifest.get("manifest_sha256") != expected_manifest_sha:
+        raise ValueError("training-stream manifest SHA256 mismatch")
+    try:
+        frame = pd.read_parquet(source, columns=["stream_position", "view_id"])
+    except (OSError, ValueError) as error:
+        raise ValueError(f"cannot read frozen training stream: {source}") from error
+    values = _validate_stream_frame(frame)
+    if len(values) != int(manifest["sample_count"]):
+        raise ValueError("training-stream sample count disagrees with manifest")
+    if stream_content_sha256(values) != manifest["stream_content_sha256"]:
+        raise ValueError("training-stream logical content SHA256 mismatch")
+    return _contract_from_verified_manifest(manifest)
+
+
+def training_stream_contract_from_args(
+    args: Any,
+    *,
+    required: bool = False,
+) -> dict[str, Any] | None:
+    path = getattr(args, "training_stream_path", None)
+    expected = getattr(args, "training_stream_contract_sha256", None)
+    if path is None:
+        if required or expected is not None:
+            raise ValueError("formal training requires --training-stream-path")
+        return None
+    try:
+        contract = load_training_stream_contract(path)
+    except ValueError:
+        if required or expected is not None:
+            raise
+        return None
+    if required and not expected:
+        raise ValueError(
+            "formal training requires --training-stream-contract-sha256"
+        )
+    if expected is not None and str(expected) != contract["sha256"]:
+        raise ValueError(
+            "training-stream contract SHA256 does not match the frozen artifact"
+        )
+    setattr(args, "training_stream_contract_sha256", contract["sha256"])
+    setattr(args, "training_stream_contract_snapshot", contract)
+    return contract
+
+
+def assert_checkpoint_training_stream_contract(payload: Mapping[str, Any], args: Any) -> None:
+    expected = getattr(args, "training_stream_contract_snapshot", None)
+    if expected is None:
+        if payload.get("training_stream_contract") is not None:
+            raise ValueError("checkpoint unexpectedly contains a training-stream contract")
+        return
+    if (
+        not isinstance(expected, Mapping)
+        or expected.get("sha256") != training_stream_contract_digest(expected)
+    ):
+        raise ValueError("current training-stream contract snapshot is invalid")
+    saved_args = payload.get("args", {}) or {}
+    if not isinstance(saved_args, Mapping):
+        saved_args = vars(saved_args)
+    if payload.get("training_stream_contract") != expected:
+        raise ValueError("checkpoint training-stream contract mismatch")
+    if saved_args.get("training_stream_contract_snapshot") != expected:
+        raise ValueError("checkpoint args training-stream snapshot mismatch")
+    if saved_args.get("training_stream_contract_sha256") != expected["sha256"]:
+        raise ValueError("checkpoint args training-stream SHA256 mismatch")
 
 
 def atomic_write_stream(output: str | Path, stream: pd.DataFrame, manifest: dict) -> None:
@@ -159,6 +346,14 @@ def atomic_write_stream(output: str | Path, stream: pd.DataFrame, manifest: dict
         manifest_path.suffix + f".tmp.{os.getpid()}"
     )
     try:
+        view_ids = _validate_stream_frame(stream)
+        manifest["content_digest_scheme"] = STREAM_CONTENT_DIGEST_SCHEME
+        manifest["stream_content_sha256"] = stream_content_sha256(view_ids)
+        manifest["file_hash_validation_performed"] = True
+        if not manifest.get("source_index_sha256"):
+            raise ValueError("training-stream manifest requires source_index_sha256")
+        manifest.setdefault("allowed_family_ids_sha256", None)
+        manifest["manifest_sha256"] = training_stream_manifest_digest(manifest)
         stream.to_parquet(temporary, index=False)
         os.replace(temporary, destination)
         manifest_temporary.write_text(
@@ -179,19 +374,27 @@ def read_stream_view_ids(
 ) -> list[str]:
     source = Path(path)
     frame = pd.read_parquet(source, columns=["stream_position", "view_id"])
-    if list(frame["stream_position"].astype(int)) != list(range(len(frame))):
-        raise ValueError("training stream positions are not contiguous and zero-based")
+    values = _validate_stream_frame(frame)
     begin = int(start)
     end = len(frame) if stop is None else int(stop)
     if begin < 0 or end < begin or end > len(frame):
         raise ValueError("requested training-stream slice is out of range")
-    return frame.iloc[begin:end]["view_id"].astype(str).tolist()
+    return values[begin:end]
 
 
 __all__ = [
     "STREAM_SCHEMA",
+    "STREAM_CONTRACT_SCHEMA",
+    "STREAM_CONTENT_DIGEST_SCHEME",
+    "assert_checkpoint_training_stream_contract",
     "atomic_write_stream",
     "build_training_stream",
+    "file_sha256",
+    "load_training_stream_contract",
     "normalize_scale",
     "read_stream_view_ids",
+    "stream_content_sha256",
+    "training_stream_contract_digest",
+    "training_stream_contract_from_args",
+    "training_stream_manifest_digest",
 ]

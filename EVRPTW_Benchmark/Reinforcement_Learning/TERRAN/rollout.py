@@ -166,6 +166,33 @@ def _defer_route_info(envs, enabled: bool):
             base.info_level = "full"
 
 
+@contextmanager
+def _scoped_eval_sampling_seed(
+    seed: int | None,
+    device: str | torch.device,
+    *,
+    enabled: bool,
+):
+    """Seed evaluation sampling without consuming the caller's training RNG."""
+
+    if not enabled or seed is None:
+        yield
+        return
+    target = torch.device(device)
+    cuda_devices: list[int] = []
+    if target.type == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA evaluation requested but CUDA is unavailable")
+        cuda_devices = [
+            torch.cuda.current_device() if target.index is None else int(target.index)
+        ]
+    with torch.random.fork_rng(devices=cuda_devices, enabled=True):
+        torch.random.default_generator.manual_seed(int(seed))
+        if cuda_devices:
+            torch.cuda.default_generators[cuda_devices[0]].manual_seed(int(seed))
+        yield
+
+
 class BoundedBaseRewardStats:
     """CPU-only logging accumulator; never used to construct rewards or losses.
 
@@ -281,6 +308,9 @@ def collect_rollout(
         "pbrs_repair_distance",
         "pbrs_feasible_ratio",
         "terminal_heuristic",
+        "terminal_task_total",
+        "terminal_failure_base",
+        "terminal_unserved",
         "shaped",
         "pbrs_total",
         "shaping_total",
@@ -359,6 +389,9 @@ def collect_rollout(
                     "pbrs_repair_distance": np.zeros_like(base),
                     "pbrs_feasible_ratio": np.zeros_like(base),
                     "terminal_heuristic": np.zeros_like(base),
+                    "terminal_task_total": np.zeros_like(base),
+                    "terminal_failure_base": np.zeros_like(base),
+                    "terminal_unserved": np.zeros_like(base),
                     "shaped": base,
                 }
                 previous = previous_infos[env_index]
@@ -384,7 +417,12 @@ def collect_rollout(
                 + arrays["pbrs_repair_distance"]
                 + arrays["pbrs_feasible_ratio"]
             )
-            arrays["shaping_total"] = arrays["shaped"] - arrays["base"]
+            # ``terminal_task_total`` is part of the canonical task, not
+            # auxiliary shaping.  Keep this long-standing diagnostic field but
+            # narrow its semantics to PBRS plus the legacy heuristic only.
+            arrays["shaping_total"] = (
+                arrays["pbrs_total"] + arrays["terminal_heuristic"]
+            )
             if base_reward_stats is not None:
                 base_reward_stats.update(arrays["base"], active)
             num_customers = int(getattr(env.unwrapped, "num_customers", 0))
@@ -565,7 +603,11 @@ def rollout_eval_batch(
     """
     if not envs:
         return []
-    with _defer_route_info(envs, final_routes_only):
+    with _scoped_eval_sampling_seed(
+        seed,
+        device,
+        enabled=decode_mode == "sample",
+    ), _defer_route_info(envs, final_routes_only):
         observations, infos = reset_envs(envs, seed=seed)
         n_traj = int(envs[0].unwrapped.n_traj)
         done = np.zeros((len(envs), n_traj), dtype=bool)

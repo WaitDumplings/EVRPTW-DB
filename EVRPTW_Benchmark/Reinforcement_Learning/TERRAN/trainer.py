@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
+from dataclasses import asdict
 import json
 import math
 import os
@@ -9,7 +11,9 @@ import random
 import shutil
 import sys
 import time
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
+from types import SimpleNamespace
+from collections import Counter
 
 import numpy as np
 import torch
@@ -28,12 +32,19 @@ from ..common import Stage2TaskPool
 from ..common.data_pass import DataPassState
 from ..common.evaluation import select_min_verified_objective
 from ..common.objective import objective_from_checkpoint, resolve_objective
+from ..common.reward_contract import RewardContract, load_reward_contract
 from ..common.training_diagnostics import summarize_values
 from ..common.training_protocol import (
     append_jsonl,
     atomic_json,
     build_adamw_optimizer,
+    resolved_training_signature_digest,
+    resolved_training_signature_from_args,
     validation_key,
+)
+from ..common.training_stream import (
+    STREAM_CONTRACT_SCHEMA,
+    training_stream_contract_digest,
 )
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
@@ -177,7 +188,35 @@ def build_epoch_reward_diagnostics(
         "optimizer_steps_total": int(optimizer_steps_total), "normalization": normalization,
         "mask": {"source": "RolloutBatch.valid (active before action; terminal transition included, finished padding excluded)", "active_transition_count": active_count, "trajectory_count": trajectory_count},
         "distributions": distributions, "components": components,
-        "component_units": "actual training reward components after configured environment normalization; distance is the separate historical km-scale diagnostic, PBRS remains auxiliary; these are not raw USD costs",
+        "component_relationships": {
+            "objective": ["electricity_cost", "vehicle_cost"],
+            "base": ["objective", "base_non_objective"],
+            "pbrs_total": [
+                "pbrs_customer",
+                "pbrs_repair_distance",
+                "pbrs_feasible_ratio",
+            ],
+            "terminal_task_total": [
+                "terminal_failure_base",
+                "terminal_unserved",
+            ],
+            "shaping_total": [
+                "pbrs_total",
+                "terminal_heuristic",
+            ],
+            "shaped": [
+                "base",
+                "shaping_total",
+                "terminal_task_total",
+            ],
+            "derived_totals_not_additional_components": [
+                "pbrs_total",
+                "terminal_task_total",
+                "shaping_total",
+                "shaped",
+            ],
+        },
+        "component_units": "actual training reward components after configured environment normalization; distance is the separate historical km-scale diagnostic, shaping_total contains only auxiliary PBRS plus the disabled-by-contract legacy heuristic, and terminal_task_total is a separate non-annealed task penalty; these are not raw USD costs",
         "gradients": {"preclip_global_norm": summarize_values(norm_values), "max_grad_norm": max_grad_norm, "clip_fraction": clip_stats["mean"], "clip_fraction_finite_optimizer_steps": clip_stats["count"], "clip_fraction_definition": "returned_preclip_norm > max_grad_norm on finite norms", "capture": "return value of the existing single clip_grad_norm_ call after all backward accumulation, before optimizer.step"},
     })
 
@@ -209,6 +248,472 @@ def training_gamma(cfg: dict[str, Any]) -> float:
     return gamma
 
 
+def _selected_reward_contract_terms(
+    cfg: dict[str, Any], contract: RewardContract, *, source: str,
+):
+    """Resolve and audit the immutable per-scale terms stored in a config.
+
+    A contract digest identifies the complete multi-scale JSON, not the scale
+    used by one training run.  Checkpoints therefore have to preserve both the
+    selected scale and every derived runtime value that affected rewards.
+    """
+
+    data = cfg.get("data", {})
+    raw_scale = data.get("stage2_scale")
+    if raw_scale in (None, ""):
+        try:
+            raw_scale = f"Cus{int(data['num_customers'])}"
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"TERRAN {source} reward contract is missing its selected scale"
+            ) from error
+    try:
+        terms = contract.for_scale(raw_scale, resolve_objective(cfg.get("objective")))
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"TERRAN {source} reward contract selection is invalid: {error}"
+        ) from error
+
+    expected = {
+        ("training", "reward_contract_id"): terms.contract_id,
+        ("normalization", "reward_contract_id"): terms.contract_id,
+        ("normalization", "reward_contract_sha256"): terms.digest,
+        ("normalization", "reward_contract_scale"): terms.scale_label,
+        ("normalization", "reward_objective_scale"): terms.objective_scale,
+        ("normalization", "failure_base"): terms.failure_base,
+        ("normalization", "unserved_coefficient"): terms.unserved_coefficient,
+        ("env", "normalize_reward"): True,
+        ("env", "reward_objective_scale"): terms.objective_scale,
+        ("env", "invalid_action_penalty"): 0.0,
+        ("env", "success_bonus"): 0.0,
+        ("pbrs", "use_terminal_heuristic"): False,
+        ("pbrs", "use_terminal_task_penalty"): True,
+        ("pbrs", "success_bonus"): 0.0,
+        ("pbrs", "failure_base"): terms.failure_base,
+        ("pbrs", "unserved_coefficient"): terms.unserved_coefficient,
+    }
+    for path, expected_value in expected.items():
+        section, field = path
+        actual = cfg.get(section, {}).get(field)
+        if actual != expected_value:
+            dotted = ".".join(path)
+            raise ValueError(
+                f"TERRAN {source} derived reward contract field {dotted} "
+                f"does not match the frozen {terms.scale_label} terms"
+            )
+    return terms
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+def _validated_training_stream_sha(
+    cfg: Mapping[str, Any], *, source: str,
+) -> str | None:
+    protocol = cfg.get("protocol", {}) or {}
+    if not isinstance(protocol, Mapping):
+        raise ValueError(f"TERRAN {source} protocol provenance is invalid")
+    snapshot = protocol.get("training_stream_contract_snapshot")
+    digest = protocol.get("training_stream_contract_sha256")
+    if snapshot is None and digest is None:
+        return None
+    if not isinstance(snapshot, Mapping) or not isinstance(digest, str):
+        raise ValueError(
+            f"TERRAN {source} training-stream contract is incomplete"
+        )
+    if snapshot.get("schema") != STREAM_CONTRACT_SCHEMA:
+        raise ValueError(
+            f"TERRAN {source} training-stream contract schema is invalid"
+        )
+    computed = training_stream_contract_digest(snapshot)
+    if snapshot.get("sha256") != computed or digest != computed:
+        raise ValueError(
+            f"TERRAN {source} training-stream contract digest is inconsistent"
+        )
+    return digest
+
+
+def resolved_terran_scientific_fields(
+    cfg: Mapping[str, Any], *, seed: int,
+) -> dict[str, Any]:
+    """Resolve the exact TERRAN controls that may change learned parameters.
+
+    This is the method-specific portion of the common resolved-training
+    signature.  It intentionally excludes dynamic resume counters and output
+    paths while freezing PPO batching, validation selection, and the formal
+    protocol boundary with the same defaults/transforms used by the trainer.
+    """
+
+    training = cfg.get("training", {}) or {}
+    evaluation = cfg.get("evaluation", {}) or {}
+    protocol = cfg.get("protocol", {}) or {}
+    if not all(isinstance(section, Mapping) for section in (training, evaluation, protocol)):
+        raise ValueError("TERRAN scientific signature requires mapping config sections")
+
+    epochs = int(training.get("epochs", 1000))
+    num_envs = int(training.get("num_envs_per_gpu", 128))
+    n_traj = int(training.get("n_traj", 100))
+    rollout_steps = int(training.get("rollout_steps", 64))
+    logical_microbatches = max(
+        1, int(training.get("logical_microbatches_per_epoch", 1))
+    )
+    effective_batch = num_envs * logical_microbatches
+    ppo_step_chunk = int(training.get("ppo_step_chunk_size", 0) or 0)
+    if ppo_step_chunk <= 0:
+        ppo_step_chunk = 0
+
+    for field, expected in (
+        ("physical_batch_size", num_envs),
+        ("effective_batch_size", effective_batch),
+        ("logical_environments_per_epoch", effective_batch),
+        ("training_rollout_steps", rollout_steps),
+    ):
+        configured = protocol.get(field)
+        if configured is not None and int(configured) != expected:
+            raise ValueError(
+                f"TERRAN protocol {field}={configured!r} disagrees with "
+                f"resolved trainer value {expected!r}"
+            )
+
+    eval_seed = int(evaluation.get("eval_seed", int(seed) + 910_000_000))
+    raw_decode = str(evaluation.get("eval_decode_mode", "sample")).lower()
+    if raw_decode in {"sample", "sampling"}:
+        eval_decode = "sample"
+    elif raw_decode == "greedy":
+        eval_decode = "greedy"
+    else:
+        raise ValueError(f"unsupported TERRAN evaluation decode mode: {raw_decode}")
+    eval_n_traj = int(evaluation.get("eval_n_traj", 100))
+    eval_interval = int(evaluation.get("eval_interval", 0) or 0)
+    eval_limit = _optional_int(evaluation.get("eval_limit"))
+    eval_max_steps = _optional_int(evaluation.get("eval_max_steps"))
+    eval_num_batches = _optional_int(evaluation.get("eval_num_batches"))
+    eval_batch_size = max(1, int(evaluation.get("eval_batch_size", 1)))
+
+    scheduled_epochs = [
+        int(value) for value in training.get("validation_epochs", [])
+    ]
+    protocol_schedule = protocol.get("scheduled_validation_epochs")
+    if protocol_schedule is not None and [
+        int(value) for value in protocol_schedule
+    ] != scheduled_epochs:
+        raise ValueError(
+            "TERRAN protocol validation schedule disagrees with trainer schedule"
+        )
+    early_stop_patience = int(
+        training.get("early_stop_patience_validations", 0) or 0
+    )
+    early_stop_start = int(training.get("early_stop_start_epoch", 0) or 0)
+    for field, expected in (
+        ("early_stop_patience_validations", early_stop_patience),
+        ("early_stop_start_epoch", early_stop_start),
+    ):
+        configured = protocol.get(field)
+        if configured is not None and int(configured) != expected:
+            raise ValueError(
+                f"TERRAN protocol {field} disagrees with trainer configuration"
+            )
+
+    protocol_seed = protocol.get("validation_seed")
+    if protocol_seed is not None and int(protocol_seed) != eval_seed:
+        raise ValueError("TERRAN protocol validation seed disagrees with evaluation")
+    protocol_candidates = protocol.get("validation_candidates")
+    if protocol_candidates is not None and int(protocol_candidates) != eval_n_traj:
+        raise ValueError(
+            "TERRAN protocol validation candidates disagree with evaluation"
+        )
+    protocol_decode = protocol.get("validation_decode_type")
+    expected_protocol_decode = "sampling" if eval_decode == "sample" else "greedy"
+    if protocol_decode is not None and str(protocol_decode) != expected_protocol_decode:
+        raise ValueError(
+            "TERRAN protocol validation decode type disagrees with evaluation"
+        )
+
+    minimum_epochs = int(training.get("minimum_training_epochs", epochs) or epochs)
+    validation_every = _optional_int(protocol.get("validation_every_epochs"))
+    post_minimum_every = _optional_int(
+        training.get(
+            "post_minimum_validation_every_epochs",
+            protocol.get("post_minimum_validation_every_epochs"),
+        )
+    )
+    validation_checkpoints = int(
+        protocol.get("validation_checkpoints", len(scheduled_epochs) or 1)
+    )
+    stream_sha = _validated_training_stream_sha(
+        cfg, source="scientific signature"
+    )
+    return {
+        "method": "TERRAN",
+        "training": {
+            "epochs": epochs,
+            "num_envs_per_gpu": num_envs,
+            "n_traj": n_traj,
+            "rollout_steps": rollout_steps,
+            "logical_microbatches_per_epoch": logical_microbatches,
+            "ppo_update_epochs": int(training.get("ppo_update_epochs", 4)),
+            "num_minibatches": max(1, int(training.get("num_minibatches", 1))),
+            "gradient_accumulation_steps": max(
+                1, int(training.get("gradient_accumulation_steps", 1))
+            ),
+            "ppo_step_chunk_size": ppo_step_chunk,
+            "clip_coef": float(training.get("clip_coef", 0.2)),
+            "vf_coef": float(training.get("vf_coef", 0.5)),
+            "ent_coef": float(training.get("ent_coef", 0.01)),
+            "learning_rate": float(training.get("learning_rate", 1e-4)),
+            "max_grad_norm": float(training.get("max_grad_norm", 1.0)),
+            "gamma": training_gamma(dict(cfg)),
+        },
+        "evaluation": {
+            "seed": eval_seed,
+            "decode_mode": eval_decode,
+            "n_traj": eval_n_traj,
+            "limit": eval_limit,
+            "max_steps": eval_max_steps,
+            "batch_size": eval_batch_size,
+            "num_batches": eval_num_batches,
+            "interval": eval_interval,
+        },
+        "protocol": {
+            "protocol_id": str(protocol.get("protocol_id", "")),
+            "physical_batch_size": num_envs,
+            "effective_batch_size": effective_batch,
+            "training_rollout_steps": rollout_steps,
+            "training_stream_contract_sha256": stream_sha,
+            "minimum_training_epochs": minimum_epochs,
+            "validation_every_epochs": validation_every,
+            "post_minimum_validation_every_epochs": post_minimum_every,
+            "scheduled_validation_epochs": scheduled_epochs,
+            "validation_checkpoints": validation_checkpoints,
+            "early_stop_patience_validations": early_stop_patience,
+            "early_stop_start_epoch": early_stop_start,
+        },
+    }
+
+
+def _resolved_terran_training_signature(
+    cfg: Mapping[str, Any], *, seed: int,
+) -> dict[str, Any]:
+    method_fields = resolved_terran_scientific_fields(cfg, seed=seed)
+    data = cfg.get("data", {}) or {}
+    training = method_fields["training"]
+    evaluation = method_fields["evaluation"]
+    protocol = method_fields["protocol"]
+    raw_scale = data.get("stage2_scale")
+    if raw_scale in (None, ""):
+        raw_scale = f"Cus{int(data.get('num_customers', 15))}"
+    stream_path = (cfg.get("protocol", {}) or {}).get("training_stream_path")
+    if stream_path is None:
+        stream_path = data.get("stage2_training_stream_path")
+    effective = int(protocol["effective_batch_size"])
+    exposure_budget = (
+        int(training["epochs"])
+        * effective
+        * int(str(raw_scale).removeprefix("Cus"))
+        if stream_path is not None
+        else None
+    )
+    eval_decode_type = (
+        "sampling" if evaluation["decode_mode"] == "sample" else "greedy"
+    )
+    proxy = SimpleNamespace(
+        protocol_id=protocol["protocol_id"],
+        seed=int(seed),
+        stage2_scale=str(raw_scale),
+        training_representation=str(
+            data.get("stage2_training_representation", "G")
+        ),
+        training_epochs=int(training["epochs"]),
+        minimum_training_epochs=protocol["minimum_training_epochs"],
+        training_rollout_steps=int(training["rollout_steps"]),
+        physical_batch_size=int(protocol["physical_batch_size"]),
+        effective_batch_size=effective,
+        n_traj=int(training["n_traj"]),
+        customer_exposure_budget=exposure_budget,
+        training_stream_contract_sha256=protocol[
+            "training_stream_contract_sha256"
+        ],
+        validation_limit=evaluation["limit"],
+        validation_decode_type=eval_decode_type,
+        validation_candidates=int(evaluation["n_traj"]),
+        validation_seed=int(evaluation["seed"]),
+        validation_every_epochs=protocol["validation_every_epochs"],
+        post_minimum_validation_every_epochs=protocol[
+            "post_minimum_validation_every_epochs"
+        ],
+        validation_checkpoints=int(protocol["validation_checkpoints"]),
+        early_stop_patience_validations=protocol[
+            "early_stop_patience_validations"
+        ],
+        early_stop_start_epoch=protocol["early_stop_start_epoch"],
+        final_validation_limit=(cfg.get("protocol", {}) or {}).get(
+            "final_validation_limit"
+        ),
+        soft_stage_end_epoch=None,
+        optimizer=(cfg.get("training", {}) or {}).get("optimizer"),
+        weight_decay=(cfg.get("training", {}) or {}).get("weight_decay"),
+        reward_contract_sha256=(cfg.get("normalization", {}) or {}).get(
+            "reward_contract_sha256"
+        ),
+        method_auxiliary_sha256=None,
+        training_stream_path=stream_path,
+        validation_dataset_path=(cfg.get("evaluation", {}) or {}).get(
+            "eval_path"
+        ),
+        euclidean_manifest=(cfg.get("evaluation", {}) or {}).get(
+            "eval_euclidean_manifest",
+            data.get("stage2_euclidean_manifest"),
+        ),
+        resolved_training_method_fields=method_fields,
+    )
+    return resolved_training_signature_from_args(proxy)
+
+
+def _freeze_resolved_terran_training_signature(
+    cfg: dict[str, Any], *, seed: int,
+) -> dict[str, Any]:
+    signature = _resolved_terran_training_signature(cfg, seed=seed)
+    protocol = cfg.setdefault("protocol", {})
+    existing = protocol.get("resolved_training_signature")
+    if existing is not None and existing != signature:
+        raise ValueError(
+            "TERRAN current resolved training signature is inconsistent"
+        )
+    protocol["resolved_training_method_fields"] = signature["method_specific"]
+    protocol["resolved_training_signature"] = signature
+    protocol["resolved_training_signature_sha256"] = signature["sha256"]
+    return signature
+
+
+def _validate_resume_training_signature(
+    cfg: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    current_seed: int | None,
+) -> None:
+    saved_cfg = payload.get("config", {}) or {}
+    current_protocol = cfg.get("protocol", {}) or {}
+    saved_protocol = saved_cfg.get("protocol", {}) or {}
+    current = current_protocol.get("resolved_training_signature")
+    saved = saved_protocol.get("resolved_training_signature")
+    if current is None and saved is None:
+        return
+    if not isinstance(current, Mapping) or not isinstance(saved, Mapping):
+        raise ValueError(
+            "TERRAN resume resolved training signature is missing; start a fresh run"
+        )
+    resolved_current_seed = (
+        int(current_seed)
+        if current_seed is not None
+        else int(current.get("seed"))
+    )
+    saved_seed = payload.get("seed", saved.get("seed"))
+    if saved_seed is None:
+        raise ValueError(
+            "TERRAN resume checkpoint is missing its training seed"
+        )
+    expected_current = _resolved_terran_training_signature(
+        cfg, seed=resolved_current_seed
+    )
+    expected_saved = _resolved_terran_training_signature(
+        saved_cfg, seed=int(saved_seed)
+    )
+    if (
+        dict(current) != expected_current
+        or current.get("sha256")
+        != resolved_training_signature_digest(dict(current))
+        or current_protocol.get("resolved_training_method_fields")
+        != current.get("method_specific")
+    ):
+        raise ValueError(
+            "TERRAN current resolved training signature is inconsistent"
+        )
+    if (
+        dict(saved) != expected_saved
+        or saved.get("sha256") != resolved_training_signature_digest(dict(saved))
+        or saved_protocol.get("resolved_training_method_fields")
+        != saved.get("method_specific")
+    ):
+        raise ValueError(
+            "TERRAN resume checkpoint resolved training signature is inconsistent"
+        )
+    if (
+        dict(current) != dict(saved)
+        and not _allows_legacy_training_prefix_extension(
+            saved=dict(saved), current=dict(current)
+        )
+    ):
+        raise ValueError(
+            "TERRAN resume resolved training signature mismatch; start a fresh run"
+        )
+
+
+def _allows_legacy_training_prefix_extension(
+    *, saved: dict[str, Any], current: dict[str, Any],
+) -> bool:
+    """Keep only the historical non-formal epoch-prefix resume behavior.
+
+    The frozen RQ protocol is immutable.  A legacy direct caller may increase
+    only its terminal epoch when early stopping is disabled; fields derived
+    directly from that epoch are normalized solely for this comparison.
+    """
+
+    if (
+        saved.get("protocol_id") == "drl_rq_protocol_frozen_v1"
+        or current.get("protocol_id") == "drl_rq_protocol_frozen_v1"
+        or saved.get("protocol_id") != current.get("protocol_id")
+    ):
+        return False
+    try:
+        saved_epoch = int(saved["training_epochs"])
+        current_epoch = int(current["training_epochs"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if current_epoch < saved_epoch:
+        return False
+    saved_method = saved.get("method_specific")
+    current_method = current.get("method_specific")
+    if not isinstance(saved_method, dict) or not isinstance(current_method, dict):
+        return False
+    saved_protocol = saved_method.get("protocol")
+    current_protocol = current_method.get("protocol")
+    saved_training = saved_method.get("training")
+    current_training = current_method.get("training")
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            saved_protocol,
+            current_protocol,
+            saved_training,
+            current_training,
+        )
+    ):
+        return False
+    if (
+        int(saved_protocol.get("early_stop_patience_validations") or 0) != 0
+        or int(current_protocol.get("early_stop_patience_validations") or 0) != 0
+        or saved.get("minimum_training_epochs") != saved_epoch
+        or current.get("minimum_training_epochs") != current_epoch
+        or saved_protocol.get("minimum_training_epochs") != saved_epoch
+        or current_protocol.get("minimum_training_epochs") != current_epoch
+        or saved_training.get("epochs") != saved_epoch
+        or current_training.get("epochs") != current_epoch
+    ):
+        return False
+
+    saved_normalized = deepcopy(saved)
+    current_normalized = deepcopy(current)
+    for signature in (saved_normalized, current_normalized):
+        signature.pop("sha256", None)
+        signature["training_epochs"] = saved_epoch
+        signature["minimum_training_epochs"] = saved_epoch
+        method = signature["method_specific"]
+        method["training"]["epochs"] = saved_epoch
+        method["protocol"]["minimum_training_epochs"] = saved_epoch
+    return saved_normalized == current_normalized
+
+
 def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
     """Do not silently continue a discounted/older reward run as a new protocol."""
     saved_training = payload.get("config", {}).get("training", {})
@@ -219,6 +724,68 @@ def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]
     current_contract = cfg.get("training", {}).get("reward_contract_id")
     if saved_training.get("reward_contract_id") != current_contract:
         raise ValueError("TERRAN resume reward contract mismatch; start a fresh run")
+    current_snapshot = cfg.get("reward_contract")
+    saved_snapshot = payload.get("config", {}).get("reward_contract")
+    if (current_snapshot is None) != (saved_snapshot is None):
+        raise ValueError("TERRAN resume reward contract snapshot mismatch; start a fresh run")
+    if current_snapshot is not None:
+        try:
+            current_frozen = RewardContract.from_payload(current_snapshot)
+            saved_frozen = RewardContract.from_payload(saved_snapshot)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "TERRAN resume reward contract snapshot is invalid; start a fresh run"
+            ) from error
+        if current_frozen.digest != saved_frozen.digest:
+            raise ValueError(
+                "TERRAN resume reward contract digest mismatch; start a fresh run"
+            )
+        current_terms = _selected_reward_contract_terms(
+            cfg, current_frozen, source="current configuration",
+        )
+        saved_terms = _selected_reward_contract_terms(
+            payload["config"], saved_frozen, source="resume checkpoint",
+        )
+        if current_terms.scale_label != saved_terms.scale_label:
+            raise ValueError(
+                "TERRAN resume reward contract scale mismatch; start a fresh run"
+            )
+        if current_terms.to_dict() != saved_terms.to_dict():
+            raise ValueError(
+                "TERRAN resume derived reward contract mismatch; start a fresh run"
+            )
+    current_pbrs = cfg.get("pbrs_reward_semantics")
+    saved_pbrs = payload.get("config", {}).get("pbrs_reward_semantics")
+    if (current_pbrs is None) != (saved_pbrs is None):
+        raise ValueError(
+            "TERRAN resume PBRS shaping snapshot mismatch; start a fresh run"
+        )
+    if current_pbrs is not None:
+        current_resolved = _resolved_pbrs_reward_semantics(cfg)
+        saved_resolved = _resolved_pbrs_reward_semantics(payload["config"])
+        if current_pbrs != current_resolved or saved_pbrs != saved_resolved:
+            raise ValueError(
+                "TERRAN resume PBRS shaping snapshot is inconsistent with its config"
+            )
+        if current_pbrs != saved_pbrs:
+            raise ValueError(
+                "TERRAN resume PBRS shaping semantics mismatch; start a fresh run"
+            )
+    current_stream_sha = _validated_training_stream_sha(
+        cfg, source="current configuration"
+    )
+    saved_stream_sha = _validated_training_stream_sha(
+        payload.get("config", {}), source="resume checkpoint"
+    )
+    if current_stream_sha != saved_stream_sha:
+        raise ValueError(
+            "TERRAN resume training-stream contract mismatch; start a fresh run"
+        )
+    _validate_resume_training_signature(
+        cfg,
+        payload,
+        current_seed=None,
+    )
     current_optimizer = cfg.get("training", {}).get("optimizer")
     current_weight_decay = cfg.get("training", {}).get("weight_decay")
     if current_optimizer is not None or current_weight_decay is not None:
@@ -398,6 +965,9 @@ def build_pbrs_config(cfg: dict[str, Any]) -> PotentialRewardConfig | None:
         use_repair_distance_pbrs=bool(pbrs.get("use_repair_distance_pbrs", False)),
         use_feasible_ratio_pbrs=bool(pbrs.get("use_feasible_ratio_pbrs", False)),
         use_terminal_heuristic=bool(pbrs.get("use_terminal_heuristic", False)),
+        use_terminal_task_penalty=bool(
+            pbrs.get("use_terminal_task_penalty", False)
+        ),
         customer_pbrs_mode=str(pbrs.get("customer_pbrs_mode", "progress")),
         gamma=training_gamma(cfg),
         alpha=float(pbrs.get("alpha", 2.0)),
@@ -410,15 +980,129 @@ def build_pbrs_config(cfg: dict[str, Any]) -> PotentialRewardConfig | None:
         pbrs_clip=pbrs.get("pbrs_clip", None),
         success_bonus=float(pbrs.get("success_bonus", 0.1)),
         failure_penalty=float(pbrs.get("failure_penalty", 0.5)),
+        failure_base=float(pbrs.get("failure_base", 0.0)),
+        unserved_coefficient=float(pbrs.get("unserved_coefficient", 1.0)),
     )
     if not (
         config.use_customer_pbrs
         or config.use_repair_distance_pbrs
         or config.use_feasible_ratio_pbrs
         or config.use_terminal_heuristic
+        or config.use_terminal_task_penalty
     ):
         return None
     return config
+
+
+def _resolved_pbrs_reward_semantics(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Return every reward-affecting PBRS value with defaults resolved.
+
+    The shared reward contract intentionally does not hash method-specific
+    shaping.  TERRAN nevertheless has to reject a resume when its potential,
+    coefficients, or annealing schedule changed.  In particular, materialize
+    the default annealing end epoch now so extending ``training.epochs`` cannot
+    silently change a checkpoint's shaping schedule.
+    """
+
+    pbrs = cfg.get("pbrs", {}) or {}
+    training = cfg.get("training", {}) or {}
+    total_epochs = int(training.get("epochs", 1000))
+    if total_epochs <= 0:
+        raise ValueError("training.epochs must be positive before freezing PBRS")
+    raw_annealing = pbrs.get("annealing", {}) or {}
+    start_epoch = max(1, int(raw_annealing.get("start_epoch", 1)))
+    end_epoch = max(
+        start_epoch,
+        int(raw_annealing.get("end_epoch", total_epochs)),
+    )
+    schedule = str(raw_annealing.get("schedule", "cosine")).lower()
+    if schedule not in {"cosine", "linear", "exponential", "constant"}:
+        raise ValueError(f"unsupported PBRS annealing schedule: {schedule!r}")
+    annealing = {
+        "enabled": bool(raw_annealing.get("enabled", False)),
+        "start_scale": float(raw_annealing.get("start_scale", 1.0)),
+        "end_scale": float(raw_annealing.get("end_scale", 0.2)),
+        "start_epoch": start_epoch,
+        "end_epoch": end_epoch,
+        "schedule": schedule,
+    }
+    if not all(
+        math.isfinite(float(annealing[name]))
+        and float(annealing[name]) >= 0.0
+        for name in ("start_scale", "end_scale")
+    ):
+        raise ValueError("PBRS annealing scales must be finite and non-negative")
+    config = build_pbrs_config(cfg)
+    return {
+        "schema": "terran_pbrs_reward_semantics_v1",
+        "wrapper_enabled": config is not None,
+        "potential_reward_config": asdict(config) if config is not None else None,
+        "annealing": dict(annealing),
+    }
+
+
+def _freeze_pbrs_reward_semantics(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Materialize resolved PBRS semantics into the live config/checkpoint."""
+
+    snapshot = _resolved_pbrs_reward_semantics(cfg)
+    cfg.setdefault("training", {})["epochs"] = int(
+        cfg.get("training", {}).get("epochs", 1000)
+    )
+    cfg.setdefault("pbrs", {})["annealing"] = dict(snapshot["annealing"])
+    cfg["pbrs_reward_semantics"] = snapshot
+    return snapshot
+
+
+def _configure_reward_contract(cfg: dict[str, Any]) -> None:
+    """Resolve and freeze the common task scale before any env is created."""
+
+    source = cfg.get("reward_contract")
+    if source in (None, ""):
+        return
+    if isinstance(source, (str, Path)):
+        contract = load_reward_contract(source)
+        cfg["reward_contract_source_path"] = str(contract.source_path)
+    elif isinstance(source, dict):
+        contract = RewardContract.from_payload(source)
+    else:
+        raise TypeError("reward_contract must be a JSON path or frozen mapping")
+    objective = resolve_objective(cfg.get("objective"))
+    data = cfg.get("data", {})
+    raw_scale = data.get("stage2_scale")
+    if raw_scale in (None, ""):
+        raw_scale = f"Cus{int(data.get('num_customers', 0))}"
+    terms = contract.for_scale(raw_scale, objective)
+    cfg["reward_contract"] = contract.to_dict()
+    cfg.setdefault("training", {})["reward_contract_id"] = terms.contract_id
+    cfg.setdefault("normalization", {}).update(
+        {
+            "reward_contract_id": terms.contract_id,
+            "reward_contract_sha256": terms.digest,
+            "reward_contract_scale": terms.scale_label,
+            "reward_objective_scale": terms.objective_scale,
+            "failure_base": terms.failure_base,
+            "unserved_coefficient": terms.unserved_coefficient,
+            "reward_objective_scale_source": "frozen_training_reference_contract",
+        }
+    )
+    cfg.setdefault("env", {}).update(
+        {
+            "normalize_reward": True,
+            "reward_objective_scale": terms.objective_scale,
+            "invalid_action_penalty": 0.0,
+            "success_bonus": 0.0,
+        }
+    )
+    cfg.setdefault("pbrs", {}).update(
+        {
+            "use_terminal_heuristic": False,
+            "use_terminal_task_penalty": True,
+            "success_bonus": 0.0,
+            "failure_base": terms.failure_base,
+            "unserved_coefficient": terms.unserved_coefficient,
+        }
+    )
+    _freeze_pbrs_reward_semantics(cfg)
 
 
 def _configure_dataset_reward_scale(cfg: dict[str, Any], pool: Any) -> None:
@@ -443,6 +1127,7 @@ def _configure_dataset_reward_scale(cfg: dict[str, Any], pool: Any) -> None:
 
 
 def make_envs(cfg: dict[str, Any], seed: int):
+    _configure_reward_contract(cfg)
     data_cfg = cfg["data"]
     train_cfg = cfg["training"]
     num_envs = int(train_cfg.get("num_envs_per_gpu", 128))
@@ -466,6 +1151,11 @@ def make_envs(cfg: dict[str, Any], seed: int):
             completed_samples=int(data_cfg.get("stage2_completed_samples", 0)),
             training_stream_path=_resolve_repo_path(
                 data_cfg.get("stage2_training_stream_path")
+            ),
+            training_stream_contract_sha256=(
+                (cfg.get("protocol", {}) or {}).get(
+                    "training_stream_contract_sha256"
+                )
             ),
             representation=str(data_cfg.get("stage2_training_representation", "G")),
             euclidean_manifest=_resolve_repo_path(
@@ -729,22 +1419,26 @@ def summarize_train_infos(final_infos: list[dict[str, Any]]) -> dict[str, Any]:
             "train_avg_best_objective": np.nan,
             "train_avg_vehicle_count": np.nan,
             "train_avg_served_customers": np.nan,
+            "terminal_outcome_reason_counts": {},
         }
     feasible_flags = []
     best_objectives = []
     best_distances = []
     vehicle_counts = []
     served_counts = []
+    reason_counts: Counter[str] = Counter()
     for info in final_infos:
         success = np.asarray(info.get("success", []), dtype=bool)
         distance = np.asarray(info.get("objective_distance_km", []), dtype=np.float64)
         objective = np.asarray(info.get("objective_value", distance), dtype=np.float64)
         vehicle = np.asarray(info.get("vehicle_count", []), dtype=np.float64)
         served = np.asarray(info.get("served_customers", []), dtype=np.float64)
+        reasons = np.asarray(info.get("failure_reason", []), dtype=object)
         if objective.size == 0:
             continue
         feasible_flags.extend(success.tolist())
         served_counts.extend(served.tolist())
+        reason_counts.update(str(value) for value in reasons.reshape(-1))
         if np.any(success):
             candidates = np.where(success)[0]
             selected = int(candidates[np.argmin(objective[candidates])])
@@ -757,6 +1451,7 @@ def summarize_train_infos(final_infos: list[dict[str, Any]]) -> dict[str, Any]:
         "train_avg_best_objective": float(np.mean(best_objectives)) if best_objectives else np.nan,
         "train_avg_vehicle_count": float(np.mean(vehicle_counts)) if vehicle_counts else np.nan,
         "train_avg_served_customers": float(np.mean(served_counts)) if served_counts else np.nan,
+        "terminal_outcome_reason_counts": dict(sorted(reason_counts.items())),
     }
 
 
@@ -906,15 +1601,26 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     gamma = training_gamma(cfg)
     objective_config = resolve_objective(cfg.get("objective"))
     cfg["objective"] = objective_config.to_dict()
+    _configure_reward_contract(cfg)
+    protocol_id = str(cfg.get("protocol", {}).get("protocol_id", "")).strip()
+    if objective_config.is_cost and protocol_id and cfg.get("reward_contract") is None:
+        raise ValueError(
+            "formal TERRAN cost training requires a frozen reward contract"
+        )
+    # Contract configuration freezes this after injecting terminal terms. Legacy
+    # runs still need an explicit snapshot so any new checkpoint is resume-safe.
+    _freeze_pbrs_reward_semantics(cfg)
     if objective_config.is_cost:
         if gamma != 1.0:
             raise ValueError("TERRAN cost objective requires undiscounted training.gamma=1")
-        train_cfg["reward_contract_id"] = "terran_undiscounted_energy_vehicle_pbrs_v1"
+        if cfg.get("reward_contract") is None:
+            train_cfg["reward_contract_id"] = "terran_undiscounted_energy_vehicle_pbrs_v1"
     elif train_cfg.get("reward_contract_id") == "terran_undiscounted_energy_vehicle_pbrs_v1":
         train_cfg["reward_contract_id"] = "terran_undiscounted_distance_pbrs_v1"
     # Persist the resolved value even for callers using the default. Resume
     # must never guess which discount produced an existing checkpoint.
     train_cfg["gamma"] = gamma
+    _freeze_resolved_terran_training_signature(cfg, seed=seed)
     protocol_cfg = cfg.get("protocol", {})
     resume_checkpoint = protocol_cfg.get("resume_checkpoint")
     resume_payload = None
@@ -1094,6 +1800,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "reward_pbrs_customer_mean",
         "reward_pbrs_repair_distance_mean",
         "reward_terminal_heuristic_mean",
+        "reward_terminal_task_total_mean",
+        "reward_terminal_failure_base_mean",
+        "reward_terminal_unserved_mean",
         "reward_pbrs_total_mean",
         "reward_shaping_total_mean",
         "reward_base_abs_mean",
@@ -1105,9 +1814,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "reward_distance_per_trajectory",
         "reward_pbrs_total_per_trajectory",
         "reward_terminal_heuristic_per_trajectory",
+        "reward_terminal_task_total_per_trajectory",
         "reward_discounted_distance_per_trajectory",
         "reward_discounted_pbrs_total_per_trajectory",
         "reward_discounted_terminal_heuristic_per_trajectory",
+        "reward_discounted_terminal_task_total_per_trajectory",
         "customer_action_reward_base_mean",
         "customer_action_reward_pbrs_total_mean",
         "noncustomer_action_reward_pbrs_total_mean",
@@ -1122,6 +1833,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "n_traj",
         "rollout_steps",
         "trajectory_count",
+        "terminal_outcome_reason_counts",
         "mean_trajectory_steps",
         "trajectory_steps_p50",
         "trajectory_steps_p90",
@@ -1495,6 +2207,18 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 reward_diagnostics.get("terminal_heuristic_sum", 0.0)
                 / component_count
             )
+            reward_terminal_task_total_mean = (
+                reward_diagnostics.get("terminal_task_total_sum", 0.0)
+                / component_count
+            )
+            reward_terminal_failure_base_mean = (
+                reward_diagnostics.get("terminal_failure_base_sum", 0.0)
+                / component_count
+            )
+            reward_terminal_unserved_mean = (
+                reward_diagnostics.get("terminal_unserved_sum", 0.0)
+                / component_count
+            )
             reward_pbrs_total_mean = (
                 reward_diagnostics.get("pbrs_total_sum", 0.0)
                 / component_count
@@ -1695,10 +2419,17 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "objective_unit": objective_config.unit,
                     "reward_objective_scale": float(getattr(getattr(envs[0], "unwrapped", envs[0]), "reward_objective_scale", 1.0)),
                     "train_avg_best_objective": train_summary.get("train_avg_best_objective"),
+                    "terminal_outcome_reason_counts": json.dumps(
+                        train_summary.get("terminal_outcome_reason_counts", {}),
+                        sort_keys=True,
+                    ),
                     **{field: eval_row.get(field) for field in OBJECTIVE_EVAL_FIELDS},
                     "reward_pbrs_customer_mean": reward_pbrs_customer_mean,
                     "reward_pbrs_repair_distance_mean": reward_pbrs_repair_distance_mean,
                     "reward_terminal_heuristic_mean": reward_terminal_heuristic_mean,
+                    "reward_terminal_task_total_mean": reward_terminal_task_total_mean,
+                    "reward_terminal_failure_base_mean": reward_terminal_failure_base_mean,
+                    "reward_terminal_unserved_mean": reward_terminal_unserved_mean,
                     "reward_pbrs_total_mean": reward_pbrs_total_mean,
                     "reward_shaping_total_mean": reward_shaping_total_mean,
                     "reward_base_abs_mean": reward_base_abs_mean,
@@ -1722,6 +2453,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         reward_diagnostics.get("terminal_heuristic_sum", 0.0)
                         / max(trajectory_count, 1)
                     ),
+                    "reward_terminal_task_total_per_trajectory": (
+                        reward_diagnostics.get("terminal_task_total_sum", 0.0)
+                        / max(trajectory_count, 1)
+                    ),
                     "reward_discounted_distance_per_trajectory": (
                         reward_diagnostics.get("distance_discounted_sum", 0.0)
                         / max(trajectory_count, 1)
@@ -1733,6 +2468,12 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "reward_discounted_terminal_heuristic_per_trajectory": (
                         reward_diagnostics.get(
                             "terminal_heuristic_discounted_sum", 0.0
+                        )
+                        / max(trajectory_count, 1)
+                    ),
+                    "reward_discounted_terminal_task_total_per_trajectory": (
+                        reward_diagnostics.get(
+                            "terminal_task_total_discounted_sum", 0.0
                         )
                         / max(trajectory_count, 1)
                     ),

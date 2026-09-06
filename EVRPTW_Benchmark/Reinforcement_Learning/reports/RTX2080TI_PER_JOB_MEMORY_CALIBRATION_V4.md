@@ -2,14 +2,18 @@
 
 Date: 2026-09-05
 
-Status: all 16 jobs assigned to the three RTX 2080 Ti bundles completed the
-required calibration run. Formal training remained stopped.
+Status: historical, frozen and non-launchable. All 16 jobs assigned to the
+three RTX 2080 Ti bundles at the time completed the required calibration run;
+formal training remained stopped. The current 2080 Ti formal manifests are
+intentionally empty because Cus50/Cus100 do not yet have a frozen reference
+scale under `drl_energy_vehicle_reference_scale_v2`.
 
 ## Frozen calibration contract
 
 - Hardware: four local NVIDIA RTX 2080 Ti cards with 11,264 MiB each.
 - Formal seed, model, reward, normalization, data representation and data
-  stream are preserved.
+  stream in effect at the time are preserved as historical evidence. They are
+  not asserted to match the current reward contract.
 - Current rollout limits: Cus50=65, Cus100=120, Cus500=580, Cus1000=1200.
 - Every calibration runs exactly two logical training epochs.
 - DRL-TS runs one soft-stage epoch and one hard-stage epoch.
@@ -88,14 +92,15 @@ make memory utilization look uniform.
 
 ## Reproduction tools
 
-- `scripts/build_2080ti_memory_calibration_manifest.py` builds one disposable
-  four-job wave from the checked-in formal manifests.
-- `scripts/run_2080ti_memory_calibration.py` materializes the exact first two
-  logical epochs, runs jobs on isolated GPU slots, samples process memory and
-  checks the complete validation contract.
+- `configs/drl_rq_2080ti_memory_calibration_inventory_v1.json` freezes the 16
+  historical source rows independently of the current formal queues.
+- `scripts/build_2080ti_memory_calibration_manifest.py` renders audit-only,
+  disabled rows from that inventory. It no longer reads the active manifests.
+- `scripts/run_2080ti_memory_calibration.py` explicitly rejects those
+  historical rows. A new executable calibration requires calibrated Cus50 and
+  Cus100 reward terms and a new versioned manifest contract.
 
-These tools write only to their requested disposable output root. They do not
-modify formal checkpoints or launch the long-running queues.
+Rendering writes only to the requested output path and cannot launch training.
 
 
 ## Post-v4 AM trajectory-5 revalidation (2026-09-05)

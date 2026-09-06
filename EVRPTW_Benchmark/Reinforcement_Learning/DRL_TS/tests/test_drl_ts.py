@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sys
+from argparse import Namespace
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -23,11 +25,15 @@ from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.env import (
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.model import DRLTSPolicy
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.rollout import (
+    bounded_soft_violation_component,
     normalized_edge_matrices,
     rollout,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.soft_env import (
     DRLTSSoftConstraintEnv,
+)
+from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.train import (
+    _configure_soft_auxiliary,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import EVRPTWVectorEnvFast
 
@@ -70,6 +76,111 @@ def test_stage1_soft_mask_allows_and_penalizes_capacity_violation() -> None:
     observation, _, _, _, info = soft.step(np.asarray([1], dtype=np.int64))
     assert info["capacity_violation_normalized"][0] > 0.0
     assert soft.observation_space.contains(observation)
+
+
+def test_soft_violation_fixed_customer_normalization_is_bounded_and_not_dilutable() -> None:
+    env = DRLTSSoftConstraintEnv(
+        _instance(), n_traj=1, soft_violation_step_clip=1.0
+    )
+    env.reset(seed=3)
+    # One extreme customer transition: raw audit values remain exact while the
+    # only training-eligible contribution is clipped to one per component.
+    env._record_normalized_violations(0, 1, 5.0, 2.0, 3.0)
+    first = env._with_violation_info({})
+    assert first["capacity_violation_raw_sum"].tolist() == [5.0]
+    assert first["time_violation_raw_sum"].tolist() == [2.0]
+    assert first["energy_violation_raw_sum"].tolist() == [3.0]
+    assert first["capacity_violation_clipped_sum"].tolist() == [1.0]
+    assert first["time_violation_clipped_sum"].tolist() == [1.0]
+    assert first["energy_violation_clipped_sum"].tolist() == [1.0]
+
+    fixed_n = np.asarray([float(env.num_customers)])
+    before = bounded_soft_violation_component(
+        first["time_violation_clipped_sum"], fixed_n, 1.0
+    )
+    for _ in range(100):
+        # Extra zero-violation travel raises the audit count but cannot enter the
+        # fixed denominator or reduce the component already incurred.
+        env._record_normalized_violations(0, 0, 0.0, 0.0, 0.0)
+    after_info = env._with_violation_info({})
+    after = bounded_soft_violation_component(
+        after_info["time_violation_clipped_sum"], fixed_n, 1.0
+    )
+    np.testing.assert_allclose(after, before)
+    assert after_info["time_violation_applicable_transitions"].tolist() == [101]
+    assert after_info["capacity_violation_applicable_transitions"].tolist() == [1]
+
+    # The same violated-customer fraction has the same scale for small and
+    # large instances, while the final clip provides a hard upper bound.
+    np.testing.assert_allclose(
+        bounded_soft_violation_component(
+            np.asarray([1.0, 500.0]), np.asarray([2.0, 1000.0]), 1.0
+        ),
+        np.asarray([0.5, 0.5]),
+    )
+    assert bounded_soft_violation_component(
+        np.asarray([10_000.0]), np.asarray([1000.0]), 1.0
+    ).item() == 1.0
+
+
+def test_signed_soft_profile_is_authoritative_over_legacy_cli_values() -> None:
+    args = Namespace(
+        method_auxiliary_profile=(
+            REPO_ROOT
+            / "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+            "drl_ts_soft_auxiliary_v1.json"
+        ),
+        reward_contract="signed-task-contract.json",
+        capacity_penalty=99.0,
+        time_penalty=98.0,
+        energy_penalty=97.0,
+        soft_violation_contract_id="drl_ts_soft_auxiliary_v1",
+        soft_violation_step_clip=7.0,
+        soft_violation_component_clip=8.0,
+        soft_violation_denominator="num_customers",
+    )
+    _configure_soft_auxiliary(args)
+    assert args.capacity_penalty == 1.0
+    assert args.time_penalty == 1.0
+    assert args.energy_penalty == 1.0
+    assert args.soft_violation_step_clip == 1.0
+    assert args.soft_violation_component_clip == 1.0
+    assert args.method_auxiliary_profile_id == "drl_ts_soft_auxiliary_v1"
+    assert len(args.method_auxiliary_sha256) == 64
+
+
+def test_formal_soft_profile_and_task_contract_are_required_together() -> None:
+    profile = (
+        REPO_ROOT
+        / "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+        "drl_ts_soft_auxiliary_v1.json"
+    )
+    common = {
+        "capacity_penalty": 1.0,
+        "time_penalty": 1.0,
+        "energy_penalty": 1.0,
+        "soft_violation_contract_id": "drl_ts_soft_auxiliary_v1",
+        "soft_violation_step_clip": 1.0,
+        "soft_violation_component_clip": 1.0,
+        "soft_violation_denominator": "num_customers",
+    }
+    with pytest.raises(ValueError, match="requires --method-auxiliary-profile"):
+        _configure_soft_auxiliary(
+            Namespace(
+                **common,
+                method_auxiliary_profile=None,
+                method_auxiliary_snapshot=None,
+                reward_contract="signed-task-contract.json",
+            )
+        )
+    with pytest.raises(ValueError, match="requires a reward contract"):
+        _configure_soft_auxiliary(
+            Namespace(
+                **common,
+                method_auxiliary_profile=profile,
+                reward_contract=None,
+            )
+        )
 
 
 def _three_customer_instance():

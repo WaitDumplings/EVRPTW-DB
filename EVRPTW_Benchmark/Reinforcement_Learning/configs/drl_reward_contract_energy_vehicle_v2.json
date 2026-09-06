@@ -1,0 +1,134 @@
+{
+  "calibration": {
+    "aggregation": {
+      "failure_base": "linear_quantile_0.99(C/objective_scale)+1",
+      "objective_scale": "median(C)",
+      "quantile_method": "linear",
+      "unserved_coefficient": 1.0
+    },
+    "artifacts": {
+      "cohort_file": "cohort.json",
+      "cohort_file_sha256": "026fc7373b31dbb4ddec2fadd6a3c81ddc8b44f1b45d3481a82d455508e40185",
+      "per_view_file": "per_view.jsonl",
+      "per_view_file_sha256": "c974078efdfbda10d3044851671c324ef91d6a460cdf71cdbd89c64d2e8529a1"
+    },
+    "cohort": {
+      "city_count": 10,
+      "day_quota_per_city": {
+        "weekday": 36,
+        "weekend": 14
+      },
+      "day_types": [
+        "weekday",
+        "weekend"
+      ],
+      "hash_scheme": "blake2b_training_reference_view_rank_v1",
+      "scales": [
+        "Cus500",
+        "Cus1000"
+      ],
+      "schema": "drl_training_reference_cohort_v1",
+      "seed": 20260904,
+      "selected_day_mix": {
+        "weekday": 0.72,
+        "weekend": 0.28
+      },
+      "selection_unit": "view",
+      "source_day_mix": {
+        "weekday": 0.714,
+        "weekend": 0.286
+      },
+      "views_per_city": 50,
+      "views_per_scale": 500,
+      "weighting": "approximately_proportional_city_day_stratified_72_28"
+    },
+    "constructor": {
+      "base_algorithm_profile_id": "alns_stage2_scalable_v2",
+      "initial_construction_strategy": "singleton_best_fit_v1",
+      "profile_id": "alns_singleton_best_fit_deterministic_reference_v1",
+      "singleton_source_required": "stage2_certificate_replayed",
+      "stochastic_search_iterations": 0,
+      "termination_basis": "candidate_limits_only",
+      "wall_clock_cutoff_enabled": false
+    },
+    "objective_config_sha256": "003baea23800ef4b976da1b63b9a02aa78db5647509baf7506192139eef933a6",
+    "representation": "G",
+    "scale_statistics": {
+      "Cus1000": {
+        "failure_base": 3.035830117996873,
+        "normalized_objective_q99_linear": 2.035830117996873,
+        "objective_cost_usd": {
+          "max": 1703.0778652092436,
+          "median": 726.0507068707868,
+          "min": 229.65130118057976,
+          "q99_linear": 1478.115896240467
+        },
+        "objective_distance_km": {
+          "max": 3903.1861737668514,
+          "median": 1594.3148606009781,
+          "min": 431.3658717414364
+        },
+        "sample_count": 500,
+        "vehicles_started": {
+          "max": 46,
+          "median": 19.0,
+          "min": 6
+        }
+      },
+      "Cus500": {
+        "failure_base": 3.2305474937486807,
+        "normalized_objective_q99_linear": 2.2305474937486807,
+        "objective_cost_usd": {
+          "max": 1088.8811443516458,
+          "median": 372.4231140709385,
+          "min": 89.72728757437645,
+          "q99_linear": 830.7074437050107
+        },
+        "objective_distance_km": {
+          "max": 2133.0524451471865,
+          "median": 790.5437416778877,
+          "min": 278.3550338759087
+        },
+        "sample_count": 500,
+        "vehicles_started": {
+          "max": 30,
+          "median": 10.0,
+          "min": 2
+        }
+      }
+    },
+    "schema": "drl_training_reference_calibration_v1",
+    "source_split": "train",
+    "source_track": "train",
+    "source_view_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+    "verification": {
+      "D_and_K_source": "same_verified_routes",
+      "K_definition": "depot_to_nondepot_dispatch_count",
+      "canonical_replay_profile_id": "full_charge_derated_strict_route_v3",
+      "objective_verifier_profile_id": "gurobi_stage2_route_validator_v1",
+      "require_both_pass": true
+    }
+  },
+  "contract_id": "drl_energy_vehicle_reference_scale_v2",
+  "objective": {
+    "consumption_kwh_per_km": 0.38910505836575876,
+    "electricity_price_usd_per_kwh": 0.1341,
+    "mode": "energy_vehicle_cost",
+    "profile_id": "rivian_energy_vehicle_cost_v1",
+    "vehicle_fixed_cost_usd": 33.56
+  },
+  "scales": {
+    "Cus1000": {
+      "failure_base": 3.035830117996873,
+      "objective_scale": 726.0507068707868,
+      "unserved_coefficient": 1.0
+    },
+    "Cus500": {
+      "failure_base": 3.2305474937486807,
+      "objective_scale": 372.4231140709385,
+      "unserved_coefficient": 1.0
+    }
+  },
+  "schema": "drl_reward_contract_v1",
+  "sha256": "425df9f07cfc9edd1ef4f03d78cb9075577f3096d23ae9e2bd81dc9116ad7e89"
+}

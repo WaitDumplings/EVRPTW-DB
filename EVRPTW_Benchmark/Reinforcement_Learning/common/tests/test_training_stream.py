@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+
 import pandas as pd
+import pytest
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
     atomic_write_stream,
     build_training_stream,
+    load_training_stream_contract,
     read_stream_view_ids,
 )
 
@@ -76,7 +80,37 @@ def test_parent_family_support_is_enforced() -> None:
 
 def test_atomic_stream_round_trip_and_slice(tmp_path) -> None:
     stream, manifest = build_training_stream(_index(), scale="Cus100", seed=11, sample_count=12)
+    manifest["source_index_sha256"] = "a" * 64
+    manifest["allowed_family_ids_sha256"] = None
     path = tmp_path / "stream.parquet"
     atomic_write_stream(path, stream, manifest)
     assert read_stream_view_ids(path, start=2, stop=5) == stream.iloc[2:5]["view_id"].tolist()
     assert path.with_suffix(".parquet.manifest.json").is_file()
+    contract = load_training_stream_contract(path)
+    assert contract["sample_count"] == 12
+    assert contract["stream_content_sha256"] == manifest["stream_content_sha256"]
+    assert contract["manifest_sha256"] == manifest["manifest_sha256"]
+
+
+def test_stream_contract_rejects_manifest_and_content_tampering(tmp_path) -> None:
+    stream, manifest = build_training_stream(
+        _index(), scale="Cus100", seed=11, sample_count=12
+    )
+    manifest["source_index_sha256"] = "b" * 64
+    path = tmp_path / "stream.parquet"
+    atomic_write_stream(path, stream, manifest)
+    manifest_path = path.with_suffix(".parquet.manifest.json")
+    original_manifest = manifest_path.read_text(encoding="utf-8")
+
+    corrupted = json.loads(original_manifest)
+    corrupted["seed"] = 12
+    manifest_path.write_text(json.dumps(corrupted), encoding="utf-8")
+    with pytest.raises(ValueError, match="manifest SHA256 mismatch"):
+        load_training_stream_contract(path)
+
+    manifest_path.write_text(original_manifest, encoding="utf-8")
+    changed = stream.copy()
+    changed.loc[0, "view_id"] = "different-view"
+    changed.to_parquet(path, index=False)
+    with pytest.raises(ValueError, match="logical content SHA256 mismatch"):
+        load_training_stream_contract(path)

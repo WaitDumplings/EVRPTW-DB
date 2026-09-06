@@ -20,6 +20,9 @@ from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.env import DRLTSHardConstrai
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.soft_env import DRLTSSoftConstraintEnv
 from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_entrypoints, protocol_trainers
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
+from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (
+    reward_contract_digest,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.common.stage2_data import make_envs
 
 
@@ -28,6 +31,23 @@ def _objective(cost: bool = True) -> ObjectiveConfig:
         mode="energy_vehicle_cost" if cost else "distance",
         profile_id="rivian_energy_vehicle_cost_v1" if cost else "distance_v1",
     )
+
+
+def _reward_contract_payload() -> dict:
+    payload = {
+        "schema": "drl_reward_contract_v1",
+        "contract_id": "reinforce-test-reference-scale-v1",
+        "objective": _objective().to_dict(),
+        "scales": {
+            "Cus2": {
+                "objective_scale": 10.0,
+                "failure_base": 2.0,
+                "unserved_coefficient": 1.0,
+            }
+        },
+    }
+    payload["sha256"] = reward_contract_digest(payload)
+    return payload
 
 
 class _ScriptedPolicy(torch.nn.Module):
@@ -318,6 +338,130 @@ def test_reinforce_resume_accepts_exact_adamw_contract(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    ("saved", "requested"),
+    [
+        (
+            dict(fixed_epochs=10, total_passes=1, soft_stage_fraction=0.5,
+                 soft_stage_end_epoch=4),
+            dict(fixed_epochs=10, total_passes=1, soft_stage_fraction=0.5,
+                 soft_stage_end_epoch=5),
+        ),
+        (
+            dict(fixed_epochs=10, total_passes=1, soft_stage_fraction=0.5,
+                 soft_stage_end_epoch=None),
+            dict(fixed_epochs=10, total_passes=1, soft_stage_fraction=0.4,
+                 soft_stage_end_epoch=None),
+        ),
+        (
+            dict(fixed_epochs=10, total_passes=1, soft_stage_fraction=0.5,
+                 soft_stage_end_epoch=None),
+            dict(fixed_epochs=12, total_passes=1, soft_stage_fraction=0.5,
+                 soft_stage_end_epoch=None),
+        ),
+    ],
+)
+def test_drl_ts_resume_rejects_changed_soft_stage_contract(
+    tmp_path, saved, requested,
+) -> None:
+    objective = _objective()
+    policy = torch.nn.Linear(1, 1, bias=False)
+    baseline = deepcopy(policy)
+    optimizer = torch.optim.AdamW(policy.parameters(), weight_decay=0.01)
+    saved_contract = protocol_trainers._resolve_soft_stage_contract(
+        method="DRL-TS", **saved
+    )
+    requested_contract = protocol_trainers._resolve_soft_stage_contract(
+        method="DRL-TS", **requested
+    )
+    checkpoint_args = SimpleNamespace(
+        protocol_id="drl-ts-stage-test",
+        objective=objective.to_dict(),
+        soft_stage_contract_snapshot=saved_contract,
+    )
+    path = tmp_path / "checkpoint.pt"
+    protocol_trainers._save_checkpoint(
+        path,
+        method="DRL-TS",
+        data_pass=0,
+        policy=policy,
+        baseline=baseline,
+        optimizer=optimizer,
+        args=checkpoint_args,
+    )
+    with pytest.raises(ValueError, match="soft-stage contract mismatch"):
+        protocol_trainers._load_checkpoint(
+            path,
+            policy=policy,
+            baseline=baseline,
+            optimizer=optimizer,
+            protocol_id="drl-ts-stage-test",
+            objective_config=objective,
+        reward_contract_args=SimpleNamespace(
+            **{
+                **vars(checkpoint_args),
+                "soft_stage_contract_snapshot": requested_contract,
+            }
+        ),
+        )
+
+
+def test_drl_ts_resume_accepts_exact_soft_stage_contract_and_rejects_legacy(
+    tmp_path,
+) -> None:
+    objective = _objective()
+    policy = torch.nn.Linear(1, 1, bias=False)
+    baseline = deepcopy(policy)
+    optimizer = torch.optim.AdamW(policy.parameters(), weight_decay=0.01)
+    contract = protocol_trainers._resolve_soft_stage_contract(
+        method="DRL-TS",
+        fixed_epochs=10,
+        total_passes=1,
+        soft_stage_fraction=0.5,
+        soft_stage_end_epoch=None,
+    )
+    checkpoint_args = SimpleNamespace(
+        protocol_id="drl-ts-stage-test",
+        objective=objective.to_dict(),
+        soft_stage_contract_snapshot=contract,
+    )
+    path = tmp_path / "checkpoint.pt"
+    protocol_trainers._save_checkpoint(
+        path,
+        method="DRL-TS",
+        data_pass=0,
+        policy=policy,
+        baseline=baseline,
+        optimizer=optimizer,
+        args=checkpoint_args,
+    )
+    current_args = SimpleNamespace(**vars(checkpoint_args))
+    protocol_trainers._load_checkpoint(
+        path,
+        policy=policy,
+        baseline=baseline,
+        optimizer=optimizer,
+        protocol_id="drl-ts-stage-test",
+        objective_config=objective,
+        reward_contract_args=current_args,
+    )
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload.pop("soft_stage_contract")
+    payload["args"].pop("soft_stage_contract_snapshot")
+    torch.save(payload, path)
+    with pytest.raises(ValueError, match="soft-stage contract mismatch"):
+        protocol_trainers._load_checkpoint(
+            path,
+            policy=policy,
+            baseline=baseline,
+            optimizer=optimizer,
+            protocol_id="drl-ts-stage-test",
+            objective_config=objective,
+            reward_contract_args=current_args,
+        )
+
+
 def test_soft_cost_rollout_retains_nonzero_capacity_penalty():
     from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.rollout import rollout
 
@@ -403,11 +547,26 @@ def test_standalone_resume_is_rejected_and_formal_cost_resume_is_checked(tmp_pat
     with pytest.raises(ValueError, match="standalone training does not implement"):
         protocol_trainers.prepare_training_objective(args)
     args.training_epochs = 2
+    args.protocol_id = "reinforce-resume-test"
+    args.scale = "Cus2"
+    args.reward_contract_snapshot = _reward_contract_payload()
     checkpoint = tmp_path / "checkpoint_latest.pt"
     torch.save({"objective_config": _objective(False).to_dict()}, checkpoint)
     with pytest.raises(ValueError, match="objective mismatch"):
         protocol_trainers.prepare_training_objective(args)
-    torch.save({"objective_config": _objective().to_dict()}, checkpoint)
+
+    policy = torch.nn.Linear(1, 1, bias=False)
+    baseline = deepcopy(policy)
+    optimizer = torch.optim.AdamW(policy.parameters(), weight_decay=0.01)
+    protocol_trainers._save_checkpoint(
+        checkpoint,
+        method="AM-EVRPTW",
+        data_pass=0,
+        policy=policy,
+        baseline=baseline,
+        optimizer=optimizer,
+        args=args,
+    )
     assert protocol_trainers.prepare_training_objective(args).is_cost
 
 

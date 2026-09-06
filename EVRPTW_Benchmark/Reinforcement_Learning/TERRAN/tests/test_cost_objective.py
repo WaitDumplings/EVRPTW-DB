@@ -18,7 +18,11 @@ from EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.tests.test_am_model impor
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import (
     ObjectiveConfig, objective_from_checkpoint, resolve_objective,
 )
+from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (
+    reward_contract_digest,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import rollout as terran_rollout
+from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import protocol as terran_protocol
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import trainer
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import train as train_entrypoint
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.protocol import _validation_summary
@@ -30,6 +34,54 @@ def _objective() -> ObjectiveConfig:
     return resolve_objective(
         "EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json"
     )
+
+
+def _configured_reward_contract(scale: str = "Cus2") -> dict:
+    objective = _objective()
+    payload = {
+        "schema": "drl_reward_contract_v1",
+        "contract_id": "test-reference-contract",
+        "objective": objective.to_dict(),
+        "scales": {
+            "Cus2": {
+                "objective_scale": 123.0,
+                "failure_base": 2.5,
+                "unserved_coefficient": 1.0,
+            },
+            "Cus3": {
+                "objective_scale": 234.0,
+                "failure_base": 3.5,
+                "unserved_coefficient": 0.75,
+            },
+        },
+    }
+    payload["sha256"] = reward_contract_digest(payload)
+    cfg = {
+        "objective": objective.to_dict(),
+        "reward_contract": payload,
+        "data": {
+            "stage2_scale": scale,
+            "num_customers": int(scale.removeprefix("Cus")),
+        },
+        "training": {"gamma": 1.0},
+        "env": {},
+        "pbrs": {
+            "use_customer_pbrs": True,
+            "use_repair_distance_pbrs": True,
+            "customer_progress_budget": 0.5,
+            "repair_progress_coef": 0.5,
+            "annealing": {
+                "enabled": True,
+                "start_scale": 1.0,
+                "end_scale": 0.2,
+                "start_epoch": 1,
+                "end_epoch": 500,
+                "schedule": "cosine",
+            },
+        },
+    }
+    trainer._configure_reward_contract(cfg)
+    return cfg
 
 
 @pytest.mark.parametrize("normalize", [False, True])
@@ -142,7 +194,13 @@ def test_rollout_diagnostics_separate_cost_from_auxiliary_rewards(monkeypatch, p
     assert diagnostics["vehicle_cost_sum"] == pytest.approx(-2 * objective.vehicle_fixed_cost_usd / scale)
     assert diagnostics["base_non_objective_sum"] == pytest.approx(0.0, abs=1e-6)
     assert diagnostics["base_sum"] == pytest.approx(diagnostics["electricity_cost_sum"] + diagnostics["vehicle_cost_sum"], abs=1e-6)
-    assert diagnostics["shaped_sum"] == pytest.approx(diagnostics["base_sum"] + diagnostics["pbrs_total_sum"] + diagnostics["terminal_heuristic_sum"], abs=1e-6)
+    assert diagnostics["shaped_sum"] == pytest.approx(
+        diagnostics["base_sum"]
+        + diagnostics["pbrs_total_sum"]
+        + diagnostics["terminal_heuristic_sum"]
+        + diagnostics["terminal_task_total_sum"],
+        abs=1e-6,
+    )
     returns = terran_rollout.compute_returns(batch.rewards, batch.dones, gamma=1.0)
     assert returns[0, 0, 0].item() == pytest.approx(diagnostics["shaped_sum"], abs=1e-6)
 
@@ -315,7 +373,153 @@ def test_formal_yaml_resolves_shared_cost_profile_and_gamma_one() -> None:
     assert isinstance(cfg["objective"], str)
     assert resolve_objective(cfg["objective"]).to_dict() == _objective().to_dict()
     assert cfg["training"]["gamma"] == 1.0
-    assert cfg["training"]["reward_contract_id"] == "terran_undiscounted_energy_vehicle_pbrs_v1"
+    assert cfg["training"]["reward_contract_id"] == "drl_energy_vehicle_reference_scale_v2"
+    assert cfg["reward_contract"].endswith(
+        "configs/drl_reward_contract_energy_vehicle_v2.json"
+    )
+
+
+def test_common_reward_contract_configures_terran_task_terms() -> None:
+    objective = _objective()
+    payload = {
+        "schema": "drl_reward_contract_v1",
+        "contract_id": "test-reference-contract",
+        "objective": objective.to_dict(),
+        "scales": {
+            "Cus2": {
+                "objective_scale": 123.0,
+                "failure_base": 2.5,
+                "unserved_coefficient": 1.0,
+            }
+        },
+    }
+    payload["sha256"] = reward_contract_digest(payload)
+    cfg = {
+        "objective": objective.to_dict(),
+        "reward_contract": payload,
+        "data": {"stage2_scale": "Cus2", "num_customers": 2},
+        "training": {"reward_contract_id": "stale"},
+        "env": {"normalize_reward": False, "invalid_action_penalty": -1.0},
+        "pbrs": {"use_terminal_heuristic": True, "success_bonus": 0.1},
+    }
+
+    trainer._configure_reward_contract(cfg)
+
+    assert cfg["training"]["reward_contract_id"] == "test-reference-contract"
+    assert cfg["env"]["normalize_reward"] is True
+    assert cfg["env"]["reward_objective_scale"] == 123.0
+    assert cfg["env"]["invalid_action_penalty"] == 0.0
+    assert cfg["env"]["success_bonus"] == 0.0
+    assert cfg["pbrs"]["use_terminal_heuristic"] is False
+    assert cfg["pbrs"]["use_terminal_task_penalty"] is True
+    assert cfg["pbrs"]["failure_base"] == 2.5
+    assert cfg["pbrs"]["unserved_coefficient"] == 1.0
+
+
+def test_resume_accepts_exact_frozen_reward_contract_scale_and_terms() -> None:
+    cfg = _configured_reward_contract("Cus2")
+
+    trainer.validate_resume_reward_contract(
+        cfg, {"config": deepcopy(cfg)},
+    )
+
+
+def test_resume_rejects_other_scale_from_same_multiscale_contract() -> None:
+    current = _configured_reward_contract("Cus3")
+    saved = _configured_reward_contract("Cus2")
+
+    with pytest.raises(ValueError, match="reward contract scale mismatch"):
+        trainer.validate_resume_reward_contract(current, {"config": saved})
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("normalization", "reward_objective_scale"),
+        ("normalization", "failure_base"),
+        ("normalization", "unserved_coefficient"),
+        ("env", "reward_objective_scale"),
+        ("pbrs", "failure_base"),
+        ("pbrs", "unserved_coefficient"),
+    ],
+)
+def test_resume_rejects_tampered_derived_reward_contract_fields(
+    section: str, field: str,
+) -> None:
+    current = _configured_reward_contract("Cus2")
+    saved = deepcopy(current)
+    saved[section][field] = float(saved[section][field]) + 1.0
+
+    with pytest.raises(ValueError, match="derived reward contract field"):
+        trainer.validate_resume_reward_contract(current, {"config": saved})
+
+
+def test_resume_rejects_disabled_reward_normalization() -> None:
+    current = _configured_reward_contract("Cus2")
+    saved = deepcopy(current)
+    saved["env"]["normalize_reward"] = False
+
+    with pytest.raises(ValueError, match="derived reward contract field"):
+        trainer.validate_resume_reward_contract(current, {"config": saved})
+
+
+def test_checkpoint_provenance_rejects_disabled_reward_normalization(
+    tmp_path: Path,
+) -> None:
+    saved = _configured_reward_contract("Cus2")
+    saved["env"]["normalize_reward"] = False
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save({"config": saved}, checkpoint)
+
+    with pytest.raises(RuntimeError, match="env.normalize_reward"):
+        terran_protocol._checkpoint_reward_contract_provenance(
+            checkpoint,
+            scale="Cus2",
+            objective=_objective(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("pbrs", "customer_progress_budget", 0.7),
+        ("pbrs", "repair_progress_coef", 0.7),
+        ("annealing", "end_epoch", 400),
+        ("annealing", "schedule", "linear"),
+    ],
+)
+def test_resume_rejects_pbrs_shaping_drift_under_same_shared_contract(
+    section: str, field: str, value,
+) -> None:
+    current = _configured_reward_contract("Cus2")
+    saved = deepcopy(current)
+    target = saved["pbrs"] if section == "pbrs" else saved["pbrs"]["annealing"]
+    target[field] = value
+    trainer._freeze_pbrs_reward_semantics(saved)
+    assert saved["reward_contract"]["sha256"] == current["reward_contract"]["sha256"]
+
+    with pytest.raises(ValueError, match="PBRS shaping semantics mismatch"):
+        trainer.validate_resume_reward_contract(current, {"config": saved})
+
+
+def test_formal_cost_training_requires_reward_contract_before_initialization(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    agent = pytest.fail
+    monkeypatch.setattr(trainer, "Agent", agent)
+    output = tmp_path / "formal-missing-contract"
+    cfg = {
+        "output_dir": str(output),
+        "objective": _objective().to_dict(),
+        "protocol": {"protocol_id": "drl_rq_protocol_frozen_v1"},
+        "data": {"num_customers": 2, "num_charging_stations": 1},
+        "training": {"gamma": 1.0, "epochs": 1, "rollout_steps": 1},
+        "pbrs": {},
+    }
+
+    with pytest.raises(ValueError, match="formal TERRAN cost training requires"):
+        trainer.train_from_config(cfg, seed=1234, device="cpu")
+    assert not output.exists()
 
 
 def test_direct_cost_training_rejects_discounting_before_initialization(tmp_path: Path) -> None:

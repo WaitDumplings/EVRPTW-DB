@@ -1,9 +1,9 @@
 {
   "formal_jobs": 8,
-  "formal_launch_allowed": true,
+  "formal_launch_allowed": false,
   "gpu_count": 2,
   "hardware": "a6000",
-  "launch_policy": "direct_full",
+  "launch_policy": "reward_contract_v2_short_validation_pending_user_authorization",
   "pilot_jobs": 0,
   "schema": "drl_rq_server_assignment_v1",
   "server": "a6000_2_1"

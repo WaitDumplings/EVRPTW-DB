@@ -1,13 +1,28 @@
 protocol_id: drl_rq_protocol_frozen_v1
-status: method_frozen_formal_training_active
-formal_launch_allowed: true
-launch_mode: direct_full
-launch_policy: direct_full_user_authorized_2026-09-04
+status: reward_contract_v2_short_validation_active
+formal_launch_allowed: false
+launch_mode: direct_full_after_user_authorization
+launch_policy: reward_contract_v2_short_validation_pending_user_authorization
 runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
 supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
 objective_revision: rivian_energy_vehicle_cost_v1
+reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json
+reward_contract_revision: drl_energy_vehicle_reference_scale_v2
+training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
+training_stream_registry_sha256: 65653ce92932dec5e70de9d58daab74a33f3ae467569e25998bb8d22b6e1405d
+# The frozen study design below still records all four intended training
+# scales.  This reward-contract revision is currently launchable only on the
+# two independently calibrated scales; the smaller-scale runs remain blocked,
+# rather than borrowing a legacy or fabricated denominator.
+reward_contract_calibrated_scales: [Cus500, Cus1000]
+reward_contract_launch_enabled_scales: [Cus500, Cus1000]
+reward_contract_blocked_scales: [Cus50, Cus100]
+reward_contract_blocked_reason: missing_training_reference_calibration
+method_auxiliary_profiles:
+  drl_ts: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_ts_soft_auxiliary_v1.json
+  evrptw_rl: EVRPTW_Benchmark/Reinforcement_Learning/configs/evrptw_rl_station_auxiliary_v1.json
 historical_distance_runs_are_cost_optimized: false
 training_optimizer:
   name: adamw
@@ -54,6 +69,7 @@ research_questions:
     graph_injection_enabled: false
 
 core_training_run_count: 24
+currently_launchable_core_training_run_count: 8
 train_cus2000: false
 energy_relaxed_directed_vrptw_model: excluded
 
@@ -160,7 +176,7 @@ formal_launch_gates:
     status: PILOT_WAIVED_BY_USER
   G2:
     requirement: shared_deterministic_stratified_shuffle_cycle_id_stream
-    status: IMPLEMENTED_RELEASE_EXECUTION_REQUIRED
+    status: IMPLEMENTED_UNIT_TESTED
   G3:
     requirement: exposure_and_gpu_hour_checkpoints
     status: PILOT_WAIVED_BY_USER
@@ -175,7 +191,7 @@ formal_launch_gates:
     status: PILOT_WAIVED_BY_USER
   G7:
     requirement: euclidean_distance_time_energy_generation_manifest
-    status: PARTIAL_IMPLEMENTATION_FEASIBILITY_AUDIT_REQUIRED
+    status: NOT_APPLICABLE_G_ONLY
   G8:
     requirement: parent_family_clustered_paired_bootstrap_aggregation
     status: IMPLEMENTED_UNIT_TESTED

@@ -73,24 +73,66 @@ Stage-1 minimization cost is total distance plus raw lateness, capacity, and
 electricity violations weighted by `alpha`, `beta`, and `gamma`; in Stage 2 it
 reduces to total distance. There is no CS visit term.
 
-The adapter preserves the violation terms and two-stage strategy. New formal
-runs replace only the objective-facing distance term with the common
-electricity-plus-vehicle cost in
-[`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md).
-Legacy distance configurations remain supported. Benchmark scaling is explicit:
+The adapter preserves the three violation semantics and the two-stage
+strategy, but separates the shared task contract from the DRL-TS-only soft
+auxiliary. New formal runs replace the objective-facing distance term with the
+common electricity-plus-vehicle cost in
+[`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md). For the
+positive minimization cost used by DRL-TS, the shared task part is
 
-- the active objective is divided by the corresponding unit-converted,
-  deterministic training-pool scale;
-- excess demand is divided by vehicle cargo capacity;
-- lateness is divided by the operating-horizon duration;
-- energy deficit is divided by battery capacity.
+```text
+L_task = C / S_N + I[incomplete] * (b_N + lambda_u * unserved_fraction)
+```
 
-Edge distance, time, and energy inputs are divided respectively by the fixed
-training-pool distance scale, operating horizon, and battery capacity. The paper
-does not specify this complete normalization, so it is a documented benchmark
-adaptation rather than paper-exact behavior.
-A separately named incomplete-rollout guard supplies a finite training signal
-when the registered step budget is exhausted; it never ranks reported routes.
+`S_N`, `b_N`, and `lambda_u` come from the frozen per-scale
+[`drl_energy_vehicle_reference_scale_v2`](../configs/drl_reward_contract_energy_vehicle_v2.json)
+contract and are shared with the other formal DRL methods. The rule
+`b_N = Q_0.99(C_ref / S_N) + 1` is a frozen empirical calibration candidate,
+not a mathematical feasibility-first guarantee. Although each frozen value is
+larger than the maximum normalized cost in its 500-member calibration sample,
+that is only an in-sample fact and is not an upper bound on every feasible
+solution.
+
+The method-specific Stage-1 profile is independently frozen in
+[`drl_ts_soft_auxiliary_v1.json`](../configs/drl_ts_soft_auxiliary_v1.json).
+For resource component `j` in capacity, time-window, and energy, it uses
+
+```text
+v_bar_j = min(component_clip,
+              sum_{t in A_j} min(x_j,t, step_clip) / N)
+L_soft = alpha * v_bar_capacity
+       + beta  * v_bar_time
+       + gamma * v_bar_energy
+```
+
+Here `N` is the fixed instance customer count, not an observed action or
+applicable-transition count. The normalized raw excess `x_j,t` is excess demand
+over cargo capacity, lateness over operating-horizon duration, or energy deficit
+over battery capacity. Capacity applies only on customer arrivals; time and
+energy apply on every valid travel transition. The frozen profile uses
+`step_clip=1`, `component_clip=1`, and unit weights. Thus each training
+component is bounded by 1 and extra zero-violation depot or station moves cannot
+dilute an earlier violation.
+
+Unclipped raw sums remain authoritative for feasibility and are logged with
+the clipped sums, applicable-transition counts, and final unweighted
+components. A structurally complete Stage-1 rollout with a nonzero raw
+violation is labelled `completed_with_soft_violation`: it pays `L_soft` but not
+the hard terminal failure floor. Every incomplete Stage-1 or Stage-2 rollout
+pays the common terminal term exactly once, including a rollout that served all
+customers but failed to return to the depot. The shared task-contract identity
+and the independent method-auxiliary profile identity are both recorded in
+formal provenance; changing either invalidates same-run resume.
+
+Legacy distance configurations remain supported. Edge distance, time, and
+energy inputs are divided respectively by the fixed training-pool distance
+scale, operating horizon, and battery capacity. These observation/edge scales
+are separate from both reward contracts.
+
+The paper does not specify this reward or input normalization, clipping,
+fixed-customer aggregation, or terminal guard. They are documented benchmark
+adaptations, not paper-exact behavior, and none of the training-only terms
+ranks reported routes.
 
 ## Fidelity boundary
 

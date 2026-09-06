@@ -10,6 +10,7 @@ import pandas as pd
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
     atomic_write_stream,
     build_training_stream,
+    file_sha256,
     normalize_scale,
 )
 
@@ -47,8 +48,12 @@ def main() -> None:
         allowed_family_ids=allowed,
     )
     manifest["source_index"] = str(args.index)
+    manifest["source_index_sha256"] = file_sha256(args.index)
     manifest["allowed_family_ids_source"] = (
         str(args.allowed_family_ids) if args.allowed_family_ids else None
+    )
+    manifest["allowed_family_ids_sha256"] = (
+        file_sha256(args.allowed_family_ids) if args.allowed_family_ids else None
     )
     atomic_write_stream(args.output, stream, manifest)
     print(json.dumps({"output": str(args.output), **manifest}, sort_keys=True))

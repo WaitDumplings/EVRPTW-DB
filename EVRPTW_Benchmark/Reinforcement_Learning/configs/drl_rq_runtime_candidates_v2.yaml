@@ -1,10 +1,36 @@
 schema: drl_rq_runtime_candidates_v2
-status: formal_runtime_active
+status: reward_contract_v2_short_validation_active
 protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
-formal_launch_allowed: true
-launch_policy: direct_full_user_authorized_2026-09-04
+formal_launch_allowed: false
+launch_policy: reward_contract_v2_short_validation_pending_user_authorization
+formal_launch_gates:
+  G1: PILOT_WAIVED_BY_USER
+  G2: IMPLEMENTED_UNIT_TESTED
+  G3: PILOT_WAIVED_BY_USER
+  G4: PILOT_WAIVED_BY_USER
+  G5: PILOT_WAIVED_BY_USER
+  G6: PILOT_WAIVED_BY_USER
+  G7: NOT_APPLICABLE_G_ONLY
+  G8: IMPLEMENTED_UNIT_TESTED
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
+reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json
+reward_contract_revision: drl_energy_vehicle_reference_scale_v2
+training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
+training_stream_registry_sha256: 65653ce92932dec5e70de9d58daab74a33f3ae467569e25998bb8d22b6e1405d
+# This contract has training-only reference calibrations for these two scales.
+# The queue builder rejects any enabled scale outside this set before emitting
+# a job, so Cus50/Cus100 cannot silently inherit a made-up or legacy scale.
+reward_contract_calibrated_scales: [Cus500, Cus1000]
+reward_contract_blocked_scales: [Cus50, Cus100]
+
+# Method-specific auxiliary objectives are versioned independently of the
+# shared C/S + terminal-failure reward contract. DRL-TS uses its profile only
+# during Stage-1 soft curriculum; EVRPTW-RL keeps its explicit station term on
+# a fixed per-customer scale. DRL-TS Stage 2 remains the shared hard task.
+method_auxiliary_profiles:
+  drl_ts: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_ts_soft_auxiliary_v1.json
+  evrptw_rl: EVRPTW_Benchmark/Reinforcement_Learning/configs/evrptw_rl_station_auxiliary_v1.json
 
 # Use one explicit optimizer contract across every formal DRL method. Learning
 # rates remain method-native; decoupled weight decay is shared and versioned.
@@ -42,13 +68,14 @@ training_overrides_by_method_scale:
       ppo_step_chunk_size: 736
 
 seeds: [1234]
-enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
+enabled_scales: [Cus500, Cus1000]
 rollout_steps: {Cus50: 65, Cus100: 120, Cus500: 580, Cus1000: 1200}
 
-# Keep the 11 GiB servers on the two measured-safe scales. Larger graph scales
-# are queued only on the two 48 GiB Ada GPUs.
+# Only the two calibrated large graph scales are launchable in this revision.
+# The empty 2080 Ti assignment is deliberate until Cus50/Cus100 receive their
+# own frozen training-reference calibration under this reward contract.
 scale_hardware:
-  2080ti: [Cus50, Cus100]
+  2080ti: []
   a6000: [Cus500, Cus1000]
 
 # One logical epoch is one benchmark outer training iteration over the listed

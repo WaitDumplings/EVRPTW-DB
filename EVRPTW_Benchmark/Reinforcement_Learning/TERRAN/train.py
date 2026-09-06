@@ -87,6 +87,8 @@ def main() -> None:
         overrides["objective"] = objective_from_args(args).to_dict()
     else:
         overrides["objective"] = resolve_objective(cfg.get("objective")).to_dict()
+    if getattr(args, "reward_contract", None) is not None:
+        overrides["reward_contract"] = str(args.reward_contract.resolve())
     if args.mother_board_pool_size is not None:
         overrides["data"]["mother_board_pool_size"] = args.mother_board_pool_size
     if args.train_dataset_path is not None:

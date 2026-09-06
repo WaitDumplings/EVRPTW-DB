@@ -2,16 +2,29 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
+
+from EVRPTW_Benchmark.Reinforcement_Learning.common.method_auxiliary import (
+    load_method_auxiliary_profile,
+)
+from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (
+    load_reward_contract,
+)
+from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
+    load_training_stream_contract,
+    training_stream_contract_digest,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs" / "drl_rq_runtime_candidates_v2.yaml"
+STREAM_REGISTRY = ROOT / "configs" / "drl_training_stream_registry_v1.json"
 TERRAN_CONFIG = ROOT / "TERRAN" / "configs" / "stage2_cus100_terran.yaml"
 SCRIPT_ROOT = ROOT / "scripts" / "rq_v1"
 GATE = "EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_rq_formal_launch_gate_v1.json"
@@ -46,6 +59,39 @@ VALIDATION_INDEX = {
     "Cus500": "generation_plan/core/val/view_index.parquet",
     "Cus1000": "generation_plan/core/val/view_index.parquet",
 }
+
+
+def load_training_stream_registry(cfg: Mapping[str, Any]) -> dict[str, Any]:
+    configured_path = str(cfg.get("training_stream_registry_path", ""))
+    if configured_path != str(STREAM_REGISTRY.relative_to(ROOT.parents[1])):
+        raise ValueError("runtime config training-stream registry path mismatch")
+    try:
+        payload = json.loads(STREAM_REGISTRY.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(
+            "frozen training-stream registry is missing or invalid"
+        ) from error
+    if not isinstance(payload, dict):
+        raise ValueError("frozen artifact marker must contain an object")
+    canonical = {
+        key: value
+        for key, value in payload.items()
+        if key != "sha256"
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            canonical, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        payload.get("schema") != "drl_training_stream_registry_v1"
+        or payload.get("runtime_budget_id") != cfg["runtime_budget_id"]
+        or payload.get("source_scope") != "training_split_and_track_only"
+        or payload.get("sha256") != digest
+        or payload.get("sha256") != cfg.get("training_stream_registry_sha256")
+    ):
+        raise ValueError("frozen training-stream registry contract mismatch")
+    return payload
 
 
 def job(
@@ -92,6 +138,41 @@ def job(
         f"{ARTIFACTS}/streams/{cfg['runtime_budget_id']}/"
         f"formal/{condition}/{scale}/seed_{seed}.parquet"
     )
+    registry = load_training_stream_registry(cfg)
+    registry_key = f"{representation}/{condition}/{scale}/seed_{seed}"
+    try:
+        registered_stream = registry["streams"][registry_key]
+        stream_contract = registered_stream["snapshot"]
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            f"training stream is not frozen in the registry: {registry_key}"
+        ) from error
+    if registered_stream.get("path") != stream:
+        raise ValueError("training-stream registry path mismatch")
+    if (
+        not isinstance(stream_contract, dict)
+        or stream_contract.get("sha256")
+        != training_stream_contract_digest(stream_contract)
+    ):
+        raise ValueError("training-stream registry contains an invalid snapshot")
+    artifact_path = ROOT.parents[1] / stream
+    if artifact_path.is_file():
+        actual_stream_contract = load_training_stream_contract(artifact_path)
+        if actual_stream_contract != stream_contract:
+            raise ValueError("local training stream disagrees with frozen registry")
+    if (
+        stream_contract["scale"] != scale
+        or stream_contract["seed"] != int(seed)
+        or stream_contract["sample_count"] != target_environments
+    ):
+        raise ValueError(
+            "frozen training stream does not match the requested formal job: "
+            f"{stream_contract}"
+        )
+    seed_tag = "_".join(str(int(value)) for value in cfg["seeds"])
+    marker_path = (
+        f"{ARTIFACTS}/preparation_{cfg['runtime_budget_id']}_seeds_{seed_tag}.json"
+    )
     payload = {
         "schema": "drl_rq_job_manifest_v1",
         "protocol_id": "drl_rq_protocol_frozen_v1",
@@ -112,6 +193,16 @@ def job(
         "train_index": TRAIN_INDEX[scale],
         "validation_index": VALIDATION_INDEX[scale],
         "training_stream_path": stream,
+        "training_stream_contract_sha256": stream_contract["sha256"],
+        "training_stream_contract_snapshot": stream_contract,
+        "artifact_preparation_marker_path": marker_path,
+        "artifact_preparation_marker_sha256": registry[
+            "artifact_preparation_marker_sha256"
+        ],
+        "training_stream_registry_path": str(
+            STREAM_REGISTRY.relative_to(ROOT.parents[1])
+        ),
+        "training_stream_registry_sha256": registry["sha256"],
         "customer_exposure_budget": exposure,
         "target_environments": target_environments,
         "exposure_checkpoints": [
@@ -192,17 +283,46 @@ def job(
             f"{ARTIFACTS}/euclidean/euclidean_calibration_manifest.json"
             if representation == "E" else None
         ),
-        "file_hash_validation_performed": False,
+        "file_hash_validation_performed": True,
     }
     objective_path = cfg["objective_config_path"]
     objective = json.loads(
         (ROOT.parents[1] / objective_path).read_text(encoding="utf-8")
     )["objective"]
     payload.update(objective_config_path=objective_path, objective_config=objective)
+    reward_contract_path = cfg["reward_contract_config_path"]
+    reward_contract = load_reward_contract(ROOT.parents[1] / reward_contract_path)
+    reward_terms = reward_contract.for_scale(scale, objective)
+    payload.update(
+        reward_contract_config_path=reward_contract_path,
+        reward_contract_id=reward_terms.contract_id,
+        reward_contract_sha256=reward_terms.digest,
+        reward_objective_scale=reward_terms.objective_scale,
+        reward_failure_base=reward_terms.failure_base,
+        reward_unserved_coefficient=reward_terms.unserved_coefficient,
+    )
+    auxiliary_path = cfg.get("method_auxiliary_profiles", {}).get(method)
+    if auxiliary_path is not None:
+        auxiliary = load_method_auxiliary_profile(
+            ROOT.parents[1] / auxiliary_path
+        ).require_method(method)
+        payload.update(
+            method_auxiliary_profile_path=auxiliary_path,
+            method_auxiliary_profile_id=auxiliary.profile_id,
+            method_auxiliary_sha256=auxiliary.digest,
+            method_auxiliary_method=auxiliary.method,
+            method_auxiliary_applicability=auxiliary.applicability,
+            method_auxiliary_aggregation=auxiliary.aggregation,
+            method_auxiliary_denominator=auxiliary.denominator,
+            method_auxiliary_step_clip=auxiliary.step_clip,
+            method_auxiliary_component_clip=auxiliary.component_clip,
+            method_auxiliary_weights=dict(auxiliary.weights),
+        )
     if method == "terran":
         training = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))["training"]
+        if training["reward_contract_id"] != reward_terms.contract_id:
+            raise ValueError("TERRAN config and common reward contract disagree")
         payload.update(
-            reward_contract_id=training["reward_contract_id"],
             training_gamma=float(training["gamma"]),
         )
     training_overrides = (
@@ -250,9 +370,59 @@ def assign_round_robin(
         queues[server].append(payload)
 
 
+def validate_reward_contract_scope(cfg: dict[str, Any]) -> None:
+    """Fail closed before generating jobs for an uncalibrated scale."""
+
+    reward_contract_path = cfg["reward_contract_config_path"]
+    reward_contract = load_reward_contract(
+        ROOT.parents[1] / reward_contract_path
+    )
+    configured = tuple(cfg.get("reward_contract_calibrated_scales", ()))
+    if not configured or len(configured) != len(set(configured)):
+        raise ValueError(
+            "reward_contract_calibrated_scales must be a nonempty unique list"
+        )
+    actual = set(reward_contract.scales)
+    if set(configured) != actual:
+        raise ValueError(
+            "reward_contract_calibrated_scales must exactly match the frozen "
+            f"contract; configured={sorted(configured)}, contract={sorted(actual)}"
+        )
+    if cfg.get("reward_contract_revision") != reward_contract.contract_id:
+        raise ValueError(
+            "reward_contract_revision must match the frozen contract_id"
+        )
+
+    enabled = set(cfg.get("enabled_scales", ()))
+    uncalibrated = enabled.difference(actual)
+    if uncalibrated:
+        raise ValueError(
+            "enabled scale(s) have no frozen reward calibration: "
+            f"{sorted(uncalibrated)}"
+        )
+    blocked = set(cfg.get("reward_contract_blocked_scales", ()))
+    if enabled.intersection(blocked):
+        raise ValueError(
+            "reward-contract-blocked scales cannot be enabled: "
+            f"{sorted(enabled.intersection(blocked))}"
+        )
+    incorrectly_blocked = blocked.intersection(actual)
+    if incorrectly_blocked:
+        raise ValueError(
+            "calibrated reward-contract scales cannot also be blocked: "
+            f"{sorted(incorrectly_blocked)}"
+        )
+
+
 def build() -> dict[str, list[dict[str, Any]]]:
     cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
-    queues: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    validate_reward_contract_scope(cfg)
+    # Materialize empty server queues too.  In this contract revision the
+    # 2080 Ti bundles intentionally contain no jobs until Cus50/Cus100 are
+    # calibrated, and their checked-in empty manifests are part of the gate.
+    queues: dict[str, list[dict[str, Any]]] = {
+        server: [] for server in SERVERS
+    }
     scales = tuple(cfg["enabled_scales"])
     assigned_scales = [
         scale
@@ -292,31 +462,33 @@ def build() -> dict[str, list[dict[str, Any]]]:
                 )
                 for method in METHODS
             )
-        formal_by_hardware["2080ti"].extend(
-            job(
-                cfg,
-                method=method,
-                scale="Cus100",
-                seed=seed,
-                representation="G",
-                condition=condition,
-                hardware="2080ti",
+        if "Cus100" in scales:
+            cus100_hardware = scale_hardware["Cus100"]
+            formal_by_hardware[cus100_hardware].extend(
+                job(
+                    cfg,
+                    method=method,
+                    scale="Cus100",
+                    seed=seed,
+                    representation="G",
+                    condition=condition,
+                    hardware=cus100_hardware,
+                )
+                for condition in ("Random-10%-support", "Coverage-10%-support")
+                for method in ("am_evrptw", "terran")
             )
-            for condition in ("Random-10%-support", "Coverage-10%-support")
-            for method in ("am_evrptw", "terran")
-        )
-        formal_by_hardware["2080ti"].extend(
-            job(
-                cfg,
-                method=method,
-                scale="Cus100",
-                seed=seed,
-                representation="E",
-                condition="Full-support",
-                hardware="2080ti",
+            formal_by_hardware[cus100_hardware].extend(
+                job(
+                    cfg,
+                    method=method,
+                    scale="Cus100",
+                    seed=seed,
+                    representation="E",
+                    condition="Full-support",
+                    hardware=cus100_hardware,
+                )
+                for method in METHODS
             )
-            for method in METHODS
-        )
     for hardware, formal in formal_by_hardware.items():
         assign_round_robin(queues, formal, servers_by_hardware[hardware])
     return queues
@@ -358,6 +530,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build four frozen RQ training queues.")
     parser.add_argument("--output-root", type=Path, default=SCRIPT_ROOT)
     args = parser.parse_args()
+    runtime_config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    formal_launch_allowed = bool(runtime_config["formal_launch_allowed"])
+    launch_policy = str(runtime_config["launch_policy"])
     queues = build()
     for server, rows in queues.items():
         destination = args.output_root / server
@@ -373,8 +548,10 @@ def main() -> None:
             "gpu_count": SERVERS[server][1],
             "pilot_jobs": 0,
             "formal_jobs": sum(row["run_mode"] == "full" for row in rows),
-            "formal_launch_allowed": True,
-            "launch_policy": "direct_full",
+            "formal_launch_allowed": bool(rows) and formal_launch_allowed,
+            "launch_policy": (
+                launch_policy if rows else "blocked_no_calibrated_reward_scale"
+            ),
         }
         (destination / "assignment_summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -393,8 +570,8 @@ def main() -> None:
         "gpu_count": 2,
         "pilot_jobs": 0,
         "formal_jobs": len(cus1000_priority),
-        "formal_launch_allowed": True,
-        "launch_policy": "direct_full",
+        "formal_launch_allowed": formal_launch_allowed,
+        "launch_policy": launch_policy,
         "slot_queues": {
             "0": ["drl_ts", "evrptw_rl", "am_evrptw"],
             "1": ["terran"],

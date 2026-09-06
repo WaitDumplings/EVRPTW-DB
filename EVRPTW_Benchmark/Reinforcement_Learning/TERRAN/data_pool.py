@@ -15,7 +15,10 @@ from evrptw_core.schema import EVRPTWInstance
 
 from ..common import Stage2TaskPool
 from ..common.data_pass import seeded_pass_order
-from ..common.training_stream import read_stream_view_ids
+from ..common.training_stream import (
+    load_training_stream_contract,
+    read_stream_view_ids,
+)
 
 
 @dataclass
@@ -33,6 +36,7 @@ class Stage2TERRANPool:
     completed_data_passes: int = 0
     completed_samples: int = 0
     training_stream_path: str | Path | None = None
+    training_stream_contract_sha256: str | None = None
     representation: str = "G"
     euclidean_manifest: str | Path | None = None
 
@@ -49,6 +53,20 @@ class Stage2TERRANPool:
             representation=self.representation,
             euclidean_manifest=self.euclidean_manifest,
         )
+        if self.training_stream_contract_sha256 is not None:
+            if self.training_stream_path is None:
+                raise ValueError(
+                    "TERRAN training-stream contract requires a stream path"
+                )
+            actual_contract = load_training_stream_contract(
+                self.training_stream_path
+            )
+            if actual_contract["sha256"] != str(
+                self.training_stream_contract_sha256
+            ):
+                raise ValueError(
+                    "TERRAN training stream changed after protocol configuration"
+                )
         self._stream_view_ids = (
             read_stream_view_ids(self.training_stream_path)
             if self.training_stream_path is not None

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import csv
 import json
 import sys
@@ -27,14 +28,61 @@ from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.pbrs import (
     PotentialRewardConfig,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import protocol as terran_protocol
+from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import data_pool as terran_data_pool
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import trainer as terran_trainer
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.trainer import (
     pbrs_scale_for_epoch,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import DataPassState
+from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
+    STREAM_CONTRACT_SCHEMA,
+    training_stream_contract_digest,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import (
     collect_rollout, compute_returns, rollout_eval_batch,
 )
+
+
+def test_terran_pool_revalidates_frozen_stream_before_reading(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        terran_data_pool,
+        "Stage2TaskPool",
+        lambda **_kwargs: SimpleNamespace(tasks=[]),
+    )
+
+    def load_contract(_path):
+        calls.append("load")
+        return {"sha256": "actual"}
+
+    def read_ids(_path):
+        calls.append("read")
+        return []
+
+    monkeypatch.setattr(
+        terran_data_pool, "load_training_stream_contract", load_contract
+    )
+    monkeypatch.setattr(terran_data_pool, "read_stream_view_ids", read_ids)
+    with pytest.raises(
+        ValueError, match="changed after protocol configuration"
+    ):
+        terran_data_pool.Stage2TERRANPool(
+            dataset_path="unused.parquet",
+            training_stream_path="stream.parquet",
+            training_stream_contract_sha256="expected",
+        )
+    assert calls == ["load"]
+
+    calls.clear()
+    pool = terran_data_pool.Stage2TERRANPool(
+        dataset_path="unused.parquet",
+        training_stream_path="stream.parquet",
+        training_stream_contract_sha256="actual",
+    )
+    assert pool._stream_view_ids == []
+    assert calls == ["load", "read"]
 
 
 def test_undiscounted_complete_returns_sum_remaining_rewards() -> None:
@@ -187,6 +235,245 @@ def test_terran_resume_accepts_exact_adamw_contract() -> None:
     )
 
 
+def _terran_scientific_signature_config() -> dict:
+    return {
+        "data": {
+            "stage2_scale": "Cus2",
+            "num_customers": 2,
+            "num_charging_stations": 1,
+            "stage2_training_representation": "G",
+        },
+        "training": {
+            "epochs": 10,
+            "num_envs_per_gpu": 4,
+            "n_traj": 3,
+            "rollout_steps": 8,
+            "logical_microbatches_per_epoch": 2,
+            "ppo_update_epochs": 3,
+            "num_minibatches": 2,
+            "gradient_accumulation_steps": 1,
+            "ppo_step_chunk_size": 4,
+            "gamma": 1.0,
+            "optimizer": "adamw",
+            "weight_decay": 0.01,
+            "minimum_training_epochs": 5,
+            "post_minimum_validation_every_epochs": 5,
+            "validation_epochs": [5, 10],
+            "early_stop_patience_validations": 2,
+            "early_stop_start_epoch": 5,
+        },
+        "evaluation": {
+            "eval_seed": 77,
+            "eval_decode_mode": "sample",
+            "eval_n_traj": 5,
+            "eval_limit": 7,
+            "eval_interval": 5,
+            "eval_batch_size": 1,
+        },
+        "protocol": {
+            "protocol_id": "terran-signature-test",
+            "physical_batch_size": 4,
+            "effective_batch_size": 8,
+            "logical_environments_per_epoch": 8,
+            "training_rollout_steps": 8,
+            "validation_every_epochs": 5,
+            "minimum_training_epochs": 5,
+            "post_minimum_validation_every_epochs": 5,
+            "scheduled_validation_epochs": [5, 10],
+            "validation_checkpoints": 2,
+            "validation_seed": 77,
+            "validation_decode_type": "sampling",
+            "validation_candidates": 5,
+            "early_stop_patience_validations": 2,
+            "early_stop_start_epoch": 5,
+            "final_validation_limit": 7,
+        },
+    }
+
+
+def _signature_payload(cfg: dict) -> dict:
+    return {
+        "config": cfg,
+        "seed": 1234,
+        "optimizer_state_dict": {
+            "param_groups": [{"weight_decay": 0.01}]
+        },
+    }
+
+
+def test_terran_resolved_training_signature_freezes_method_specific_fields() -> None:
+    cfg = _terran_scientific_signature_config()
+    signature = terran_trainer._freeze_resolved_terran_training_signature(
+        cfg, seed=1234
+    )
+
+    assert signature["schema"] == "drl_resolved_training_signature_v1"
+    assert signature["method_specific"]["method"] == "TERRAN"
+    assert signature["method_specific"]["training"] == {
+        "epochs": 10,
+        "num_envs_per_gpu": 4,
+        "n_traj": 3,
+        "rollout_steps": 8,
+        "logical_microbatches_per_epoch": 2,
+        "ppo_update_epochs": 3,
+        "num_minibatches": 2,
+        "gradient_accumulation_steps": 1,
+        "ppo_step_chunk_size": 4,
+        "clip_coef": 0.2,
+        "vf_coef": 0.5,
+        "ent_coef": 0.01,
+        "learning_rate": 1e-4,
+        "max_grad_norm": 1.0,
+        "gamma": 1.0,
+    }
+    assert signature["method_specific"]["evaluation"] == {
+        "seed": 77,
+        "decode_mode": "sample",
+        "n_traj": 5,
+        "limit": 7,
+        "max_steps": None,
+        "batch_size": 1,
+        "num_batches": None,
+        "interval": 5,
+    }
+    assert cfg["protocol"]["resolved_training_signature"] == signature
+    assert cfg["protocol"]["resolved_training_signature_sha256"] == signature["sha256"]
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "n_traj",
+        "rollout_steps",
+        "num_envs",
+        "ppo_update_epochs",
+        "num_minibatches",
+        "ppo_step_chunk_size",
+        "eval_seed",
+        "eval_decode",
+        "eval_n_traj",
+        "eval_limit",
+        "eval_schedule",
+        "validation_epochs",
+        "early_stop",
+    ],
+)
+def test_terran_resume_rejects_resolved_scientific_signature_drift(
+    changed: str,
+) -> None:
+    saved = _terran_scientific_signature_config()
+    terran_trainer._freeze_resolved_terran_training_signature(saved, seed=1234)
+    current = _terran_scientific_signature_config()
+    if changed == "n_traj":
+        current["training"]["n_traj"] = 4
+    elif changed == "rollout_steps":
+        current["training"]["rollout_steps"] = 9
+        current["protocol"]["training_rollout_steps"] = 9
+    elif changed == "num_envs":
+        current["training"]["num_envs_per_gpu"] = 5
+        current["protocol"]["physical_batch_size"] = 5
+        current["protocol"]["effective_batch_size"] = 10
+        current["protocol"]["logical_environments_per_epoch"] = 10
+    elif changed == "ppo_update_epochs":
+        current["training"]["ppo_update_epochs"] = 4
+    elif changed == "num_minibatches":
+        current["training"]["num_minibatches"] = 3
+    elif changed == "ppo_step_chunk_size":
+        current["training"]["ppo_step_chunk_size"] = 2
+    elif changed == "eval_seed":
+        current["evaluation"]["eval_seed"] = 78
+        current["protocol"]["validation_seed"] = 78
+    elif changed == "eval_decode":
+        current["evaluation"]["eval_decode_mode"] = "greedy"
+        current["protocol"]["validation_decode_type"] = "greedy"
+    elif changed == "eval_n_traj":
+        current["evaluation"]["eval_n_traj"] = 6
+        current["protocol"]["validation_candidates"] = 6
+    elif changed == "eval_limit":
+        current["evaluation"]["eval_limit"] = 8
+    elif changed == "eval_schedule":
+        current["evaluation"]["eval_interval"] = 2
+        current["protocol"]["validation_every_epochs"] = 2
+    elif changed == "validation_epochs":
+        current["training"]["validation_epochs"] = [5, 9, 10]
+        current["protocol"]["scheduled_validation_epochs"] = [5, 9, 10]
+        current["protocol"]["validation_checkpoints"] = 3
+    else:
+        current["training"]["early_stop_start_epoch"] = 6
+        current["protocol"]["early_stop_start_epoch"] = 6
+    terran_trainer._freeze_resolved_terran_training_signature(
+        current, seed=1234
+    )
+
+    with pytest.raises(ValueError, match="resolved training signature mismatch"):
+        terran_trainer.validate_resume_reward_contract(
+            current, _signature_payload(saved)
+        )
+
+
+def test_terran_resume_rejects_checkpoint_missing_resolved_signature() -> None:
+    current = _terran_scientific_signature_config()
+    terran_trainer._freeze_resolved_terran_training_signature(
+        current, seed=1234
+    )
+    saved = _terran_scientific_signature_config()
+    with pytest.raises(ValueError, match="signature is missing"):
+        terran_trainer.validate_resume_reward_contract(
+            current, _signature_payload(saved)
+        )
+
+
+def test_terran_resume_freezes_training_stream_snapshot_and_sha() -> None:
+    stream_contract = {
+        "schema": STREAM_CONTRACT_SCHEMA,
+        "stream_schema": "drl_training_id_stream_v3",
+        "content_digest_scheme": "test",
+        "stream_content_sha256": "a" * 64,
+        "manifest_sha256": "b" * 64,
+        "sample_count": 80,
+        "scale": "Cus2",
+        "seed": 1234,
+        "source_index_sha256": "c" * 64,
+        "allowed_family_ids_sha256": None,
+    }
+    stream_contract["sha256"] = training_stream_contract_digest(
+        stream_contract
+    )
+    saved = _terran_scientific_signature_config()
+    saved["protocol"].update(
+        {
+            "training_stream_path": "/tmp/frozen-stream.parquet",
+            "training_stream_contract_snapshot": deepcopy(stream_contract),
+            "training_stream_contract_sha256": stream_contract["sha256"],
+        }
+    )
+    terran_trainer._freeze_resolved_terran_training_signature(saved, seed=1234)
+    current = deepcopy(saved)
+    terran_trainer.validate_resume_reward_contract(
+        current, _signature_payload(saved)
+    )
+
+    current = _terran_scientific_signature_config()
+    current["protocol"].update(
+        {
+            "training_stream_path": "/tmp/frozen-stream.parquet",
+            "training_stream_contract_snapshot": deepcopy(stream_contract),
+            "training_stream_contract_sha256": stream_contract["sha256"],
+        }
+    )
+    terran_trainer._freeze_resolved_terran_training_signature(
+        current, seed=1234
+    )
+    saved_without_stream = _terran_scientific_signature_config()
+    terran_trainer._freeze_resolved_terran_training_signature(
+        saved_without_stream, seed=1234
+    )
+    with pytest.raises(ValueError, match="training-stream contract mismatch"):
+        terran_trainer.validate_resume_reward_contract(
+            current, _signature_payload(saved_without_stream)
+        )
+
+
 def test_fresh_output_allows_launcher_only_records(tmp_path: Path) -> None:
     for name, content in (
         ("provenance.json", '{"schema": "drl_job_provenance_v1"}'),
@@ -335,6 +622,98 @@ def test_terran_rollout_horizon_penalizes_remaining_customers() -> None:
     assert info["remaining_customers"].tolist() == [1]
     assert info["remaining_customer_fraction"].tolist() == [0.5]
     assert np.isclose(info["reward_components"]["terminal_heuristic"][0], -0.25)
+
+
+def test_terminal_task_penalty_has_failure_floor_even_when_all_customers_served() -> None:
+    env = make_terran_env(
+        instance=_instance(),
+        n_traj=1,
+        charging_mode="station_power_full",
+        matrix_mode="canonical",
+        info_level="full",
+        use_jit_mask=False,
+        invalid_action_penalty=0.0,
+        rollout_horizon_steps=2,
+        pbrs_config=PotentialRewardConfig(
+            use_terminal_task_penalty=True,
+            failure_base=2.25,
+            unserved_coefficient=1.0,
+        ),
+    )
+    env.reset(seed=143)
+    env.step(np.asarray([1]))
+    _, _, terminated, truncated, info = env.step(np.asarray([2]))
+
+    assert not terminated[0]
+    assert truncated[0]
+    assert not info["success"][0]
+    assert info["served_customers"].tolist() == [2]
+    assert info["failure_reason"].tolist() == [
+        "rollout_budget_exhausted_not_returned"
+    ]
+    components = info["reward_components"]
+    assert components["terminal_failure_base"].tolist() == pytest.approx([-2.25])
+    assert components["terminal_unserved"].tolist() == [0.0]
+    assert components["terminal_task_total"].tolist() == pytest.approx([-2.25])
+    np.testing.assert_allclose(
+        components["terminal_task_total"],
+        components["terminal_failure_base"] + components["terminal_unserved"],
+    )
+    np.testing.assert_allclose(
+        components["shaped"],
+        components["base"]
+        + components["pbrs_customer"]
+        + components["pbrs_repair_distance"]
+        + components["pbrs_feasible_ratio"]
+        + components["terminal_heuristic"]
+        + components["terminal_task_total"],
+    )
+
+    # Padding an already finished trajectory must not charge the terminal cost
+    # for a second time.
+    _, _, _, _, info = env.step(np.asarray([0]))
+    assert info["reward_components"]["terminal_task_total"].tolist() == [0.0]
+
+
+def test_terminal_task_penalty_separates_floor_and_unserved_components() -> None:
+    env = make_terran_env(
+        instance=_instance(),
+        n_traj=1,
+        charging_mode="station_power_full",
+        matrix_mode="canonical",
+        info_level="full",
+        use_jit_mask=False,
+        invalid_action_penalty=0.0,
+        rollout_horizon_steps=1,
+        pbrs_config=PotentialRewardConfig(
+            use_terminal_task_penalty=True,
+            failure_base=2.25,
+            unserved_coefficient=1.0,
+        ),
+    )
+    env.reset(seed=144)
+    _, _, _, truncated, info = env.step(np.asarray([1]))
+
+    assert truncated[0]
+    assert info["failure_reason"].tolist() == ["rollout_budget_exhausted"]
+    components = info["reward_components"]
+    assert components["base_non_objective"].tolist() == [0.0]
+    assert components["terminal_failure_base"].tolist() == pytest.approx([-2.25])
+    assert components["terminal_unserved"].tolist() == pytest.approx([-0.5])
+    assert components["terminal_task_total"].tolist() == pytest.approx([-2.75])
+    np.testing.assert_allclose(
+        components["terminal_task_total"],
+        components["terminal_failure_base"] + components["terminal_unserved"],
+    )
+    np.testing.assert_allclose(
+        components["shaped"],
+        components["base"]
+        + components["pbrs_customer"]
+        + components["pbrs_repair_distance"]
+        + components["pbrs_feasible_ratio"]
+        + components["terminal_heuristic"]
+        + components["terminal_task_total"],
+    )
 
 
 def test_terran_completion_at_rollout_horizon_gets_success_not_failure() -> None:
@@ -554,7 +933,14 @@ def test_reward_diagnostics_match_active_rollout_rewards() -> None:
         diagnostics["pbrs_total_sum"],
         diagnostics["shaped_sum"]
         - diagnostics["base_sum"]
-        - diagnostics["terminal_heuristic_sum"],
+        - diagnostics["terminal_heuristic_sum"]
+        - diagnostics["terminal_task_total_sum"],
+        atol=1e-6,
+    )
+    assert np.isclose(
+        diagnostics["terminal_task_total_sum"],
+        diagnostics["terminal_failure_base_sum"]
+        + diagnostics["terminal_unserved_sum"],
         atol=1e-6,
     )
     assert np.isclose(
@@ -564,7 +950,9 @@ def test_reward_diagnostics_match_active_rollout_rewards() -> None:
     )
     assert np.isclose(
         diagnostics["shaping_total_sum"],
-        diagnostics["shaped_sum"] - diagnostics["base_sum"],
+        diagnostics["shaped_sum"]
+        - diagnostics["base_sum"]
+        - diagnostics["terminal_task_total_sum"],
         atol=1e-6,
     )
 
@@ -596,13 +984,26 @@ def test_stage2_terran_config_uses_cus1000_reward_calibration() -> None:
     )
     assert (
         cfg["env"]["reward_distance_scale_mode"]
-        == "dataset_single_customer_repair_sum"
+        == "single_customer_repair_median"
     )
-    assert cfg["env"]["invalid_action_penalty"] == -1.0
+    assert cfg["env"]["invalid_action_penalty"] == 0.0
     assert cfg["training"]["gamma"] == 1.0
     assert (
         cfg["training"]["reward_contract_id"]
-        == "terran_undiscounted_energy_vehicle_pbrs_v1"
+        == "drl_energy_vehicle_reference_scale_v2"
+    )
+    assert str(cfg["reward_contract"]).endswith(
+        "configs/drl_reward_contract_energy_vehicle_v2.json"
+    )
+    cfg["data"].update(stage2_scale="Cus1000", num_customers=1000)
+    terran_trainer._configure_reward_contract(cfg)
+    assert cfg["normalization"]["reward_contract_scale"] == "Cus1000"
+    expected = cfg["reward_contract"]["scales"]["Cus1000"]
+    assert cfg["env"]["reward_objective_scale"] == expected["objective_scale"]
+    assert cfg["pbrs"]["failure_base"] == expected["failure_base"]
+    assert (
+        cfg["pbrs"]["unserved_coefficient"]
+        == expected["unserved_coefficient"]
     )
     assert cfg["pbrs"]["annealing"]["end_epoch"] == 5000
 
@@ -932,10 +1333,22 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
     checkpoint_dir.mkdir(parents=True)
     log_dir.mkdir(parents=True)
     final_checkpoint = checkpoint_dir / "checkpoint_final.pt"
-    final_checkpoint.write_bytes(b"final")
-    (output / "best.ckpt").write_bytes(b"stale-within")
-    (output / "best_within_5000.ckpt").write_bytes(b"within")
-    (output / "best_overall.ckpt").write_bytes(b"overall")
+    torch.save(
+        {"label": "final", "config": {"reward_contract": None}},
+        final_checkpoint,
+    )
+    torch.save(
+        {"label": "stale-within", "config": {"reward_contract": None}},
+        output / "best.ckpt",
+    )
+    torch.save(
+        {"label": "within", "config": {"reward_contract": None}},
+        output / "best_within_5000.ckpt",
+    )
+    torch.save(
+        {"label": "overall", "config": {"reward_contract": None}},
+        output / "best_overall.ckpt",
+    )
     (output / "validation_summary.json").write_text(
         json.dumps(
             {
@@ -1040,9 +1453,15 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
     assert audit["instances"] == 2
     assert audit["selection_logical_epoch"] == 75
     assert audit["selection_changed"] is False
-    assert (output / "checkpoint_selected.pt").read_bytes() == b"overall"
-    assert (output / "best.ckpt").read_bytes() == b"overall"
-    assert (output / "best_within_5000.ckpt").read_bytes() == b"within"
+    assert torch.load(
+        output / "checkpoint_selected.pt", map_location="cpu", weights_only=False
+    )["label"] == "overall"
+    assert torch.load(
+        output / "best.ckpt", map_location="cpu", weights_only=False
+    )["label"] == "overall"
+    assert torch.load(
+        output / "best_within_5000.ckpt", map_location="cpu", weights_only=False
+    )["label"] == "within"
     assert json.loads((output / "validation_summary.json").read_text())[
         "logical_epoch"
     ] == 75

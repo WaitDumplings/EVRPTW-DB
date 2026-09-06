@@ -1,0 +1,14 @@
+{
+  "aggregation": "executed_legal_station_visit_count",
+  "applicability": "formal_training_with_shared_reward_contract",
+  "component_clip": null,
+  "denominator": "num_customers",
+  "method": "evrptw_rl",
+  "profile_id": "evrptw_rl_legal_station_fraction_v1",
+  "schema": "drl_method_auxiliary_profile_v1",
+  "sha256": "194e4e09e6e1f5c385f6570c12d6043d4071dc27b84a9e2e837eae7b26f13185",
+  "step_clip": null,
+  "weights": {
+    "station_visit": 0.3
+  }
+}

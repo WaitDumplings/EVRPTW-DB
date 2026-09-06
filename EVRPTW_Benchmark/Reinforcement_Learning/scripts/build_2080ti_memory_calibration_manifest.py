@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Build disposable two-epoch manifests for RTX 2080 Ti memory calibration.
+"""Render the frozen, non-launchable RTX 2080 Ti calibration inventory.
 
-The generated jobs preserve the formal data stream, logical batch, seed,
-rollout horizon, validation cohort, and best-of-100 decoding.  Only the
-physical microbatch is configurable.  DRL-TS executes one soft and one hard
-update so both training stages are covered before the full validation.
+The measurements predate the current shared reward contract.  Cus50/Cus100
+have no training-reference reward calibration in that contract, so the active
+2080 Ti formal queues are intentionally empty.  This tool reads a dedicated
+historical inventory instead of treating those active queues as source data.
+Rendered rows are explicitly disabled and are rejected by the calibration
+runner; they preserve the old two-epoch calibration metadata for audit only.
 """
 
 from __future__ import annotations
@@ -17,22 +19,39 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RQ_ROOT = ROOT / "scripts" / "rq_v1"
-SERVER_IDS = ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1")
+INVENTORY = ROOT / "configs" / "drl_rq_2080ti_memory_calibration_inventory_v1.json"
 WAVES = ("cus50", "cus100_g", "cus100_e", "cus100_support")
 
 
 def _load_jobs() -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for server_id in SERVER_IDS:
-        path = RQ_ROOT / server_id / "jobs.jsonl"
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                row = json.loads(line)
-                row["calibration_source_server"] = server_id
-                rows.append(row)
+    payload = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    if (
+        payload.get("schema")
+        != "drl_rq_2080ti_memory_calibration_inventory_v1"
+        or payload.get("status") != "historical_frozen_nonlaunchable"
+    ):
+        raise RuntimeError("invalid RTX 2080 Ti historical calibration inventory")
+    reason = str(payload.get("nonlaunchable_reason", "")).strip()
+    if not reason:
+        raise RuntimeError("historical calibration inventory lacks blocked reason")
+    rows = []
+    for source in payload.get("jobs", []):
+        row = dict(source)
+        row.update(
+            {
+                "enabled": False,
+                "historical_only": True,
+                "calibration_source_status": payload["status"],
+                "calibration_source_commit": payload["source_commit"],
+                "calibration_source_inventory": str(INVENTORY.relative_to(ROOT)),
+                "nonlaunchable_reason": reason,
+            }
+        )
+        rows.append(row)
     if len(rows) != 16 or len({row["job_id"] for row in rows}) != 16:
-        raise RuntimeError("expected exactly 16 unique RTX 2080 Ti jobs")
+        raise RuntimeError("expected exactly 16 unique historical RTX 2080 Ti jobs")
+    if {row["scale"] for row in rows} != {"Cus50", "Cus100"}:
+        raise RuntimeError("historical RTX 2080 Ti inventory has unexpected scales")
     return rows
 
 
@@ -121,6 +140,8 @@ def _calibration_job(
             "gpu_hour_checkpoints": [],
             "global_slot": slot,
             "queue_position": 0,
+            "enabled": False,
+            "historical_only": True,
         }
     )
     if row["method"] == "drl_ts":
@@ -130,7 +151,7 @@ def _calibration_job(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build a disposable 2-epoch + full-validation memory manifest."
+        description="Render a non-launchable historical 2080 Ti calibration manifest."
     )
     parser.add_argument("--wave", choices=(*WAVES, "all"), required=True)
     parser.add_argument(
@@ -176,6 +197,9 @@ def main() -> None:
         json.dumps(
             {
                 "schema": "drl_rq_memory_calibration_manifest_summary_v1",
+                "status": "historical_frozen_nonlaunchable",
+                "launchable": False,
+                "nonlaunchable_reason": generated[0]["nonlaunchable_reason"],
                 "wave": args.wave,
                 "output": str(args.output.resolve()),
                 "jobs": [

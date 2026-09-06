@@ -60,8 +60,22 @@ class TERRANRolloutHorizonWrapper(Wrapper):
         num_customers = max(int(getattr(self.unwrapped, "num_customers", 0)), 1)
         remaining = np.maximum(num_customers - served, 0)
         out_info = dict(info)
+        failure_reason = np.asarray(
+            info.get(
+                "failure_reason",
+                np.full_like(served, "in_progress", dtype=object),
+            ),
+            dtype=object,
+        ).copy()
+        failure_reason[budget_exhausted & (remaining > 0)] = (
+            "rollout_budget_exhausted"
+        )
+        failure_reason[budget_exhausted & (remaining == 0)] = (
+            "rollout_budget_exhausted_not_returned"
+        )
         out_info["rollout_horizon_steps"] = self.max_rollout_steps
         out_info["rollout_budget_exhausted"] = budget_exhausted.copy()
+        out_info["failure_reason"] = failure_reason
         out_info["remaining_customers"] = remaining.astype(np.int32, copy=False)
         out_info["remaining_customer_fraction"] = (
             remaining.astype(np.float32) / float(num_customers)
@@ -127,6 +141,7 @@ def make_terran_env(
         or pbrs_config.use_repair_distance_pbrs
         or pbrs_config.use_feasible_ratio_pbrs
         or pbrs_config.use_terminal_heuristic
+        or pbrs_config.use_terminal_task_penalty
     ):
         env = PotentialRewardWrapper(env, pbrs_config)
     return env

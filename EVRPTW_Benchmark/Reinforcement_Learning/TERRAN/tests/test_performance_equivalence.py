@@ -327,6 +327,33 @@ def test_cached_eval_preserves_routes_verifier_rng_and_exports_once(decode_mode,
         assert actual_verification == expected_verification
 
 
+def test_sampling_eval_seed_is_scoped_and_independent_of_caller_rng():
+    agent = _agent()
+
+    torch.manual_seed(101)
+    caller_state_one = torch.get_rng_state().clone()
+    first = rollout_eval_batch(
+        agent, _envs(), "sample", 32, "cpu", seed=777,
+        include_routes=True, return_final_info=True,
+    )
+    assert torch.equal(torch.get_rng_state(), caller_state_one)
+
+    torch.manual_seed(202)
+    caller_state_two = torch.get_rng_state().clone()
+    second = rollout_eval_batch(
+        agent, _envs(), "sample", 32, "cpu", seed=777,
+        include_routes=True, return_final_info=True,
+    )
+    assert torch.equal(torch.get_rng_state(), caller_state_two)
+    assert agent.training is False
+
+    for expected, observed in zip(first, second):
+        for row in (expected, observed):
+            row.pop("runtime_s")
+            row.pop("batch_runtime_s")
+        _assert_infos_equal(observed, expected)
+
+
 @pytest.mark.parametrize("decode_mode", ["greedy", "sample"])
 def test_action_only_matches_reference_and_cached_logits(decode_mode):
     agent = _agent()

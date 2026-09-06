@@ -19,11 +19,20 @@ from ..common.training_protocol import (
     require_adamw,
 )
 from ..common.objective import objective_from_args
+from ..common.method_auxiliary import method_auxiliary_from_args
 from ..common.protocol_trainers import prepare_training_objective
 from .env import DRLTSHardConstraintEnv
 from .model import DRLTSPolicy
 from .rollout import rollout
 from .soft_env import DRLTSSoftConstraintEnv
+from .soft_env import (
+    DEFAULT_SOFT_VIOLATION_COMPONENT_CLIP,
+    DEFAULT_SOFT_VIOLATION_STEP_CLIP,
+    SOFT_VIOLATION_AGGREGATION,
+    SOFT_VIOLATION_APPLICABILITY,
+    SOFT_VIOLATION_CONTRACT_ID,
+    SOFT_VIOLATION_DENOMINATOR,
+)
 
 
 def set_seed(seed: int) -> None:
@@ -57,6 +66,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--capacity-penalty", type=float, default=1.0)
     parser.add_argument("--time-penalty", type=float, default=1.0)
     parser.add_argument("--energy-penalty", type=float, default=1.0)
+    parser.add_argument(
+        "--soft-violation-contract-id",
+        choices=[SOFT_VIOLATION_CONTRACT_ID],
+        default=SOFT_VIOLATION_CONTRACT_ID,
+    )
+    parser.add_argument(
+        "--soft-violation-step-clip",
+        type=float,
+        default=DEFAULT_SOFT_VIOLATION_STEP_CLIP,
+    )
+    parser.add_argument(
+        "--soft-violation-component-clip",
+        type=float,
+        default=DEFAULT_SOFT_VIOLATION_COMPONENT_CLIP,
+    )
+    parser.add_argument(
+        "--soft-violation-denominator",
+        choices=[SOFT_VIOLATION_DENOMINATOR],
+        default=SOFT_VIOLATION_DENOMINATOR,
+    )
     parser.add_argument("--incomplete-penalty", type=float, default=100.0)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--baseline-eval-size", type=int, default=64)
@@ -71,7 +100,66 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _make_envs(instances, *, n_traj: int, soft: bool, info_level: str, objective_config=None):
+def _soft_violation_kwargs(args):
+    return {
+        "soft_violation_contract_id": args.soft_violation_contract_id,
+        "soft_violation_step_clip": args.soft_violation_step_clip,
+        "soft_violation_component_clip": args.soft_violation_component_clip,
+        "soft_violation_denominator": args.soft_violation_denominator,
+    }
+
+
+def _configure_soft_auxiliary(args) -> None:
+    """Make an optional signed profile authoritative over legacy CLI knobs."""
+
+    profile = method_auxiliary_from_args(args, expected_method="drl_ts")
+    if profile is None:
+        if getattr(args, "reward_contract", None) is not None:
+            raise ValueError(
+                "formal DRL-TS reward-contract training requires "
+                "--method-auxiliary-profile"
+            )
+        return
+    if getattr(args, "reward_contract", None) is None:
+        raise ValueError(
+            "DRL-TS formal method auxiliary profile requires a reward contract"
+        )
+    expected = {
+        "profile_id": SOFT_VIOLATION_CONTRACT_ID,
+        "applicability": SOFT_VIOLATION_APPLICABILITY,
+        "aggregation": SOFT_VIOLATION_AGGREGATION,
+        "denominator": SOFT_VIOLATION_DENOMINATOR,
+        "weights": {"capacity": 1.0, "energy": 1.0, "time_window": 1.0},
+    }
+    actual = {
+        "profile_id": profile.profile_id,
+        "applicability": profile.applicability,
+        "aggregation": profile.aggregation,
+        "denominator": profile.denominator,
+        "weights": dict(profile.weights),
+    }
+    if actual != expected or profile.step_clip is None or profile.component_clip is None:
+        raise ValueError(
+            f"unsupported DRL-TS soft auxiliary profile: {actual!r}"
+        )
+    args.soft_violation_contract_id = profile.profile_id
+    args.soft_violation_step_clip = float(profile.step_clip)
+    args.soft_violation_component_clip = float(profile.component_clip)
+    args.soft_violation_denominator = profile.denominator
+    args.capacity_penalty = float(profile.weights["capacity"])
+    args.time_penalty = float(profile.weights["time_window"])
+    args.energy_penalty = float(profile.weights["energy"])
+
+
+def _make_envs(
+    instances,
+    *,
+    n_traj: int,
+    soft: bool,
+    info_level: str,
+    objective_config=None,
+    soft_violation_kwargs=None,
+):
     if not soft:
         return [
             DRLTSHardConstraintEnv(
@@ -94,6 +182,11 @@ def _make_envs(instances, *, n_traj: int, soft: bool, info_level: str, objective
             matrix_mode="canonical",
             info_level=info_level,
             objective_config=objective_config,
+            **{
+                key: value
+                for key, value in (soft_violation_kwargs or {}).items()
+                if key != "soft_violation_component_clip"
+            },
         )
         for instance in instances
     ]
@@ -104,7 +197,15 @@ def _max_steps(envs) -> int:
 
 
 def _greedy_costs(policy, instances, args, *, soft: bool) -> np.ndarray:
-    envs = _make_envs(instances, n_traj=1, soft=soft, info_level="light", objective_config=objective_from_args(args))
+    soft_kwargs = _soft_violation_kwargs(args)
+    envs = _make_envs(
+        instances,
+        n_traj=1,
+        soft=soft,
+        info_level="light",
+        objective_config=objective_from_args(args),
+        soft_violation_kwargs=soft_kwargs,
+    )
     with torch.no_grad():
         result = rollout(
             policy,
@@ -117,12 +218,14 @@ def _greedy_costs(policy, instances, args, *, soft: bool) -> np.ndarray:
             time_penalty=args.time_penalty,
             energy_penalty=args.energy_penalty,
             incomplete_penalty=args.incomplete_penalty,
+            **soft_kwargs,
         )
     return result.training_cost[:, 0].detach().cpu().numpy()
 
 
 def main() -> None:
     args = parse_args()
+    _configure_soft_auxiliary(args)
     objective_config = prepare_training_objective(args)
     args.objective = objective_config.to_dict()
     if not 0.0 <= args.soft_stage_fraction <= 1.0:
@@ -172,6 +275,7 @@ def main() -> None:
         epoch_feasible: list[float] = []
         violations = {"capacity": [], "time": [], "energy": []}
         started = time.perf_counter()
+        soft_kwargs = _soft_violation_kwargs(args)
         for batch_index in range(args.batches_per_epoch):
             instances = pool.sample(args.batch_size)
             actor_envs = _make_envs(
@@ -180,6 +284,7 @@ def main() -> None:
                 soft=soft,
                 info_level="light",
                 objective_config=objective_config,
+                soft_violation_kwargs=soft_kwargs,
             )
             actor = rollout(
                 policy,
@@ -192,6 +297,7 @@ def main() -> None:
                 time_penalty=args.time_penalty,
                 energy_penalty=args.energy_penalty,
                 incomplete_penalty=args.incomplete_penalty,
+                **soft_kwargs,
             )
             baseline_envs = _make_envs(
                 instances,
@@ -199,6 +305,7 @@ def main() -> None:
                 soft=soft,
                 info_level="light",
                 objective_config=objective_config,
+                soft_violation_kwargs=soft_kwargs,
             )
             with torch.no_grad():
                 baseline_result = rollout(
@@ -212,6 +319,7 @@ def main() -> None:
                     time_penalty=args.time_penalty,
                     energy_penalty=args.energy_penalty,
                     incomplete_penalty=args.incomplete_penalty,
+                    **soft_kwargs,
                 )
             advantage = (actor.training_cost - baseline_result.training_cost).detach()
             loss = (advantage * actor.log_likelihood).mean()

@@ -539,6 +539,47 @@ class ALNS_Solver:
     # ======================================================================
     # Public API
     # ======================================================================
+    def construct_deterministic_reference_solution(self) -> List[List[int]]:
+        """Return one complete constructive solution without a wall-clock cutoff.
+
+        This entry point is intentionally separate from :meth:`solve`.  It is
+        used by training-only objective calibration, where the same input must
+        produce the same route set regardless of host speed or concurrent
+        system load.  Work remains bounded by the scale-adaptive route and
+        insertion candidate counts; no stochastic ALNS operator is executed.
+
+        The returned routes use the solver's canonical integer node indices.
+        A malformed certificate or an infeasible constructed solution is an
+        error instead of a partial/fallback calibration observation.
+        """
+
+        singleton = self._construct_singleton_solution()
+        if (
+            self.singleton_source != "stage2_certificate_replayed"
+            or not singleton
+            or not self.is_solution_feasible(singleton)
+        ):
+            raise ValueError(
+                "deterministic reference construction requires a replayed, "
+                "complete Stage-2 certificate warm start"
+            )
+
+        routes = self._construct_initial_solution(
+            singleton_routes=singleton,
+            use_wall_clock_budget=False,
+        )
+        routes = self._postprocess_solution(routes)
+        if not routes or not self.is_solution_feasible(routes):
+            raise RuntimeError(
+                "deterministic reference construction produced an infeasible solution"
+            )
+
+        self.current_routes = [list(route) for route in routes]
+        self.best_routes = [list(route) for route in routes]
+        self.global_value = self.objective_value(routes)
+        self.visited = self._served_mask(routes)
+        return [list(route) for route in routes]
+
     def solve(
         self,
         initial_routes: Optional[List[List[int]]] = None,
@@ -1050,11 +1091,25 @@ class ALNS_Solver:
         self,
         deadline: Optional[float] = None,
         singleton_routes: Optional[List[List[int]]] = None,
+        *,
+        use_wall_clock_budget: bool = True,
     ) -> List[List[int]]:
         construction_start = time.perf_counter()
-        construction_deadline = construction_start + self.initial_construction_budget_s
-        if deadline is not None:
-            construction_deadline = min(construction_deadline, deadline)
+        construction_deadline: Optional[float]
+        if use_wall_clock_budget:
+            construction_deadline = (
+                construction_start + self.initial_construction_budget_s
+            )
+            if deadline is not None:
+                construction_deadline = min(construction_deadline, deadline)
+        else:
+            construction_deadline = None
+
+        def budget_expired() -> bool:
+            return (
+                construction_deadline is not None
+                and time.perf_counter() >= construction_deadline
+            )
 
         routes = (
             self._construct_singleton_solution()
@@ -1066,6 +1121,13 @@ class ALNS_Solver:
                 "strategy": self.initial_construction_strategy,
                 "singleton_fallback_feasible": False,
                 "singleton_source": self.singleton_source,
+                "deterministic": not use_wall_clock_budget,
+                "wall_clock_cutoff_enabled": use_wall_clock_budget,
+                "termination_basis": (
+                    "wall_clock_and_candidate_limits"
+                    if use_wall_clock_budget
+                    else "candidate_limits_only"
+                ),
                 "elapsed_s": time.perf_counter() - construction_start,
             }
             return []
@@ -1085,7 +1147,7 @@ class ALNS_Solver:
         inserted = 0
         budget_exhausted = False
         for order_position, customer in enumerate(customer_order):
-            if time.perf_counter() >= construction_deadline:
+            if budget_expired():
                 budget_exhausted = True
                 remaining = customer_order[order_position:]
                 merged_routes.extend(routes[customer - 1] for customer in remaining)
@@ -1111,7 +1173,7 @@ class ALNS_Solver:
                 route_ids,
                 construction_deadline,
             )
-            if time.perf_counter() >= construction_deadline:
+            if budget_expired():
                 budget_exhausted = True
 
             if best is None:
@@ -1137,8 +1199,17 @@ class ALNS_Solver:
             "singleton_route_count": len(routes),
             "result_route_count": len(result),
             "merged_customer_count": inserted,
-            "budget_s": self.initial_construction_budget_s,
+            "budget_s": (
+                self.initial_construction_budget_s if use_wall_clock_budget else None
+            ),
             "budget_exhausted": budget_exhausted,
+            "deterministic": not use_wall_clock_budget,
+            "wall_clock_cutoff_enabled": use_wall_clock_budget,
+            "termination_basis": (
+                "wall_clock_and_candidate_limits"
+                if use_wall_clock_budget
+                else "candidate_limits_only"
+            ),
             "elapsed_s": time.perf_counter() - construction_start,
         }
         return result
@@ -1148,7 +1219,7 @@ class ALNS_Solver:
         routes: List[List[int]],
         customer: int,
         route_ids: List[int],
-        deadline: float,
+        deadline: Optional[float],
     ) -> Optional[Tuple[int, List[int], float]]:
         """Evaluate a bounded set of promising positions with exact checks.
 
@@ -1187,7 +1258,7 @@ class ALNS_Solver:
         cheap.sort(key=lambda item: item[0])
         best: Optional[Tuple[int, List[int], float]] = None
         for _, ridx, pos, base_distance in cheap[: self.initial_exact_insertion_limit]:
-            if time.perf_counter() >= deadline:
+            if deadline is not None and time.perf_counter() >= deadline:
                 break
             route = routes[ridx]
             trial = route[:pos] + [customer] + route[pos:]

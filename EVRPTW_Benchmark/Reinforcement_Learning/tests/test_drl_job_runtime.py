@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
+import torch
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +48,251 @@ def _job(job_id: str = "train__R__am_evrptw__Cus100__seed1234"):
     }
 
 
+def _write_formal_gate(
+    root: Path,
+    *,
+    allowed: bool,
+    protocol_id: str = "drl_rq_protocol_frozen_v1",
+) -> Path:
+    statuses = {
+        "G1": "PILOT_WAIVED_BY_USER",
+        "G2": "IMPLEMENTED_UNIT_TESTED",
+        "G3": "PILOT_WAIVED_BY_USER",
+        "G4": "PILOT_WAIVED_BY_USER",
+        "G5": "PILOT_WAIVED_BY_USER",
+        "G6": "PILOT_WAIVED_BY_USER",
+        "G7": "NOT_APPLICABLE_G_ONLY",
+        "G8": "IMPLEMENTED_UNIT_TESTED",
+    }
+    policy = (
+        RUNTIME.AUTHORIZED_LAUNCH_POLICY
+        if allowed
+        else "reward_contract_v2_short_validation_pending_user_authorization"
+    )
+    registry = {
+        "training_stream_registry_path": (
+            "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+            "drl_training_stream_registry_v1.json"
+        ),
+        "training_stream_registry_sha256": "1" * 64,
+    }
+    config_root = root / "EVRPTW_Benchmark/Reinforcement_Learning/configs"
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "drl_rq_runtime_candidates_v2.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "protocol_id": "drl_rq_protocol_frozen_v1",
+                "formal_launch_allowed": allowed,
+                "launch_policy": policy,
+                "formal_launch_gates": statuses,
+                **registry,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_root / "drl_rq_protocol_frozen_v1.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "protocol_id": "drl_rq_protocol_frozen_v1",
+                "formal_launch_allowed": allowed,
+                "launch_policy": policy,
+                "formal_launch_gates": {
+                    key: {"status": value} for key, value in statuses.items()
+                },
+                **registry,
+            }
+        ),
+        encoding="utf-8",
+    )
+    path = root / "formal_gate.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "drl_rq_formal_launch_gate_v1",
+                "protocol_id": protocol_id,
+                "formal_launch_allowed": allowed,
+                "launch_policy": policy,
+                "formal_launch_gates": statuses,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_closed_formal_gate_blocks_execution_but_allows_dry_run_validation(
+    tmp_path: Path,
+) -> None:
+    gate = _write_formal_gate(tmp_path, allowed=False)
+    job = _job()
+    job.update(
+        {
+            "formal_gate_file": gate.name,
+            "protocol_id": "drl_rq_protocol_frozen_v1",
+        }
+    )
+    RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=False)
+    with pytest.raises(RuntimeError, match="formal launch gate is closed"):
+        RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=True)
+
+
+def test_formal_gate_fails_closed_on_missing_or_mismatched_contract(
+    tmp_path: Path,
+) -> None:
+    job = _job()
+    job["protocol_id"] = "drl_rq_protocol_frozen_v1"
+    with pytest.raises(RuntimeError, match="missing formal_gate_file"):
+        RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=True)
+
+    gate = _write_formal_gate(tmp_path, allowed=True, protocol_id="other")
+    job["formal_gate_file"] = gate.name
+    with pytest.raises(RuntimeError, match="protocol does not match"):
+        RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=True)
+
+
+@pytest.mark.parametrize("document_name", ["gate", "runtime", "protocol"])
+def test_flipping_only_one_formal_launch_boolean_fails_closed(
+    tmp_path: Path, document_name: str,
+) -> None:
+    gate_path = _write_formal_gate(tmp_path, allowed=False)
+    config_root = tmp_path / "EVRPTW_Benchmark/Reinforcement_Learning/configs"
+    paths = {
+        "gate": gate_path,
+        "runtime": config_root / "drl_rq_runtime_candidates_v2.yaml",
+        "protocol": config_root / "drl_rq_protocol_frozen_v1.yaml",
+    }
+    path = paths[document_name]
+    if path.suffix == ".json":
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["formal_launch_allowed"] = True
+        path.write_text(json.dumps(document), encoding="utf-8")
+    else:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        document["formal_launch_allowed"] = True
+        path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    job = {
+        **_job(),
+        "protocol_id": "drl_rq_protocol_frozen_v1",
+        "formal_gate_file": gate_path.name,
+    }
+    # Cross-checking is unconditional: even a dry-run may not bless a
+    # contradictory release decision.
+    with pytest.raises(RuntimeError, match="decisions disagree"):
+        RUNTIME.validate_formal_launch_gates(
+            tmp_path, [job], require_open=False
+        )
+    with pytest.raises(RuntimeError, match="decisions disagree"):
+        RUNTIME.validate_formal_launch_gates(
+            tmp_path, [job], require_open=True
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("launch_policy", "decisions disagree"),
+        ("formal_launch_gates", "G1-G8 evidence disagrees"),
+    ],
+)
+def test_single_document_policy_or_gate_evidence_mutation_fails_closed(
+    tmp_path: Path, field: str, message: str,
+) -> None:
+    gate_path = _write_formal_gate(tmp_path, allowed=False)
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    if field == "launch_policy":
+        gate[field] = "locally-edited-policy"
+    else:
+        gate[field]["G4"] = "PARTIAL_LOCAL_EDIT"
+    gate_path.write_text(json.dumps(gate), encoding="utf-8")
+    job = {
+        **_job(),
+        "protocol_id": "drl_rq_protocol_frozen_v1",
+        "formal_gate_file": gate_path.name,
+    }
+    with pytest.raises(RuntimeError, match=message):
+        RUNTIME.validate_formal_launch_gates(
+            tmp_path, [job], require_open=False
+        )
+
+
+def test_consistent_explicitly_authorized_gate_can_open(tmp_path: Path) -> None:
+    gate = _write_formal_gate(tmp_path, allowed=True)
+    job = {
+        **_job(),
+        "protocol_id": "drl_rq_protocol_frozen_v1",
+        "formal_gate_file": gate.name,
+    }
+    RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=False)
+    RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=True)
+
+
+def test_consistent_open_boolean_without_authorized_policy_stays_closed(
+    tmp_path: Path,
+) -> None:
+    gate_path = _write_formal_gate(tmp_path, allowed=True)
+    config_root = tmp_path / "EVRPTW_Benchmark/Reinforcement_Learning/configs"
+    pending_policy = "reward_contract_v2_validation_complete_but_not_authorized"
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["launch_policy"] = pending_policy
+    gate_path.write_text(json.dumps(gate), encoding="utf-8")
+    for name in (
+        "drl_rq_runtime_candidates_v2.yaml",
+        "drl_rq_protocol_frozen_v1.yaml",
+    ):
+        path = config_root / name
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        document["launch_policy"] = pending_policy
+        path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    job = {
+        **_job(),
+        "protocol_id": "drl_rq_protocol_frozen_v1",
+        "formal_gate_file": gate_path.name,
+    }
+    RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=False)
+    with pytest.raises(RuntimeError, match="explicit user authorization"):
+        RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=True)
+
+
+@pytest.mark.parametrize(
+    "incomplete_status",
+    [
+        "PARTIAL_IMPLEMENTATION",
+        "NOT_PASSED",
+        "NOT_UNIT_TESTED",
+        "NOT_APPLICABLE_PENDING",
+    ],
+)
+def test_consistent_open_gate_still_rejects_incomplete_g1_g8_evidence(
+    tmp_path: Path, incomplete_status: str,
+) -> None:
+    gate_path = _write_formal_gate(tmp_path, allowed=True)
+    config_root = tmp_path / "EVRPTW_Benchmark/Reinforcement_Learning/configs"
+
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["formal_launch_gates"]["G7"] = incomplete_status
+    gate_path.write_text(json.dumps(gate), encoding="utf-8")
+
+    runtime_path = config_root / "drl_rq_runtime_candidates_v2.yaml"
+    runtime = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
+    runtime["formal_launch_gates"]["G7"] = incomplete_status
+    runtime_path.write_text(yaml.safe_dump(runtime), encoding="utf-8")
+
+    protocol_path = config_root / "drl_rq_protocol_frozen_v1.yaml"
+    protocol = yaml.safe_load(protocol_path.read_text(encoding="utf-8"))
+    protocol["formal_launch_gates"]["G7"]["status"] = incomplete_status
+    protocol_path.write_text(yaml.safe_dump(protocol), encoding="utf-8")
+
+    job = {
+        **_job(),
+        "protocol_id": "drl_rq_protocol_frozen_v1",
+        "formal_gate_file": gate_path.name,
+    }
+    RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=False)
+    with pytest.raises(RuntimeError, match="formal launch gates are incomplete"):
+        RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=True)
+
+
 def _artifact_command(
     output: Path, exit_code: int = 0, *, include_manifest_checkpoints: bool = True
 ):
@@ -58,10 +307,138 @@ def _artifact_command(
         f"p=Path({str(output)!r}); p.mkdir(parents=True, exist_ok=True); "
         "(p/'checkpoint_selected.pt').write_bytes(b'x'); "
         "(p/'validation_summary.json').write_text('{}'); "
+        "(p/'training_result.json').write_text('{}'); "
         f"{manifest_artifacts}"
         f"raise SystemExit({exit_code})"
     )
     return [sys.executable, "-c", source]
+
+
+def _write_completed_test_job(job: dict, output: Path) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    for artifact in RUNTIME.required_training_artifacts(job, output):
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        if artifact.name == "training_result.json":
+            artifact.write_text('{"generation": 1}', encoding="utf-8")
+        else:
+            artifact.write_bytes(b"selected")
+    (output / "job_result.json").write_text(
+        json.dumps({"status": "passed"}), encoding="utf-8"
+    )
+
+
+def test_job_complete_requires_training_result_and_rechecks_all_validators(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    job = _job()
+    output = tmp_path / "completed"
+    _write_completed_test_job(job, output)
+    calls: list[str] = []
+    validators = (
+        ("validate_completed_training_reward_contract", "reward"),
+        ("validate_completed_method_auxiliary_contract", "auxiliary"),
+        ("validate_completed_training_stream_contract", "stream"),
+        ("validate_completed_training_signature", "signature"),
+    )
+    for attribute, label in validators:
+        monkeypatch.setattr(
+            RUNTIME,
+            attribute,
+            lambda *_args, label=label: calls.append(label),
+        )
+
+    expected = [label for _, label in validators]
+    assert RUNTIME.job_complete(job, output, _context(tmp_path))
+    assert calls == expected
+
+    # A second status/skip decision must re-run trainer-evidence validation;
+    # it may not trust the previous job_result.json decision.
+    calls.clear()
+    assert RUNTIME.job_complete(job, output, _context(tmp_path))
+    assert calls == expected
+
+    calls.clear()
+    (output / "training_result.json").unlink()
+    assert not RUNTIME.job_complete(job, output, _context(tmp_path))
+    assert calls == []
+    (output / "training_result.json").write_text("not-json", encoding="utf-8")
+    assert not RUNTIME.job_complete(job, output, _context(tmp_path))
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "validator_name",
+    [
+        "validate_completed_training_reward_contract",
+        "validate_completed_method_auxiliary_contract",
+    ],
+)
+def test_job_complete_rejects_checkpoint_corruption_reported_by_contract_validator(
+    tmp_path: Path, monkeypatch, validator_name: str,
+) -> None:
+    job = _job()
+    output = tmp_path / validator_name
+    _write_completed_test_job(job, output)
+    for attribute in (
+        "validate_completed_training_reward_contract",
+        "validate_completed_method_auxiliary_contract",
+        "validate_completed_training_stream_contract",
+        "validate_completed_training_signature",
+    ):
+        monkeypatch.setattr(RUNTIME, attribute, lambda *_args: None)
+
+    def reject_corrupt_checkpoint(
+        _job_payload, _context_payload, _training_result, checkpoint: Path,
+    ) -> None:
+        if checkpoint.read_bytes() != b"selected":
+            raise RuntimeError("contract checkpoint corruption")
+
+    monkeypatch.setattr(RUNTIME, validator_name, reject_corrupt_checkpoint)
+    assert RUNTIME.job_complete(job, output, _context(tmp_path))
+    (output / "checkpoint_selected.pt").write_bytes(b"corrupt")
+    assert not RUNTIME.job_complete(job, output, _context(tmp_path))
+
+
+@pytest.mark.parametrize("damage", ["delete-result", "corrupt-checkpoint"])
+def test_run_job_never_skips_a_damaged_completed_training_directory(
+    tmp_path: Path, monkeypatch, damage: str,
+) -> None:
+    context = _context(tmp_path)
+    context["dataset"].mkdir()
+    job = _job()
+    output = RUNTIME.output_dir(job, context)
+    _write_completed_test_job(job, output)
+    for validator in (
+        "validate_completed_training_reward_contract",
+        "validate_completed_method_auxiliary_contract",
+        "validate_completed_training_stream_contract",
+        "validate_completed_training_signature",
+    ):
+        monkeypatch.setattr(RUNTIME, validator, lambda *_args: None)
+    if damage == "delete-result":
+        (output / "training_result.json").unlink()
+    else:
+        def reject_corruption(_job, _context, _result, checkpoint: Path) -> None:
+            if checkpoint.read_bytes() != b"selected":
+                raise RuntimeError("corrupt checkpoint")
+
+        monkeypatch.setattr(
+            RUNTIME,
+            "validate_completed_training_reward_contract",
+            reject_corruption,
+        )
+        (output / "checkpoint_selected.pt").write_bytes(b"corrupt")
+    marker = tmp_path / "unexpected-execution"
+    job["test_command"] = [
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')",
+    ]
+
+    assert not RUNTIME.job_complete(job, output, context)
+    with pytest.raises(RuntimeError, match="refusing fresh training"):
+        RUNTIME.run_job(job, context, 0, False, False)
+    assert not marker.exists()
 
 
 def test_one_job_run_and_valid_resume_skip(tmp_path: Path) -> None:
@@ -89,6 +466,7 @@ def test_final_validation_audit_is_required_when_registered(tmp_path: Path) -> N
     (output / "validation_summary.json").write_text("{}")
     (output / "best_overall.ckpt").write_bytes(b"overall")
     (output / "best_within_5000.ckpt").write_bytes(b"within")
+    (output / "training_result.json").write_text("{}")
     (output / "job_result.json").write_text(json.dumps({"status": "passed"}))
     assert not RUNTIME.job_complete(job, output)
     (output / "validation_final_audit.json").write_text("{}")
@@ -104,6 +482,7 @@ def test_training_completion_requires_each_distinct_manifest_checkpoint(
     (output / "checkpoint_selected.pt").write_bytes(b"selected")
     (output / "validation_summary.json").write_text("{}")
     (output / "best_overall.ckpt").write_bytes(b"overall")
+    (output / "training_result.json").write_text("{}")
     (output / "job_result.json").write_text(json.dumps({"status": "passed"}))
 
     required = RUNTIME.required_training_artifacts(job, output)
@@ -186,6 +565,10 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         "validation_decode_type": "sampling",
         "validation_candidate_count": 100,
         "training_trajectory_count": 100,
+        "training_stream_path": "artifacts/stream.parquet",
+        "customer_exposure_budget": 10_000,
+        "exposure_checkpoints": [2_500, 5_000, 10_000],
+        "gpu_hour_checkpoints": [6, 12, 24],
         "final_validation_views": 500,
         "validation_every_epochs": 50,
         "validation_checkpoints": 1,
@@ -229,6 +612,12 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
             assert command[trajectory_index + 1] == "100"
         final_validation_index = command.index("--final-validation-limit")
         assert command[final_validation_index + 1] == "500"
+        assert command.count("--exposure-checkpoints") == 1
+        exposure_index = command.index("--exposure-checkpoints")
+        assert command[exposure_index + 1] == "2500,5000,10000"
+        assert command.count("--gpu-hour-checkpoints") == 1
+        gpu_hours_index = command.index("--gpu-hour-checkpoints")
+        assert command[gpu_hours_index + 1] == "6,12,24"
         assert "--data-passes" not in command
         assert "--num-minibatches" not in command
         assert "--ppo-step-chunk-size" not in command
@@ -326,11 +715,227 @@ def _cost_job(method="am_evrptw"):
     return next(dict(job) for jobs in build().values() for job in jobs if job["method"] == method)
 
 
+def _formal_stream_completion_fixture(tmp_path: Path, monkeypatch):
+    from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import build
+
+    job = next(
+        dict(item)
+        for queue in build().values()
+        for item in queue
+        if item["method"] == "am_evrptw" and item["scale"] == "Cus1000"
+    )
+    repository = ROOT.parents[1]
+    relative_stream = Path(job["training_stream_path"])
+    source_stream = repository / relative_stream
+    copied_stream = tmp_path / relative_stream
+    copied_stream.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_stream, copied_stream)
+    shutil.copy2(
+        source_stream.with_suffix(source_stream.suffix + ".manifest.json"),
+        copied_stream.with_suffix(copied_stream.suffix + ".manifest.json"),
+    )
+
+    context = {**_context(tmp_path), "repo": tmp_path}
+    output = tmp_path / "formal-completed"
+    output.mkdir(parents=True)
+    for artifact in RUNTIME.required_training_artifacts(job, output):
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(b"artifact")
+
+    snapshot = job["training_stream_contract_snapshot"]
+    training_result = {
+        "status": "passed",
+        "protocol_id": job["protocol_id"],
+        "requested_training_epochs": job["training_epochs"],
+        "completed_training_epochs": job["training_epochs"],
+        "early_stopped": False,
+        "training_stream_contract_snapshot": snapshot,
+        "training_stream_contract_sha256": job[
+            "training_stream_contract_sha256"
+        ],
+    }
+    (output / "training_result.json").write_text(
+        json.dumps(training_result), encoding="utf-8"
+    )
+    checkpoint_payload = {
+        "training_stream_contract": snapshot,
+        "args": {
+            "training_stream_contract_snapshot": snapshot,
+            "training_stream_contract_sha256": job[
+                "training_stream_contract_sha256"
+            ],
+        },
+    }
+    torch.save(checkpoint_payload, output / "checkpoint_selected.pt")
+
+    contract = RUNTIME.training_contract(job)
+    (output / "job_result.json").write_text(
+        json.dumps({"status": "passed", **contract}), encoding="utf-8"
+    )
+    (output / "provenance.json").write_text(
+        json.dumps({"job": job, **contract}), encoding="utf-8"
+    )
+    for validator in (
+        "validate_completed_training_reward_contract",
+        "validate_completed_method_auxiliary_contract",
+        "validate_completed_training_signature",
+    ):
+        monkeypatch.setattr(RUNTIME, validator, lambda *_args: None)
+    return job, output, context, copied_stream, training_result, checkpoint_payload
+
+
+def test_formal_completion_revalidates_stream_result_checkpoint_and_provenance(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    (
+        job,
+        output,
+        context,
+        copied_stream,
+        training_result,
+        checkpoint_payload,
+    ) = _formal_stream_completion_fixture(tmp_path, monkeypatch)
+    assert RUNTIME.job_complete(job, output, context)
+
+    job_result = json.loads((output / "job_result.json").read_text())
+    provenance = json.loads((output / "provenance.json").read_text())
+    for document in (job_result, provenance):
+        assert (
+            document["training_stream_contract_sha256"]
+            == job["training_stream_contract_sha256"]
+        )
+        assert (
+            document["training_stream_contract_snapshot"]
+            == job["training_stream_contract_snapshot"]
+        )
+
+    stale_result = {
+        **training_result,
+        "training_stream_contract_sha256": "0" * 64,
+    }
+    (output / "training_result.json").write_text(
+        json.dumps(stale_result), encoding="utf-8"
+    )
+    assert not RUNTIME.job_complete(job, output, context)
+    (output / "training_result.json").write_text(
+        json.dumps(training_result), encoding="utf-8"
+    )
+
+    stale_checkpoint = {
+        **checkpoint_payload,
+        "args": {
+            **checkpoint_payload["args"],
+            "training_stream_contract_sha256": "f" * 64,
+        },
+    }
+    torch.save(stale_checkpoint, output / "checkpoint_selected.pt")
+    assert not RUNTIME.job_complete(job, output, context)
+    torch.save(checkpoint_payload, output / "checkpoint_selected.pt")
+
+    # Logical sequence hashing must notice a changed view ID even though the
+    # Parquet path, row count, and contiguous positions remain unchanged.
+    frame = pd.read_parquet(copied_stream)
+    frame.loc[0, "view_id"] = str(frame.loc[0, "view_id"]) + "__tampered"
+    frame.to_parquet(copied_stream, index=False)
+    assert not RUNTIME.job_complete(job, output, context)
+
+
+def test_stream_preflight_requires_every_method_to_share_exact_snapshot(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import build
+
+    jobs = [
+        dict(item)
+        for queue in build().values()
+        for item in queue
+        if item["scale"] == "Cus1000"
+    ]
+    assert {job["method"] for job in jobs} == RUNTIME.METHODS
+    assert len({job["training_stream_contract_sha256"] for job in jobs}) == 1
+    repository = tmp_path / "repo"
+    source_repository = ROOT.parents[1]
+    for relative in {job["training_stream_path"] for job in jobs}:
+        source = source_repository / relative
+        destination = repository / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        shutil.copy2(
+            source.with_suffix(source.suffix + ".manifest.json"),
+            destination.with_suffix(destination.suffix + ".manifest.json"),
+        )
+    registry_relative = Path(jobs[0]["training_stream_registry_path"])
+    copied_registry = repository / registry_relative
+    copied_registry.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_repository / registry_relative, copied_registry)
+    dataset = tmp_path / "dataset"
+    index = dataset / jobs[0]["train_index"]
+    index.parent.mkdir(parents=True)
+    index.write_bytes(b"source-index-placeholder")
+    marker_relative = Path(jobs[0]["artifact_preparation_marker_path"])
+    marker = json.loads(
+        (source_repository / marker_relative).read_text(encoding="utf-8")
+    )
+    marker["dataset_root"] = str(dataset)
+    copied_marker = repository / marker_relative
+    copied_marker.parent.mkdir(parents=True, exist_ok=True)
+    copied_marker.write_text(json.dumps(marker), encoding="utf-8")
+    expected_source_sha = jobs[0]["training_stream_contract_snapshot"][
+        "source_index_sha256"
+    ]
+    monkeypatch.setattr(RUNTIME, "file_sha256", lambda _path: expected_source_sha)
+
+    RUNTIME.validate_training_stream_contracts(jobs, repository, dataset)
+
+    tampered_marker = json.loads(json.dumps(marker))
+    matching_entry = next(
+        item
+        for item in tampered_marker["training_stream_contracts"]
+        if item["relative_path"] == jobs[0]["training_stream_path"]
+    )
+    matching_entry["sha256"] = "a" * 64
+    canonical_marker = {
+        key: value
+        for key, value in tampered_marker.items()
+        if key not in {"marker_sha256", "dataset_root"}
+    }
+    tampered_marker["marker_sha256"] = RUNTIME.hashlib.sha256(
+        json.dumps(
+            canonical_marker,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    copied_marker.write_text(json.dumps(tampered_marker), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="manifest artifact marker SHA256 mismatch"):
+        RUNTIME.validate_training_stream_contracts(jobs, repository, dataset)
+    copied_marker.write_text(json.dumps(marker), encoding="utf-8")
+
+    stale_sha = [dict(job) for job in jobs]
+    stale_sha[0]["training_stream_contract_sha256"] = "0" * 64
+    with pytest.raises(RuntimeError, match="training-stream contract mismatch"):
+        RUNTIME.validate_training_stream_contracts(
+            stale_sha, repository, dataset
+        )
+
+    stale_snapshot = [dict(job) for job in jobs]
+    stale_snapshot[0]["training_stream_contract_snapshot"] = {
+        **stale_snapshot[0]["training_stream_contract_snapshot"],
+        "sample_count": 1,
+    }
+    with pytest.raises(RuntimeError, match="training-stream contract mismatch"):
+        RUNTIME.validate_training_stream_contracts(
+            stale_snapshot, repository, dataset
+        )
+
+
 def test_all_formal_cost_manifests_pass_and_commands_forward_profile(tmp_path):
     for method in sorted(RUNTIME.METHODS):
         job = _cost_job(method)
         RUNTIME.validate_objective_contracts([job])
         RUNTIME.validate_terran_training_contracts([job])
+        RUNTIME.validate_method_auxiliary_contracts([job])
         RUNTIME.validate_optimizer_contracts([job])
         context = _context(tmp_path)
         command = RUNTIME.training_command(job, context, tmp_path / "run", False)
@@ -340,6 +945,22 @@ def test_all_formal_cost_manifests_pass_and_commands_forward_profile(tmp_path):
         assert RUNTIME.training_contract(job)["objective_config"] == job["objective_config"]
         assert RUNTIME.training_contract(job)["optimizer_name"] == "adamw"
         assert RUNTIME.training_contract(job)["optimizer_weight_decay"] == 0.01
+        stream_sha_index = command.index("--training-stream-contract-sha256")
+        assert command[stream_sha_index + 1] == job[
+            "training_stream_contract_sha256"
+        ]
+        contract = RUNTIME.training_contract(job)
+        assert contract["training_stream_contract_snapshot"] == job[
+            "training_stream_contract_snapshot"
+        ]
+        assert contract["artifact_preparation_marker_sha256"] == job[
+            "artifact_preparation_marker_sha256"
+        ]
+        auxiliary_path = job.get("method_auxiliary_profile_path")
+        if auxiliary_path is not None:
+            assert command[command.index("--method-auxiliary-profile") + 1] == str(
+                context["repo"] / auxiliary_path
+            )
 
 
 @pytest.mark.parametrize("field", ["optimizer_name", "optimizer_weight_decay"])
@@ -386,13 +1007,42 @@ def test_objective_preflight_rejects_stale_scientific_metadata(field):
 
 
 @pytest.mark.parametrize("method", sorted(RUNTIME.METHODS))
-def test_all_methods_completion_is_bound_to_exact_cost_profile(tmp_path, method):
+def test_all_methods_completion_is_bound_to_exact_cost_profile(
+    tmp_path, method, monkeypatch
+):
     context = _context(tmp_path)
     context["dataset"].mkdir()
     job = _cost_job(method)
     output = RUNTIME.output_dir(job, context)
     job["test_command"] = _artifact_command(output)
+    checked = []
+    monkeypatch.setattr(
+        RUNTIME,
+        "validate_completed_training_reward_contract",
+        lambda checked_job, *_args: checked.append(checked_job["method"]),
+    )
+    monkeypatch.setattr(
+        RUNTIME,
+        "validate_completed_method_auxiliary_contract",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        RUNTIME,
+        "validate_completed_training_stream_contract",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        RUNTIME,
+        "validate_completed_training_signature",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        RUNTIME,
+        "validate_training_result_outcome",
+        lambda *_args: None,
+    )
     assert RUNTIME.run_job(job, context, 0, False, False)
+    assert checked == [method]
     assert RUNTIME.job_complete(job, output)
     result_path = output / "job_result.json"
     result = json.loads(result_path.read_text())
@@ -401,6 +1051,132 @@ def test_all_methods_completion_is_bound_to_exact_cost_profile(tmp_path, method)
     assert not RUNTIME.job_complete(job, output)
     with pytest.raises(RuntimeError, match="refusing fresh training"):
         RUNTIME.run_job(job, context, 0, False, False)
+
+
+@pytest.mark.parametrize("method", sorted(RUNTIME.METHODS))
+def test_completed_training_reward_contract_is_cross_checked(
+    tmp_path, method
+):
+    job = _cost_job(method)
+    repo = RUNTIME.ROOT.parents[1]
+    context = {**_context(tmp_path), "repo": repo}
+    contract = RUNTIME.load_reward_contract(
+        repo / job["reward_contract_config_path"]
+    )
+    terms = contract.for_scale(job["scale"], job["objective_config"])
+    snapshot = contract.to_dict()
+    derived = {
+        "reward_contract_id": terms.contract_id,
+        "reward_contract_sha256": terms.digest,
+        "reward_contract_scale": terms.scale_label,
+        "reward_objective_scale": terms.objective_scale,
+        "reward_failure_base": terms.failure_base,
+        "reward_unserved_coefficient": terms.unserved_coefficient,
+    }
+    result = {
+        "objective_config": terms.objective_config.to_dict(),
+        "reward_contract_snapshot": snapshot,
+        **derived,
+    }
+    checkpoint = tmp_path / f"{method}.pt"
+    if method == "terran":
+        torch.save(
+            {
+                "config": {
+                    "objective": terms.objective_config.to_dict(),
+                    "reward_contract": snapshot,
+                    "training": {"reward_contract_id": terms.contract_id},
+                    "normalization": {
+                        "reward_contract_sha256": terms.digest,
+                        "reward_contract_scale": terms.scale_label,
+                        "reward_objective_scale": terms.objective_scale,
+                        "failure_base": terms.failure_base,
+                        "unserved_coefficient": terms.unserved_coefficient,
+                    },
+                }
+            },
+            checkpoint,
+        )
+    else:
+        torch.save(
+            {
+                "objective_config": terms.objective_config.to_dict(),
+                "reward_contract": snapshot,
+                "args": {"reward_contract_snapshot": snapshot, **derived},
+            },
+            checkpoint,
+        )
+
+    RUNTIME.validate_completed_training_reward_contract(
+        job, context, result, checkpoint
+    )
+    stale_result = {**result, "reward_failure_base": terms.failure_base + 1.0}
+    with pytest.raises(RuntimeError, match="training_result reward contract mismatch"):
+        RUNTIME.validate_completed_training_reward_contract(
+            job, context, stale_result, checkpoint
+        )
+
+
+def test_completed_drl_ts_auxiliary_contract_is_cross_checked(tmp_path):
+    job = _cost_job("drl_ts")
+    repo = RUNTIME.ROOT.parents[1]
+    context = {**_context(tmp_path), "repo": repo}
+    profile = RUNTIME.load_method_auxiliary_profile(
+        repo / job["method_auxiliary_profile_path"]
+    ).require_method("drl_ts")
+    expected = {
+        "method_auxiliary_profile_id": profile.profile_id,
+        "method_auxiliary_sha256": profile.digest,
+        "method_auxiliary_snapshot": profile.to_dict(),
+        "method_auxiliary_method": profile.method,
+        "method_auxiliary_applicability": profile.applicability,
+        "method_auxiliary_aggregation": profile.aggregation,
+        "method_auxiliary_denominator": profile.denominator,
+        "method_auxiliary_step_clip": profile.step_clip,
+        "method_auxiliary_component_clip": profile.component_clip,
+        "method_auxiliary_weights": dict(profile.weights),
+    }
+    runtime_fields = {
+        "soft_violation_contract_id": profile.profile_id,
+        "soft_violation_step_clip": profile.step_clip,
+        "soft_violation_component_clip": profile.component_clip,
+        "soft_violation_denominator": profile.denominator,
+        "capacity_penalty": profile.weights["capacity"],
+        "time_penalty": profile.weights["time_window"],
+        "energy_penalty": profile.weights["energy"],
+        "soft_stage_end_epoch": job["soft_stage_end_epoch"],
+    }
+    training_result = {
+        **expected,
+        "soft_stage_end_epoch": job["soft_stage_end_epoch"],
+    }
+    checkpoint = tmp_path / "drl-ts.pt"
+    torch.save(
+        {
+            "args": {**expected, **runtime_fields},
+            "method_auxiliary_profile": profile.to_dict(),
+        },
+        checkpoint,
+    )
+    RUNTIME.validate_completed_method_auxiliary_contract(
+        job, context, training_result, checkpoint
+    )
+
+    stale_result = {**training_result, "method_auxiliary_step_clip": 2.0}
+    with pytest.raises(
+        RuntimeError, match="training_result method auxiliary mismatch"
+    ):
+        RUNTIME.validate_completed_method_auxiliary_contract(
+            job, context, stale_result, checkpoint
+        )
+
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    payload["args"]["time_penalty"] = 0.0
+    torch.save(payload, checkpoint)
+    with pytest.raises(RuntimeError, match="did not consume its auxiliary profile"):
+        RUNTIME.validate_completed_method_auxiliary_contract(
+            job, context, training_result, checkpoint
+        )
 
 
 @pytest.mark.parametrize("provenance", [None, {}, {"objective_config": {"mode": "distance"}}])

@@ -508,6 +508,46 @@ def test_constructor_budget_falls_back_only_to_complete_solution() -> None:
     assert solver.initial_construction_stats["budget_exhausted"] is True
 
 
+def test_deterministic_reference_constructor_ignores_clock_seed_and_rng(
+    monkeypatch,
+) -> None:
+    module = _load_current_solver_module()
+    instance = _tensor_instance(n_customers=8)
+    instance["certificate_singleton_routes"] = [
+        [0, customer, 0] for customer in range(1, 9)
+    ]
+
+    def construct(seed: int, clock_values: tuple[float, float]):
+        solver = module.ALNS_Solver(instance, seed=seed, format="tensor")
+        before = solver.rng.getstate()
+        clock = iter(clock_values)
+        monkeypatch.setattr(module.time, "perf_counter", lambda: next(clock))
+        routes = solver.construct_deterministic_reference_solution()
+        return solver, before, routes
+
+    first, first_rng, first_routes = construct(1, (0.0, 10.0**12))
+    second, second_rng, second_routes = construct(999_999, (91.0, -5.0))
+
+    assert first_routes == second_routes
+    assert first.is_solution_feasible(first_routes)
+    assert second.is_solution_feasible(second_routes)
+    assert first.rng.getstate() == first_rng
+    assert second.rng.getstate() == second_rng
+    assert first.initial_construction_stats["deterministic"] is True
+    assert first.initial_construction_stats["wall_clock_cutoff_enabled"] is False
+    assert first.initial_construction_stats["termination_basis"] == "candidate_limits_only"
+    assert first.initial_construction_stats["budget_exhausted"] is False
+    assert first.initial_construction_stats["result_route_count"] < 8
+
+
+def test_deterministic_reference_constructor_requires_replayed_certificate() -> None:
+    module = _load_current_solver_module()
+    solver = module.ALNS_Solver(_tensor_instance(), seed=7, format="tensor")
+
+    with pytest.raises(ValueError, match="Stage-2 certificate"):
+        solver.construct_deterministic_reference_solution()
+
+
 def test_route_at_exact_vehicle_capacity_is_feasible() -> None:
     module = _load_current_solver_module()
     instance = _tensor_instance(n_customers=1)
