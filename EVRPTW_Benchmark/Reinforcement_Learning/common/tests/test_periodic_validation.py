@@ -382,6 +382,20 @@ def test_completed_fixed_budget_can_resume_a_prefix_stable_extension(
     assert state["completed_data_passes"] == 1
     assert state["instances_seen"] == 8
     assert state["optimizer_steps"] == 4
+    diagnostics = [
+        json.loads(line)
+        for line in (args.output_dir / "reward_diagnostics.jsonl").read_text().splitlines()
+    ]
+    assert [row["logical_epoch"] for row in diagnostics] == [1, 2, 3, 4]
+    assert [row["optimizer_steps_total"] for row in diagnostics] == [1, 2, 3, 4]
+    assert diagnostics[0]["session_id"] == diagnostics[1]["session_id"]
+    assert diagnostics[2]["session_id"] == diagnostics[3]["session_id"]
+    assert diagnostics[0]["session_id"] != diagnostics[2]["session_id"]
+    assert diagnostics[0]["resume_requested"] is False
+    assert diagnostics[2]["resume_requested"] is True
+    assert diagnostics[2]["session_start_optimizer_steps"] == 2
+    assert diagnostics[2]["session_start_logical_epoch"] == 2
+    assert diagnostics[2]["resume_checkpoint"] == str(args.output_dir / "checkpoint_latest.pt")
 
 
 def test_two_phase_validation_schedule_has_exact_boundary_and_tail():

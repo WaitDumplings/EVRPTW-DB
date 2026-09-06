@@ -18,6 +18,7 @@ from evrptw_core.schema import merge_route_sequences
 
 from ..common.route_info import finalize_route_infos
 from ..common.objective import resolve_objective
+from ..common.training_diagnostics import summarize_values
 from .models.attention_model_wrapper import (
     DYNAMIC_OBSERVATION_KEYS,
     STATIC_OBSERVATION_KEYS,
@@ -165,6 +166,77 @@ def _defer_route_info(envs, enabled: bool):
             base.info_level = "full"
 
 
+class BoundedBaseRewardStats:
+    """CPU-only logging accumulator; never used to construct rewards or losses.
+
+    Moments cover every finite active transition. A fixed integer hash of the
+    global active-transition index chooses at most K values for approximate
+    quantiles, independent of chunking and without consuming a random stream.
+    """
+
+    def __init__(self, max_quantile_samples: int = 8192) -> None:
+        self.limit = int(max_quantile_samples)
+        if self.limit < 1:
+            raise ValueError("max_quantile_samples must be positive")
+        self.count = self.finite_count = 0
+        self.mean = self.m2 = 0.0
+        self.minimum, self.maximum = np.inf, -np.inf
+        self.samples = np.empty(0, dtype=np.float64)
+        self.priorities = np.empty(0, dtype=np.uint64)
+        self.threshold = np.iinfo(np.uint64).max
+
+    def update(self, values: np.ndarray, mask: np.ndarray) -> None:
+        active = np.asarray(values, dtype=np.float64)[np.asarray(mask, dtype=bool)].reshape(-1)
+        start = self.count
+        self.count += int(active.size)
+        finite_mask = np.isfinite(active)
+        finite = active[finite_mask]
+        if not finite.size:
+            return
+        chunk_count = int(finite.size)
+        chunk_mean = float(finite.mean())
+        delta = chunk_mean - self.mean
+        total_count = self.finite_count + chunk_count
+        self.m2 += float(np.square(finite - chunk_mean).sum()) + delta * delta * self.finite_count * chunk_count / total_count
+        self.mean += delta * chunk_count / total_count
+        self.finite_count = total_count
+        self.minimum = min(self.minimum, float(finite.min()))
+        self.maximum = max(self.maximum, float(finite.max()))
+
+        # SplitMix64 is a deterministic permutation, not a training RNG call.
+        priority = np.arange(start, self.count, dtype=np.uint64)[finite_mask]
+        priority = priority + np.uint64(0x9E3779B97F4A7C15)
+        priority = (priority ^ (priority >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        priority = (priority ^ (priority >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        priority = priority ^ (priority >> np.uint64(31))
+        if self.samples.size >= self.limit:
+            keep = priority < self.threshold
+            finite, priority = finite[keep], priority[keep]
+        if not finite.size:
+            return
+        samples = np.concatenate((self.samples, finite))
+        priorities = np.concatenate((self.priorities, priority))
+        if samples.size > self.limit:
+            keep = np.argpartition(priorities, self.limit - 1)[:self.limit]
+            samples, priorities = samples[keep], priorities[keep]
+        self.samples, self.priorities = samples, priorities
+        self.threshold = self.priorities.max()
+
+    def summary(self) -> dict[str, Any]:
+        result = summarize_values(self.samples, max_quantile_samples=self.limit)
+        result.update(
+            count=self.count, finite_count=self.finite_count,
+            nonfinite_count=self.count - self.finite_count,
+            mean=self.mean if self.finite_count and np.isfinite(self.mean) else None,
+            std=float(np.sqrt(max(self.m2 / self.finite_count, 0.0))) if self.finite_count and np.isfinite(self.m2) else None,
+            min=self.minimum if self.finite_count else None,
+            max=self.maximum if self.finite_count else None,
+            quantile_method="linear_on_deterministic_splitmix64_bottom_k_finite_active_observations",
+            quantiles_approximate=self.finite_count > self.limit,
+        )
+        return result
+
+
 def collect_rollout(
     agent,
     envs,
@@ -176,6 +248,7 @@ def collect_rollout(
     compact_observations: bool = True,
     cache_static_embeddings: bool = True,
     reward_discount_factor: float = 1.0,
+    base_reward_stats: BoundedBaseRewardStats | None = None,
 ) -> RolloutBatch:
     total_start = time.perf_counter()
     reset_start = time.perf_counter()
@@ -312,6 +385,8 @@ def collect_rollout(
                 + arrays["pbrs_feasible_ratio"]
             )
             arrays["shaping_total"] = arrays["shaped"] - arrays["base"]
+            if base_reward_stats is not None:
+                base_reward_stats.update(arrays["base"], active)
             num_customers = int(getattr(env.unwrapped, "num_customers", 0))
             customer_action = (
                 active

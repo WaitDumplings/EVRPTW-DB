@@ -13,6 +13,7 @@ import torch
 from scipy.stats import ttest_rel
 
 from .objective import objective_from_args, objective_from_checkpoint
+from .training_diagnostics import summarize_values
 from .training_protocol import (
     append_jsonl,
     atomic_json,
@@ -57,6 +58,125 @@ def prepare_training_objective(args: Any):
         if evidence:
             raise FileExistsError("fresh cost training requires a new output directory without training history")
     return config
+
+
+def _collect_diagnostic_values(
+    destination: dict[str, list[np.ndarray]], name: str, values: Any,
+) -> None:
+    """Detach one microbatch; storage lives for one logical update only."""
+    if values is None:
+        return
+    if isinstance(values, torch.Tensor):
+        values = values.detach().cpu().numpy()
+    destination.setdefault(name, []).append(
+        np.asarray(values, dtype=np.float64).reshape(-1).copy()
+    )
+
+
+def _summarize_diagnostic_groups(
+    groups: dict[str, list[np.ndarray]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        name: summarize_values(np.concatenate(parts))
+        for name, parts in groups.items() if parts
+    }
+
+
+def _collect_reinforce_diagnostics(
+    *, actor: Any, actor_cost: torch.Tensor, baseline_cost: torch.Tensor,
+    advantage: torch.Tensor, raw_distance: torch.Tensor,
+    active_objective: torch.Tensor, started_vehicles: torch.Tensor,
+    objective_config: Any, distributions: dict[str, list[np.ndarray]],
+    components: dict[str, list[np.ndarray]], scales: dict[str, list[np.ndarray]],
+) -> None:
+    for name, values in (
+        ("actor_training_cost", actor_cost),
+        ("baseline_training_cost", torch.broadcast_to(baseline_cost, actor_cost.shape)),
+        ("pre_loss_advantage", advantage),
+        ("raw_objective_value", active_objective),
+        ("raw_distance_km", raw_distance),
+        ("vehicles_started", started_vehicles),
+    ):
+        _collect_diagnostic_values(distributions, name, values)
+    if objective_config.is_cost:
+        # Detached CPU accounting, not inputs to the policy loss.
+        distributions.setdefault("raw_electricity_cost_usd", []).append(
+            distributions["raw_distance_km"][-1] * objective_config.distance_unit_cost
+        )
+        distributions.setdefault("raw_vehicle_cost_usd", []).append(
+            distributions["vehicles_started"][-1] * objective_config.vehicle_unit_cost
+        )
+    for name, values in (getattr(actor, "training_cost_components", None) or {}).items():
+        _collect_diagnostic_values(components, name, values)
+    _collect_diagnostic_values(scales, "objective_scale", getattr(actor, "reward_objective_scale", None))
+
+
+def _append_reinforce_diagnostics(
+    *, output: Path, method: str, args: Any, objective_config: Any,
+    session: dict[str, Any], data_pass: int, logical_epoch: int,
+    optimizer_steps: int, soft: bool, baseline_kind: str,
+    distributions: dict[str, list[np.ndarray]],
+    components: dict[str, list[np.ndarray]], scales: dict[str, list[np.ndarray]],
+    pre_clip_norm: Any,
+) -> None:
+    """Positive trajectory-cost diagnostics, never inputs to learning."""
+    diagnostics_started = time.perf_counter()
+    gradient = summarize_values(pre_clip_norm)
+    threshold = float(args.max_grad_norm)
+    pre_clip_value = gradient["mean"]
+    component_summaries = _summarize_diagnostic_groups(components)
+    row = {
+        "schema": "drl_reward_diagnostics_v1",
+        "method": method,
+        "protocol_id": args.protocol_id,
+        **session,
+        "data_pass": int(data_pass),
+        "logical_epoch": int(logical_epoch),
+        "optimizer_steps_total": int(optimizer_steps),
+        "training_stage": "soft" if soft else "hard",
+        "sample_unit": "candidate_trajectory_including_failed_or_truncated",
+        "cost_sign_convention": "positive_cost_lower_is_better_not_step_reward",
+        "advantage_definition": "actor_training_cost_minus_actual_baseline_cost_before_loss",
+        "baseline_kind": baseline_kind,
+        "objective_config": objective_config.to_dict(),
+        "objective_unit": objective_config.unit,
+        "normalization": {
+            "training_cost_unit": "dimensionless",
+            "base_objective_normalized": True,
+            "advantage_standardized": False,
+            "reward_objective_scale": _summarize_diagnostic_groups(scales).get("objective_scale", summarize_values([])),
+            "objective_scale_sample_unit": "base_instance_not_trajectory",
+            "objective_scale_unit": objective_config.unit,
+            "reward_distance_scale_km": getattr(args, "reward_distance_scale_km", None),
+            "reward_distance_scale_mode": getattr(args, "reward_distance_scale_mode", None),
+            "reward_distance_scale_metadata": getattr(args, "reward_distance_scale_metadata", None),
+        },
+        "distributions": _summarize_diagnostic_groups(distributions),
+        "components": component_summaries,
+        "component_unit": "dimensionless_positive_trajectory_cost",
+        "component_relationships": {
+            "base_objective": ["base_distance_term", "base_vehicle_term"],
+            "training_cost": [
+                name for name in component_summaries
+                if name not in {"base_distance_term", "base_vehicle_term"}
+            ],
+            "base_distance_term_meaning": "electricity_cost_normalized" if objective_config.is_cost else "distance_normalized",
+            "base_vehicle_term_meaning": "vehicle_cost_normalized" if objective_config.is_cost else "zero_no_vehicle_term",
+        },
+        "gradients": {
+            "pre_clip_norm": gradient,
+            "clip_max_norm": threshold,
+            "clipping_fraction": (
+                float(pre_clip_value > threshold) if pre_clip_value is not None else None
+            ),
+            "clipping_definition": "finite_pre_clip_norm_exceeds_clip_max_norm",
+            "optimizer_updates": 1,
+            "scope": "after_all_weighted_microbatch_backward_before_existing_clip",
+        },
+    }
+    row["diagnostics_compute_wall_time_s"] = time.perf_counter() - diagnostics_started
+    row["diagnostics_compute_wall_time_scope"] = "summary_and_row_creation_excluding_collection_and_file_write"
+    append_jsonl(output / "reward_diagnostics.jsonl", row)
 
 
 def paper_ema_baseline_due(method: str, optimizer_steps: int, args: Any) -> bool:
@@ -409,6 +529,14 @@ def train_reinforce_data_passes(
     environment_transitions_total = int(state.environment_transitions)
     starting_state_instances = int(state.instances_seen)
     starting_state_exposures = int(state.customer_exposures)
+    diagnostic_session = {
+        "session_id": str(time.time_ns()),
+        "resume_requested": bool(args.resume),
+        "resume_checkpoint": str(checkpoint) if args.resume else None,
+        "session_start_optimizer_steps": starting_optimizer_steps,
+        "session_start_logical_epoch": completed_logical_epochs,
+        "session_start_completed_data_passes": int(state.completed_data_passes),
+    }
     run_started = time.perf_counter()
     exposure_checkpoints = parse_int_checkpoints(getattr(args, "exposure_checkpoints", ""))
     gpu_hour_checkpoints = parse_float_checkpoints(getattr(args, "gpu_hour_checkpoints", ""))
@@ -488,6 +616,9 @@ def train_reinforce_data_passes(
             group_transitions = 0
             group_trajectory_steps: list[int] = []
             group_exhausted = 0
+            diagnostic_distributions: dict[str, list[np.ndarray]] = {}
+            diagnostic_components: dict[str, list[np.ndarray]] = {}
+            diagnostic_scales: dict[str, list[np.ndarray]] = {}
             optimizer.zero_grad(set_to_none=True)
             for sub_index, instances in enumerate(batch_group):
                 rollout_seed = int(args.seed) + data_pass * 10_000_000 + logical_epoch * 1000 + sub_index
@@ -522,6 +653,13 @@ def train_reinforce_data_passes(
                         raise ValueError("cost training requires a named objective_value")
                     active_objective = raw_distance
                 started_vehicles = getattr(actor, "vehicles_started", torch.zeros_like(raw_distance))
+                _collect_reinforce_diagnostics(
+                    actor=actor, actor_cost=actor_cost, baseline_cost=baseline_cost,
+                    advantage=advantage, raw_distance=raw_distance,
+                    active_objective=active_objective, started_vehicles=started_vehicles,
+                    objective_config=objective_config, distributions=diagnostic_distributions,
+                    components=diagnostic_components, scales=diagnostic_scales,
+                )
                 metrics = {
                     "loss": float(loss.detach().cpu()) * count,
                     "cost": float(actor_cost.mean().detach().cpu()) * count,
@@ -542,9 +680,17 @@ def train_reinforce_data_passes(
                 group_trajectory_steps.extend(actor_steps)
                 rollout_budget_exhausted_count += actor_exhausted
                 group_exhausted += actor_exhausted
-            torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
+            pre_clip_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
             optimizer.step()
             optimizer_steps += 1
+            _append_reinforce_diagnostics(
+                output=output, method=method, args=args, objective_config=objective_config,
+                session=diagnostic_session, data_pass=data_pass, logical_epoch=logical_epoch,
+                optimizer_steps=optimizer_steps, soft=group_soft,
+                baseline_kind="paper_ema" if use_ema else "greedy_rollout",
+                distributions=diagnostic_distributions, components=diagnostic_components,
+                scales=diagnostic_scales, pre_clip_norm=pre_clip_norm,
+            )
             if method == "EVRPTW-RL" and optimizer_steps == int(args.ema_warmup_steps):
                 baseline.load_state_dict(policy.state_dict())
             baseline_updated = False
@@ -1032,6 +1178,11 @@ def train_reinforce_data_passes(
         "objective_config": objective_config.to_dict(),
         "objective_mode": objective_config.mode,
         "objective_unit": objective_config.unit,
+        "reward_diagnostics": str(output / "reward_diagnostics.jsonl"),
+        "reward_diagnostics_schema": "drl_reward_diagnostics_v1",
+        "reward_distance_scale_km": getattr(args, "reward_distance_scale_km", None),
+        "reward_distance_scale_mode": getattr(args, "reward_distance_scale_mode", None),
+        "reward_distance_scale_metadata": getattr(args, "reward_distance_scale_metadata", None),
         "budget_mode": (
             "fixed_customer_exposure" if stream_path is not None else
             ("fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes")

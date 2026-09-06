@@ -29,6 +29,9 @@ class DRLTSRollout:
     environment_transitions: int
     trajectory_steps: torch.Tensor
     rollout_budget_exhausted: torch.Tensor
+    # CPU-only diagnostics; never used to recompute the training objective.
+    training_cost_components: dict[str, torch.Tensor] | None = None
+    reward_objective_scale: torch.Tensor | None = None
 
 
 def normalized_edge_matrices(
@@ -169,7 +172,7 @@ def rollout(
         dtype=np.float64,
     )[:, None]
     incomplete_fraction = 1.0 - served / np.maximum(customer_count, 1.0)
-    objective_value, objective_scale, vehicles_started, _ = rollout_objective_arrays(envs, infos)
+    objective_value, objective_scale, vehicles_started, distance_unit_cost = rollout_objective_arrays(envs, infos)
     training_cost = (
         objective_value / np.maximum(objective_scale, 1e-12)
         + float(capacity_penalty) * capacity_violation
@@ -178,6 +181,19 @@ def rollout(
         + (~completed)
         * (float(incomplete_penalty) * (1.0 + incomplete_fraction))
     )
+    diagnostic_components = {
+        "base_objective": objective_value / np.maximum(objective_scale, 1e-12),
+        "base_distance_term": objective * distance_unit_cost / np.maximum(objective_scale, 1e-12),
+        "base_vehicle_term": (
+            objective_value - objective * distance_unit_cost
+        ) / np.maximum(objective_scale, 1e-12),
+        "capacity_penalty": float(capacity_penalty) * capacity_violation,
+        "time_penalty": float(time_penalty) * time_violation,
+        "energy_penalty": float(energy_penalty) * energy_violation,
+        "incomplete_penalty": (~completed) * (
+            float(incomplete_penalty) * (1.0 + incomplete_fraction)
+        ),
+    }
     return DRLTSRollout(
         training_cost=torch.as_tensor(training_cost, device=policy.device).float(),
         objective_value=torch.as_tensor(objective_value, device=policy.device).float(),
@@ -204,6 +220,10 @@ def rollout(
         rollout_budget_exhausted=torch.as_tensor(
             ~done, device=policy.device
         ),
+        training_cost_components={
+            name: torch.as_tensor(value) for name, value in diagnostic_components.items()
+        },
+        reward_objective_scale=torch.as_tensor(objective_scale),
     )
 
 

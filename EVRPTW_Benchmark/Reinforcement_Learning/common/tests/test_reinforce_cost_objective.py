@@ -119,6 +119,28 @@ def test_reinforce_rollouts_use_active_base_and_preserve_auxiliary_penalties(
     np.testing.assert_allclose(result.objective_value.numpy()[0], active_value, rtol=1e-6)
     np.testing.assert_allclose(result.vehicles_started.numpy()[0], vehicles)
     np.testing.assert_allclose(result.training_cost.numpy()[0], expected, rtol=1e-6)
+    components = result.training_cost_components
+    assert components is not None
+    np.testing.assert_allclose(result.reward_objective_scale.numpy(), [[env.reward_objective_scale]])
+    np.testing.assert_allclose(
+        components["base_objective"][0], active_value / env.reward_objective_scale,
+    )
+    np.testing.assert_allclose(
+        components["base_distance_term"][0],
+        distance * objective.distance_unit_cost / env.reward_objective_scale,
+    )
+    np.testing.assert_allclose(
+        components["base_vehicle_term"][0],
+        vehicles * objective.vehicle_unit_cost / env.reward_objective_scale,
+    )
+    additive = [
+        value for name, value in components.items()
+        if name not in {"base_distance_term", "base_vehicle_term"}
+    ]
+    np.testing.assert_allclose(sum(additive).numpy(), result.training_cost.numpy(), rtol=1e-6)
+    assert all(value.device.type == "cpu" and not value.requires_grad for value in components.values())
+    assert result.reward_objective_scale.device.type == "cpu"
+    assert not result.reward_objective_scale.requires_grad
     expected_vehicles = 2 if actions == (1, 0, 2, 0) else 1
     assert vehicles.tolist() == [expected_vehicles, expected_vehicles]
     (result.training_cost.detach() * result.log_likelihood).mean().backward()
@@ -214,6 +236,10 @@ def test_soft_cost_rollout_retains_nonzero_capacity_penalty():
         max_steps=3, seed=1, soft_constraints=True, capacity_penalty=3.0,
     )
     assert result.capacity_violation.item() > 0.0
+    torch.testing.assert_close(
+        result.training_cost_components["capacity_penalty"].float(),
+        3.0 * result.capacity_violation,
+    )
     expected = (
         result.objective_value / env.reward_objective_scale
         + 3.0 * result.capacity_violation + result.time_violation + result.energy_violation

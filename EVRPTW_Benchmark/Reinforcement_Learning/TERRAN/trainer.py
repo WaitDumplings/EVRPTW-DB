@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 from pathlib import Path
 import random
 import shutil
@@ -27,6 +28,7 @@ from ..common import Stage2TaskPool
 from ..common.data_pass import DataPassState
 from ..common.evaluation import select_min_verified_objective
 from ..common.objective import objective_from_checkpoint, resolve_objective
+from ..common.training_diagnostics import summarize_values
 from ..common.training_protocol import append_jsonl, atomic_json, validation_key
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
@@ -36,13 +38,143 @@ from .models.attention_model_wrapper import (
     STATIC_OBSERVATION_KEYS,
 )
 from .pbrs import PotentialRewardConfig
-from .rollout import collect_rollout, compute_returns, rollout_eval_batch
+from .rollout import BoundedBaseRewardStats, collect_rollout, compute_returns, rollout_eval_batch
 
 OBJECTIVE_EVAL_FIELDS = (
     "eval_objective_mode", "eval_objective_unit", "eval_avg_objective",
     "eval_avg_objective_cost_usd", "eval_avg_electricity_cost_usd", "eval_avg_vehicle_cost_usd",
 )
 OBJECTIVE_REWARD_COMPONENTS = ("objective", "electricity_cost", "vehicle_cost", "base_non_objective")
+
+
+def _summarize_tensor_parts(parts, max_quantile_samples: int = 8192) -> dict[str, Any]:
+    """Pool detached buffer statistics without concatenating physical rollouts.
+
+    Full moments are merged by population size. For multiple physical buffers,
+    quantiles use global evenly spaced finite-observation positions; at most K
+    selected values (never complete reward/return buffers) cross to the CPU.
+    """
+    parts = list(parts)
+    if not parts:
+        return summarize_values(np.empty(0))
+    summaries = [summarize_values(values, mask, max_quantile_samples) for values, mask in parts]
+    if len(parts) == 1:
+        return summaries[0]
+    result = summarize_values(np.empty(0))
+    result.update({key: sum(row[key] for row in summaries) for key in ("count", "finite_count", "nonfinite_count")})
+    size = result["finite_count"]
+    if not size:
+        return result
+    nonempty = [row for row in summaries if row["finite_count"]]
+    if all(row["mean"] is not None and row["std"] is not None for row in nonempty):
+        mean = sum(row["mean"] * row["finite_count"] / size for row in nonempty)
+        variance = sum((row["std"] ** 2 + (row["mean"] - mean) ** 2) * row["finite_count"] / size for row in nonempty)
+        result.update(mean=mean, std=math.sqrt(max(variance, 0.0)))
+    result.update(min=min(row["min"] for row in nonempty), max=max(row["max"] for row in nonempty))
+    positions = np.linspace(0, size - 1, min(size, max_quantile_samples)).round().astype(np.int64)
+    sample_parts, offset = [], 0
+    with torch.no_grad():
+        for (values, mask), summary in zip(parts, summaries):
+            local = positions[(positions >= offset) & (positions < offset + summary["finite_count"])] - offset
+            offset += summary["finite_count"]
+            if not local.size:
+                continue
+            data = values.detach().reshape(-1)
+            flat_mask = mask.reshape(-1) if mask is not None else None
+            finite_seen = 0
+            for start in range(0, data.numel(), 262144):
+                chunk = data[start:start + 262144]
+                if flat_mask is not None:
+                    chunk = chunk[flat_mask[start:start + 262144]]
+                finite = chunk[torch.isfinite(chunk)]
+                chosen = local[(local >= finite_seen) & (local < finite_seen + finite.numel())] - finite_seen
+                finite_seen += finite.numel()
+                if chosen.size:
+                    indices = torch.as_tensor(chosen, device=finite.device)
+                    sample_parts.append(finite[indices].double().cpu().numpy())
+    sampled = summarize_values(np.concatenate(sample_parts), max_quantile_samples=max_quantile_samples)
+    result.update({key: sampled[key] for key in ("p05", "p50", "p95", "quantile_sample_count")})
+    return result
+
+
+def _json_safe_diagnostics(value):
+    if isinstance(value, dict):
+        return {key: _json_safe_diagnostics(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_diagnostics(item) for item in value]
+    if isinstance(value, (float, np.floating)):
+        return float(value) if math.isfinite(float(value)) else None
+    return value
+
+
+@torch.no_grad()
+def build_epoch_reward_diagnostics(
+    *, cfg, epoch, session_id, start_epoch, resume_from, rollout_records,
+    raw_advantages, base_reward_stats, reward_components, normalization_records,
+    preclip_norms, optimizer_steps_total, pbrs_scale,
+) -> dict[str, Any]:
+    """Logging-only view of tensors already consumed by the completed PPO update."""
+    distributions = {
+        "base_reward_per_active_step": {"population": "masked_active_transitions", **base_reward_stats.summary()},
+        "shaped_reward_per_active_step": {"population": "masked_active_transitions", **_summarize_tensor_parts((batch.rewards, batch.valid) for batch, _, _ in rollout_records)},
+        "shaped_return_to_go": {"population": "masked_active_transition_return_to_go", **_summarize_tensor_parts((returns, batch.valid) for batch, returns, _ in rollout_records)},
+        "advantage_before_normalization": {"population": "masked_active_transitions", **summarize_values(raw_advantages)},
+        "advantage_after_normalization": {"population": "masked_active_transitions", **_summarize_tensor_parts((advantages, batch.valid) for batch, _, advantages in rollout_records)},
+    }
+    initial_returns, trajectory_totals = [], []
+    for batch, returns, _ in rollout_records:
+        active_trajectory, first = batch.valid.max(dim=0)
+        initial_returns.append((returns.gather(0, first.unsqueeze(0)).squeeze(0), active_trajectory))
+        dtype = torch.float32 if batch.rewards.device.type == "mps" else torch.float64
+        total = torch.zeros_like(batch.rewards[0], dtype=dtype)
+        step_chunk = max(1, 262144 // max(batch.rewards[0].numel(), 1))
+        for start in range(0, batch.rewards.size(0), step_chunk):
+            active_rewards = torch.where(batch.valid[start:start + step_chunk], batch.rewards[start:start + step_chunk], 0.0)
+            total += active_rewards.sum(dim=0, dtype=dtype)
+        trajectory_totals.append((total, active_trajectory))
+    distributions["shaped_initial_return_per_trajectory"] = {"population": "one_initial_return_per_nonempty_trajectory", **_summarize_tensor_parts(initial_returns)}
+    distributions["shaped_total_per_trajectory"] = {"population": "one_undiscounted_masked_reward_sum_per_nonempty_trajectory", **_summarize_tensor_parts(trajectory_totals)}
+    active_count = int(raw_advantages.numel())
+    trajectory_count = distributions["shaped_initial_return_per_trajectory"]["count"]
+    normalized = [row["normalize_reward"] for row in normalization_records]
+    scale_mode = cfg.get("normalization", {}).get("reward_distance_scale_mode", cfg.get("env", {}).get("reward_distance_scale_mode", "single_customer_repair_median"))
+    normalization = {
+        "objective": resolve_objective(cfg.get("objective")).to_dict(),
+        "training_pool_metadata": dict(cfg.get("normalization", {})),
+        "reward_distance_scale_mode": scale_mode,
+        "reward_distance_scale_source": cfg.get("normalization", {}).get("reward_distance_scale_source", "explicit_env_scale" if cfg.get("env", {}).get("reward_distance_scale_km") is not None else "per_instance"),
+        "normalize_reward": normalized[0] if normalized and len(set(normalized)) == 1 else "mixed_or_unavailable",
+        "distance_scale_km": summarize_values([row["distance_scale_km"] for row in normalization_records]),
+        "objective_scale": summarize_values([row["objective_scale"] for row in normalization_records]),
+        "applied_reward_divisor": summarize_values([row["objective_scale"] if row["normalize_reward"] else 1.0 for row in normalization_records]),
+        "scale_population": "one_scale_per_environment_reset_in_this_epoch",
+        "gamma": training_gamma(cfg), "pbrs_annealing_scale": pbrs_scale,
+        "advantage_normalization_applied": active_count > 1,
+        "advantage_normalization_epsilon": 1e-8,
+    }
+    names = sorted(key.removesuffix("_sum") for key in reward_components if key.endswith("_sum") and not key.endswith(("_abs_sum", "_discounted_sum", "_customer_action_sum", "_noncustomer_action_sum")))
+    components = {
+        name: {
+            "active_step_sum": reward_components[f"{name}_sum"],
+            "active_step_mean": reward_components[f"{name}_sum"] / max(active_count, 1),
+            "active_step_abs_mean": reward_components.get(f"{name}_abs_sum", 0.0) / max(active_count, 1),
+            "mean_sum_per_trajectory": reward_components[f"{name}_sum"] / max(trajectory_count, 1),
+            "mean_discounted_sum_per_trajectory": reward_components.get(f"{name}_discounted_sum") / max(trajectory_count, 1) if f"{name}_discounted_sum" in reward_components else None,
+        } for name in names
+    }
+    norm_values = torch.stack(preclip_norms) if preclip_norms else torch.empty(0)
+    max_grad_norm = float(cfg.get("training", {}).get("max_grad_norm", 1.0))
+    clip_flags = norm_values > max_grad_norm
+    clip_stats = summarize_values(clip_flags, torch.isfinite(norm_values))
+    return _json_safe_diagnostics({
+        "schema": "drl_reward_diagnostics_v1", "method": "TERRAN", "epoch": int(epoch), "logical_epoch": int(epoch),
+        "session_id": session_id, "start_epoch": int(start_epoch), "resume_from": str(resume_from) if resume_from else None,
+        "optimizer_steps_total": int(optimizer_steps_total), "normalization": normalization,
+        "mask": {"source": "RolloutBatch.valid (active before action; terminal transition included, finished padding excluded)", "active_transition_count": active_count, "trajectory_count": trajectory_count},
+        "distributions": distributions, "components": components,
+        "component_units": "actual training reward components after configured environment normalization; distance is the separate historical km-scale diagnostic, PBRS remains auxiliary; these are not raw USD costs",
+        "gradients": {"preclip_global_norm": summarize_values(norm_values), "max_grad_norm": max_grad_norm, "clip_fraction": clip_stats["mean"], "clip_fraction_finite_optimizer_steps": clip_stats["count"], "clip_fraction_definition": "returned_preclip_norm > max_grad_norm on finite norms", "capture": "return value of the existing single clip_grad_norm_ call after all backward accumulation, before optimizer.step"},
+    })
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -822,6 +954,8 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     log_path = log_dir / "train_log.csv"
     eval_log_path = log_dir / "eval_log.csv"
     debug_log_path = log_dir / "debug_log.txt"
+    reward_diagnostics_path = (out_root if cfg.get("output_dir") else log_dir) / "reward_diagnostics.jsonl"
+    diagnostic_session_id = f"{os.getpid()}-{time.time_ns()}"
     validation_history_path = out_root / "validation_history.jsonl"
     validation_summary_path = out_root / "validation_summary.json"
     validation_summary_within_path = out_root / "validation_summary_within_5000.json"
@@ -1045,6 +1179,8 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             reward_sum = 0.0
             reward_count = 0
             reward_diagnostics: dict[str, float] = {}
+            base_reward_stats = BoundedBaseRewardStats()
+            normalization_records = []
             environment_transitions = 0
             rollout_budget_exhausted_count = 0
             for microbatch_index in range(logical_microbatches_per_epoch):
@@ -1058,7 +1194,15 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     profile_timing=profile_timing,
                     cache_static_embeddings=cache_rollout_encoder,
                     reward_discount_factor=gamma,
+                    base_reward_stats=base_reward_stats,
                 )
+                for env in envs:
+                    base_env = getattr(env, "unwrapped", env)
+                    normalization_records.append({
+                        "normalize_reward": bool(getattr(base_env, "normalize_reward", False)),
+                        "distance_scale_km": float(getattr(base_env, "reward_distance_scale_km", 1.0)),
+                        "objective_scale": float(getattr(base_env, "reward_objective_scale", 1.0)),
+                    })
                 returns = compute_returns(batch.rewards, batch.dones, gamma=gamma)
                 advantages = returns - batch.values
                 rollout_records.append((batch, returns, advantages))
@@ -1119,6 +1263,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 ]
 
             losses = []
+            preclip_norms = []
             num_envs = int(rollout_records[0][0].actions.size(1))
             minibatches = min(num_minibatches, num_envs)
             effective_instances = num_envs * logical_microbatches_per_epoch
@@ -1189,10 +1334,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                             group_policy += weighted_policy / group_size
                             group_value += weighted_value / group_size
                             group_entropy += weighted_entropy / group_size
-                        torch.nn.utils.clip_grad_norm_(
+                        preclip_norm = torch.nn.utils.clip_grad_norm_(
                             agent.parameters(),
                             float(train_cfg.get("max_grad_norm", 1.0)),
                         )
+                        preclip_norms.append(preclip_norm.detach())
                         optimizer.step()
                         optimizer_steps_total += 1
                         losses.append(
@@ -1261,10 +1407,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                                 group_policy += policy_loss.item() * weight
                                 group_value += value_loss.item() * weight
                                 group_entropy += entropy.item() * weight
-                    torch.nn.utils.clip_grad_norm_(
+                    preclip_norm = torch.nn.utils.clip_grad_norm_(
                         agent.parameters(),
                         float(train_cfg.get("max_grad_norm", 1.0)),
                     )
+                    preclip_norms.append(preclip_norm.detach())
                     optimizer.step()
                     optimizer_steps_total += 1
                     losses.append((group_policy, group_value, group_entropy))
@@ -1621,6 +1768,17 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 }
             )
             f.flush()
+            diagnostics_start = time.perf_counter()
+            diagnostic_record = build_epoch_reward_diagnostics(
+                cfg=cfg, epoch=epoch, session_id=diagnostic_session_id,
+                start_epoch=start_epoch, resume_from=resume_checkpoint,
+                rollout_records=rollout_records, raw_advantages=all_advantages,
+                base_reward_stats=base_reward_stats, reward_components=reward_diagnostics,
+                normalization_records=normalization_records, preclip_norms=preclip_norms,
+                optimizer_steps_total=optimizer_steps_total, pbrs_scale=pbrs_scale,
+            )
+            diagnostic_record["diagnostics_compute_wall_time_s"] = time.perf_counter() - diagnostics_start
+            append_jsonl(reward_diagnostics_path, diagnostic_record)
             if should_eval or epoch % checkpoint_interval == 0 or epoch == epochs:
                 save_checkpoint(ckpt_dir / f"checkpoint_epoch_{epoch:04d}.pt", agent, optimizer, cfg, epoch, seed)
             observed_exposure = int(pool.sample_count) * num_customers

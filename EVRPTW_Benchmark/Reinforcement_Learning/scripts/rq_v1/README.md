@@ -29,6 +29,13 @@ TERRAN uses `terran_undiscounted_energy_vehicle_pbrs_v1`, with `gamma=1.0`
 in both returns and PBRS. The other methods retain their native auxiliary
 shaping and training-stage schedules. Architectures, data and budgets are unchanged.
 
+All four formal trainers also write an observational `reward_diagnostics.jsonl`
+inside their run output directory. It records normalization provenance,
+training-cost/reward components, advantage distributions and pre-clipping
+gradient statistics without changing training. See
+[`TRAINING_REWARD_DIAGNOSTICS.md`](../../TRAINING_REWARD_DIAGNOSTICS.md)
+for units, method-specific interpretation, sampling and resume boundaries.
+
 After stopping any old queue on the server and pulling the new commit, restart
 **all four methods** from scratch, without loading an older checkpoint:
 
