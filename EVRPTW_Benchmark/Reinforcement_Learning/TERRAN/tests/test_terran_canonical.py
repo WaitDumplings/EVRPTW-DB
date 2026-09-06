@@ -136,6 +136,18 @@ def test_invalid_gamma_is_rejected_by_training_and_pbrs(gamma: float) -> None:
         PotentialRewardConfig(gamma=gamma)
 
 
+@pytest.mark.parametrize(
+    "bonus", [-0.01, float("nan"), float("inf"), -float("inf")]
+)
+def test_invalid_terminal_success_bonus_is_rejected(bonus: float) -> None:
+    with pytest.raises(ValueError, match="terminal_success_bonus"):
+        PotentialRewardConfig(terminal_success_bonus=bonus)
+    with pytest.raises(ValueError, match="terminal_success_bonus"):
+        terran_trainer.terminal_success_bonus(
+            {"pbrs": {"terminal_success_bonus": bonus}}
+        )
+
+
 @pytest.mark.parametrize("gamma", [0.0, 0.999, 1.0])
 @pytest.mark.parametrize("contract", [None, "terran_undiscounted_distance_pbrs_v1"])
 def test_resume_accepts_matching_gamma_and_reward_contract(
@@ -271,6 +283,7 @@ def _terran_scientific_signature_config() -> dict:
             "eval_interval": 5,
             "eval_batch_size": 1,
         },
+        "pbrs": {"terminal_success_bonus": 1.0},
         "protocol": {
             "protocol_id": "terran-signature-test",
             "physical_batch_size": 4,
@@ -311,6 +324,10 @@ def test_terran_resolved_training_signature_freezes_method_specific_fields() -> 
 
     assert signature["schema"] == "drl_resolved_training_signature_v1"
     assert signature["method_specific"]["method"] == "TERRAN"
+    assert signature["method_specific"]["task_reward"] == {
+        "terminal_success_bonus": 1.0,
+        "unit": "normalized_objective_cost",
+    }
     assert signature["method_specific"]["training"] == {
         "epochs": 10,
         "num_envs_per_gpu": 4,
@@ -351,6 +368,7 @@ def test_terran_resolved_training_signature_freezes_method_specific_fields() -> 
         "ppo_update_epochs",
         "num_minibatches",
         "ppo_step_chunk_size",
+        "terminal_success_bonus",
         "eval_seed",
         "eval_decode",
         "eval_n_traj",
@@ -383,6 +401,8 @@ def test_terran_resume_rejects_resolved_scientific_signature_drift(
         current["training"]["num_minibatches"] = 3
     elif changed == "ppo_step_chunk_size":
         current["training"]["ppo_step_chunk_size"] = 2
+    elif changed == "terminal_success_bonus":
+        current["pbrs"]["terminal_success_bonus"] = 0.5
     elif changed == "eval_seed":
         current["evaluation"]["eval_seed"] = 78
         current["protocol"]["validation_seed"] = 78
@@ -658,12 +678,15 @@ def test_terminal_task_penalty_has_failure_floor_even_when_all_customers_served(
         "rollout_budget_exhausted_not_returned"
     ]
     components = info["reward_components"]
+    assert components["terminal_success_bonus"].tolist() == [0.0]
     assert components["terminal_failure_base"].tolist() == pytest.approx([-2.25])
     assert components["terminal_unserved"].tolist() == [0.0]
     assert components["terminal_task_total"].tolist() == pytest.approx([-2.25])
     np.testing.assert_allclose(
         components["terminal_task_total"],
-        components["terminal_failure_base"] + components["terminal_unserved"],
+        components["terminal_success_bonus"]
+        + components["terminal_failure_base"]
+        + components["terminal_unserved"],
     )
     np.testing.assert_allclose(
         components["shaped"],
@@ -679,6 +702,7 @@ def test_terminal_task_penalty_has_failure_floor_even_when_all_customers_served(
     # for a second time.
     _, _, _, _, info = env.step(np.asarray([0]))
     assert info["reward_components"]["terminal_task_total"].tolist() == [0.0]
+    assert info["reward_components"]["terminal_success_bonus"].tolist() == [0.0]
 
 
 def test_terminal_task_penalty_separates_floor_and_unserved_components() -> None:
@@ -704,12 +728,15 @@ def test_terminal_task_penalty_separates_floor_and_unserved_components() -> None
     assert info["failure_reason"].tolist() == ["rollout_budget_exhausted"]
     components = info["reward_components"]
     assert components["base_non_objective"].tolist() == [0.0]
+    assert components["terminal_success_bonus"].tolist() == [0.0]
     assert components["terminal_failure_base"].tolist() == pytest.approx([-2.25])
     assert components["terminal_unserved"].tolist() == pytest.approx([-0.5])
     assert components["terminal_task_total"].tolist() == pytest.approx([-2.75])
     np.testing.assert_allclose(
         components["terminal_task_total"],
-        components["terminal_failure_base"] + components["terminal_unserved"],
+        components["terminal_success_bonus"]
+        + components["terminal_failure_base"]
+        + components["terminal_unserved"],
     )
     np.testing.assert_allclose(
         components["shaped"],
@@ -720,6 +747,52 @@ def test_terminal_task_penalty_separates_floor_and_unserved_components() -> None
         + components["terminal_heuristic"]
         + components["terminal_task_total"],
     )
+
+
+def test_terminal_task_success_bonus_is_once_only_and_not_pbrs_annealed() -> None:
+    env = make_terran_env(
+        instance=_instance(),
+        n_traj=1,
+        charging_mode="station_power_full",
+        matrix_mode="canonical",
+        info_level="full",
+        use_jit_mask=False,
+        invalid_action_penalty=0.0,
+        rollout_horizon_steps=3,
+        pbrs_config=PotentialRewardConfig(
+            use_terminal_task_penalty=True,
+            terminal_success_bonus=1.0,
+            failure_base=2.25,
+            unserved_coefficient=1.0,
+        ),
+    )
+    # The completion reward is a task term and must not follow the auxiliary
+    # PBRS annealing scale.
+    env.set_reward_scale(0.0)
+    env.reset(seed=145)
+    env.step(np.asarray([1]))
+    env.step(np.asarray([2]))
+    _, _, terminated, truncated, info = env.step(np.asarray([0]))
+
+    assert terminated[0]
+    assert not truncated[0]
+    assert info["success"].tolist() == [True]
+    components = info["reward_components"]
+    assert components["terminal_success_bonus"].tolist() == [1.0]
+    assert components["terminal_failure_base"].tolist() == [0.0]
+    assert components["terminal_unserved"].tolist() == [0.0]
+    assert components["terminal_task_total"].tolist() == [1.0]
+    np.testing.assert_allclose(
+        components["terminal_task_total"],
+        components["terminal_success_bonus"]
+        + components["terminal_failure_base"]
+        + components["terminal_unserved"],
+    )
+
+    # Padding an already completed trajectory cannot collect a second bonus.
+    _, _, _, _, info = env.step(np.asarray([0]))
+    assert info["reward_components"]["terminal_success_bonus"].tolist() == [0.0]
+    assert info["reward_components"]["terminal_task_total"].tolist() == [0.0]
 
 
 def test_terran_completion_at_rollout_horizon_gets_success_not_failure() -> None:
@@ -945,7 +1018,8 @@ def test_reward_diagnostics_match_active_rollout_rewards() -> None:
     )
     assert np.isclose(
         diagnostics["terminal_task_total_sum"],
-        diagnostics["terminal_failure_base_sum"]
+        diagnostics["terminal_success_bonus_sum"]
+        + diagnostics["terminal_failure_base_sum"]
         + diagnostics["terminal_unserved_sum"],
         atol=1e-6,
     )
@@ -1117,6 +1191,18 @@ def test_fixed_epoch_protocol_does_not_expand_to_a_full_data_pass(
     assert configured["protocol"]["views_per_pass"] == 5_000
     assert meta is not None and meta["physical_batch_size"] == 1
     assert meta["effective_batch_size"] == 2
+
+
+def test_frozen_protocol_requires_explicit_terminal_success_bonus() -> None:
+    args = SimpleNamespace(
+        training_epochs=1,
+        data_passes=None,
+        protocol_id="drl_rq_protocol_frozen_v1",
+        terminal_success_bonus=None,
+    )
+
+    with pytest.raises(ValueError, match="explicit --terminal-success-bonus"):
+        terran_protocol.configure_protocol(args, {})
 
 
 @pytest.mark.parametrize("gamma", [1.0, 0.999])

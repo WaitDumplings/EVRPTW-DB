@@ -400,7 +400,11 @@ def test_common_reward_contract_configures_terran_task_terms() -> None:
         "data": {"stage2_scale": "Cus2", "num_customers": 2},
         "training": {"reward_contract_id": "stale"},
         "env": {"normalize_reward": False, "invalid_action_penalty": -1.0},
-        "pbrs": {"use_terminal_heuristic": True, "success_bonus": 0.1},
+        "pbrs": {
+            "use_terminal_heuristic": True,
+            "success_bonus": 0.1,
+            "terminal_success_bonus": 1.0,
+        },
     }
 
     trainer._configure_reward_contract(cfg)
@@ -412,8 +416,18 @@ def test_common_reward_contract_configures_terran_task_terms() -> None:
     assert cfg["env"]["success_bonus"] == 0.0
     assert cfg["pbrs"]["use_terminal_heuristic"] is False
     assert cfg["pbrs"]["use_terminal_task_penalty"] is True
+    assert cfg["pbrs"]["terminal_success_bonus"] == 1.0
     assert cfg["pbrs"]["failure_base"] == 2.5
     assert cfg["pbrs"]["unserved_coefficient"] == 1.0
+    assert cfg["normalization"]["terran_terminal_success_bonus"] == 1.0
+    assert (
+        cfg["normalization"]["terran_terminal_success_bonus_unit"]
+        == "normalized_objective_cost"
+    )
+    assert (
+        cfg["normalization"]["terran_terminal_success_bonus_equivalent_usd"]
+        == 123.0
+    )
 
 
 def test_resume_accepts_exact_frozen_reward_contract_scale_and_terms() -> None:
@@ -438,6 +452,8 @@ def test_resume_rejects_other_scale_from_same_multiscale_contract() -> None:
         ("normalization", "reward_objective_scale"),
         ("normalization", "failure_base"),
         ("normalization", "unserved_coefficient"),
+        ("normalization", "terran_terminal_success_bonus"),
+        ("normalization", "terran_terminal_success_bonus_equivalent_usd"),
         ("env", "reward_objective_scale"),
         ("pbrs", "failure_base"),
         ("pbrs", "unserved_coefficient"),
@@ -479,11 +495,36 @@ def test_checkpoint_provenance_rejects_disabled_reward_normalization(
         )
 
 
+def test_checkpoint_provenance_records_terminal_success_bonus_scale(
+    tmp_path: Path,
+) -> None:
+    saved = _configured_reward_contract("Cus2")
+    saved["pbrs"]["terminal_success_bonus"] = 1.0
+    trainer._configure_reward_contract(saved)
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save({"config": saved}, checkpoint)
+
+    provenance = terran_protocol._checkpoint_reward_contract_provenance(
+        checkpoint,
+        scale="Cus2",
+        objective=_objective(),
+    )
+
+    assert provenance is not None
+    assert provenance["terran_terminal_success_bonus"] == 1.0
+    assert (
+        provenance["terran_terminal_success_bonus_unit"]
+        == "normalized_objective_cost"
+    )
+    assert provenance["terran_terminal_success_bonus_equivalent_usd"] == 123.0
+
+
 @pytest.mark.parametrize(
     ("section", "field", "value"),
     [
         ("pbrs", "customer_progress_budget", 0.7),
         ("pbrs", "repair_progress_coef", 0.7),
+        ("pbrs", "terminal_success_bonus", 1.0),
         ("annealing", "end_epoch", 400),
         ("annealing", "schedule", "linear"),
     ],
@@ -495,7 +536,10 @@ def test_resume_rejects_pbrs_shaping_drift_under_same_shared_contract(
     saved = deepcopy(current)
     target = saved["pbrs"] if section == "pbrs" else saved["pbrs"]["annealing"]
     target[field] = value
-    trainer._freeze_pbrs_reward_semantics(saved)
+    if field == "terminal_success_bonus":
+        trainer._configure_reward_contract(saved)
+    else:
+        trainer._freeze_pbrs_reward_semantics(saved)
     assert saved["reward_contract"]["sha256"] == current["reward_contract"]["sha256"]
 
     with pytest.raises(ValueError, match="PBRS shaping semantics mismatch"):

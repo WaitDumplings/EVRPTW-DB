@@ -102,7 +102,7 @@ def test_epoch_log_distinguishes_steps_initial_returns_and_gradients_without_mut
     assert result["components"]["base"]["mean_sum_per_trajectory"] == 5.25
     relationships = result["component_relationships"]
     assert relationships["terminal_task_total"] == [
-        "terminal_failure_base", "terminal_unserved",
+        "terminal_success_bonus", "terminal_failure_base", "terminal_unserved",
     ]
     assert relationships["shaping_total"] == [
         "pbrs_total", "terminal_heuristic",

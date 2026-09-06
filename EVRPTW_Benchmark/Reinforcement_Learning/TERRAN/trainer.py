@@ -53,7 +53,10 @@ from .models.attention_model_wrapper import (
     DYNAMIC_OBSERVATION_KEYS,
     STATIC_OBSERVATION_KEYS,
 )
-from .pbrs import PotentialRewardConfig
+from .pbrs import (
+    TERMINAL_TASK_REWARD_UNIT,
+    PotentialRewardConfig,
+)
 from .rollout import BoundedBaseRewardStats, collect_rollout, compute_returns, rollout_eval_batch
 
 OBJECTIVE_EVAL_FIELDS = (
@@ -197,6 +200,7 @@ def build_epoch_reward_diagnostics(
                 "pbrs_feasible_ratio",
             ],
             "terminal_task_total": [
+                "terminal_success_bonus",
                 "terminal_failure_base",
                 "terminal_unserved",
             ],
@@ -216,7 +220,7 @@ def build_epoch_reward_diagnostics(
                 "shaped",
             ],
         },
-        "component_units": "actual training reward components after configured environment normalization; distance is the separate historical km-scale diagnostic, shaping_total contains only auxiliary PBRS plus the disabled-by-contract legacy heuristic, and terminal_task_total is a separate non-annealed task penalty; these are not raw USD costs",
+        "component_units": "actual training reward components after configured environment normalization; distance is the separate historical km-scale diagnostic, shaping_total contains only auxiliary PBRS plus the disabled-by-contract legacy heuristic, and terminal_task_total is a separate non-annealed task outcome reward (success bonus plus signed failure terms); these are not raw USD costs",
         "gradients": {"preclip_global_norm": summarize_values(norm_values), "max_grad_norm": max_grad_norm, "clip_fraction": clip_stats["mean"], "clip_fraction_finite_optimizer_steps": clip_stats["count"], "clip_fraction_definition": "returned_preclip_norm > max_grad_norm on finite norms", "capture": "return value of the existing single clip_grad_norm_ call after all backward accumulation, before optimizer.step"},
     })
 
@@ -248,6 +252,20 @@ def training_gamma(cfg: dict[str, Any]) -> float:
     return gamma
 
 
+def terminal_success_bonus(cfg: Mapping[str, Any]) -> float:
+    """Resolve the canonical completion reward in normalized-cost units."""
+
+    pbrs = cfg.get("pbrs", {}) or {}
+    if not isinstance(pbrs, Mapping):
+        raise ValueError("TERRAN pbrs configuration must be a mapping")
+    value = float(pbrs.get("terminal_success_bonus", 0.0))
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(
+            "TERRAN pbrs.terminal_success_bonus must be finite and non-negative"
+        )
+    return value
+
+
 def _selected_reward_contract_terms(
     cfg: dict[str, Any], contract: RewardContract, *, source: str,
 ):
@@ -274,6 +292,7 @@ def _selected_reward_contract_terms(
             f"TERRAN {source} reward contract selection is invalid: {error}"
         ) from error
 
+    completion_bonus = terminal_success_bonus(cfg)
     expected = {
         ("training", "reward_contract_id"): terms.contract_id,
         ("normalization", "reward_contract_id"): terms.contract_id,
@@ -282,6 +301,11 @@ def _selected_reward_contract_terms(
         ("normalization", "reward_objective_scale"): terms.objective_scale,
         ("normalization", "failure_base"): terms.failure_base,
         ("normalization", "unserved_coefficient"): terms.unserved_coefficient,
+        ("normalization", "terran_terminal_success_bonus"): completion_bonus,
+        ("normalization", "terran_terminal_success_bonus_unit"):
+            TERMINAL_TASK_REWARD_UNIT,
+        ("normalization", "terran_terminal_success_bonus_equivalent_usd"):
+            completion_bonus * terms.objective_scale,
         ("env", "normalize_reward"): True,
         ("env", "reward_objective_scale"): terms.objective_scale,
         ("env", "invalid_action_penalty"): 0.0,
@@ -289,6 +313,7 @@ def _selected_reward_contract_terms(
         ("pbrs", "use_terminal_heuristic"): False,
         ("pbrs", "use_terminal_task_penalty"): True,
         ("pbrs", "success_bonus"): 0.0,
+        ("pbrs", "terminal_success_bonus"): completion_bonus,
         ("pbrs", "failure_base"): terms.failure_base,
         ("pbrs", "unserved_coefficient"): terms.unserved_coefficient,
     }
@@ -461,8 +486,21 @@ def resolved_terran_scientific_fields(
     stream_sha = _validated_training_stream_sha(
         cfg, source="scientific signature"
     )
+    completion_bonus = terminal_success_bonus(cfg)
+    protocol_completion_bonus = protocol.get("terran_terminal_success_bonus")
+    if (
+        protocol_completion_bonus is not None
+        and float(protocol_completion_bonus) != completion_bonus
+    ):
+        raise ValueError(
+            "TERRAN protocol terminal success bonus disagrees with task reward"
+        )
     return {
         "method": "TERRAN",
+        "task_reward": {
+            "terminal_success_bonus": completion_bonus,
+            "unit": TERMINAL_TASK_REWARD_UNIT,
+        },
         "training": {
             "epochs": epochs,
             "num_envs_per_gpu": num_envs,
@@ -997,6 +1035,7 @@ def build_pbrs_config(cfg: dict[str, Any]) -> PotentialRewardConfig | None:
         repair_progress_coef=float(pbrs.get("repair_progress_coef", 0.5)),
         feasible_ratio_coef=float(pbrs.get("feasible_ratio_coef", 0.0)),
         pbrs_clip=pbrs.get("pbrs_clip", None),
+        terminal_success_bonus=terminal_success_bonus(cfg),
         success_bonus=float(pbrs.get("success_bonus", 0.1)),
         failure_penalty=float(pbrs.get("failure_penalty", 0.5)),
         failure_base=float(pbrs.get("failure_base", 0.0)),
@@ -1053,7 +1092,7 @@ def _resolved_pbrs_reward_semantics(cfg: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("PBRS annealing scales must be finite and non-negative")
     config = build_pbrs_config(cfg)
     return {
-        "schema": "terran_pbrs_reward_semantics_v1",
+        "schema": "terran_pbrs_reward_semantics_v2",
         "wrapper_enabled": config is not None,
         "potential_reward_config": asdict(config) if config is not None else None,
         "annealing": dict(annealing),
@@ -1091,6 +1130,7 @@ def _configure_reward_contract(cfg: dict[str, Any]) -> None:
     if raw_scale in (None, ""):
         raw_scale = f"Cus{int(data.get('num_customers', 0))}"
     terms = contract.for_scale(raw_scale, objective)
+    completion_bonus = terminal_success_bonus(cfg)
     cfg["reward_contract"] = contract.to_dict()
     cfg.setdefault("training", {})["reward_contract_id"] = terms.contract_id
     cfg.setdefault("normalization", {}).update(
@@ -1101,6 +1141,11 @@ def _configure_reward_contract(cfg: dict[str, Any]) -> None:
             "reward_objective_scale": terms.objective_scale,
             "failure_base": terms.failure_base,
             "unserved_coefficient": terms.unserved_coefficient,
+            "terran_terminal_success_bonus": completion_bonus,
+            "terran_terminal_success_bonus_unit": TERMINAL_TASK_REWARD_UNIT,
+            "terran_terminal_success_bonus_equivalent_usd": (
+                completion_bonus * terms.objective_scale
+            ),
             "reward_objective_scale_source": "frozen_training_reference_contract",
         }
     )
@@ -1117,6 +1162,7 @@ def _configure_reward_contract(cfg: dict[str, Any]) -> None:
             "use_terminal_heuristic": False,
             "use_terminal_task_penalty": True,
             "success_bonus": 0.0,
+            "terminal_success_bonus": completion_bonus,
             "failure_base": terms.failure_base,
             "unserved_coefficient": terms.unserved_coefficient,
         }
@@ -1820,6 +1866,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "reward_pbrs_repair_distance_mean",
         "reward_terminal_heuristic_mean",
         "reward_terminal_task_total_mean",
+        "reward_terminal_success_bonus_mean",
         "reward_terminal_failure_base_mean",
         "reward_terminal_unserved_mean",
         "reward_pbrs_total_mean",
@@ -1834,10 +1881,12 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "reward_pbrs_total_per_trajectory",
         "reward_terminal_heuristic_per_trajectory",
         "reward_terminal_task_total_per_trajectory",
+        "reward_terminal_success_bonus_per_trajectory",
         "reward_discounted_distance_per_trajectory",
         "reward_discounted_pbrs_total_per_trajectory",
         "reward_discounted_terminal_heuristic_per_trajectory",
         "reward_discounted_terminal_task_total_per_trajectory",
+        "reward_discounted_terminal_success_bonus_per_trajectory",
         "customer_action_reward_base_mean",
         "customer_action_reward_pbrs_total_mean",
         "noncustomer_action_reward_pbrs_total_mean",
@@ -2230,6 +2279,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 reward_diagnostics.get("terminal_task_total_sum", 0.0)
                 / component_count
             )
+            reward_terminal_success_bonus_mean = (
+                reward_diagnostics.get("terminal_success_bonus_sum", 0.0)
+                / component_count
+            )
             reward_terminal_failure_base_mean = (
                 reward_diagnostics.get("terminal_failure_base_sum", 0.0)
                 / component_count
@@ -2447,6 +2500,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "reward_pbrs_repair_distance_mean": reward_pbrs_repair_distance_mean,
                     "reward_terminal_heuristic_mean": reward_terminal_heuristic_mean,
                     "reward_terminal_task_total_mean": reward_terminal_task_total_mean,
+                    "reward_terminal_success_bonus_mean": (
+                        reward_terminal_success_bonus_mean
+                    ),
                     "reward_terminal_failure_base_mean": reward_terminal_failure_base_mean,
                     "reward_terminal_unserved_mean": reward_terminal_unserved_mean,
                     "reward_pbrs_total_mean": reward_pbrs_total_mean,
@@ -2476,6 +2532,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         reward_diagnostics.get("terminal_task_total_sum", 0.0)
                         / max(trajectory_count, 1)
                     ),
+                    "reward_terminal_success_bonus_per_trajectory": (
+                        reward_diagnostics.get("terminal_success_bonus_sum", 0.0)
+                        / max(trajectory_count, 1)
+                    ),
                     "reward_discounted_distance_per_trajectory": (
                         reward_diagnostics.get("distance_discounted_sum", 0.0)
                         / max(trajectory_count, 1)
@@ -2493,6 +2553,12 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "reward_discounted_terminal_task_total_per_trajectory": (
                         reward_diagnostics.get(
                             "terminal_task_total_discounted_sum", 0.0
+                        )
+                        / max(trajectory_count, 1)
+                    ),
+                    "reward_discounted_terminal_success_bonus_per_trajectory": (
+                        reward_diagnostics.get(
+                            "terminal_success_bonus_discounted_sum", 0.0
                         )
                         / max(trajectory_count, 1)
                     ),

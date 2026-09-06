@@ -8,7 +8,8 @@ They are not a new acceptance gate or a convergence guarantee.
 ## Output and frequency
 
 Each formal training run writes `reward_diagnostics.jsonl` in its existing
-output directory. Existing training histories and CSV columns are unchanged.
+output directory. Existing training histories remain append-only; TERRAN also
+records its terminal success component in dedicated CSV columns.
 The three REINFORCE methods write after each completed logical optimizer update;
 TERRAN writes after each completed training epoch, which may contain several
 PPO optimizer updates. Physical microbatches are combined for the corresponding
@@ -38,6 +39,20 @@ all four methods and conditions at that scale; distance and vehicle count in
 each reference cost come from the same independently replayed route set. No
 normalizer is fitted using validation/test outcomes, and normalization does not
 imply that rewards, returns or total training costs lie in `[0, 1]`.
+
+TERRAN may additionally freeze a method-specific completion reward `b_success` in
+the same normalized-cost unit:
+
+```text
+r_task = -C / S_N
+         + I[success] * b_success
+         - I[incomplete] * (b_N + lambda_u * unserved_fraction)
+```
+
+The success and failure terms are mutually exclusive, charged only on the
+first terminal transition, and never PBRS-annealed. `terminal_success_bonus`,
+`terminal_failure_base`, and `terminal_unserved` are logged separately. The
+constant success term does not change the ordering among feasible solutions.
 
 The floor rule `b_N = Q_0.99(C_ref / S_N) + 1` is an empirical calibration
 candidate, not a mathematical feasibility-first guarantee. The frozen floors

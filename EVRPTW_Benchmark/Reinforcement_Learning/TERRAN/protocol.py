@@ -33,6 +33,7 @@ from ..common.training_stream import (
     training_stream_contract_digest,
     training_stream_contract_from_args,
 )
+from .pbrs import TERMINAL_TASK_REWARD_UNIT
 
 
 def _checkpoint_reward_contract_provenance(
@@ -68,6 +69,36 @@ def _checkpoint_reward_contract_provenance(
             f"TERRAN checkpoint contains an invalid reward contract: {checkpoint}"
         ) from error
 
+    raw_completion_bonus = (config.get("pbrs") or {}).get(
+        "terminal_success_bonus"
+    )
+    try:
+        completion_bonus = float(raw_completion_bonus)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            "TERRAN checkpoint is missing its terminal success-bonus contract"
+        ) from error
+    if not np.isfinite(completion_bonus) or completion_bonus < 0.0:
+        raise RuntimeError(
+            "TERRAN checkpoint terminal success bonus must be finite and non-negative"
+        )
+    reward_semantics = config.get("pbrs_reward_semantics")
+    frozen_potential = (
+        reward_semantics.get("potential_reward_config")
+        if isinstance(reward_semantics, Mapping)
+        else None
+    )
+    if (
+        not isinstance(reward_semantics, Mapping)
+        or reward_semantics.get("schema") != "terran_pbrs_reward_semantics_v2"
+        or not isinstance(frozen_potential, Mapping)
+        or frozen_potential.get("terminal_success_bonus") != completion_bonus
+    ):
+        raise RuntimeError(
+            "TERRAN checkpoint terminal success-bonus semantics are not frozen "
+            "consistently"
+        )
+
     expected = {
         ("training", "reward_contract_id"): terms.contract_id,
         ("normalization", "reward_contract_id"): terms.contract_id,
@@ -76,6 +107,11 @@ def _checkpoint_reward_contract_provenance(
         ("normalization", "reward_objective_scale"): terms.objective_scale,
         ("normalization", "failure_base"): terms.failure_base,
         ("normalization", "unserved_coefficient"): terms.unserved_coefficient,
+        ("normalization", "terran_terminal_success_bonus"): completion_bonus,
+        ("normalization", "terran_terminal_success_bonus_unit"):
+            TERMINAL_TASK_REWARD_UNIT,
+        ("normalization", "terran_terminal_success_bonus_equivalent_usd"):
+            completion_bonus * terms.objective_scale,
         ("env", "normalize_reward"): True,
         ("env", "reward_objective_scale"): terms.objective_scale,
         ("env", "invalid_action_penalty"): 0.0,
@@ -83,6 +119,7 @@ def _checkpoint_reward_contract_provenance(
         ("pbrs", "use_terminal_heuristic"): False,
         ("pbrs", "use_terminal_task_penalty"): True,
         ("pbrs", "success_bonus"): 0.0,
+        ("pbrs", "terminal_success_bonus"): completion_bonus,
         ("pbrs", "failure_base"): terms.failure_base,
         ("pbrs", "unserved_coefficient"): terms.unserved_coefficient,
     }
@@ -101,6 +138,11 @@ def _checkpoint_reward_contract_provenance(
         "reward_objective_scale": terms.objective_scale,
         "reward_failure_base": terms.failure_base,
         "reward_unserved_coefficient": terms.unserved_coefficient,
+        "terran_terminal_success_bonus": completion_bonus,
+        "terran_terminal_success_bonus_unit": TERMINAL_TASK_REWARD_UNIT,
+        "terran_terminal_success_bonus_equivalent_usd": (
+            completion_bonus * terms.objective_scale
+        ),
     }
 
 
@@ -169,6 +211,14 @@ def _checkpoint_training_signature_provenance(
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if getattr(args, "training_epochs", None) is None and args.data_passes is None:
         return overrides, None
+    if (
+        getattr(args, "protocol_id", None) == "drl_rq_protocol_frozen_v1"
+        and getattr(args, "terminal_success_bonus", None) is None
+    ):
+        raise ValueError(
+            "formal TERRAN protocol requires an explicit "
+            "--terminal-success-bonus"
+        )
     if args.stage2_dataset_path is None or args.output_dir is None:
         raise ValueError("TERRAN protocol mode requires Stage-2 data and --output-dir")
     completed = 0
@@ -382,6 +432,11 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         ),
         "early_stop_patience_validations": early_stop_patience,
         "early_stop_start_epoch": early_stop_start_epoch,
+        "terran_terminal_success_bonus": (
+            float(args.terminal_success_bonus)
+            if getattr(args, "terminal_success_bonus", None) is not None
+            else None
+        ),
         "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
         "validation_decode_type": validation_decode_type,
         "validation_candidates": validation_candidates,
@@ -676,6 +731,19 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             "TERRAN was launched with a reward contract, but completed checkpoints "
             "do not contain one"
         )
+    requested_completion_bonus = getattr(
+        args, "terminal_success_bonus", None
+    )
+    if (
+        requested_completion_bonus is not None
+        and reward_contract_provenance is not None
+        and reward_contract_provenance.get("terran_terminal_success_bonus")
+        != float(requested_completion_bonus)
+    ):
+        raise RuntimeError(
+            "TERRAN completed checkpoints do not contain the requested "
+            "terminal success bonus"
+        )
     reward_contract_fields = reward_contract_provenance or {
         "reward_contract_id": None,
         "reward_contract_sha256": None,
@@ -684,6 +752,9 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
         "reward_objective_scale": None,
         "reward_failure_base": None,
         "reward_unserved_coefficient": None,
+        "terran_terminal_success_bonus": None,
+        "terran_terminal_success_bonus_unit": None,
+        "terran_terminal_success_bonus_equivalent_usd": None,
     }
     stream_contract_provenance = _checkpoint_training_stream_provenance(
         final_checkpoint

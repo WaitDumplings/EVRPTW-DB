@@ -13,6 +13,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests i
     SCRIPT_ROOT,
     build,
     build_a6000_cus1000_priority_queue,
+    build_a6000_terran_cus1000_replacement_queue,
     build_a6000_terran_formal_queue,
 )
 
@@ -339,7 +340,11 @@ def test_scale_rollout_limits_match_current_protocol() -> None:
     rows = [row for queue in build().values() for row in queue]
     assert rows
     for row in rows:
-        training_steps, validation_steps = expected[row["scale"]]
+        training_steps, validation_steps = (
+            (1400, 2100)
+            if row["method"] == "terran" and row["scale"] == "Cus1000"
+            else expected[row["scale"]]
+        )
         assert row["training_rollout_steps"] == training_steps
         assert row["validation_rollout_steps"] == validation_steps
 
@@ -380,7 +385,11 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     assert all(row["num_minibatches"] == 1 for row in overridden)
     assert {row["scale"]: row["ppo_step_chunk_size"] for row in overridden} == {
         "Cus500": 36,
-        "Cus1000": 736,
+        "Cus1000": 720,
+    }
+    assert {row["scale"]: row["terran_terminal_success_bonus"] for row in overridden} == {
+        "Cus500": 0.0,
+        "Cus1000": 1.0,
     }
 
     priority_terran = [
@@ -390,7 +399,7 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     ]
     assert len(priority_terran) == 1
     assert priority_terran[0]["num_minibatches"] == 1
-    assert priority_terran[0]["ppo_step_chunk_size"] == 736
+    assert priority_terran[0]["ppo_step_chunk_size"] == 720
 
     dedicated = {
         row["scale"]: row for row in build_a6000_terran_formal_queue()
@@ -398,7 +407,7 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     assert dedicated["Cus500"]["num_minibatches"] == 1
     assert dedicated["Cus500"]["ppo_step_chunk_size"] == 36
     assert dedicated["Cus1000"]["num_minibatches"] == 1
-    assert dedicated["Cus1000"]["ppo_step_chunk_size"] == 736
+    assert dedicated["Cus1000"]["ppo_step_chunk_size"] == 720
 
 
 def test_a6000_cus1000_priority_queue_uses_approved_two_gpu_order() -> None:
@@ -496,6 +505,47 @@ def test_checked_in_a6000_terran_formal_manifest_matches_builder() -> None:
         "0": ["terran/Cus500"],
         "1": ["terran/Cus1000"],
     }
+
+
+def test_a6000_terran_cus1000_replacement_is_one_gpu1_bound_job() -> None:
+    rows = build_a6000_terran_cus1000_replacement_queue()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["job_id"] == "full__G__Full-support__terran__Cus1000__seed1234"
+    assert row["method"] == "terran"
+    assert row["scale"] == "Cus1000"
+    assert row["training_rollout_steps"] == 1400
+    assert row["validation_rollout_steps"] == 2100
+    assert row["num_minibatches"] == 1
+    assert row["ppo_step_chunk_size"] == 720
+    assert row["terran_terminal_success_bonus"] == 1.0
+    assert row["global_slot"] == 1
+    assert row["queue_position"] == 0
+    assert row["required_launcher_id"] == "terran_cus1000_replacement_v1"
+    assert row["required_local_gpu"] == 1
+
+
+def test_checked_in_a6000_terran_cus1000_replacement_matches_builder() -> None:
+    destination = SCRIPT_ROOT / "a6000_2_1"
+    checked_in = [
+        json.loads(line)
+        for line in (
+            destination / "terran_cus1000_replacement_jobs.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert checked_in == build_a6000_terran_cus1000_replacement_queue()
+    summary = json.loads(
+        (
+            destination
+            / "terran_cus1000_replacement_assignment_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert summary["profile"] == "terran_cus1000_reward_replacement_v1"
+    assert summary["launcher_id"] == "terran_cus1000_replacement_v1"
+    assert summary["formal_jobs"] == 1
+    assert summary["slot_gpu_map"] == {"1": 1}
+    assert summary["slot_queues"] == {"1": ["terran/Cus1000"]}
 
 
 def test_checked_in_server_manifests_match_builder() -> None:

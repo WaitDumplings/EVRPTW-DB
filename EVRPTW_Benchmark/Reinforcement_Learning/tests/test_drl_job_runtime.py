@@ -684,14 +684,17 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         assert "--ppo-step-chunk-size" not in command
         if method == "terran":
             job["num_minibatches"] = 1
-            job["ppo_step_chunk_size"] = 736
+            job["ppo_step_chunk_size"] = 720
+            job["terran_terminal_success_bonus"] = 1.0
             overridden = RUNTIME.training_command(
                 job, context, tmp_path / method, resume=False
             )
             minibatch_index = overridden.index("--num-minibatches")
             assert overridden[minibatch_index + 1] == "1"
             chunk_index = overridden.index("--ppo-step-chunk-size")
-            assert overridden[chunk_index + 1] == "736"
+            assert overridden[chunk_index + 1] == "720"
+            bonus_index = overridden.index("--terminal-success-bonus")
+            assert overridden[bonus_index + 1] == "1.0"
 
     non_terran = _job("train__R__am_evrptw__Cus1000__seed1234")
     non_terran.update(common)
@@ -734,6 +737,90 @@ def test_gpu_name_pattern_supports_controlled_aliases() -> None:
     assert RUNTIME.gpu_name_matches("NVIDIA RTX A6000", accepted)
     assert RUNTIME.gpu_name_matches("NVIDIA RTX 6000 Ada Generation", accepted)
     assert not RUNTIME.gpu_name_matches("NVIDIA GeForce RTX 3090", accepted)
+
+
+def test_explicit_slot_gpu_mapping_preserves_physical_gpu_identity() -> None:
+    assert RUNTIME.parse_slot_gpu_map(
+        None, slots={0, 1}, local_gpu_count=2
+    ) == {0: 0, 1: 1}
+    assert RUNTIME.parse_slot_gpu_map(
+        "1:1", slots={1}, local_gpu_count=2
+    ) == {1: 1}
+    with pytest.raises(ValueError, match="map exactly"):
+        RUNTIME.parse_slot_gpu_map("0:0", slots={1}, local_gpu_count=2)
+    with pytest.raises(ValueError, match="outside"):
+        RUNTIME.parse_slot_gpu_map("1:2", slots={1}, local_gpu_count=2)
+    with pytest.raises(ValueError, match="concurrent slots"):
+        RUNTIME.parse_slot_gpu_map("0:1,1:1", slots={0, 1}, local_gpu_count=2)
+
+
+def test_dedicated_job_routing_fails_closed_on_namespace_or_gpu_drift() -> None:
+    job = {
+        **_job("replacement"),
+        "global_slot": 1,
+        "required_launcher_id": "replacement-v1",
+        "required_local_gpu": 1,
+    }
+    RUNTIME.validate_job_routing(
+        [job], launcher_id="replacement-v1", slot_gpu_map={1: 1}
+    )
+    with pytest.raises(ValueError, match="requires launcher"):
+        RUNTIME.validate_job_routing(
+            [job], launcher_id="default", slot_gpu_map={1: 1}
+        )
+    with pytest.raises(ValueError, match="requires local GPU"):
+        RUNTIME.validate_job_routing(
+            [job], launcher_id="replacement-v1", slot_gpu_map={1: 0}
+        )
+
+
+def test_main_routes_a_single_selected_slot_to_explicit_gpu1(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    job = {
+        **_job("replacement"),
+        "enabled": True,
+        "run_mode": "full",
+        "global_slot": 1,
+        "scale": "Cus1000",
+        "required_launcher_id": "replacement-v1",
+        "required_local_gpu": 1,
+    }
+    manifest = tmp_path / "replacement.jsonl"
+    manifest.write_text(json.dumps(job) + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "drl_job_runtime.py",
+            "full",
+            "--manifest",
+            str(manifest),
+            "--slots",
+            "1",
+            "--slot-gpu-map",
+            "1:1",
+            "--launcher-id",
+            "replacement-v1",
+            "--local-gpu-count",
+            "2",
+            "--gpu-name-pattern",
+            "unused",
+        ],
+    )
+    monkeypatch.setattr(RUNTIME, "preflight", lambda *_args: _context(tmp_path))
+    routed = []
+    monkeypatch.setattr(
+        RUNTIME,
+        "run_job",
+        lambda selected, context, local_gpu, resume, dry_run: (
+            routed.append((selected["global_slot"], local_gpu, context["launcher_id"]))
+            or True
+        ),
+    )
+    RUNTIME.STOP.clear()
+    RUNTIME.main()
+    assert routed == [(1, 1, "replacement-v1")]
 
 
 def test_job_loading_filters_formal_seed_and_scale(
@@ -1022,6 +1109,22 @@ def test_all_formal_cost_manifests_pass_and_commands_forward_profile(tmp_path):
             assert command[command.index("--method-auxiliary-profile") + 1] == str(
                 context["repo"] / auxiliary_path
             )
+        if method == "terran":
+            bonus_index = command.index("--terminal-success-bonus")
+            assert float(command[bonus_index + 1]) == job[
+                "terran_terminal_success_bonus"
+            ]
+            assert RUNTIME.training_contract(job)[
+                "terran_terminal_success_bonus"
+            ] == job["terran_terminal_success_bonus"]
+            assert RUNTIME.expected_resolved_training_signature(
+                job, context
+            )["method_specific"]["task_reward"] == {
+                "terminal_success_bonus": job[
+                    "terran_terminal_success_bonus"
+                ],
+                "unit": "normalized_objective_cost",
+            }
 
 
 @pytest.mark.parametrize("field", ["optimizer_name", "optimizer_weight_decay"])
@@ -1141,6 +1244,15 @@ def test_completed_training_reward_contract_is_cross_checked(
     }
     checkpoint = tmp_path / f"{method}.pt"
     if method == "terran":
+        completion_bonus = float(job["terran_terminal_success_bonus"])
+        terminal_fields = {
+            "terran_terminal_success_bonus": completion_bonus,
+            "terran_terminal_success_bonus_unit": "normalized_objective_cost",
+            "terran_terminal_success_bonus_equivalent_usd": (
+                completion_bonus * terms.objective_scale
+            ),
+        }
+        result.update(terminal_fields)
         torch.save(
             {
                 "config": {
@@ -1153,7 +1265,9 @@ def test_completed_training_reward_contract_is_cross_checked(
                         "reward_objective_scale": terms.objective_scale,
                         "failure_base": terms.failure_base,
                         "unserved_coefficient": terms.unserved_coefficient,
+                        **terminal_fields,
                     },
+                    "pbrs": {"terminal_success_bonus": completion_bonus},
                 }
             },
             checkpoint,
@@ -1176,6 +1290,30 @@ def test_completed_training_reward_contract_is_cross_checked(
         RUNTIME.validate_completed_training_reward_contract(
             job, context, stale_result, checkpoint
         )
+    if method == "terran":
+        stale_bonus_result = {
+            **result,
+            "terran_terminal_success_bonus": (
+                result["terran_terminal_success_bonus"] + 1.0
+            ),
+        }
+        with pytest.raises(
+            RuntimeError, match="training_result reward contract mismatch"
+        ):
+            RUNTIME.validate_completed_training_reward_contract(
+                job, context, stale_bonus_result, checkpoint
+            )
+        checkpoint_payload = torch.load(
+            checkpoint, map_location="cpu", weights_only=False
+        )
+        checkpoint_payload["config"]["pbrs"]["terminal_success_bonus"] += 1.0
+        torch.save(checkpoint_payload, checkpoint)
+        with pytest.raises(
+            RuntimeError, match="derived reward-contract fields are inconsistent"
+        ):
+            RUNTIME.validate_completed_training_reward_contract(
+                job, context, result, checkpoint
+            )
 
 
 def test_completed_drl_ts_auxiliary_contract_is_cross_checked(tmp_path):
@@ -1283,6 +1421,20 @@ def test_terran_manifest_contract_is_checked_before_preflight_side_effects(
     # Unaffected methods do not require or load the TERRAN YAML.
     monkeypatch.setattr(RUNTIME, "TERRAN_CONFIG", tmp_path / "missing.yaml")
     RUNTIME.validate_terran_training_contracts([_job()])
+
+
+def test_formal_terran_terminal_bonus_must_match_runtime_and_protocol() -> None:
+    job = _cost_job("terran")
+    RUNTIME.validate_terran_training_contracts([job])
+
+    stale = {
+        **job,
+        "terran_terminal_success_bonus": (
+            float(job["terran_terminal_success_bonus"]) + 0.5
+        ),
+    }
+    with pytest.raises(RuntimeError, match="success-bonus contract mismatch"):
+        RUNTIME.validate_terran_training_contracts([stale])
 
 
 def test_versioned_terran_completion_requires_matching_saved_contract(tmp_path: Path) -> None:

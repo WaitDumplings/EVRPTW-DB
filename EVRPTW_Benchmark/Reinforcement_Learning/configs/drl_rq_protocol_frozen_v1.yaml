@@ -50,6 +50,23 @@ validation_rollout_steps:
   Cus100: 180
   Cus500: 870
   Cus1000: 1800
+# Method/scale exceptions are explicit so the common Cus1000 contract for
+# AM/EVRPTW-RL/DRL-TS remains 1200/1800.  Only the replacement TERRAN job uses
+# the longer horizon and completion reward below.
+training_overrides_by_method_scale:
+  terran:
+    Cus500:
+      training_rollout_steps: 580
+      validation_rollout_steps: 870
+      num_minibatches: 1
+      ppo_step_chunk_size: 36
+      terran_terminal_success_bonus: 0.0
+    Cus1000:
+      training_rollout_steps: 1400
+      validation_rollout_steps: 2100
+      num_minibatches: 1
+      ppo_step_chunk_size: 720
+      terran_terminal_success_bonus: 1.0
 
 research_questions:
   RQ1:

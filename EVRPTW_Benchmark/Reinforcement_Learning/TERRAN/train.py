@@ -24,6 +24,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ppo-step-chunk-size", type=int, default=None)
     parser.add_argument("--n-traj", type=int, default=None)
     parser.add_argument("--num-minibatches", type=int, default=None)
+    parser.add_argument(
+        "--terminal-success-bonus",
+        type=float,
+        default=None,
+        help=(
+            "Canonical completion bonus in normalized objective-cost units; "
+            "formal manifests freeze this explicitly."
+        ),
+    )
     parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
     parser.add_argument("--service-territory-pool-size", "--mother-board-pool-size", dest="mother_board_pool_size", type=int, default=None)
     parser.add_argument("--train-dataset-path", type=str, default=None, help="Fixed train split bundle or directory, e.g. EVRPTW_Dataset/dataset_v1/dataset/train/Cus15")
@@ -82,7 +91,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
-    overrides: dict[str, Any] = {"data": {}, "training": {}, "evaluation": {}}
+    overrides: dict[str, Any] = {
+        "data": {},
+        "training": {},
+        "evaluation": {},
+        "pbrs": {},
+    }
     if getattr(args, "objective_config", None) is not None:
         overrides["objective"] = objective_from_args(args).to_dict()
     else:
@@ -152,6 +166,10 @@ def main() -> None:
         overrides["training"]["n_traj"] = args.n_traj
     if args.num_minibatches is not None:
         overrides["training"]["num_minibatches"] = args.num_minibatches
+    if args.terminal_success_bonus is not None:
+        overrides["pbrs"]["terminal_success_bonus"] = (
+            args.terminal_success_bonus
+        )
     if args.gradient_accumulation_steps is not None:
         overrides["training"]["gradient_accumulation_steps"] = args.gradient_accumulation_steps
     overrides["training"]["optimizer"] = args.optimizer

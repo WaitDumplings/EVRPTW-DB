@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping
@@ -31,6 +32,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs" / "drl_rq_runtime_candidates_v2.yaml"
 STREAM_REGISTRY = ROOT / "configs" / "drl_training_stream_registry_v1.json"
 TERRAN_CONFIG = ROOT / "TERRAN" / "configs" / "stage2_cus100_terran.yaml"
+TERRAN_CUS1000_REPLACEMENT_CONFIG = (
+    ROOT / "configs" / "drl_terran_cus1000_replacement_v1.yaml"
+)
 SCRIPT_ROOT = ROOT / "scripts" / "rq_v1"
 GATE = "EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_rq_formal_launch_gate_v1.json"
 ARTIFACTS = "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts"
@@ -125,6 +129,31 @@ def job(
     cfg: dict[str, Any], *, method: str, scale: str, seed: int,
     representation: str, condition: str, hardware: str,
 ) -> dict[str, Any]:
+    training_overrides = (
+        cfg.get("training_overrides_by_method_scale", {})
+        .get(method, {})
+        .get(scale, {})
+    )
+    if training_overrides and method != "terran":
+        raise ValueError(
+            "method/scale training overrides are supported only for TERRAN; "
+            f"found {method}/{scale}"
+        )
+    allowed_training_overrides = {
+        "training_rollout_steps",
+        "validation_rollout_steps",
+        "num_minibatches",
+        "ppo_step_chunk_size",
+        "terran_terminal_success_bonus",
+    }
+    unexpected_training_overrides = set(training_overrides).difference(
+        allowed_training_overrides
+    )
+    if unexpected_training_overrides:
+        raise ValueError(
+            f"unsupported training override(s) for {method}/{scale}: "
+            f"{sorted(unexpected_training_overrides)}"
+        )
     logical = int(cfg["candidate_logical_batch"][scale])
     environments_per_epoch = int(cfg["candidate_environments_per_epoch"][scale])
     if logical != environments_per_epoch:
@@ -200,7 +229,21 @@ def job(
     marker_path = (
         f"{ARTIFACTS}/preparation_{cfg['runtime_budget_id']}_seeds_{seed_tag}.json"
     )
-    training_steps = int(cfg["rollout_steps"][scale])
+    training_steps = int(
+        training_overrides.get("training_rollout_steps", cfg["rollout_steps"][scale])
+    )
+    if training_steps <= 0:
+        raise ValueError(f"training_rollout_steps must be positive for {method}/{scale}")
+    derived_validation_steps = frozen_validation_rollout_steps(cfg, training_steps)
+    configured_validation_steps = int(
+        training_overrides.get("validation_rollout_steps", derived_validation_steps)
+    )
+    if configured_validation_steps != derived_validation_steps:
+        raise ValueError(
+            f"validation_rollout_steps must equal ceil(3/2 * training) for "
+            f"{method}/{scale}: {configured_validation_steps} != "
+            f"{derived_validation_steps}"
+        )
     payload = {
         "schema": "drl_rq_job_manifest_v1",
         "protocol_id": "drl_rq_protocol_frozen_v1",
@@ -247,9 +290,7 @@ def job(
         "logical_environments_per_epoch": environments_per_epoch,
         "planned_logical_epochs": updates,
         "training_rollout_steps": training_steps,
-        "validation_rollout_steps": frozen_validation_rollout_steps(
-            cfg, training_steps
-        ),
+        "validation_rollout_steps": configured_validation_steps,
         "optimizer_name": str(cfg["training_optimizer"]["name"]),
         "optimizer_weight_decay": float(
             cfg["training_optimizer"]["weight_decay"]
@@ -356,32 +397,33 @@ def job(
         payload.update(
             training_gamma=float(training["gamma"]),
         )
-    training_overrides = (
-        cfg.get("training_overrides_by_method_scale", {})
-        .get(method, {})
-        .get(scale, {})
-    )
-    if training_overrides and method != "terran":
-        raise ValueError(
-            "PPO training overrides are supported only for TERRAN; "
-            f"found {method}/{scale}"
+    for field in (
+        "num_minibatches",
+        "ppo_step_chunk_size",
+        "terran_terminal_success_bonus",
+    ):
+        if field not in training_overrides:
+            continue
+        raw_value = training_overrides[field]
+        value = (
+            float(raw_value)
+            if field == "terran_terminal_success_bonus"
+            else int(raw_value)
         )
-    allowed_training_overrides = {"num_minibatches", "ppo_step_chunk_size"}
-    unexpected_training_overrides = set(training_overrides).difference(
-        allowed_training_overrides
-    )
-    if unexpected_training_overrides:
-        raise ValueError(
-            f"unsupported training override(s) for {method}/{scale}: "
-            f"{sorted(unexpected_training_overrides)}"
-        )
-    for field, value in training_overrides.items():
-        value = int(value)
-        if value <= 0:
+        if field == "terran_terminal_success_bonus":
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"{field} must be non-negative for {method}/{scale}: {value}"
+                )
+        elif value <= 0:
             raise ValueError(
                 f"{field} must be positive for {method}/{scale}: {value}"
             )
         payload[field] = value
+    if method == "terran" and "terran_terminal_success_bonus" not in payload:
+        raise ValueError(
+            f"TERRAN {scale} must explicitly freeze terran_terminal_success_bonus"
+        )
     return payload
 
 
@@ -603,6 +645,59 @@ def build_a6000_terran_formal_queue(
     return rows
 
 
+def build_a6000_terran_cus1000_replacement_queue(
+    queues: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Build the isolated one-job replacement queue for physical GPU 1."""
+
+    profile = yaml.safe_load(
+        TERRAN_CUS1000_REPLACEMENT_CONFIG.read_text(encoding="utf-8")
+    )
+    if profile.get("schema") != "drl_terran_cus1000_replacement_v1":
+        raise ValueError("invalid TERRAN Cus1000 replacement profile schema")
+    source = (queues or build())["a6000_2_1"]
+    matches = [row for row in source if row["job_id"] == profile["job_id"]]
+    if len(matches) != 1:
+        raise ValueError(
+            "replacement profile must resolve exactly one canonical job; "
+            f"found {len(matches)}"
+        )
+    payload = dict(matches[0])
+    expected = {
+        "method": str(profile["method"]),
+        "scale": str(profile["scale"]),
+        "seed": int(profile["seed"]),
+        "training_rollout_steps": int(profile["training_rollout_steps"]),
+        "validation_rollout_steps": int(profile["validation_rollout_steps"]),
+        "num_minibatches": int(profile["num_minibatches"]),
+        "ppo_step_chunk_size": int(profile["ppo_step_chunk_size"]),
+        "terran_terminal_success_bonus": float(
+            profile["terran_terminal_success_bonus"]
+        ),
+    }
+    actual = {field: payload.get(field) for field in expected}
+    if actual != expected:
+        raise ValueError(
+            "canonical TERRAN Cus1000 job disagrees with replacement profile: "
+            f"actual={actual}, expected={expected}"
+        )
+    if expected["validation_rollout_steps"] != validation_rollout_steps(
+        expected["training_rollout_steps"]
+    ):
+        raise ValueError("replacement validation horizon violates the 3/2 contract")
+    runtime = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    if payload["job_id"] not in set(runtime.get("authorized_job_ids", ())):
+        raise ValueError("replacement job is outside authorized_job_ids")
+    payload.update(
+        global_slot=int(profile["global_slot"]),
+        queue_position=0,
+        launcher_profile_id=str(profile["profile_id"]),
+        required_launcher_id=str(profile["launcher_id"]),
+        required_local_gpu=int(profile["local_gpu"]),
+    )
+    return [payload]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build four frozen RQ training queues.")
     parser.add_argument("--output-root", type=Path, default=SCRIPT_ROOT)
@@ -699,6 +794,40 @@ def main() -> None:
     }
     (a6000_destination / "terran_assignment_summary.json").write_text(
         json.dumps(terran_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    terran_replacement = build_a6000_terran_cus1000_replacement_queue(queues)
+    (a6000_destination / "terran_cus1000_replacement_jobs.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in terran_replacement),
+        encoding="utf-8",
+    )
+    replacement_profile = yaml.safe_load(
+        TERRAN_CUS1000_REPLACEMENT_CONFIG.read_text(encoding="utf-8")
+    )
+    replacement_summary = {
+        "schema": "drl_rq_server_assignment_v1",
+        "server": "a6000_2_1",
+        "profile": str(replacement_profile["profile_id"]),
+        "launcher_id": str(replacement_profile["launcher_id"]),
+        "hardware": "a6000",
+        "gpu_count": 2,
+        "pilot_jobs": 0,
+        "formal_jobs": 1,
+        "formal_launch_allowed": formal_launch_allowed,
+        "launch_policy": launch_policy,
+        "authorized_formal_job_ids": [str(terran_replacement[0]["job_id"])],
+        "slot_gpu_map": {
+            str(replacement_profile["global_slot"]): int(
+                replacement_profile["local_gpu"]
+            )
+        },
+        "slot_queues": {"1": ["terran/Cus1000"]},
+    }
+    (
+        a6000_destination
+        / "terran_cus1000_replacement_assignment_summary.json"
+    ).write_text(
+        json.dumps(replacement_summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     print(json.dumps({server: len(rows) for server, rows in queues.items()}, sort_keys=True))

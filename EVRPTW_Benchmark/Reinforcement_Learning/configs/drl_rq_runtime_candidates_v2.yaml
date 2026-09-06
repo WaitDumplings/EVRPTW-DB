@@ -63,18 +63,23 @@ training_trajectory_count_by_method_scale: {}
 # Current-code RTX 6000 Ada calibration for TERRAN Cus500 at batch=64 and
 # n_traj=100 measured 40,932 MiB (39.97 GiB) with one minibatch and a 36-step
 # PPO chunk; chunk=42 measured 45.25 GiB and is intentionally rejected. TERRAN
-# Cus1000 produces two base-environment groups per logical epoch at batch=2;
-# process them as one PPO minibatch and evaluate up to 736 recorded steps in
-# one chunk. Keep scale-specific overrides here instead of changing the shared
-# base config.
+# Cus1000 produces two base-environment groups per logical epoch at batch=2.
+# The final TERRAN-only replacement contract uses a 1,400-step train horizon,
+# its derived 2,100-step validation horizon, a 720-step PPO chunk, and an
+# explicit completion reward.  These method/scale overrides must not change
+# the Cus1000 horizons of the other three DRL methods.
 training_overrides_by_method_scale:
   terran:
     Cus500:
       num_minibatches: 1
       ppo_step_chunk_size: 36
+      terran_terminal_success_bonus: 0.0
     Cus1000:
+      training_rollout_steps: 1400
+      validation_rollout_steps: 2100
       num_minibatches: 1
-      ppo_step_chunk_size: 736
+      ppo_step_chunk_size: 720
+      terran_terminal_success_bonus: 1.0
 
 seeds: [1234]
 enabled_scales: [Cus500, Cus1000]

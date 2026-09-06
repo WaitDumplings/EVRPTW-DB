@@ -89,16 +89,23 @@ the shared environment:
   the action mask. This is optional and disabled in the default PBRS configs.
 - `use_terminal_heuristic`: terminal success bonus and remaining-customer
   failure penalty. This is an auxiliary shaping term, not strict PBRS, and is
-  disabled by default in legacy configs but enabled in the formal Stage-2 config.
+  retained only for replaying legacy runs and is disabled in formal Stage-2.
+- `use_terminal_task_penalty`: enables the canonical, non-annealed terminal
+  task outcome. A completed instance receives `terminal_success_bonus`; an
+  unsuccessful terminal transition receives
+  `-(failure_base + unserved_coefficient * remaining_customer_fraction)`.
+  The completion bonus is expressed in normalized economic-cost units and is
+  recorded separately from both PBRS and the failure components.
 - `customer_pbrs_mode`: default configs use `progress`, the strict gamma
   potential-difference form.
 
 Evaluation should usually disable PBRS and use the base objective reward. PBRS is
 intended for training only. Formal training turns the registered rollout budget
-into an environment truncation, so an unfinished trajectory receives
-`-failure_penalty * remaining_customer_fraction` on its final collected step.
-The diagnostic info records `rollout_budget_exhausted`, `remaining_customers`,
-and `remaining_customer_fraction`.
+into an environment truncation, so every unfinished trajectory receives the
+failure floor even when all customers were served but the vehicle did not return
+to the depot. The diagnostic info records `rollout_budget_exhausted`,
+`remaining_customers`, `remaining_customer_fraction`, and the independently
+auditable terminal reward components.
 
 ## Historical Cus15 Baselines (distance-only)
 

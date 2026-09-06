@@ -7,6 +7,9 @@ from gymnasium import Wrapper
 import numpy as np
 
 
+TERMINAL_TASK_REWARD_UNIT = "normalized_objective_cost"
+
+
 @dataclass(frozen=True)
 class PotentialRewardConfig:
     """PBRS controls for TERRAN-style RL training."""
@@ -29,6 +32,10 @@ class PotentialRewardConfig:
     repair_progress_coef: float = 0.5
     feasible_ratio_coef: float = 0.0
     pbrs_clip: float | None = None
+    # Canonical terminal task reward, expressed in the same dimensionless
+    # units as normalized economic cost (C / S_N).  Keep this separate from
+    # ``success_bonus``, which belongs to the disabled legacy heuristic.
+    terminal_success_bonus: float = 0.0
     success_bonus: float = 0.1
     failure_penalty: float = 0.5
     failure_base: float = 0.0
@@ -47,7 +54,11 @@ class PotentialRewardConfig:
             raise ValueError(
                 "legacy terminal heuristic and terminal task penalty are mutually exclusive"
             )
-        for name in ("failure_base", "unserved_coefficient"):
+        for name in (
+            "terminal_success_bonus",
+            "failure_base",
+            "unserved_coefficient",
+        ):
             value = float(getattr(self, name))
             if not np.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be finite and non-negative")
@@ -148,7 +159,12 @@ class PotentialRewardWrapper(Wrapper):
         legacy_terminal = self._terminal_heuristic(
             info, terminated, truncated, prev_finished
         )
-        terminal, terminal_base, terminal_unserved = self._terminal_task_components(
+        (
+            terminal,
+            terminal_success,
+            terminal_base,
+            terminal_unserved,
+        ) = self._terminal_task_components(
             info, terminated, truncated, prev_finished
         )
         scale = float(self.reward_scale)
@@ -186,6 +202,7 @@ class PotentialRewardWrapper(Wrapper):
             "pbrs_feasible_ratio": feasible.copy(),
             "terminal_heuristic": legacy_terminal.copy(),
             "terminal_task_total": terminal.copy(),
+            "terminal_success_bonus": terminal_success.copy(),
             "terminal_failure_base": terminal_base.copy(),
             "terminal_unserved": terminal_unserved.copy(),
             "shaped": shaped.copy(),
@@ -324,37 +341,48 @@ class PotentialRewardWrapper(Wrapper):
         terminated: np.ndarray,
         truncated: np.ndarray,
         prev_finished: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return one failure cost at the first unsuccessful terminal transition.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return one task outcome reward at the first terminal transition.
 
-        The returned arrays use reward signs (negative costs).  In particular,
-        an episode that served every customer but did not return to the depot
-        receives ``-failure_base`` rather than escaping with zero penalty.
+        A successful completion receives ``+terminal_success_bonus``.  Failure
+        components use reward signs (negative costs); in particular, an episode
+        that served every customer but did not return to the depot receives
+        ``-failure_base`` rather than escaping with zero penalty.  Success and
+        failure masks are disjoint and ``newly_finished`` prevents double
+        settlement on padded transitions.
         """
 
         served = np.asarray(next_info["served_customers"], dtype=np.float32)
         zero = np.zeros_like(served, dtype=np.float32)
         if not self.config.use_terminal_task_penalty:
-            return zero, zero.copy(), zero.copy()
+            return zero, zero.copy(), zero.copy(), zero.copy()
         now_finished = np.asarray(terminated, dtype=bool) | np.asarray(
             truncated, dtype=bool
         )
         newly_finished = now_finished & (~prev_finished)
         success = np.asarray(next_info["success"], dtype=bool)
+        succeeded = newly_finished & success
         failed = newly_finished & (~success)
-        if not np.any(failed):
-            return zero, zero.copy(), zero.copy()
+        if not np.any(succeeded) and not np.any(failed):
+            return zero, zero.copy(), zero.copy(), zero.copy()
         customer_count = max(
             float(getattr(self.unwrapped, "num_customers", 1)), 1.0
         )
         unserved_fraction = np.clip(1.0 - served / customer_count, 0.0, 1.0)
+        success_reward = np.zeros_like(zero)
         base = np.zeros_like(zero)
         unserved = np.zeros_like(zero)
+        success_reward[succeeded] = float(self.config.terminal_success_bonus)
         base[failed] = -float(self.config.failure_base)
         unserved[failed] = (
             -float(self.config.unserved_coefficient) * unserved_fraction[failed]
         )
-        return (base + unserved).astype(np.float32), base, unserved
+        return (
+            (success_reward + base + unserved).astype(np.float32),
+            success_reward,
+            base,
+            unserved,
+        )
 
     @staticmethod
     def _direct_progress_potential(served: np.ndarray, n: float, beta: float) -> np.ndarray:
@@ -390,6 +418,7 @@ class PotentialRewardWrapper(Wrapper):
             "pbrs_feasible_ratio": reward.copy(),
             "terminal_heuristic": reward.copy(),
             "terminal_task_total": reward.copy(),
+            "terminal_success_bonus": reward.copy(),
             "terminal_failure_base": reward.copy(),
             "terminal_unserved": reward.copy(),
             "shaped": reward.copy(),
@@ -398,4 +427,8 @@ class PotentialRewardWrapper(Wrapper):
         return info
 
 
-__all__ = ["PotentialRewardConfig", "PotentialRewardWrapper"]
+__all__ = [
+    "TERMINAL_TASK_REWARD_UNIT",
+    "PotentialRewardConfig",
+    "PotentialRewardWrapper",
+]

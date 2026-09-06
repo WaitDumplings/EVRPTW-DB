@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -42,6 +43,7 @@ RUNTIME_CONFIG = ROOT / "configs" / "drl_rq_runtime_candidates_v2.yaml"
 FROZEN_PROTOCOL_CONFIG = ROOT / "configs" / "drl_rq_protocol_frozen_v1.yaml"
 AUTHORIZED_LAUNCH_POLICY = "reward_contract_v2_formal_user_authorized"
 METHODS = {"am_evrptw", "evrptw_rl", "drl_ts", "terran"}
+LAUNCHER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 REQUIRED_ENV = (
     "EVRPTW_REPO_ROOT",
     "EVRPTW_DATASET_ROOT",
@@ -51,6 +53,105 @@ STOP = threading.Event()
 CHILDREN: dict[int, subprocess.Popen[str]] = {}
 CHILD_LOCK = threading.Lock()
 OVERFLOW_LOCK = threading.Lock()
+
+
+def validate_launcher_id(value: str) -> str:
+    launcher_id = str(value).strip()
+    if not LAUNCHER_ID_PATTERN.fullmatch(launcher_id):
+        raise ValueError(
+            "--launcher-id must contain 1-64 letters, digits, '.', '_' or '-' "
+            "and start with a letter or digit"
+        )
+    return launcher_id
+
+
+def parse_slot_gpu_map(
+    raw: str | None,
+    *,
+    slots: set[int],
+    local_gpu_count: int,
+) -> dict[int, int]:
+    """Resolve an explicit logical-slot to physical-GPU mapping.
+
+    The legacy behavior remains the default.  A replacement launcher can
+    select only slot 1 while still targeting CUDA device 1 via ``1:1`` rather
+    than silently remapping the sole selected slot to device 0.
+    """
+
+    if not slots:
+        raise ValueError("--slots must select at least one logical slot")
+    if local_gpu_count <= 0:
+        raise ValueError("--local-gpu-count must be positive")
+    if raw is None or not raw.strip():
+        mapping = {
+            slot: local_gpu
+            for local_gpu, slot in enumerate(sorted(slots))
+        }
+    else:
+        mapping: dict[int, int] = {}
+        for item in raw.split(","):
+            fields = item.strip().split(":")
+            if len(fields) != 2:
+                raise ValueError(
+                    "--slot-gpu-map entries must use SLOT:LOCAL_GPU"
+                )
+            try:
+                slot, local_gpu = (int(value) for value in fields)
+            except ValueError as error:
+                raise ValueError(
+                    "--slot-gpu-map entries must contain integers"
+                ) from error
+            if slot in mapping:
+                raise ValueError(f"duplicate logical slot in --slot-gpu-map: {slot}")
+            mapping[slot] = local_gpu
+    if set(mapping) != slots:
+        raise ValueError(
+            "--slot-gpu-map must map exactly the selected slots: "
+            f"mapped={sorted(mapping)}, selected={sorted(slots)}"
+        )
+    invalid_gpus = sorted(
+        local_gpu
+        for local_gpu in mapping.values()
+        if not 0 <= local_gpu < local_gpu_count
+    )
+    if invalid_gpus:
+        raise ValueError(
+            "--slot-gpu-map references GPU indexes outside "
+            f"[0, {local_gpu_count - 1}]: {invalid_gpus}"
+        )
+    if len(set(mapping.values())) != len(mapping):
+        raise ValueError("--slot-gpu-map cannot assign concurrent slots to one GPU")
+    return mapping
+
+
+def validate_job_routing(
+    jobs: list[dict[str, Any]],
+    *,
+    launcher_id: str,
+    slot_gpu_map: Mapping[int, int],
+) -> None:
+    """Fail closed when a dedicated manifest is launched in another namespace/GPU."""
+
+    for job in jobs:
+        slot = int(job["global_slot"])
+        required_launcher_id = job.get("required_launcher_id")
+        if (
+            required_launcher_id is not None
+            and str(required_launcher_id) != launcher_id
+        ):
+            raise ValueError(
+                f"job {job['job_id']} requires launcher "
+                f"{required_launcher_id!r}, got {launcher_id!r}"
+            )
+        required_local_gpu = job.get("required_local_gpu")
+        if (
+            required_local_gpu is not None
+            and int(required_local_gpu) != slot_gpu_map[slot]
+        ):
+            raise ValueError(
+                f"job {job['job_id']} requires local GPU "
+                f"{required_local_gpu}, got {slot_gpu_map[slot]}"
+            )
 
 
 def process_rss_bytes(pid: int) -> int:
@@ -346,6 +447,7 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
         "post_minimum_validation_every_epochs", "validation_checkpoints",
         "early_stop_patience_validations", "early_stop_start_epoch",
         "final_validation_views", "num_minibatches", "ppo_step_chunk_size",
+        "terran_terminal_success_bonus",
     }
     for field in (
         "reward_contract_config_path",
@@ -403,6 +505,7 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
         "final_validation_views",
         "num_minibatches",
         "ppo_step_chunk_size",
+        "terran_terminal_success_bonus",
     ):
         if field in scientific_fields and not formal_scientific:
             continue
@@ -455,6 +558,10 @@ def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
     if not terran_jobs:
         return
     training = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))["training"]
+    runtime_config = yaml.safe_load(RUNTIME_CONFIG.read_text(encoding="utf-8"))
+    frozen_protocol = yaml.safe_load(
+        FROZEN_PROTOCOL_CONFIG.read_text(encoding="utf-8")
+    )
     expected = {
         "reward_contract_id": training["reward_contract_id"],
         "training_gamma": float(training["gamma"]),
@@ -466,6 +573,35 @@ def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
                 f"manifest={training_contract(job)} config={expected}; "
                 "regenerate the RQ manifests before launching"
             )
+        if job.get("protocol_id") == "drl_rq_protocol_frozen_v1":
+            try:
+                completion_bonus = float(job["terran_terminal_success_bonus"])
+                runtime_bonus = float(
+                    runtime_config["training_overrides_by_method_scale"]
+                    ["terran"][job["scale"]]["terran_terminal_success_bonus"]
+                )
+                protocol_bonus = float(
+                    frozen_protocol["training_overrides_by_method_scale"]
+                    ["terran"][job["scale"]]["terran_terminal_success_bonus"]
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise RuntimeError(
+                    "formal TERRAN manifest/runtime/protocol must freeze "
+                    "terran_terminal_success_bonus per scale"
+                ) from error
+            if (
+                not all(
+                    math.isfinite(value) and value >= 0.0
+                    for value in (completion_bonus, runtime_bonus, protocol_bonus)
+                )
+                or completion_bonus != runtime_bonus
+                or completion_bonus != protocol_bonus
+            ):
+                raise RuntimeError(
+                    "formal TERRAN terminal success-bonus contract mismatch: "
+                    f"manifest={completion_bonus}, runtime={runtime_bonus}, "
+                    f"protocol={protocol_bonus}"
+                )
 
 
 def validate_objective_contracts(jobs: list[dict[str, Any]]) -> None:
@@ -794,6 +930,12 @@ def expected_resolved_training_signature(
         raw_decode = str(job["validation_decode_type"])
         method_specific = {
             "method": "TERRAN",
+            "task_reward": {
+                "terminal_success_bonus": float(
+                    job["terran_terminal_success_bonus"]
+                ),
+                "unit": "normalized_objective_cost",
+            },
             "training": {
                 "epochs": epochs,
                 "num_envs_per_gpu": physical,
@@ -1008,6 +1150,15 @@ def validate_completed_training_reward_contract(
         "reward_failure_base": terms.failure_base,
         "reward_unserved_coefficient": terms.unserved_coefficient,
     }
+    if job.get("method") == "terran":
+        completion_bonus = float(job["terran_terminal_success_bonus"])
+        expected_result.update(
+            terran_terminal_success_bonus=completion_bonus,
+            terran_terminal_success_bonus_unit="normalized_objective_cost",
+            terran_terminal_success_bonus_equivalent_usd=(
+                completion_bonus * terms.objective_scale
+            ),
+        )
     mismatched = {
         field: (training_result.get(field), expected)
         for field, expected in expected_result.items()
@@ -1049,6 +1200,15 @@ def validate_completed_training_reward_contract(
             "reward_unserved_coefficient": (
                 config.get("normalization") or {}
             ).get("unserved_coefficient"),
+            "terran_terminal_success_bonus": (config.get("pbrs") or {}).get(
+                "terminal_success_bonus"
+            ),
+            "terran_terminal_success_bonus_unit": (
+                config.get("normalization") or {}
+            ).get("terran_terminal_success_bonus_unit"),
+            "terran_terminal_success_bonus_equivalent_usd": (
+                config.get("normalization") or {}
+            ).get("terran_terminal_success_bonus_equivalent_usd"),
         }
     else:
         checkpoint_objective = payload.get("objective_config")
@@ -1095,6 +1255,15 @@ def validate_completed_training_reward_contract(
         "reward_failure_base": checkpoint_terms.failure_base,
         "reward_unserved_coefficient": checkpoint_terms.unserved_coefficient,
     }
+    if job.get("method") == "terran":
+        completion_bonus = float(job["terran_terminal_success_bonus"])
+        expected_derived.update(
+            terran_terminal_success_bonus=completion_bonus,
+            terran_terminal_success_bonus_unit="normalized_objective_cost",
+            terran_terminal_success_bonus_equivalent_usd=(
+                completion_bonus * checkpoint_terms.objective_scale
+            ),
+        )
     if derived != expected_derived:
         raise RuntimeError(
             "selected checkpoint derived reward-contract fields are inconsistent: "
@@ -1323,6 +1492,19 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
         "python_executable": sys.executable,
         "python_prefix": sys.prefix,
         "gpu_names": gpu_names,
+        "launcher_id": validate_launcher_id(args.launcher_id),
+        "slot_gpu_map": {
+            str(slot): local_gpu
+            for slot, local_gpu in parse_slot_gpu_map(
+                args.slot_gpu_map,
+                slots={
+                    int(value)
+                    for value in args.slots.split(",")
+                    if value.strip()
+                },
+                local_gpu_count=args.local_gpu_count,
+            ).items()
+        },
     }
     if args.mode == "evaluate" and not args.dry_run:
         missing_checkpoints = [
@@ -1512,6 +1694,7 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
         for field, option in (
             ("num_minibatches", "--num-minibatches"),
             ("ppo_step_chunk_size", "--ppo-step-chunk-size"),
+            ("terran_terminal_success_bonus", "--terminal-success-bonus"),
         ):
             if field in job:
                 command.extend([option, str(job[field])])
@@ -1753,6 +1936,9 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         "conda_env": context["conda_env"],
         "resume_requested": bool(resume),
         "resumed_from_checkpoint": bool(resume_this_job),
+        "launcher_id": context.get("launcher_id", "default"),
+        "logical_slot": int(job["global_slot"]),
+        "local_gpu": int(local_gpu),
         **training_contract(job),
         "started_at": time.time(),
     }
@@ -1862,6 +2048,9 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
     result = {
         "schema": "drl_job_result_v1",
         "job_id": job["job_id"],
+        "launcher_id": context.get("launcher_id", "default"),
+        "logical_slot": int(job["global_slot"]),
+        "local_gpu": int(local_gpu),
         "status": "passed" if passed else "failed",
         "returncode": returncode,
         "training_outcome": training_result.get("status"),
@@ -1939,6 +2128,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("mode", choices=("full", "evaluate", "status", "resume"))
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--slots", required=True)
+    parser.add_argument(
+        "--slot-gpu-map",
+        default=None,
+        help=(
+            "Optional explicit logical-slot to local CUDA-device mapping, for "
+            "example 1:1. It must map exactly --slots."
+        ),
+    )
+    parser.add_argument(
+        "--launcher-id",
+        default="default",
+        help="Safe launcher namespace identifier recorded in run provenance.",
+    )
     parser.add_argument("--local-gpu-count", type=int, required=True)
     parser.add_argument("--gpu-name-pattern", required=True)
     parser.add_argument("--expected-branch", default="drl-benchmark-adapters")
@@ -1954,6 +2156,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     slots = {int(value) for value in args.slots.split(",") if value.strip()}
+    launcher_id = validate_launcher_id(args.launcher_id)
+    slot_gpu_map = parse_slot_gpu_map(
+        args.slot_gpu_map,
+        slots=slots,
+        local_gpu_count=args.local_gpu_count,
+    )
     seeds = {int(value) for value in args.seeds.split(",") if value.strip()}
     scales = {value.strip() for value in args.scales.split(",") if value.strip()}
     methods = (
@@ -1973,7 +2181,19 @@ def main() -> None:
             f"and scales={sorted(scales)} methods={sorted(methods) if methods is not None else 'all'} "
             f"in {args.manifest}"
         )
+    validate_job_routing(
+        jobs,
+        launcher_id=launcher_id,
+        slot_gpu_map=slot_gpu_map,
+    )
     context = preflight(args, jobs)
+    # Tests and downstream callers may provide a minimal context, so populate
+    # the launcher routing provenance here as the single authoritative fallback.
+    context.setdefault("launcher_id", launcher_id)
+    context.setdefault(
+        "slot_gpu_map",
+        {str(slot): local_gpu for slot, local_gpu in slot_gpu_map.items()},
+    )
     if args.mode == "status":
         rows = []
         by_mode: dict[str, dict[str, int]] = {}
@@ -2009,7 +2229,8 @@ def main() -> None:
     by_slot = {slot: [job for job in jobs if int(job["global_slot"]) == slot] for slot in slots}
     failures: list[str] = []
     threads = []
-    for local_gpu, slot in enumerate(sorted(slots)):
+    for slot in sorted(slots):
+        local_gpu = slot_gpu_map[slot]
         thread = threading.Thread(target=worker, args=(slot, by_slot[slot], context, local_gpu, args.mode == "resume", args.dry_run, failures), daemon=False)
         thread.start()
         threads.append(thread)

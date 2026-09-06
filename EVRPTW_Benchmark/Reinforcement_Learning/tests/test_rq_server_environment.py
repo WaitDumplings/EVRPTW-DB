@@ -87,6 +87,79 @@ def test_terran_wrappers_pin_the_dedicated_manifest_and_method_filter() -> None:
         assert f" {mode} --methods terran" in source
 
 
+def test_terran_cus1000_replacement_wrappers_pin_namespace_and_gpu1() -> None:
+    server = SCRIPT_ROOT / "a6000_2_1"
+    for name, mode in (
+        ("terran_cus1000_replacement_full.sh", "full"),
+        ("terran_cus1000_replacement_resume.sh", "resume"),
+        ("terran_cus1000_replacement_status.sh", "status"),
+    ):
+        source = (server / name).read_text(encoding="utf-8")
+        assert os.access(server / name, os.X_OK)
+        assert "terran_cus1000_replacement_jobs.jsonl" in source
+        assert "--launcher-id terran_cus1000_replacement_v1" in source
+        assert "--slots 1" in source
+        assert "--slot-gpu-map 1:1" in source
+        assert f" {mode} " in source
+
+
+def test_named_launcher_namespace_does_not_touch_live_default_pid(
+    tmp_path: Path,
+) -> None:
+    environment, log_dir = _launcher_test_environment(tmp_path)
+    log_dir.mkdir(parents=True)
+    (log_dir / "full.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    started = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT_ROOT / "start_server.sh"),
+            "full",
+            "--launcher-id",
+            "replacement-test",
+            "--slots",
+            "1",
+            "--slot-gpu-map",
+            "1:1",
+        ],
+        cwd=REPO,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert started.returncode == 0, started.stderr
+    assert (log_dir / "full.pid").read_text(encoding="utf-8") == f"{os.getpid()}\n"
+    replacement_dir = log_dir / "launchers/replacement-test"
+    replacement_pid = int((replacement_dir / "full.pid").read_text())
+    try:
+        assert replacement_pid != os.getpid()
+        assert (replacement_dir / "launcher.lock").is_file()
+        assert (replacement_dir / "current.log.path").is_file()
+    finally:
+        os.kill(replacement_pid, signal.SIGTERM)
+
+
+def test_named_launcher_rejects_unsafe_identifier(tmp_path: Path) -> None:
+    environment, _log_dir = _launcher_test_environment(tmp_path)
+    refused = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT_ROOT / "start_server.sh"),
+            "full",
+            "--launcher-id",
+            "../escape",
+        ],
+        cwd=REPO,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert refused.returncode == 2
+    assert "invalid launcher id" in refused.stderr
+
+
 def test_launcher_blocks_other_mode_but_ignores_stale_pid(tmp_path: Path) -> None:
     environment, log_dir = _launcher_test_environment(tmp_path)
     log_dir.mkdir(parents=True)

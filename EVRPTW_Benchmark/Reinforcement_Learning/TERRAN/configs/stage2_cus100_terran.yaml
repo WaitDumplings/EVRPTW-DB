@@ -70,6 +70,10 @@ pbrs:
   customer_progress_budget: 0.5
   customer_progress_mix: 0.5
   repair_progress_coef: 0.5
+  # Formal replacement runs must override this explicitly through the frozen
+  # job manifest.  One unit equals one selected-scale reference cost S_N.
+  terminal_success_bonus: 0.0
+  # Legacy terminal heuristic only; canonical formal training keeps it zero.
   success_bonus: 0.0
   # Populated from the frozen reward contract before environments are built.
   failure_base: 0.0
