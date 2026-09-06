@@ -11,7 +11,11 @@ import numpy as np
 import torch
 from scipy.stats import ttest_rel
 from ..common.protocol_entrypoints import run_am
-from ..common.training_protocol import add_data_pass_arguments
+from ..common.training_protocol import (
+    add_data_pass_arguments,
+    build_adamw_optimizer,
+    require_adamw,
+)
 from ..common.objective import objective_from_args
 from ..common.protocol_trainers import prepare_training_objective
 
@@ -110,7 +114,11 @@ def main() -> None:
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
-    optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
+    optimizer = build_adamw_optimizer(
+        policy.parameters(),
+        learning_rate=args.learning_rate,
+        weight_decay=require_adamw(args),
+    )
     if args.data_passes is not None or args.training_epochs is not None:
         run_am(args, pool, policy, optimizer)
         return

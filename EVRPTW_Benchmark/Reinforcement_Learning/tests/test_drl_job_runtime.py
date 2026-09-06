@@ -178,6 +178,8 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         "validation_index": "val.parquet",
         "training_epochs": 25,
         "training_rollout_steps": 140,
+        "optimizer_name": "adamw",
+        "optimizer_weight_decay": 0.01,
         "physical_batch_size": 4,
         "effective_batch_size": 4,
         "validation_views": 100,
@@ -192,6 +194,8 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
     }
     for method, module in (
         ("am_evrptw", "EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.train"),
+        ("evrptw_rl", "EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.train"),
+        ("drl_ts", "EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.train"),
         ("terran", "EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train"),
     ):
         job = _job(f"train__R__{method}__Cus100__seed1234")
@@ -210,6 +214,10 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         assert command[decode_index + 1] == "sampling"
         candidate_index = command.index("--validation-candidates")
         assert command[candidate_index + 1] == "100"
+        optimizer_index = command.index("--optimizer")
+        assert command[optimizer_index + 1] == "adamw"
+        weight_decay_index = command.index("--weight-decay")
+        assert command[weight_decay_index + 1] == "0.01"
         if method == "terran":
             assert command.count("--num-customers") == 1
             customer_index = command.index("--num-customers")
@@ -323,12 +331,23 @@ def test_all_formal_cost_manifests_pass_and_commands_forward_profile(tmp_path):
         job = _cost_job(method)
         RUNTIME.validate_objective_contracts([job])
         RUNTIME.validate_terran_training_contracts([job])
+        RUNTIME.validate_optimizer_contracts([job])
         context = _context(tmp_path)
         command = RUNTIME.training_command(job, context, tmp_path / "run", False)
         assert command[command.index("--objective-config") + 1] == str(
             context["repo"] / job["objective_config_path"]
         )
         assert RUNTIME.training_contract(job)["objective_config"] == job["objective_config"]
+        assert RUNTIME.training_contract(job)["optimizer_name"] == "adamw"
+        assert RUNTIME.training_contract(job)["optimizer_weight_decay"] == 0.01
+
+
+@pytest.mark.parametrize("field", ["optimizer_name", "optimizer_weight_decay"])
+def test_optimizer_preflight_rejects_stale_scientific_metadata(field):
+    job = _cost_job()
+    job[field] = "adam" if field == "optimizer_name" else 0.0
+    with pytest.raises(RuntimeError, match="optimizer contract mismatch"):
+        RUNTIME.validate_optimizer_contracts([job])
 
 
 @pytest.mark.parametrize("method", sorted(RUNTIME.METHODS))

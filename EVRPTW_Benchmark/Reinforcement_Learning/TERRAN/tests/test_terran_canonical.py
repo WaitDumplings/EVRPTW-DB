@@ -129,6 +129,64 @@ def test_resume_rejects_missing_or_changed_reward_contract(
         )
 
 
+@pytest.mark.parametrize(
+    ("saved_optimizer", "saved_weight_decay", "state_weight_decay"),
+    [
+        (None, 0.01, 0.01),
+        ("adam", 0.01, 0.01),
+        ("adamw", None, 0.01),
+        ("adamw", 0.0, 0.0),
+        ("adamw", 0.01, 0.0),
+    ],
+)
+def test_terran_resume_rejects_old_optimizer_contract(
+    saved_optimizer, saved_weight_decay, state_weight_decay
+) -> None:
+    current_training = {
+        "gamma": 1.0,
+        "reward_contract_id": "terran_undiscounted_distance_pbrs_v1",
+        "optimizer": "adamw",
+        "weight_decay": 0.01,
+    }
+    saved_training = dict(current_training)
+    if saved_optimizer is None:
+        saved_training.pop("optimizer")
+    else:
+        saved_training["optimizer"] = saved_optimizer
+    if saved_weight_decay is None:
+        saved_training.pop("weight_decay")
+    else:
+        saved_training["weight_decay"] = saved_weight_decay
+    payload = {
+        "config": {"training": saved_training},
+        "optimizer_state_dict": {
+            "param_groups": [{"weight_decay": state_weight_decay}]
+        },
+    }
+    with pytest.raises(ValueError, match="optimizer"):
+        terran_trainer.validate_resume_reward_contract(
+            {"training": current_training}, payload
+        )
+
+
+def test_terran_resume_accepts_exact_adamw_contract() -> None:
+    training = {
+        "gamma": 1.0,
+        "reward_contract_id": "terran_undiscounted_distance_pbrs_v1",
+        "optimizer": "adamw",
+        "weight_decay": 0.01,
+    }
+    terran_trainer.validate_resume_reward_contract(
+        {"training": dict(training)},
+        {
+            "config": {"training": dict(training)},
+            "optimizer_state_dict": {
+                "param_groups": [{"weight_decay": 0.01}]
+            },
+        },
+    )
+
+
 def test_fresh_output_allows_launcher_only_records(tmp_path: Path) -> None:
     for name, content in (
         ("provenance.json", '{"schema": "drl_job_provenance_v1"}'),

@@ -152,6 +152,8 @@ def main() -> None:
         overrides["training"]["num_minibatches"] = args.num_minibatches
     if args.gradient_accumulation_steps is not None:
         overrides["training"]["gradient_accumulation_steps"] = args.gradient_accumulation_steps
+    overrides["training"]["optimizer"] = args.optimizer
+    overrides["training"]["weight_decay"] = args.weight_decay
     if args.debug:
         overrides["training"]["debug"] = True
     if args.no_debug:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import signal
@@ -141,7 +142,44 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
             reward_contract_id=job.get("reward_contract_id"),
             training_gamma=job.get("training_gamma"),
         )
+    for field in ("optimizer_name", "optimizer_weight_decay"):
+        if field in job:
+            contract[field] = job[field]
     return contract
+
+
+def validate_optimizer_contracts(jobs: list[dict[str, Any]]) -> None:
+    cfg = yaml.safe_load(RUNTIME_CONFIG.read_text(encoding="utf-8"))
+    optimizer = cfg["training_optimizer"]
+    expected_name = str(optimizer["name"]).lower()
+    expected_weight_decay = float(optimizer["weight_decay"])
+    if (
+        expected_name != "adamw"
+        or not math.isfinite(expected_weight_decay)
+        or expected_weight_decay < 0.0
+    ):
+        raise RuntimeError("formal training requires a valid AdamW contract")
+    for job in jobs:
+        if job.get("kind") != "train":
+            continue
+        if (
+            str(job.get("optimizer_name", "")).lower() != expected_name
+            or float(job.get("optimizer_weight_decay", -1.0))
+            != expected_weight_decay
+        ):
+            raise RuntimeError(
+                f"manifest/config optimizer contract mismatch for {job['job_id']}; "
+                "regenerate the RQ manifests before launching"
+            )
+    terran_training = yaml.safe_load(
+        TERRAN_CONFIG.read_text(encoding="utf-8")
+    )["training"]
+    if (
+        str(terran_training.get("optimizer", "")).lower() != expected_name
+        or float(terran_training.get("weight_decay", -1.0))
+        != expected_weight_decay
+    ):
+        raise RuntimeError("TERRAN config does not match the formal optimizer contract")
 
 
 def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
@@ -188,6 +226,7 @@ def validate_objective_contracts(jobs: list[dict[str, Any]]) -> None:
 def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str, Any]:
     validate_terran_training_contracts(jobs)
     validate_objective_contracts(jobs)
+    validate_optimizer_contracts(jobs)
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
     if missing:
         raise RuntimeError(f"missing required environment variables: {', '.join(missing)}")
@@ -400,6 +439,14 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
         ]
     if job.get("objective_config_path"):
         command.extend(["--objective-config", str(context["repo"] / job["objective_config_path"])])
+    command.extend(
+        [
+            "--optimizer",
+            str(job["optimizer_name"]),
+            "--weight-decay",
+            str(job["optimizer_weight_decay"]),
+        ]
+    )
     if job["method"] == "drl_ts" and job.get("soft_stage_end_epoch") is not None:
         command.extend(["--soft-stage-end-epoch", str(job["soft_stage_end_epoch"])])
     if job["method"] == "terran":

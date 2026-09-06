@@ -29,7 +29,12 @@ from ..common.data_pass import DataPassState
 from ..common.evaluation import select_min_verified_objective
 from ..common.objective import objective_from_checkpoint, resolve_objective
 from ..common.training_diagnostics import summarize_values
-from ..common.training_protocol import append_jsonl, atomic_json, validation_key
+from ..common.training_protocol import (
+    append_jsonl,
+    atomic_json,
+    build_adamw_optimizer,
+    validation_key,
+)
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
 from .models import Agent
@@ -214,6 +219,38 @@ def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]
     current_contract = cfg.get("training", {}).get("reward_contract_id")
     if saved_training.get("reward_contract_id") != current_contract:
         raise ValueError("TERRAN resume reward contract mismatch; start a fresh run")
+    current_optimizer = cfg.get("training", {}).get("optimizer")
+    current_weight_decay = cfg.get("training", {}).get("weight_decay")
+    if current_optimizer is not None or current_weight_decay is not None:
+        if current_optimizer is None or current_weight_decay is None:
+            raise ValueError("TERRAN current optimizer contract is incomplete")
+        if str(saved_training.get("optimizer", "")).lower() != str(
+            current_optimizer
+        ).lower():
+            raise ValueError("TERRAN resume optimizer mismatch; start a fresh run")
+        try:
+            saved_weight_decay = float(saved_training["weight_decay"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "TERRAN resume checkpoint is missing optimizer weight decay; "
+                "start a fresh run"
+            ) from error
+        if saved_weight_decay != float(current_weight_decay):
+            raise ValueError(
+                "TERRAN resume optimizer weight decay mismatch; start a fresh run"
+            )
+        param_groups = payload.get("optimizer_state_dict", {}).get(
+            "param_groups", []
+        )
+        if not param_groups or any(
+            float(group.get("weight_decay", float("nan")))
+            != float(current_weight_decay)
+            for group in param_groups
+        ):
+            raise ValueError(
+                "TERRAN resume optimizer state weight decay mismatch; "
+                "start a fresh run"
+            )
     current_objective = resolve_objective(cfg.get("objective"))
     try:
         objective_from_checkpoint(payload, override=current_objective)
@@ -856,6 +893,16 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     cfg = deep_update(cfg, overrides or {})
     set_seed(seed)
     train_cfg = cfg["training"]
+    optimizer_name = str(train_cfg.get("optimizer", "adamw")).lower()
+    if optimizer_name != "adamw":
+        raise ValueError(
+            f"unsupported TERRAN optimizer: {optimizer_name}; expected adamw"
+        )
+    weight_decay = float(train_cfg.get("weight_decay", 0.01))
+    if not np.isfinite(weight_decay) or weight_decay < 0.0:
+        raise ValueError("TERRAN weight_decay must be finite and non-negative")
+    train_cfg["optimizer"] = optimizer_name
+    train_cfg["weight_decay"] = weight_decay
     gamma = training_gamma(cfg)
     objective_config = resolve_objective(cfg.get("objective"))
     cfg["objective"] = objective_config.to_dict()
@@ -893,11 +940,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         use_graph_token=bool(model_cfg.get("use_graph_token", False)),
         use_dynamic_embedding=bool(model_cfg.get("use_dynamic_embedding", False)),
     ).to(device)
-    optimizer = torch.optim.AdamW(
+    optimizer = build_adamw_optimizer(
         agent.parameters(),
-        lr=float(train_cfg.get("learning_rate", 1e-4)),
+        learning_rate=float(train_cfg.get("learning_rate", 1e-4)),
         eps=1e-5,
-        weight_decay=float(train_cfg.get("weight_decay", 0.0)),
+        weight_decay=weight_decay,
     )
     initial_env_start = time.perf_counter()
     envs, pool = make_envs(cfg, seed)

@@ -128,6 +128,10 @@ def job(
         "logical_environments_per_epoch": environments_per_epoch,
         "planned_logical_epochs": updates,
         "training_rollout_steps": int(cfg["rollout_steps"][scale]),
+        "optimizer_name": str(cfg["training_optimizer"]["name"]),
+        "optimizer_weight_decay": float(
+            cfg["training_optimizer"]["weight_decay"]
+        ),
         "training_trajectory_count": int(
             cfg.get("training_trajectory_count_by_method_scale", {})
             .get(method, {})

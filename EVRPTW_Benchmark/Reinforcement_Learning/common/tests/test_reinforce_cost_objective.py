@@ -222,6 +222,102 @@ def test_reinforce_checkpoint_freezes_objective_and_rejects_changed_resume(tmp_p
     )
 
 
+@pytest.mark.parametrize(
+    ("saved_optimizer", "saved_weight_decay", "state_weight_decay"),
+    [
+        (None, 0.01, 0.01),
+        ("adam", 0.01, 0.01),
+        ("adamw", None, 0.01),
+        ("adamw", 0.0, 0.0),
+        ("adamw", 0.01, 0.0),
+    ],
+)
+def test_reinforce_resume_rejects_old_optimizer_contract(
+    tmp_path, saved_optimizer, saved_weight_decay, state_weight_decay
+):
+    objective = _objective()
+    policy = torch.nn.Linear(1, 1, bias=False)
+    baseline = deepcopy(policy)
+    optimizer = torch.optim.AdamW(policy.parameters(), weight_decay=0.01)
+    args = SimpleNamespace(
+        protocol_id="adamw-test",
+        objective=objective.to_dict(),
+        optimizer="adamw",
+        weight_decay=0.01,
+    )
+    path = tmp_path / "checkpoint.pt"
+    protocol_trainers._save_checkpoint(
+        path,
+        method="AM-EVRPTW",
+        data_pass=0,
+        policy=policy,
+        baseline=baseline,
+        optimizer=optimizer,
+        args=args,
+    )
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if saved_optimizer is None:
+        payload["args"].pop("optimizer")
+    else:
+        payload["args"]["optimizer"] = saved_optimizer
+    if saved_weight_decay is None:
+        payload["args"].pop("weight_decay")
+    else:
+        payload["args"]["weight_decay"] = saved_weight_decay
+    for group in payload["optimizer"]["param_groups"]:
+        group["weight_decay"] = state_weight_decay
+    torch.save(payload, path)
+    before = policy.weight.detach().clone()
+    with pytest.raises(ValueError, match="optimizer"):
+        protocol_trainers._load_checkpoint(
+            path,
+            policy=policy,
+            baseline=baseline,
+            optimizer=optimizer,
+            protocol_id="adamw-test",
+            objective_config=objective,
+            optimizer_name="adamw",
+            optimizer_weight_decay=0.01,
+        )
+    torch.testing.assert_close(policy.weight, before)
+
+
+def test_reinforce_resume_accepts_exact_adamw_contract(tmp_path):
+    objective = _objective()
+    policy = torch.nn.Linear(1, 1, bias=False)
+    baseline = deepcopy(policy)
+    optimizer = torch.optim.AdamW(policy.parameters(), weight_decay=0.01)
+    args = SimpleNamespace(
+        protocol_id="adamw-test",
+        objective=objective.to_dict(),
+        optimizer="adamw",
+        weight_decay=0.01,
+    )
+    path = tmp_path / "checkpoint.pt"
+    protocol_trainers._save_checkpoint(
+        path,
+        method="AM-EVRPTW",
+        data_pass=0,
+        policy=policy,
+        baseline=baseline,
+        optimizer=optimizer,
+        args=args,
+    )
+    protocol_trainers._load_checkpoint(
+        path,
+        policy=policy,
+        baseline=baseline,
+        optimizer=optimizer,
+        protocol_id="adamw-test",
+        objective_config=objective,
+        optimizer_name="adamw",
+        optimizer_weight_decay=0.01,
+    )
+    assert all(
+        group["weight_decay"] == 0.01 for group in optimizer.param_groups
+    )
+
+
 def test_soft_cost_rollout_retains_nonzero_capacity_penalty():
     from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.rollout import rollout
 

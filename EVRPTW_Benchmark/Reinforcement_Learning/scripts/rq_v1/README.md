@@ -28,6 +28,10 @@ for parameters, accounting, normalization and historical-comparison boundaries.
 TERRAN uses `terran_undiscounted_energy_vehicle_pbrs_v1`, with `gamma=1.0`
 in both returns and PBRS. The other methods retain their native auxiliary
 shaping and training-stage schedules. Architectures, data and budgets are unchanged.
+All four trainers use AdamW with explicit decoupled `weight_decay=0.01`;
+their existing method-native learning rates remain unchanged. The optimizer
+name and weight decay are recorded in each manifest, launcher provenance and
+checkpoint configuration/arguments.
 
 All four formal trainers also write an observational `reward_diagnostics.jsonl`
 inside their run output directory. It records normalization provenance,

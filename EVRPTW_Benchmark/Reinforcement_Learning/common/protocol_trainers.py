@@ -262,6 +262,8 @@ def _load_checkpoint(
     optimizer: torch.optim.Optimizer,
     protocol_id: str,
     objective_config: Any = None,
+    optimizer_name: str | None = None,
+    optimizer_weight_decay: float | None = None,
 ) -> dict[str, Any]:
     policy_device = getattr(policy, "device", None)
     if policy_device is None:
@@ -270,6 +272,39 @@ def _load_checkpoint(
     if payload.get("protocol_id") != protocol_id:
         raise ValueError("checkpoint protocol does not match requested protocol")
     objective_from_checkpoint(payload, override=objective_config)
+    if optimizer_name is not None or optimizer_weight_decay is not None:
+        if optimizer_name is None or optimizer_weight_decay is None:
+            raise ValueError("incomplete requested optimizer contract")
+        requested_name = str(optimizer_name).lower()
+        requested_weight_decay = float(optimizer_weight_decay)
+        saved_args = payload.get("args", {})
+        if str(saved_args.get("optimizer", "")).lower() != requested_name:
+            raise ValueError(
+                "checkpoint optimizer mismatch; start a fresh run"
+            )
+        try:
+            saved_weight_decay = float(saved_args["weight_decay"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "checkpoint is missing optimizer weight decay; start a fresh run"
+            ) from error
+        if saved_weight_decay != requested_weight_decay:
+            raise ValueError(
+                "checkpoint optimizer weight decay mismatch; start a fresh run"
+            )
+        param_groups = payload.get("optimizer", {}).get("param_groups", [])
+        if not param_groups or any(
+            float(group.get("weight_decay", float("nan")))
+            != requested_weight_decay
+            for group in param_groups
+        ):
+            raise ValueError(
+                "checkpoint optimizer state weight decay mismatch; start a fresh run"
+            )
+        if requested_name == "adamw" and not isinstance(
+            optimizer, torch.optim.AdamW
+        ):
+            raise ValueError("requested AdamW contract requires an AdamW optimizer")
     policy.load_state_dict(payload["model"])
     baseline.load_state_dict(payload["baseline"])
     optimizer.load_state_dict(payload["optimizer"])
@@ -475,6 +510,8 @@ def train_reinforce_data_passes(
             optimizer=optimizer,
             protocol_id=args.protocol_id,
             objective_config=objective_config,
+            optimizer_name=getattr(args, "optimizer", None),
+            optimizer_weight_decay=getattr(args, "weight_decay", None),
         )
         if int(resume_extra.get("data_pass", -1)) != state.completed_data_passes:
             raise ValueError("checkpoint and data-pass state disagree")
@@ -1141,6 +1178,8 @@ def train_reinforce_data_passes(
             optimizer=optimizer,
             protocol_id=args.protocol_id,
             objective_config=objective_config,
+            optimizer_name=getattr(args, "optimizer", None),
+            optimizer_weight_decay=getattr(args, "weight_decay", None),
         )
         policy.eval()
         final_validation = verified_validation(

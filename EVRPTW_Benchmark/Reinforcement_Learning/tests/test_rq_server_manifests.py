@@ -73,6 +73,23 @@ def test_every_formal_job_uses_the_same_versioned_cost_objective() -> None:
     assert terran["objective"] == profile_path
 
 
+def test_every_formal_job_uses_the_same_adamw_contract() -> None:
+    cfg = yaml.safe_load(MANIFESTS.CONFIG.read_text())
+    expected = cfg["training_optimizer"]
+    assert expected == {"name": "adamw", "weight_decay": 0.01}
+    for queue in build().values():
+        for row in queue:
+            assert row["optimizer_name"] == expected["name"]
+            assert row["optimizer_weight_decay"] == expected["weight_decay"]
+    frozen = yaml.safe_load(
+        (MANIFESTS.ROOT / "configs/drl_rq_protocol_frozen_v1.yaml").read_text()
+    )
+    assert frozen["training_optimizer"] == expected
+    terran = yaml.safe_load(MANIFESTS.TERRAN_CONFIG.read_text())
+    assert terran["training"]["optimizer"] == expected["name"]
+    assert terran["training"]["weight_decay"] == expected["weight_decay"]
+
+
 def test_reward_contract_is_terran_only_and_derived_from_formal_yaml(tmp_path, monkeypatch) -> None:
     baseline = build()
     formal = yaml.safe_load(MANIFESTS.TERRAN_CONFIG.read_text(encoding="utf-8"))

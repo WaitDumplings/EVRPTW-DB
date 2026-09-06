@@ -9,6 +9,9 @@ historical_evidence_relabelled: false
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
 objective_revision: rivian_energy_vehicle_cost_v1
 historical_distance_runs_are_cost_optimized: false
+training_optimizer:
+  name: adamw
+  weight_decay: 0.01
 
 methods: [am_evrptw, evrptw_rl, drl_ts, terran]
 seeds: [1234]

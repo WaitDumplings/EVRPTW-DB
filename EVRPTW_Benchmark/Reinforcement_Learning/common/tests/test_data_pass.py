@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import torch
+
 from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import (
     DataPassState,
     pass_batches,
@@ -9,7 +11,9 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import (
 )
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
+    build_adamw_optimizer,
     grouped_batches,
+    require_adamw,
     require_registered_batches,
 )
 
@@ -64,6 +68,37 @@ def test_registered_batch_allows_safe_remainder_but_not_oversize() -> None:
         assert "cannot exceed" in str(exc)
     else:
         raise AssertionError("oversize physical batch must fail")
+
+
+def test_adamw_contract_requires_nonnegative_finite_weight_decay() -> None:
+    args = SimpleNamespace(optimizer="adamw", weight_decay=0.01)
+    assert require_adamw(args) == 0.01
+    for optimizer, weight_decay in (
+        ("adam", 0.01),
+        ("adamw", -0.01),
+        ("adamw", float("nan")),
+    ):
+        args = SimpleNamespace(optimizer=optimizer, weight_decay=weight_decay)
+        try:
+            require_adamw(args)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid AdamW contract must fail")
+
+
+def test_shared_optimizer_factory_builds_explicit_adamw_contract() -> None:
+    model = torch.nn.Linear(2, 1)
+    optimizer = build_adamw_optimizer(
+        model.parameters(),
+        learning_rate=1e-4,
+        weight_decay=0.01,
+        eps=1e-5,
+    )
+    assert isinstance(optimizer, torch.optim.AdamW)
+    assert optimizer.defaults["lr"] == 1e-4
+    assert optimizer.defaults["weight_decay"] == 0.01
+    assert optimizer.defaults["eps"] == 1e-5
 
 
 def test_atomic_state_resume_and_protocol_guard(tmp_path) -> None:

@@ -19,6 +19,18 @@ from .stage2_data import Stage2TaskPool
 
 def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--objective-config", type=Path, help="Versioned objective JSON; omitted means legacy distance.")
+    parser.add_argument(
+        "--optimizer",
+        choices=("adamw",),
+        default="adamw",
+        help="Training optimizer. Formal DRL runs use AdamW.",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.01,
+        help="Decoupled AdamW weight decay.",
+    )
     parser.add_argument("--data-passes", type=int)
     parser.add_argument("--training-epochs", type=int)
     parser.add_argument("--training-rollout-steps", type=int)
@@ -52,6 +64,40 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--max-batches-per-pass", type=int)
     parser.add_argument("--pilot-mode", action="store_true")
+
+
+def require_adamw(args: argparse.Namespace) -> float:
+    optimizer = str(getattr(args, "optimizer", "adamw")).lower()
+    if optimizer != "adamw":
+        raise ValueError(f"unsupported optimizer: {optimizer}; expected adamw")
+    weight_decay = float(getattr(args, "weight_decay", 0.01))
+    if not math.isfinite(weight_decay) or weight_decay < 0.0:
+        raise ValueError("--weight-decay must be finite and non-negative")
+    return weight_decay
+
+
+def build_adamw_optimizer(
+    parameters: Iterable[torch.nn.Parameter],
+    *,
+    learning_rate: float,
+    weight_decay: float,
+    eps: float = 1e-8,
+) -> torch.optim.AdamW:
+    learning_rate = float(learning_rate)
+    weight_decay = float(weight_decay)
+    eps = float(eps)
+    if not math.isfinite(learning_rate) or learning_rate <= 0.0:
+        raise ValueError("AdamW learning rate must be finite and positive")
+    if not math.isfinite(weight_decay) or weight_decay < 0.0:
+        raise ValueError("AdamW weight decay must be finite and non-negative")
+    if not math.isfinite(eps) or eps <= 0.0:
+        raise ValueError("AdamW epsilon must be finite and positive")
+    return torch.optim.AdamW(
+        parameters,
+        lr=learning_rate,
+        eps=eps,
+        weight_decay=weight_decay,
+    )
 
 
 def require_registered_batches(args: argparse.Namespace, legacy_batch: int) -> tuple[int, int]:

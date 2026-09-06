@@ -6,6 +6,12 @@ formal_launch_allowed: true
 launch_policy: direct_full_user_authorized_2026-09-04
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
 
+# Use one explicit optimizer contract across every formal DRL method. Learning
+# rates remain method-native; decoupled weight decay is shared and versioned.
+training_optimizer:
+  name: adamw
+  weight_decay: 0.01
+
 # Common publication inference budget. Each candidate is independently checked
 # by the canonical verifier; selection is feasible-first, then minimum total cost.
 evaluation:
