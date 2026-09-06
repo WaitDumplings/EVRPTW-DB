@@ -28,7 +28,7 @@ code because upstream AM does not define this problem.
 | Component | Upstream AM | AM-EVRPTW |
 |---|---|---|
 | Task | Euclidean TSP/CVRP and related problems | Canonical directed-road EVRP-TW |
-| Final cost | Euclidean route length | Sum of `distance_matrix_km` arcs |
+| Final cost | Euclidean route length | Electricity plus dispatched-vehicle cost in the new formal track; legacy distance remains supported |
 | Static node input | coordinates plus problem-specific scalar | coordinates, normalized volume demand, TW, service, charging power, and node type |
 | Dynamic decoder context | previous node plus remaining capacity for CVRP | previous node plus used cargo, used battery fraction, and current time |
 | Feasibility | upstream problem state and mask | shared EVRPTW action mask |
@@ -36,9 +36,13 @@ code because upstream AM does not define this problem.
 | Travel physics | Euclidean norm | exported directed distance/time/energy matrices |
 | Fleet | CVRP depot returns | each depot return closes one route; unlimited homogeneous fleet |
 
-The objective-facing cost remains directed-road distance in km and formal
-policy-gradient training divides the complete cost by one deterministic scale
-estimated from the frozen training pool. Shared inputs use the documented
+The new formal objective is `p_e * rho * directed_distance_km + c_vehicle * K`,
+as defined in [`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md).
+Policy-gradient training divides the complete cost by the cost-unit conversion
+of the existing deterministic training-pool scale. The objective coefficients
+also govern the greedy baseline, validation and checkpoint selection. The
+legacy `cost_km` field remains a distance diagnostic; it never stores USD.
+Shared inputs use the documented
 benchmark normalization (per-instance coordinate min-max, capacity/horizon
 fractions, and full-charge-time/horizon station features); that complete
 normalization is an adapter choice because upstream AM has no EVRPTW state. No

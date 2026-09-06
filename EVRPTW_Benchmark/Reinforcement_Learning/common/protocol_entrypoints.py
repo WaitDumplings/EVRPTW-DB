@@ -9,6 +9,7 @@ import torch
 from .protocol_trainers import train_reinforce_data_passes
 from .route_info import finalize_route_infos
 from .stage2_data import make_envs
+from .objective import objective_from_args
 from .training_protocol import require_training_rollout_steps, require_validation_decoding
 
 
@@ -39,6 +40,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
+    objective_config = objective_from_args(args)
 
     def solve(
         active, instances, decode_type, seed, max_steps=None, candidate_count=None,
@@ -53,6 +55,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             n_traj=n_traj,
             info_level="light",
             reward_distance_scale_km=reward_distance_scale_km,
+            objective_config=objective_config,
         )
         result = rollout(
             active,
@@ -87,7 +90,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
         make_baseline=lambda active, instances, _soft, seed: solve(
             active, instances, "greedy", seed, training_rollout_steps
         ),
-        training_cost=lambda result: result.cost_km / reward_distance_scale_km,
+        training_cost=lambda result: result.training_cost,
         objective_distance=objective,
         feasible=lambda result: result.feasible,
         validation_solve=lambda active, instance, seed: solve(
@@ -107,6 +110,7 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
+    objective_config = objective_from_args(args)
 
     def solve(
         active, instances, decode_type, seed, max_steps=None, candidate_count=None,
@@ -121,6 +125,7 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             n_traj=n_traj,
             info_level="light",
             reward_distance_scale_km=reward_distance_scale_km,
+            objective_config=objective_config,
         )
         result = rollout(
             active,
@@ -172,6 +177,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     training_rollout_steps = require_training_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
+    objective_config = objective_from_args(args)
 
     def solve(
         active, instances, soft, decode_type, seed, max_steps=None,
@@ -192,6 +198,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                     matrix_mode="canonical",
                     info_level="light",
                     reward_distance_scale_km=reward_distance_scale_km,
+                    objective_config=objective_config,
                 )
                 for instance in instances
             ]
@@ -205,6 +212,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
                     matrix_mode="canonical",
                     info_level="light",
                     reward_distance_scale_km=reward_distance_scale_km,
+                    objective_config=objective_config,
                 )
                 for instance in instances
             ]

@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from ..common.objective import resolve_objective
 from .model import AMEVRPTWPolicy
 
 
@@ -15,9 +16,46 @@ def stack_observations(rows: Sequence[dict[str, np.ndarray]]) -> dict[str, np.nd
     return {key: np.stack([row[key] for row in rows], axis=0) for key in rows[0]}
 
 
+def rollout_objective_arrays(
+    envs: Sequence[Any], infos: Sequence[dict[str, Any]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Keep physical distance separate from the configured scalar objective."""
+    values, scales, vehicles, unit_costs = [], [], [], []
+    for env, info in zip(envs, infos):
+        base = env.unwrapped
+        config = getattr(base, "objective_config", None)
+        config = resolve_objective(
+            config.to_dict() if hasattr(config, "to_dict") else config
+        )
+        if config.is_cost and "vehicles_started" not in info:
+            raise ValueError("cost rollout requires vehicles_started in environment info")
+        if config.is_cost and not hasattr(base, "reward_objective_scale"):
+            raise ValueError("cost rollout requires reward_objective_scale")
+        started = np.asarray(
+            info.get("vehicles_started", info.get("vehicle_count", 0)), dtype=np.float64
+        )
+        distance = np.asarray(info["objective_distance_km"], dtype=np.float64)
+        values.append(np.asarray(config.value(distance, started), dtype=np.float64))
+        vehicles.append(np.broadcast_to(started, distance.shape))
+        scales.append(float(getattr(
+            base, "reward_objective_scale",
+            getattr(base, "reward_distance_scale_km", 1.0),
+        )))
+        unit_costs.append(float(config.distance_unit_cost))
+    return (
+        np.stack(values), np.asarray(scales)[:, None],
+        np.stack(vehicles), np.asarray(unit_costs)[:, None],
+    )
+
+
 @dataclass
 class AMRollout:
+    # Historical distance-plus-km-penalty diagnostic; never contains currency.
     cost_km: torch.Tensor
+    training_cost: torch.Tensor
+    objective_value: torch.Tensor
+    objective_distance_km: torch.Tensor
+    vehicles_started: torch.Tensor
     log_likelihood: torch.Tensor
     feasible: torch.Tensor
     served_customers: torch.Tensor
@@ -102,11 +140,26 @@ def rollout(
         [env.unwrapped.num_customers for env in envs], dtype=np.float64
     )[:, None]
     incomplete_fraction = 1.0 - served / np.maximum(customer_count, 1.0)
-    training_cost = objective + (~feasible) * (
+    legacy_cost_km = objective + (~feasible) * (
         float(incomplete_penalty_km) * (1.0 + incomplete_fraction)
     )
+    objective_value, objective_scale, vehicles_started, distance_unit_cost = (
+        rollout_objective_arrays(envs, infos)
+    )
+    # The AM auxiliary parameter retains its historical km-equivalent meaning.
+    # Convert it to the active objective unit, then normalize base and penalty
+    # together. Distance mode remains the original km cost divided by its scale.
+    training_cost = (
+        objective_value
+        + (~feasible) * float(incomplete_penalty_km)
+        * (1.0 + incomplete_fraction) * distance_unit_cost
+    ) / np.maximum(objective_scale, 1e-12)
     return AMRollout(
-        cost_km=torch.as_tensor(training_cost, device=policy.device).float(),
+        cost_km=torch.as_tensor(legacy_cost_km, device=policy.device).float(),
+        training_cost=torch.as_tensor(training_cost, device=policy.device).float(),
+        objective_value=torch.as_tensor(objective_value, device=policy.device).float(),
+        objective_distance_km=torch.as_tensor(objective, device=policy.device).float(),
+        vehicles_started=torch.as_tensor(vehicles_started, device=policy.device).float(),
         log_likelihood=log_likelihood,
         feasible=torch.as_tensor(feasible, device=policy.device),
         served_customers=torch.as_tensor(served, device=policy.device),

@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from scipy.stats import ttest_rel
 
+from .objective import objective_from_args, objective_from_checkpoint
 from .training_protocol import (
     append_jsonl,
     atomic_json,
@@ -26,6 +27,36 @@ from .training_protocol import (
     validation_key,
     verified_validation,
 )
+
+
+def prepare_training_objective(args: Any):
+    """Freeze objective values and prevent a new cost run inheriting old output."""
+    config = objective_from_args(args)
+    args.objective = config.to_dict()
+    resume = bool(getattr(args, "resume", False))
+    formal = (
+        getattr(args, "data_passes", None) is not None
+        or getattr(args, "training_epochs", None) is not None
+    )
+    if resume and not formal:
+        raise ValueError("standalone training does not implement --resume; use a formal training protocol")
+    output = Path(args.output_dir)
+    if resume and (output / "checkpoint_latest.pt").is_file():
+        payload = torch.load(output / "checkpoint_latest.pt", map_location="cpu", weights_only=False)
+        objective_from_checkpoint(payload, override=config)
+    if config.is_cost and not resume:
+        evidence = list(output.glob("checkpoint*.pt")) + list(output.glob("best*.ckpt"))
+        evidence.extend(
+            output / name for name in (
+                "data_pass_state.json", "train_history.jsonl", "logical_epoch_history.jsonl",
+                "validation_history.jsonl", "validation_summary.json", "training_result.json",
+            ) if (output / name).exists()
+        )
+        if (output / "checkpoints").is_dir():
+            evidence.extend((output / "checkpoints").iterdir())
+        if evidence:
+            raise FileExistsError("fresh cost training requires a new output directory without training history")
+    return config
 
 
 def paper_ema_baseline_due(method: str, optimizer_steps: int, args: Any) -> bool:
@@ -95,6 +126,7 @@ def _save_checkpoint(
         "optimizer": optimizer.state_dict(),
         "args": vars(args),
         "protocol_id": args.protocol_id,
+        "objective_config": objective_from_args(args).to_dict(),
     }
     payload.update(extra or {})
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -109,6 +141,7 @@ def _load_checkpoint(
     baseline: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     protocol_id: str,
+    objective_config: Any = None,
 ) -> dict[str, Any]:
     policy_device = getattr(policy, "device", None)
     if policy_device is None:
@@ -116,6 +149,7 @@ def _load_checkpoint(
     payload = torch.load(path, map_location=policy_device, weights_only=False)
     if payload.get("protocol_id") != protocol_id:
         raise ValueError("checkpoint protocol does not match requested protocol")
+    objective_from_checkpoint(payload, override=objective_config)
     policy.load_state_dict(payload["model"])
     baseline.load_state_dict(payload["baseline"])
     optimizer.load_state_dict(payload["optimizer"])
@@ -201,6 +235,7 @@ def train_reinforce_data_passes(
     mode remains available for old explicit CLI invocations.
     """
     validation_decode_type, validation_candidates = require_validation_decoding(args)
+    objective_config = prepare_training_objective(args)
     validation_seed = int(
         getattr(args, "validation_seed", None)
         if getattr(args, "validation_seed", None) is not None
@@ -319,6 +354,7 @@ def train_reinforce_data_passes(
             baseline=baseline,
             optimizer=optimizer,
             protocol_id=args.protocol_id,
+            objective_config=objective_config,
         )
         if int(resume_extra.get("data_pass", -1)) != state.completed_data_passes:
             raise ValueError("checkpoint and data-pass state disagree")
@@ -399,7 +435,7 @@ def train_reinforce_data_passes(
         training_stage = "soft" if soft else "hard"
         if fixed_epochs is not None and (soft_stage_fraction or soft_stage_end_epoch is not None):
             training_stage = "mixed"
-        sums = {"loss": 0.0, "cost": 0.0, "distance": 0.0, "feasible": 0.0}
+        sums = {key: 0.0 for key in ("loss", "cost", "distance", "objective", "vehicles_started", "feasible")}
         instances_seen = 0
         transition_count = 0
         trajectory_steps: list[int] = []
@@ -479,10 +515,19 @@ def train_reinforce_data_passes(
                 (loss * (len(instances) / max(group_size, 1))).backward()
                 count = len(instances)
                 instances_seen += count
+                raw_distance = objective_distance(actor)
+                active_objective = getattr(actor, "objective_value", None)
+                if active_objective is None:
+                    if objective_config.is_cost:
+                        raise ValueError("cost training requires a named objective_value")
+                    active_objective = raw_distance
+                started_vehicles = getattr(actor, "vehicles_started", torch.zeros_like(raw_distance))
                 metrics = {
                     "loss": float(loss.detach().cpu()) * count,
                     "cost": float(actor_cost.mean().detach().cpu()) * count,
-                    "distance": float(objective_distance(actor).mean().detach().cpu()) * count,
+                    "distance": float(raw_distance.mean().detach().cpu()) * count,
+                    "objective": float(active_objective.mean().detach().cpu()) * count,
+                    "vehicles_started": float(started_vehicles.mean().detach().cpu()) * count,
                     "feasible": float(feasible(actor).float().mean().detach().cpu()) * count,
                 }
                 for key, value in metrics.items():
@@ -594,6 +639,13 @@ def train_reinforce_data_passes(
                         "mean_loss": group_sums["loss"] / group_size,
                         "mean_training_cost": group_sums["cost"] / group_size,
                         "mean_objective_distance_km": group_sums["distance"] / group_size,
+                        "objective_mode": objective_config.mode,
+                        "objective_unit": objective_config.unit,
+                        "mean_objective_value": group_sums["objective"] / group_size,
+                        "mean_objective_cost_usd": group_sums["objective"] / group_size if objective_config.is_cost else None,
+                        "mean_electricity_cost_usd": group_sums["distance"] / group_size * objective_config.distance_unit_cost if objective_config.is_cost else None,
+                        "mean_vehicle_cost_usd": group_sums["vehicles_started"] / group_size * objective_config.vehicle_unit_cost if objective_config.is_cost else None,
+                        "mean_vehicles_started": group_sums["vehicles_started"] / group_size,
                         "mean_environment_feasible_rate": group_sums["feasible"] / group_size,
                         "mean_trajectory_steps": float(epoch_steps.mean()),
                         "rollout_budget_exhausted_rate": group_exhausted / max(epoch_steps.size, 1),
@@ -616,6 +668,7 @@ def train_reinforce_data_passes(
                             policy, instance, seed
                         ),
                         seed=validation_seed,
+                        objective_config=objective_config,
                     )
                     validation.update(
                         {
@@ -791,6 +844,7 @@ def train_reinforce_data_passes(
                 validation_instances,
                 lambda instance, seed: validation_solve(policy, instance, seed),
                 seed=validation_seed,
+                objective_config=objective_config,
             )
             validation.update(
                 {
@@ -878,6 +932,13 @@ def train_reinforce_data_passes(
             "mean_loss": sums["loss"] / instances_seen,
             "mean_training_cost": sums["cost"] / instances_seen,
             "mean_objective_distance_km": sums["distance"] / instances_seen,
+            "objective_mode": objective_config.mode,
+            "objective_unit": objective_config.unit,
+            "mean_objective_value": sums["objective"] / instances_seen,
+            "mean_objective_cost_usd": sums["objective"] / instances_seen if objective_config.is_cost else None,
+            "mean_electricity_cost_usd": sums["distance"] / instances_seen * objective_config.distance_unit_cost if objective_config.is_cost else None,
+            "mean_vehicle_cost_usd": sums["vehicles_started"] / instances_seen * objective_config.vehicle_unit_cost if objective_config.is_cost else None,
+            "mean_vehicles_started": sums["vehicles_started"] / instances_seen,
             "mean_environment_feasible_rate": sums["feasible"] / instances_seen,
             "paired_t_pvalue": paired_t_pvalue,
             "baseline_updated": baseline_updated,
@@ -933,12 +994,14 @@ def train_reinforce_data_passes(
             baseline=baseline,
             optimizer=optimizer,
             protocol_id=args.protocol_id,
+            objective_config=objective_config,
         )
         policy.eval()
         final_validation = verified_validation(
             validation_pool.first(limit=final_validation_limit),
             lambda instance, seed: validation_solve(policy, instance, seed),
             seed=int(args.seed) + 999_000_000,
+            objective_config=objective_config,
         )
         if int(final_validation["instances"]) != final_validation_limit:
             raise RuntimeError(
@@ -966,6 +1029,9 @@ def train_reinforce_data_passes(
         "status": "pilot_partial" if args.pilot_mode else ("early_stopped" if early_stopped else "passed"),
         "method": method,
         "protocol_id": args.protocol_id,
+        "objective_config": objective_config.to_dict(),
+        "objective_mode": objective_config.mode,
+        "objective_unit": objective_config.unit,
         "budget_mode": (
             "fixed_customer_exposure" if stream_path is not None else
             ("fixed_logical_epochs" if fixed_epochs is not None else "complete_data_passes")

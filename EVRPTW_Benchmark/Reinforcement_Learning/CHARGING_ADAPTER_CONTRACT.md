@@ -4,7 +4,10 @@
 
 This contract standardizes the physical state transition, feasibility mask,
 route export, and final evaluation used by every learning baseline.  It does
-not standardize each paper's training reward.
+not standardize each paper's auxiliary shaping or training strategy. Fresh
+formal runs now share the electricity-plus-vehicle objective specified in
+[`COST_OBJECTIVE_CONTRACT_V1.md`](COST_OBJECTIVE_CONTRACT_V1.md); historical
+distance-only runs keep their original objective metadata.
 
 ## Canonical matrices and units
 
@@ -71,10 +74,13 @@ The environment exposes primitive signals, including distance increment,
 served-customer progress, feasibility status, termination, and truncation.
 Each method may combine those signals according to its paper-specific reward
 and auxiliary shaping.  The method's `ADAPTATION.md` must identify every change
-needed to make distance the objective-facing term.
+needed to adapt the objective-facing term. The active term is total electricity
+plus vehicle-dispatch cost; paper-specific auxiliary shaping remains separate.
 
 The benchmark ranks only complete solutions that pass the shared verifier.
-Its canonical objective is total directed-road distance.  Training reward,
+For fresh cost-track runs it selects minimum total cost, computed from verified
+directed distance and dispatched vehicles. Raw distance is retained separately.
+Training reward,
 unfinished-rollout reward, and critic value are not cross-method metrics.
 
 ## Numerical and reproducibility rules

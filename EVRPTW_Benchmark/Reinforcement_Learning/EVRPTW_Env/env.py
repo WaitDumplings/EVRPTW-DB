@@ -5,7 +5,7 @@ import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 from gymnasium import Env, spaces
@@ -14,6 +14,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
 from evrptw_core.schema import EVRPTWInstance, merge_route_sequences
+
+if TYPE_CHECKING:
+    from ..common.objective import ObjectiveConfig
 
 
 @dataclass(frozen=True)
@@ -57,8 +60,13 @@ class EVRPTWVectorEnv(Env):
         normalize_reward: bool = True,
         reward_distance_scale_km: float | None = None,
         reward_distance_scale_mode: str = "single_customer_repair_median",
+        objective_config: ObjectiveConfig | dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
+        # Import at construction time: common also exposes environment factories.
+        from ..common.objective import resolve_objective
+
+        self.objective_config = resolve_objective(objective_config)
         if reward_mode not in {"distance", "distance_success"}:
             raise ValueError(f"Unsupported reward_mode: {reward_mode}")
         if charging_mode not in {"station_power_full", "legacy_proportional_full", "legacy_fixed_full"}:
@@ -86,6 +94,7 @@ class EVRPTWVectorEnv(Env):
         if self.reward_distance_scale_mode not in valid_scale_modes:
             raise ValueError(f"reward_distance_scale_mode must be one of {sorted(valid_scale_modes)}")
         self.reward_distance_scale_km = 1.0
+        self.reward_objective_scale = 1.0
 
         self._rng = np.random.default_rng()
         if instance is not None:
@@ -108,6 +117,11 @@ class EVRPTWVectorEnv(Env):
 
         self.distance_km = np.asarray(instance.distance_matrix_km, dtype=np.float64)
         self.reward_distance_scale_km = self._compute_reward_distance_scale_km()
+        self.reward_objective_scale = self.objective_config.reward_scale(
+            self.reward_distance_scale_km,
+            self.num_customers,
+            self.reward_distance_scale_mode,
+        )
         self.coords_raw = np.vstack(
             [
                 np.asarray(instance.depot, dtype=np.float64).reshape(1, 2),
@@ -253,6 +267,9 @@ class EVRPTWVectorEnv(Env):
         )
         self.served_customers = np.zeros(self.n_traj, dtype=np.int32)
         self.objective_distance_km = np.zeros(self.n_traj, dtype=np.float64)
+        # Count departures, including a still-open or charger-only trip. The
+        # legacy vehicle_count below counts only closed customer-serving routes.
+        self.vehicles_started = np.zeros(self.n_traj, dtype=np.int32)
         self.vehicle_count = np.zeros(self.n_traj, dtype=np.int32)
         self.route_has_customer = np.zeros(self.n_traj, dtype=bool)
         self.terminated = np.zeros(self.n_traj, dtype=bool)
@@ -304,10 +321,17 @@ class EVRPTWVectorEnv(Env):
         dist = float(self.distance_km[start, destination])
         energy = float(self.energy_kwh[start, destination])
         travel_time = float(self.travel_time_s[start, destination])
+        vehicle_departure = int(start == 0 and destination != 0)
+        self.vehicles_started[traj_idx] += vehicle_departure
         self.objective_distance_km[traj_idx] += dist
         self.current_time_s[traj_idx] += travel_time
         self.battery_used_kwh[traj_idx] += energy
-        reward = -dist / self.reward_distance_scale_km if self.normalize_reward else -dist
+        objective_delta = self.objective_config.value(dist, vehicle_departure)
+        reward = (
+            -objective_delta / self.reward_objective_scale
+            if self.normalize_reward
+            else -objective_delta
+        )
 
         self._append_route_node(traj_idx, destination)
 
@@ -345,12 +369,14 @@ class EVRPTWVectorEnv(Env):
             route.append(int(node))
 
     def _close_route_at_depot(self, traj_idx: int) -> None:
-        if self.route_has_customer[traj_idx]:
+        retain_paid_trip = self.objective_config.is_cost and len(self.current_routes[traj_idx]) > 1
+        if self.route_has_customer[traj_idx] or retain_paid_trip:
             route = self.current_routes[traj_idx]
             if route[-1] != 0:
                 route.append(0)
             self.routes[traj_idx].append(route)
-            self.vehicle_count[traj_idx] += 1
+            if self.route_has_customer[traj_idx]:
+                self.vehicle_count[traj_idx] += 1
         self.current_routes[traj_idx] = [0]
         self.route_has_customer[traj_idx] = False
         self.current_time_s[traj_idx] = self.working_start_s
@@ -570,6 +596,7 @@ class EVRPTWVectorEnv(Env):
         return {
             "action_mask": action_mask.copy(),
             "objective_distance_km": self.objective_distance_km.copy(),
+            **self._objective_info(),
             "vehicle_count": self.vehicle_count.copy(),
             "success": success.copy(),
             "served_customers": self.served_customers.copy(),
@@ -579,6 +606,30 @@ class EVRPTWVectorEnv(Env):
             "charging_power_source": self.charging_power_source,
             "routes": self.get_routes(),
             "route_sequence": [merge_route_sequences(routes) for routes in self.get_routes()],
+        }
+
+    def _objective_info(self) -> dict[str, Any]:
+        """Expose the active objective without duplicating the distance ledger.
+
+        Electricity is a distance-based economic coefficient, not electricity
+        purchased at stations; the canonical energy matrix still governs SOC.
+        """
+        objective = self.objective_config
+        value = objective.value(self.objective_distance_km, self.vehicles_started)
+        return {
+            "objective_value": value.copy(),
+            "objective_cost_usd": value.copy() if objective.is_cost else None,
+            "electricity_cost_usd": (
+                self.objective_distance_km * objective.distance_unit_cost
+                if objective.is_cost else None
+            ),
+            "vehicle_cost_usd": (
+                self.vehicles_started * objective.vehicle_unit_cost
+                if objective.is_cost else None
+            ),
+            "vehicles_started": self.vehicles_started.copy(),
+            "objective_config": objective.to_dict(),
+            "reward_objective_scale": self.reward_objective_scale,
         }
 
     def _normalized_coords(self) -> np.ndarray:
@@ -591,7 +642,8 @@ class EVRPTWVectorEnv(Env):
         out: list[list[list[int]]] = []
         for t in range(self.n_traj):
             routes = [list(route) for route in self.routes[t]]
-            if self.route_has_customer[t] and self.current_routes[t]:
+            retain_paid_trip = self.objective_config.is_cost and len(self.current_routes[t]) > 1
+            if (self.route_has_customer[t] or retain_paid_trip) and self.current_routes[t]:
                 route = list(self.current_routes[t])
                 if route[-1] != 0:
                     route.append(0)

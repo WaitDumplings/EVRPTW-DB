@@ -14,6 +14,8 @@ from scipy.stats import ttest_rel
 from ..common import Stage2TaskPool, make_envs
 from ..common.protocol_entrypoints import run_evrptw_rl
 from ..common.training_protocol import add_data_pass_arguments
+from ..common.objective import objective_from_args
+from ..common.protocol_trainers import prepare_training_objective
 from .model import EVRPTWRLPolicy
 from .rollout import rollout
 
@@ -61,7 +63,7 @@ def _max_steps(envs) -> int:
 
 
 def _greedy_costs(policy, instances, args) -> np.ndarray:
-    envs = make_envs(instances, n_traj=1, info_level="light")
+    envs = make_envs(instances, n_traj=1, info_level="light", objective_config=objective_from_args(args))
     with torch.no_grad():
         result = rollout(
             policy,
@@ -77,6 +79,8 @@ def _greedy_costs(policy, instances, args) -> np.ndarray:
 
 def main() -> None:
     args = parse_args()
+    objective_config = prepare_training_objective(args)
+    args.objective = objective_config.to_dict()
     set_seed(args.seed)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pool = Stage2TaskPool(
@@ -112,6 +116,7 @@ def main() -> None:
             instances,
             n_traj=args.samples_per_instance,
             info_level="light",
+            objective_config=objective_config,
         )
         policy.train()
         actor = rollout(
@@ -137,6 +142,7 @@ def main() -> None:
                 instances,
                 n_traj=args.samples_per_instance,
                 info_level="light",
+                objective_config=objective_config,
             )
             with torch.no_grad():
                 baseline_result = rollout(
@@ -183,6 +189,10 @@ def main() -> None:
             "iteration": iteration,
             "loss": float(loss.detach().cpu()),
             "training_cost": float(actor.training_cost.mean().detach().cpu()),
+            "objective_value": float(actor.objective_value.mean().detach().cpu()),
+            "objective_mode": objective_config.mode,
+            "objective_unit": objective_config.unit,
+            "vehicles_started": float(actor.vehicles_started.mean().detach().cpu()),
             "objective_distance_km": float(
                 actor.objective_distance_km.mean().detach().cpu()
             ),
@@ -206,6 +216,7 @@ def main() -> None:
                     "baseline": baseline.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "args": vars(args),
+                    "objective_config": objective_config.to_dict(),
                 },
                 args.output_dir / "checkpoint_latest.pt",
             )

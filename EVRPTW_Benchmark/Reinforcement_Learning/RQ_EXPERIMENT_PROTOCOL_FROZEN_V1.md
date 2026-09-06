@@ -7,6 +7,9 @@
 > `configs/drl_rq_protocol_frozen_v1.yaml` and `scripts/rq_v1/README.md`:
 > direct formal launch is user-authorized, with 24 training jobs and a
 > 5,000-epoch minimum / 10,000-epoch hard cap.
+> Fresh formal jobs additionally use the unified electricity-plus-vehicle
+> objective in `COST_OBJECTIVE_CONTRACT_V1.md`. Distance-only selection wording
+> below is historical and does not govern the new cost-training runs.
 
 Status: **method frozen; formal training launch blocked**
 Scope: four registered learning methods, classical solver evidence, and the

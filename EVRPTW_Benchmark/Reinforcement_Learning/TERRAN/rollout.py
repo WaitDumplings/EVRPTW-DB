@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 from evrptw_core.schema import merge_route_sequences
 
 from ..common.route_info import finalize_route_infos
+from ..common.objective import resolve_objective
 from .models.attention_model_wrapper import (
     DYNAMIC_OBSERVATION_KEYS,
     STATIC_OBSERVATION_KEYS,
@@ -198,6 +199,10 @@ def collect_rollout(
     reward_component_keys = (
         "base",
         "distance",
+        "objective",
+        "electricity_cost",
+        "vehicle_cost",
+        "base_non_objective",
         "base_non_distance",
         "pbrs_customer",
         "pbrs_repair_distance",
@@ -254,6 +259,7 @@ def collect_rollout(
         model_action_time_s += time.perf_counter() - model_start
         action_np = actions.detach().cpu().numpy().astype(np.int64)
         env_start = time.perf_counter()
+        previous_infos = infos
         next_observations, reward_np, step_done, infos = step_envs(envs, action_np)
         env_step_time_s += time.perf_counter() - env_start
 
@@ -271,6 +277,10 @@ def collect_rollout(
                 arrays = {
                     "base": base,
                     "distance": base,
+                    "objective": base,
+                    "electricity_cost": np.zeros_like(base),
+                    "vehicle_cost": np.zeros_like(base),
+                    "base_non_objective": np.zeros_like(base),
                     "base_non_distance": np.zeros_like(base),
                     "pbrs_customer": np.zeros_like(base),
                     "pbrs_repair_distance": np.zeros_like(base),
@@ -278,9 +288,21 @@ def collect_rollout(
                     "terminal_heuristic": np.zeros_like(base),
                     "shaped": base,
                 }
+                previous = previous_infos[env_index]
+                if "objective_value" in info and "objective_value" in previous:
+                    normalized = bool(getattr(env.unwrapped, "normalize_reward", False))
+                    scale = float(env.unwrapped.reward_objective_scale) if normalized else 1.0
+                    distance_scale = float(env.unwrapped.reward_distance_scale_km) if normalized else 1.0
+                    arrays["objective"] = -(np.asarray(info["objective_value"]) - np.asarray(previous["objective_value"])) / scale
+                    arrays["distance"] = -(np.asarray(info["objective_distance_km"]) - np.asarray(previous["objective_distance_km"])) / distance_scale
+                    arrays["base_non_objective"] = base - arrays["objective"]
+                    arrays["base_non_distance"] = arrays["base_non_objective"]
+                    for key in ("electricity_cost", "vehicle_cost"):
+                        if info.get(f"{key}_usd") is not None:
+                            arrays[key] = -(np.asarray(info[f"{key}_usd"]) - np.asarray(previous[f"{key}_usd"])) / scale
             else:
                 arrays = {
-                    key: np.asarray(components[key], dtype=np.float64)
+                    key: np.asarray(components.get(key, np.zeros_like(reward_np[env_index])), dtype=np.float64)
                     for key in reward_component_keys
                     if key not in {"pbrs_total", "shaping_total"}
                 }
@@ -390,7 +412,8 @@ def compute_returns(rewards: torch.Tensor, dones: torch.Tensor, gamma: float) ->
 
 def select_best_trajectory(info: dict[str, Any], include_routes: bool = True) -> dict[str, Any]:
     success = np.asarray(info["success"], dtype=bool)
-    objective = np.asarray(info["objective_distance_km"], dtype=np.float64)
+    distance = np.asarray(info["objective_distance_km"], dtype=np.float64)
+    objective = np.asarray(info.get("objective_value", distance), dtype=np.float64)
     served = np.asarray(info["served_customers"], dtype=np.int32)
     if np.any(success):
         candidates = np.where(success)[0]
@@ -404,10 +427,18 @@ def select_best_trajectory(info: dict[str, Any], include_routes: bool = True) ->
     row = {
         "selected_traj_idx": selected,
         "feasible": feasible,
-        "objective_distance_km": float(objective[selected]),
+        "objective_distance_km": float(distance[selected]),
+        "objective_value": float(objective[selected]),
         "vehicle_count": int(np.asarray(info["vehicle_count"])[selected]),
         "served_customers": int(served[selected]),
     }
+    for key in ("objective_cost_usd", "electricity_cost_usd", "vehicle_cost_usd", "vehicles_started"):
+        values = info.get(key)
+        row[key] = float(np.asarray(values)[selected]) if values is not None else None
+    objective_config = resolve_objective(info.get("objective_config"))
+    row["objective_mode"] = objective_config.mode
+    row["objective_unit"] = objective_config.unit
+    row["objective_profile_id"] = objective_config.profile_id
     if include_routes and "routes" in info:
         routes = info["routes"][selected]
         route_sequence = merge_route_sequences(routes)

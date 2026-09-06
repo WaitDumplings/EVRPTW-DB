@@ -14,6 +14,8 @@ from scipy.stats import ttest_rel
 from ..common import Stage2TaskPool
 from ..common.protocol_entrypoints import run_drl_ts
 from ..common.training_protocol import add_data_pass_arguments
+from ..common.objective import objective_from_args
+from ..common.protocol_trainers import prepare_training_objective
 from .env import DRLTSHardConstraintEnv
 from .model import DRLTSPolicy
 from .rollout import rollout
@@ -65,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _make_envs(instances, *, n_traj: int, soft: bool, info_level: str):
+def _make_envs(instances, *, n_traj: int, soft: bool, info_level: str, objective_config=None):
     if not soft:
         return [
             DRLTSHardConstraintEnv(
@@ -75,6 +77,7 @@ def _make_envs(instances, *, n_traj: int, soft: bool, info_level: str):
                 charging_mode="station_power_full",
                 matrix_mode="canonical",
                 info_level=info_level,
+                objective_config=objective_config,
             )
             for instance in instances
         ]
@@ -86,6 +89,7 @@ def _make_envs(instances, *, n_traj: int, soft: bool, info_level: str):
             charging_mode="station_power_full",
             matrix_mode="canonical",
             info_level=info_level,
+            objective_config=objective_config,
         )
         for instance in instances
     ]
@@ -96,7 +100,7 @@ def _max_steps(envs) -> int:
 
 
 def _greedy_costs(policy, instances, args, *, soft: bool) -> np.ndarray:
-    envs = _make_envs(instances, n_traj=1, soft=soft, info_level="light")
+    envs = _make_envs(instances, n_traj=1, soft=soft, info_level="light", objective_config=objective_from_args(args))
     with torch.no_grad():
         result = rollout(
             policy,
@@ -115,6 +119,8 @@ def _greedy_costs(policy, instances, args, *, soft: bool) -> np.ndarray:
 
 def main() -> None:
     args = parse_args()
+    objective_config = prepare_training_objective(args)
+    args.objective = objective_config.to_dict()
     if not 0.0 <= args.soft_stage_fraction <= 1.0:
         raise ValueError("soft-stage-fraction must be in [0, 1]")
     if args.soft_stage_end_epoch is not None and args.soft_stage_end_epoch < 0:
@@ -165,6 +171,7 @@ def main() -> None:
                 n_traj=args.samples_per_instance,
                 soft=soft,
                 info_level="light",
+                objective_config=objective_config,
             )
             actor = rollout(
                 policy,
@@ -183,6 +190,7 @@ def main() -> None:
                 n_traj=args.samples_per_instance,
                 soft=soft,
                 info_level="light",
+                objective_config=objective_config,
             )
             with torch.no_grad():
                 baseline_result = rollout(
@@ -246,6 +254,8 @@ def main() -> None:
             "epoch": epoch,
             "training_stage": "soft" if soft else "hard",
             "training_cost": float(np.mean(epoch_costs)),
+            "objective_mode": objective_config.mode,
+            "objective_unit": objective_config.unit,
             "objective_distance_km": float(np.mean(epoch_distances)),
             "feasible_rate": float(np.mean(epoch_feasible)),
             "capacity_violation_normalized": float(
@@ -270,6 +280,7 @@ def main() -> None:
                 "baseline": baseline.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "args": vars(args),
+                "objective_config": objective_config.to_dict(),
             },
             args.output_dir / "checkpoint_latest.pt",
         )

@@ -4,15 +4,16 @@ protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
 formal_launch_allowed: true
 launch_policy: direct_full_user_authorized_2026-09-04
+objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
 
 # Common publication inference budget. Each candidate is independently checked
-# by the canonical verifier; selection is feasible-first, then minimum distance.
+# by the canonical verifier; selection is feasible-first, then minimum total cost.
 evaluation:
   validation_decode_type: sampling
   validation_candidate_count: 100
   test_decode_type: sampling
   test_candidate_count: 100
-  selection: verifier_feasible_then_min_directed_distance
+  selection: verifier_feasible_then_min_total_cost_usd
 
 training_trajectory_count_by_method:
   am_evrptw: 5
@@ -106,7 +107,7 @@ formal_candidate:
   early_stop_patience_epochs_equivalent: 500
   drl_ts_soft_stage_end_epoch: 2500
   validation_seed_offset: 910000000
-  checkpoint_selection: feasibility_rate_then_mean_verified_distance
+  checkpoint_selection: feasibility_rate_then_mean_verified_cost_usd
   exposure_checkpoints_fraction: [0.25, 0.50, 1.00]
   gpu_hour_checkpoints: [6, 12, 24]
 

@@ -20,12 +20,14 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT))
 
 from evrptw_core.io import iter_instances
+from evrptw_core.schema import merge_route_sequences
 
 from .async_instances import AsyncInstancePool
 from ..common import Stage2TaskPool
 from ..common.data_pass import DataPassState
-from ..common.evaluation import select_min_verified_distance
-from ..common.training_protocol import append_jsonl, atomic_json
+from ..common.evaluation import select_min_verified_objective
+from ..common.objective import objective_from_checkpoint, resolve_objective
+from ..common.training_protocol import append_jsonl, atomic_json, validation_key
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
 from .env_factory import make_terran_env
 from .models import Agent
@@ -35,6 +37,12 @@ from .models.attention_model_wrapper import (
 )
 from .pbrs import PotentialRewardConfig
 from .rollout import collect_rollout, compute_returns, rollout_eval_batch
+
+OBJECTIVE_EVAL_FIELDS = (
+    "eval_objective_mode", "eval_objective_unit", "eval_avg_objective",
+    "eval_avg_objective_cost_usd", "eval_avg_electricity_cost_usd", "eval_avg_vehicle_cost_usd",
+)
+OBJECTIVE_REWARD_COMPONENTS = ("objective", "electricity_cost", "vehicle_cost", "base_non_objective")
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -74,6 +82,11 @@ def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]
     current_contract = cfg.get("training", {}).get("reward_contract_id")
     if saved_training.get("reward_contract_id") != current_contract:
         raise ValueError("TERRAN resume reward contract mismatch; start a fresh run")
+    current_objective = resolve_objective(cfg.get("objective"))
+    try:
+        objective_from_checkpoint(payload, override=current_objective)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"TERRAN resume objective configuration mismatch; start a fresh run: {error}") from error
 
 
 def validate_fresh_training_output(cfg: dict[str, Any]) -> None:
@@ -332,6 +345,7 @@ def make_envs(cfg: dict[str, Any], seed: int):
     _configure_dataset_reward_scale(cfg, pool)
     pbrs_config = build_pbrs_config(cfg)
     env_cfg = dict(cfg.get("env", {}) or {})
+    env_cfg["objective_config"] = resolve_objective(cfg.get("objective"))
     # The collector's registered budget is part of the training environment's
     # terminal semantics.  Evaluation environments are built separately and do
     # not receive this wrapper.
@@ -359,6 +373,7 @@ def evaluate_fixed_dataset(
     device: str | torch.device,
 ) -> dict[str, Any]:
     eval_cfg = cfg.get("evaluation", {})
+    objective_config = resolve_objective(cfg.get("objective"))
     candidate_seed = int(eval_cfg.get("eval_seed", seed + 910_000_000))
     data_cfg = cfg.get("data", {})
     num_customers = int(data_cfg.get("num_customers", 15))
@@ -374,7 +389,7 @@ def evaluate_fixed_dataset(
     eval_info_level = str(eval_cfg.get("eval_info_level", "light"))
     require_verifier = bool(
         eval_cfg.get("eval_require_independent_verifier", False)
-    )
+    ) or objective_config.is_cost
     if eval_path is None or not eval_path.exists():
         return {
             "eval_num_instances": 0,
@@ -429,6 +444,7 @@ def evaluate_fixed_dataset(
     seen_before_batch = 0
     for instances in instance_batches:
         eval_env_cfg = dict(cfg.get("env", {}) or {})
+        eval_env_cfg["objective_config"] = objective_config
         if bool(eval_env_cfg.get("use_fast_env", True)):
             eval_env_cfg["info_level"] = (
                 "full"
@@ -458,15 +474,21 @@ def evaluate_fixed_dataset(
             row["instance_id"] = instance.instance_id
             if require_verifier:
                 info = row.pop("_final_info")
-                _, routes, verification = select_min_verified_distance(
-                    instance, info
+                selected, routes, verification = select_min_verified_objective(
+                    instance, info, objective_config
                 )
+                row["selected_traj_idx"] = selected
                 row["feasible"] = bool(verification["passed"])
                 row["objective_distance_km"] = float(
                     verification["objective_distance_km"]
                 )
                 row["vehicle_count"] = len(routes)
                 row["verifier_passed"] = bool(verification["passed"])
+                if eval_save_routes:
+                    row["routes_json"] = json.dumps(routes)
+                    row["route_sequence_json"] = json.dumps(merge_route_sequences(routes))
+                for key in ("objective_value", "objective_cost_usd", "electricity_cost_usd", "vehicle_cost_usd", "vehicles_started", "objective_mode", "objective_unit"):
+                    row[key] = verification.get(key)
         rows.extend(batch_rows)
         num_batches += 1
         seen_before_batch += len(instances)
@@ -501,6 +523,14 @@ def evaluate_fixed_dataset(
         "eval_save_routes": eval_save_routes,
         "eval_independent_verifier": require_verifier,
         "eval_feasible_rate": len(feasible_rows) / len(rows),
+        "eval_objective_mode": objective_config.mode,
+        "eval_objective_unit": objective_config.unit,
+        "eval_avg_objective": float(np.mean([row.get("objective_value", row["objective_distance_km"]) for row in feasible_rows])) if feasible_rows else np.nan,
+        **{
+            f"eval_avg_{name}": float(np.mean([row[name] for row in feasible_rows]))
+            if feasible_rows and objective_config.is_cost else None
+            for name in ("objective_cost_usd", "electricity_cost_usd", "vehicle_cost_usd")
+        },
         "eval_avg_objective_distance_km": (
             float(
                 np.mean(
@@ -527,16 +557,19 @@ def summarize_train_infos(final_infos: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "train_feasible_rate": np.nan,
             "train_avg_best_objective_distance_km": np.nan,
+            "train_avg_best_objective": np.nan,
             "train_avg_vehicle_count": np.nan,
             "train_avg_served_customers": np.nan,
         }
     feasible_flags = []
     best_objectives = []
+    best_distances = []
     vehicle_counts = []
     served_counts = []
     for info in final_infos:
         success = np.asarray(info.get("success", []), dtype=bool)
-        objective = np.asarray(info.get("objective_distance_km", []), dtype=np.float64)
+        distance = np.asarray(info.get("objective_distance_km", []), dtype=np.float64)
+        objective = np.asarray(info.get("objective_value", distance), dtype=np.float64)
         vehicle = np.asarray(info.get("vehicle_count", []), dtype=np.float64)
         served = np.asarray(info.get("served_customers", []), dtype=np.float64)
         if objective.size == 0:
@@ -547,10 +580,12 @@ def summarize_train_infos(final_infos: list[dict[str, Any]]) -> dict[str, Any]:
             candidates = np.where(success)[0]
             selected = int(candidates[np.argmin(objective[candidates])])
             best_objectives.append(float(objective[selected]))
+            best_distances.append(float(distance[selected]))
             vehicle_counts.append(float(vehicle[selected]) if vehicle.size else np.nan)
     return {
         "train_feasible_rate": float(np.mean(feasible_flags)) if feasible_flags else np.nan,
-        "train_avg_best_objective_distance_km": float(np.mean(best_objectives)) if best_objectives else np.nan,
+        "train_avg_best_objective_distance_km": float(np.mean(best_distances)) if best_distances else np.nan,
+        "train_avg_best_objective": float(np.mean(best_objectives)) if best_objectives else np.nan,
         "train_avg_vehicle_count": float(np.mean(vehicle_counts)) if vehicle_counts else np.nan,
         "train_avg_served_customers": float(np.mean(served_counts)) if served_counts else np.nan,
     }
@@ -690,6 +725,14 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     set_seed(seed)
     train_cfg = cfg["training"]
     gamma = training_gamma(cfg)
+    objective_config = resolve_objective(cfg.get("objective"))
+    cfg["objective"] = objective_config.to_dict()
+    if objective_config.is_cost:
+        if gamma != 1.0:
+            raise ValueError("TERRAN cost objective requires undiscounted training.gamma=1")
+        train_cfg["reward_contract_id"] = "terran_undiscounted_energy_vehicle_pbrs_v1"
+    elif train_cfg.get("reward_contract_id") == "terran_undiscounted_energy_vehicle_pbrs_v1":
+        train_cfg["reward_contract_id"] = "terran_undiscounted_distance_pbrs_v1"
     # Persist the resolved value even for callers using the default. Resume
     # must never guess which discount produced an existing checkpoint.
     train_cfg["gamma"] = gamma
@@ -801,17 +844,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         previous_validation = json.loads(
             previous_overall_path.read_text(encoding="utf-8")
         )
-        previous_distance = previous_validation.get(
-            "mean_verified_distance_km"
-        )
-        best_eval_key = (
-            float(previous_validation["complete_and_feasible_rate"]),
-            (
-                -float(previous_distance)
-                if previous_distance is not None
-                else -math.inf
-            ),
-        )
+        best_eval_key = validation_key(previous_validation)
     previous_within_path = (
         validation_summary_within_path
         if validation_summary_within_path.is_file()
@@ -823,17 +856,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             previous_within.get("logical_epoch", minimum_training_epochs) or 0
         )
         if previous_within_epoch <= minimum_training_epochs:
-            previous_within_distance = previous_within.get(
-                "mean_verified_distance_km"
-            )
-            best_within_minimum_key = (
-                float(previous_within["complete_and_feasible_rate"]),
-                (
-                    -float(previous_within_distance)
-                    if previous_within_distance is not None
-                    else -math.inf
-                ),
-            )
+            best_within_minimum_key = validation_key(previous_within)
     scheduled_validation_epochs = {
         int(value) for value in train_cfg.get("validation_epochs", [])
     }
@@ -857,11 +880,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             if not line.strip():
                 continue
             row = json.loads(line)
-            distance = row.get("mean_verified_distance_km")
-            key = (
-                float(row["complete_and_feasible_rate"]),
-                -float(distance) if distance is not None else -math.inf,
-            )
+            key = validation_key(row)
             completed_validation_checks += 1
             logical_epoch = int(row.get("logical_epoch", 0) or 0)
             if key > history_best_key:
@@ -978,6 +997,14 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "eval_save_routes",
         "eval_status",
     ]
+    train_fields.extend(["train_avg_best_objective", "objective_mode", "objective_unit", "reward_objective_scale"])
+    train_fields.extend(OBJECTIVE_EVAL_FIELDS)
+    eval_fields.extend(OBJECTIVE_EVAL_FIELDS)
+    train_fields.extend(
+        f"reward_{component}_{suffix}"
+        for component in OBJECTIVE_REWARD_COMPONENTS
+        for suffix in ("mean", "per_trajectory", "discounted_per_trajectory")
+    )
 
     log_mode = "a" if start_epoch > 1 else "w"
     needs_header = log_mode == "w" or not log_path.exists()
@@ -1317,7 +1344,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     f"value_loss={_format_float(loss_arr[:, 1].mean())} "
                     f"entropy={_format_float(loss_arr[:, 2].mean())} "
                     f"train_fr={_format_float(train_summary['train_feasible_rate'])} "
-                    f"train_obj={_format_float(train_summary['train_avg_best_objective_distance_km'])} "
+                    f"train_obj={_format_float(train_summary['train_avg_best_objective'])}{objective_config.unit} "
                     f"train_veh={_format_float(train_summary['train_avg_vehicle_count'])} "
                     f"served={_format_float(train_summary['train_avg_served_customers'])} "
                     f"pbrs_scale={pbrs_scale:.4f} "
@@ -1371,15 +1398,22 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                             == int(eval_row["eval_num_instances"])
                         ),
                     }
-                    selection_key = (
-                        validation["complete_and_feasible_rate"],
-                        (
-                            -validation["mean_verified_distance_km"]
-                            if validation["mean_verified_distance_km"]
-                            is not None
-                            else -math.inf
+                    verified_objective = eval_row.get("eval_avg_objective", verified_distance)
+                    validation.update(
+                        objective_mode=objective_config.mode,
+                        objective_unit=objective_config.unit,
+                        objective_config=objective_config.to_dict(),
+                        mean_verified_objective=(
+                            float(verified_objective)
+                            if verified_objective is not None and np.isfinite(float(verified_objective)) else None
                         ),
+                        mean_verified_vehicle_count=eval_row.get("eval_avg_vehicle_count"),
+                        mean_verified_objective_cost_usd=eval_row.get("eval_avg_objective_cost_usd"),
+                        mean_verified_cost_usd=eval_row.get("eval_avg_objective_cost_usd"),
+                        mean_verified_electricity_cost_usd=eval_row.get("eval_avg_electricity_cost_usd"),
+                        mean_verified_vehicle_cost_usd=eval_row.get("eval_avg_vehicle_cost_usd"),
                     )
+                    selection_key = validation_key(validation)
                     is_best_overall = selection_key > best_eval_key
                     is_best_within_minimum = bool(
                         epoch <= minimum_training_epochs
@@ -1440,7 +1474,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     f"mode={eval_row.get('eval_decode_mode')} "
                     f"info={eval_row.get('eval_info_level')} "
                     f"fr={_format_float(eval_row.get('eval_feasible_rate'))} "
-                    f"obj={_format_float(eval_row.get('eval_avg_objective_distance_km'))} "
+                    f"obj={_format_float(eval_row.get('eval_avg_objective', eval_row.get('eval_avg_objective_distance_km')))}{objective_config.unit} "
                     f"veh={_format_float(eval_row.get('eval_avg_vehicle_count'))} "
                     f"runtime={_format_float(eval_row.get('eval_avg_runtime_s'))} "
                     f"eval_wall={eval_wall_time_s:.3f}s "
@@ -1454,6 +1488,20 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "reward_base_mean": reward_base_mean,
                     "reward_distance_mean": reward_distance_mean,
                     "reward_base_non_distance_mean": reward_base_non_distance_mean,
+                    **{
+                        f"reward_{component}_{suffix}": reward_diagnostics.get(f"{component}_{stat}", 0.0) / denominator
+                        for component in OBJECTIVE_REWARD_COMPONENTS
+                        for suffix, stat, denominator in (
+                            ("mean", "sum", component_count),
+                            ("per_trajectory", "sum", max(trajectory_count, 1)),
+                            ("discounted_per_trajectory", "discounted_sum", max(trajectory_count, 1)),
+                        )
+                    },
+                    "objective_mode": objective_config.mode,
+                    "objective_unit": objective_config.unit,
+                    "reward_objective_scale": float(getattr(getattr(envs[0], "unwrapped", envs[0]), "reward_objective_scale", 1.0)),
+                    "train_avg_best_objective": train_summary.get("train_avg_best_objective"),
+                    **{field: eval_row.get(field) for field in OBJECTIVE_EVAL_FIELDS},
                     "reward_pbrs_customer_mean": reward_pbrs_customer_mean,
                     "reward_pbrs_repair_distance_mean": reward_pbrs_repair_distance_mean,
                     "reward_terminal_heuristic_mean": reward_terminal_heuristic_mean,

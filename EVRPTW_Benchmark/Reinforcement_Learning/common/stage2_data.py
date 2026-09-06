@@ -5,6 +5,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -245,6 +246,8 @@ def make_envs(
     info_level: str,
     use_jit_mask: bool = True,
     reward_distance_scale_km: float | None = None,
+    objective_config: Any = None,
+    reward_distance_scale_mode: str = "single_customer_repair_median",
 ) -> list[EVRPTWVectorEnvFast]:
     """Create environments under the canonical Stage-2 physical contract."""
 
@@ -258,6 +261,8 @@ def make_envs(
             info_level=info_level,
             use_jit_mask=use_jit_mask,
             reward_distance_scale_km=reward_distance_scale_km,
+            reward_distance_scale_mode=reward_distance_scale_mode,
+            objective_config=objective_config,
         )
         for instance in instances
     ]

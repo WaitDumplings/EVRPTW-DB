@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..common.training_protocol import add_data_pass_arguments
+from ..common.objective import objective_from_args, resolve_objective
 from .protocol import configure_protocol, finalize_protocol
 
 from .trainer import load_config, train_from_config
@@ -82,6 +83,10 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
     overrides: dict[str, Any] = {"data": {}, "training": {}, "evaluation": {}}
+    if getattr(args, "objective_config", None) is not None:
+        overrides["objective"] = objective_from_args(args).to_dict()
+    else:
+        overrides["objective"] = resolve_objective(cfg.get("objective")).to_dict()
     if args.mother_board_pool_size is not None:
         overrides["data"]["mother_board_pool_size"] = args.mother_board_pool_size
     if args.train_dataset_path is not None:

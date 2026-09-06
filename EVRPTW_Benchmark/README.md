@@ -17,6 +17,11 @@ The learning baselines are being standardized under
 [`Reinforcement_Learning/BASELINE_IMPLEMENTATION_PLAN.md`](Reinforcement_Learning/BASELINE_IMPLEMENTATION_PLAN.md).
 Their common transition, charging, masking, and evaluation semantics are frozen
 in [`Reinforcement_Learning/CHARGING_ADAPTER_CONTRACT.md`](Reinforcement_Learning/CHARGING_ADAPTER_CONTRACT.md).
+Fresh formal learning runs use the shared electricity-plus-vehicle objective
+in [`COST_OBJECTIVE_CONTRACT_V1.md`](Reinforcement_Learning/COST_OBJECTIVE_CONTRACT_V1.md).
+The active all-method restart instructions are in
+[`scripts/rq_v1/README.md`](Reinforcement_Learning/scripts/rq_v1/README.md);
+old distance-optimized results are not relabelled as cost-optimized runs.
 The complete learning experiment matrix, thirteen-GPU allocation, and required
 three-class launch-script contract are specified in
 [`Reinforcement_Learning/DRL_EXPERIMENT_AND_GPU_SCRIPT_DIRECTIVE.md`](Reinforcement_Learning/DRL_EXPERIMENT_AND_GPU_SCRIPT_DIRECTIVE.md).

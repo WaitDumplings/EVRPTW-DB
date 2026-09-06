@@ -8,7 +8,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_distance
+from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_objective
+from ..common.objective import objective_from_checkpoint
 from EVRPTW_Benchmark.Reinforcement_Learning.common.candidate_protocol import independent_candidate_batch
 
 from ..common import Stage2TaskPool
@@ -24,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-path", type=Path, required=True)
     parser.add_argument("--family-root", type=Path)
     parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--objective-config", type=Path)
     parser.add_argument("--scale", default="Cus100")
     parser.add_argument("--split-ids", default="test")
     parser.add_argument("--track-ids", default="test1_new_seed")
@@ -59,6 +61,7 @@ def main() -> None:
         weights_only=False,
     )
     cfg = checkpoint.get("config", {})
+    objective_config = objective_from_checkpoint(checkpoint, args.objective_config)
     model_cfg = cfg.get("model", {})
     agent = Agent(
         embedding_dim=int(model_cfg.get("embedding_dim", 256)),
@@ -98,6 +101,7 @@ def main() -> None:
                         charging_mode="station_power_full",
                         matrix_mode="canonical",
                         info_level="full",
+                        objective_config=objective_config,
                     )
                 ]
                 single_rows = rollout_eval_batch(
@@ -125,8 +129,8 @@ def main() -> None:
                 for info in candidate_batch.infos
             ]
             for instance, result in zip(batch_instances, result_rows):
-                selected, routes, verification = select_min_verified_distance(
-                    instance, result.pop("_final_info")
+                selected, routes, verification = select_min_verified_objective(
+                    instance, result.pop("_final_info"), objective_config
                 )
                 row = {
                     "instance_id": instance.instance_id,
@@ -145,6 +149,9 @@ def main() -> None:
                     ),
                     "runtime_s": float(result["runtime_s"]),
                 }
+                for key in ("objective_value", "objective_cost_usd", "electricity_cost_usd", "vehicle_cost_usd", "vehicles_started", "objective_mode", "objective_unit"):
+                    row[key] = verification.get(key)
+                row["objective_profile_id"] = objective_config.profile_id
                 rows.append(row)
                 route_stream.write(
                     json.dumps(

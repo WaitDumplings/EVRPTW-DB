@@ -1,0 +1,28 @@
+{
+  "schema": "evrptw_objective_profile_v1",
+  "objective": {
+    "mode": "energy_vehicle_cost",
+    "profile_id": "rivian_energy_vehicle_cost_v1",
+    "electricity_price_usd_per_kwh": 0.1341,
+    "consumption_kwh_per_km": 0.38910505836575876,
+    "vehicle_fixed_cost_usd": 33.56
+  },
+  "accounting": {
+    "formula": "electricity_price_usd_per_kwh * consumption_kwh_per_km * distance_km + vehicle_fixed_cost_usd * vehicles_started",
+    "vehicle_purchase_price_usd": 83900,
+    "analysis_years": 10,
+    "operating_days_per_year": 250,
+    "residual_value_usd": 0,
+    "discounting": false,
+    "fixed_fee_rule": "Once on each valid depot-to-nondepot departure; one trip per vehicle",
+    "electricity_rule": "Uniform energy-consumption accounting, including initial battery energy and final depot-return travel; no additional charge-session energy bill",
+    "excluded_costs": ["driver wages", "maintenance", "insurance", "charging infrastructure", "demand charges", "time-varying or station-specific tariffs", "charging losses"],
+    "note": "A transparent capital-allocation plus traction-electricity objective, not a complete fleet TCO or measured Rivian lifetime. The 10-year, 250-day, zero-residual assumptions are configurable."
+  },
+  "provenance": {
+    "electricity_price": {"description": "Previously discussed frozen 2025 US commercial electricity price, 13.41 cents/kWh", "url": "https://www.eia.gov/electricity/monthly/epm_table_grapher.php?t=epmt_5_6_a"},
+    "vehicle_price": {"description": "Rivian Commercial Van Delivery 700 reference purchase price; exclude taxes and incentives", "url": "https://rivian.com/fleet"},
+    "economic_assumptions": {"description": "Delivery-fleet TCO example uses a 10-year vehicle lifetime and 250 operating days/year; zero residual is our explicit simplification", "url": "https://www.pge.com/content/dam/pge/docs/clean-energy/electric-vehicles/PGE-EV-Fleet_Total-Cost-of-Ownership-Distribution-Delivery.pdf.coredownload.pdf"},
+    "consumption": {"description": "Frozen benchmark Rivian reference: 100 kWh / 257 km, linear distance-consumption model"}
+  }
+}

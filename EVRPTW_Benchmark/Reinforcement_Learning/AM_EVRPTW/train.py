@@ -12,6 +12,8 @@ import torch
 from scipy.stats import ttest_rel
 from ..common.protocol_entrypoints import run_am
 from ..common.training_protocol import add_data_pass_arguments
+from ..common.objective import objective_from_args
+from ..common.protocol_trainers import prepare_training_objective
 
 from .data import Stage2TaskPool, make_envs
 from .model import AMEVRPTWPolicy
@@ -31,7 +33,7 @@ def _max_steps(envs) -> int:
 
 
 def _greedy_costs(policy, instances, args) -> np.ndarray:
-    envs = make_envs(instances, n_traj=1, info_level="light")
+    envs = make_envs(instances, n_traj=1, info_level="light", objective_config=objective_from_args(args))
     with torch.no_grad():
         result = rollout(
             policy,
@@ -41,7 +43,13 @@ def _greedy_costs(policy, instances, args) -> np.ndarray:
             seed=args.seed + 10_000,
             incomplete_penalty_km=args.incomplete_penalty_km,
         )
-    return result.cost_km[:, 0].detach().cpu().numpy()
+    return _training_cost(result, args)[:, 0].detach().cpu().numpy()
+
+
+def _training_cost(result, args):
+    # Preserve legacy standalone AM's unnormalized km update, while the new
+    # cost objective uses the explicitly normalized, correctly named field.
+    return result.training_cost if objective_from_args(args).is_cost else result.cost_km
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,6 +84,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    objective_config = prepare_training_objective(args)
+    args.objective = objective_config.to_dict()
     set_seed(args.seed)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pool = Stage2TaskPool(
@@ -117,6 +127,7 @@ def main() -> None:
                 instances,
                 n_traj=args.samples_per_instance,
                 info_level="light",
+                objective_config=objective_config,
             )
             actor = rollout(
                 policy,
@@ -130,6 +141,7 @@ def main() -> None:
                 instances,
                 n_traj=args.samples_per_instance,
                 info_level="light",
+                objective_config=objective_config,
             )
             with torch.no_grad():
                 baseline_result = rollout(
@@ -140,13 +152,13 @@ def main() -> None:
                     seed=args.seed + epoch * args.steps_per_epoch + step,
                     incomplete_penalty_km=args.incomplete_penalty_km,
                 )
-            advantage = (actor.cost_km - baseline_result.cost_km).detach()
+            advantage = (_training_cost(actor, args) - _training_cost(baseline_result, args)).detach()
             loss = (advantage * actor.log_likelihood).mean()
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
             optimizer.step()
-            epoch_costs.append(float(actor.cost_km.mean().detach().cpu()))
+            epoch_costs.append(float(_training_cost(actor, args).mean().detach().cpu()))
             epoch_feasible.append(float(actor.feasible.float().mean().detach().cpu()))
 
         policy.eval()
@@ -162,10 +174,12 @@ def main() -> None:
             baseline.load_state_dict(policy.state_dict())
         row = {
             "epoch": epoch,
-            "train_cost_km": float(np.mean(epoch_costs)),
+            ("train_cost_normalized" if objective_config.is_cost else "train_cost_km"): float(np.mean(epoch_costs)),
+            "objective_mode": objective_config.mode,
+            "objective_unit": objective_config.unit,
             "train_feasible_rate": float(np.mean(epoch_feasible)),
-            "greedy_actor_cost_km": float(np.mean(actor_costs)),
-            "greedy_baseline_cost_km": float(np.mean(baseline_costs)),
+            ("greedy_actor_cost_normalized" if objective_config.is_cost else "greedy_actor_cost_km"): float(np.mean(actor_costs)),
+            ("greedy_baseline_cost_normalized" if objective_config.is_cost else "greedy_baseline_cost_km"): float(np.mean(baseline_costs)),
             "paired_t_pvalue": float(test.pvalue),
             "baseline_updated": improved,
             "epoch_runtime_s": float(time.perf_counter() - start),
@@ -180,6 +194,7 @@ def main() -> None:
                 "baseline": baseline.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "args": vars(args),
+                "objective_config": objective_config.to_dict(),
             },
             args.output_dir / "checkpoint_latest.pt",
         )

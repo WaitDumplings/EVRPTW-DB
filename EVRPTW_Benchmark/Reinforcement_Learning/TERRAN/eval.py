@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,10 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT))
 
 from evrptw_core.io import iter_instances
+from evrptw_core.schema import merge_route_sequences
 
+from ..common.evaluation import select_min_verified_objective
+from ..common.objective import objective_from_checkpoint
 from .env_factory import make_terran_env
 from .models import Agent
 from .rollout import rollout_eval_batch
@@ -62,6 +66,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a TERRAN checkpoint with sample best-of-n_traj decoding.")
     parser.add_argument("--checkpoint-path", type=Path, required=True)
+    parser.add_argument("--objective-config", type=Path)
     parser.add_argument("--eval-path", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--solver-name", type=str, default=None)
@@ -83,8 +88,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint = torch.load(args.checkpoint_path, map_location=device)
+    checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
     cfg = checkpoint.get("config", {})
+    objective_config = objective_from_checkpoint(checkpoint, args.objective_config)
     model_cfg = cfg.get("model", {})
     solver_name = args.solver_name or str(cfg.get("run_name", "TERRAN"))
     agent = Agent(
@@ -112,6 +118,7 @@ def main() -> None:
     ):
         eval_env_cfg = dict(cfg.get("env", {}) or {})
         eval_env_cfg["info_level"] = env_info_level
+        eval_env_cfg["objective_config"] = objective_config
         envs = [
             make_terran_env(
                 instance=instance,
@@ -128,8 +135,16 @@ def main() -> None:
             device=device,
             seed=args.seed + seen_before_batch,
             include_routes=args.save_routes,
+            return_final_info=objective_config.is_cost,
         )
         for instance, row in zip(instances, batch_rows):
+            if objective_config.is_cost:
+                selected, routes, verification = select_min_verified_objective(instance, row.pop("_final_info"), objective_config)
+                row.update(verification)
+                row.update(selected_traj_idx=selected, feasible=bool(verification["passed"]), vehicle_count=len(routes))
+                if args.save_routes:
+                    row["routes_json"] = json.dumps(routes)
+                    row["route_sequence_json"] = json.dumps(merge_route_sequences(routes))
             row.update(
                 {
                     "instance_id": instance.instance_id,
@@ -165,6 +180,13 @@ def main() -> None:
         "avg_objective_distance_km": float(np.mean([row["objective_distance_km"] for row in feasible_rows])) if feasible_rows else float("nan"),
         "avg_vehicle_count": float(np.mean([row["vehicle_count"] for row in feasible_rows])) if feasible_rows else float("nan"),
         "avg_runtime_s": float(np.mean([row["runtime_s"] for row in rows])),
+        "objective_mode": objective_config.mode,
+        "objective_unit": objective_config.unit,
+        "avg_objective": float(np.mean([row.get("objective_value", row["objective_distance_km"]) for row in feasible_rows])) if feasible_rows else float("nan"),
+        **{
+            f"avg_{key}": float(np.mean([row[key] for row in feasible_rows])) if feasible_rows and objective_config.is_cost else None
+            for key in ("objective_cost_usd", "electricity_cost_usd", "vehicle_cost_usd")
+        },
     }
     output_dir = args.output_dir
     if output_dir is None:

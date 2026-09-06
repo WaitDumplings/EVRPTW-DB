@@ -6,14 +6,14 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 
-from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_distance
+from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import select_min_verified_objective
+from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import objective_from_checkpoint
 from EVRPTW_Benchmark.Reinforcement_Learning.common.candidate_protocol import independent_candidate_batch
 
 from ..common import Stage2TaskPool, make_envs
@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-path", type=Path, required=True)
     parser.add_argument("--family-root", type=Path)
     parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--objective-config", type=Path)
     parser.add_argument("--scale", default="Cus100")
     parser.add_argument("--split-ids", default="test")
     parser.add_argument("--track-ids", default="test1_new_seed")
@@ -41,23 +42,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _best_index(info: dict) -> int:
-    success = np.asarray(info["success"], dtype=bool)
-    objective = np.asarray(info["objective_distance_km"], dtype=float)
-    served = np.asarray(info["served_customers"], dtype=int)
-    if success.any():
-        candidates = np.flatnonzero(success)
-        return int(candidates[np.argmin(objective[candidates])])
-    candidates = np.flatnonzero(served == served.max())
-    return int(candidates[np.argmin(objective[candidates])])
-
-
 def main() -> None:
     args = parse_args()
     if args.decode_type == "greedy" and args.candidates != 1:
         raise ValueError("greedy evaluation has exactly one candidate")
     checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
     model_args = checkpoint.get("args", {})
+    objective_config = objective_from_checkpoint(
+        checkpoint, override=getattr(args, "objective_config", None)
+    )
     policy = EVRPTWRLPolicy(
         embedding_dim=int(model_args.get("embedding_dim", 128)),
         structure2vec_rounds=int(model_args.get("structure2vec_rounds", 3)),
@@ -85,6 +78,7 @@ def main() -> None:
                     [instance],
                     n_traj=1,
                     info_level="full",
+                    objective_config=objective_config,
                     reward_distance_scale_km=model_args.get(
                         "reward_distance_scale_km"
                     ),
@@ -113,8 +107,8 @@ def main() -> None:
                 solve_one=solve_one,
             )
             for instance, info in zip(batch_instances, result.infos):
-                selected, routes, verification = select_min_verified_distance(
-                    instance, info
+                selected, routes, verification = select_min_verified_objective(
+                    instance, info, objective_config=objective_config
                 )
                 row = {
                     "instance_id": instance.instance_id,
@@ -133,6 +127,9 @@ def main() -> None:
                     ),
                     "runtime_s": result.runtime_s / max(len(batch_instances), 1),
                 }
+                row.update(objective_config.fields(
+                    row["objective_distance_km"], verification["vehicles_started"]
+                ))
                 rows.append(row)
                 route_stream.write(
                     json.dumps(

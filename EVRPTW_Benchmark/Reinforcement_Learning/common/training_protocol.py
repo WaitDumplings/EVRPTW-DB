@@ -12,11 +12,13 @@ import numpy as np
 import torch
 
 from .data_pass import DataPassState
-from .evaluation import select_min_verified_distance
+from .evaluation import select_min_verified_objective
+from .objective import resolve_objective
 from .stage2_data import Stage2TaskPool
 
 
 def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--objective-config", type=Path, help="Versioned objective JSON; omitted means legacy distance.")
     parser.add_argument("--data-passes", type=int)
     parser.add_argument("--training-epochs", type=int)
     parser.add_argument("--training-rollout-steps", type=int)
@@ -189,15 +191,23 @@ def verified_validation(
     solve: Callable[[Any, int], dict[str, Any]],
     *,
     seed: int,
+    objective_config=None,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
+    active_objective = resolve_objective(objective_config)
     for index, instance in enumerate(instances):
         # Validation is selection-only. Retaining an autograd graph for every
         # sampled trajectory wastes GPU memory and can make best-of-K OOM even
         # though the corresponding training batch fits.
         with torch.no_grad():
             info = solve(instance, int(seed) + index)
-        selected, routes, verification = select_min_verified_distance(instance, info)
+        current_objective = resolve_objective(
+            objective_config if objective_config is not None else info.get("objective_config")
+        )
+        if rows and current_objective != active_objective:
+            raise ValueError("validation cohort mixes objective configurations")
+        active_objective = current_objective
+        selected, routes, verification = select_min_verified_objective(instance, info, current_objective)
         rows.append(
             {
                 "instance_id": instance.instance_id,
@@ -206,6 +216,9 @@ def verified_validation(
                 "verifier_passed": bool(verification["passed"]),
                 "objective_distance_km": float(verification["objective_distance_km"]),
                 "vehicle_count": len(routes),
+                **current_objective.fields(
+                    verification["objective_distance_km"], verification["vehicles_started"]
+                ),
             }
         )
     passed = [row for row in rows if row["verifier_passed"]]
@@ -219,6 +232,28 @@ def verified_validation(
             if passed
             else None
         ),
+        "objective_mode": active_objective.mode,
+        "objective_profile_id": active_objective.profile_id,
+        "objective_unit": active_objective.unit,
+        "objective_config": active_objective.to_dict(),
+        "mean_verified_objective": (
+            float(np.mean([row["objective_value"] for row in passed])) if passed else None
+        ),
+        "mean_verified_cost_usd": (
+            float(np.mean([row["objective_cost_usd"] for row in passed]))
+            if passed and active_objective.is_cost else None
+        ),
+        "mean_verified_vehicle_count": (
+            float(np.mean([row["vehicles_started"] for row in passed])) if passed else None
+        ),
+        "mean_verified_electricity_cost_usd": (
+            float(np.mean([row["electricity_cost_usd"] for row in passed]))
+            if passed and active_objective.is_cost else None
+        ),
+        "mean_verified_vehicle_cost_usd": (
+            float(np.mean([row["vehicle_cost_usd"] for row in passed]))
+            if passed and active_objective.is_cost else None
+        ),
         "verifier_summary_passed": len(rows) > 0 and len(passed) == len(rows),
         "rows": rows,
     }
@@ -226,8 +261,10 @@ def verified_validation(
 
 def validation_key(summary: dict[str, Any]) -> tuple[float, float]:
     rate = float(summary["complete_and_feasible_rate"])
-    distance = summary.get("mean_verified_distance_km")
-    return rate, -math.inf if distance is None else -float(distance)
+    value = summary.get("mean_verified_objective")
+    if value is None and summary.get("objective_mode", "distance") == "distance":
+        value = summary.get("mean_verified_distance_km")
+    return rate, -math.inf if value is None else -float(value)
 
 
 def append_jsonl(path: Path, row: dict[str, Any]) -> None:

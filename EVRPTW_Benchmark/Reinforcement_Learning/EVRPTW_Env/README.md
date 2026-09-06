@@ -90,8 +90,21 @@ route-local anti-cycle rule, not a global station-copy limit.
 Formal training uses one deterministic distance scale estimated only from its
 frozen training pool. Distance edges use that scale, travel-time edges use the
 operating horizon, and energy edges use battery capacity. Validation and test
-reuse the scale persisted in the training checkpoint; reported objectives
-remain physical directed-road kilometres.
+reuse the scale persisted in the training checkpoint. Physical directed-road
+kilometres remain a separate diagnostic in the new cost track.
+
+## Active cost objective
+
+The optional `objective_config` selects the versioned electricity-plus-vehicle
+objective used by all four formal training methods. Its complete semantics
+and parameter source are in
+[`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md).
+The environment records `vehicles_started` on valid depot departures, charges
+the fixed fee once there, and accumulates the electricity term from distance.
+This does not change the energy matrix, masks, charging time or fleet limit.
+`reward_objective_scale` normalizes the whole scalar cost; the old
+`reward_distance_scale_km` still normalizes distance features. Omitting the
+objective retains the explicit legacy distance behavior.
 
 ## Route Export
 

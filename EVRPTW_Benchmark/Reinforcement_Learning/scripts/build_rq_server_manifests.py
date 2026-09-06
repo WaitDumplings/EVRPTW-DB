@@ -190,6 +190,11 @@ def job(
         ),
         "file_hash_validation_performed": False,
     }
+    objective_path = cfg["objective_config_path"]
+    objective = json.loads(
+        (ROOT.parents[1] / objective_path).read_text(encoding="utf-8")
+    )["objective"]
+    payload.update(objective_config_path=objective_path, objective_config=objective)
     if method == "terran":
         training = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))["training"]
         payload.update(

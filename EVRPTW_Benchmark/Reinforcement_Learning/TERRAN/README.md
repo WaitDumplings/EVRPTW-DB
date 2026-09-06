@@ -6,21 +6,22 @@ user-designated method reference is the CaliRoute implementation at
 It uses the shared `EVRPTW_Env` Gymnasium-style environment and keeps POMO-style
 parallel rollouts through the environment's `n_traj` dimension.
 
-Canonical benchmark runs consume frozen Stage-2 views, use directed distance
-as the objective-facing reward, retain configured auxiliary shaping, and replay
+Canonical benchmark runs consume frozen Stage-2 views, use electricity plus
+vehicle-dispatch cost as the objective-facing reward, retain configured auxiliary shaping, and replay
 all reported routes through the shared verifier. See
 [`ADAPTATION.md`](ADAPTATION.md) for the method boundary.
 
 ## Active Stage-2 return and cache contract
 
 Formal Stage-2 runs use `training.gamma=1.0` and
-`reward_contract_id=terran_undiscounted_distance_pbrs_v1`. Returns are finite-episode
+`reward_contract_id=terran_undiscounted_energy_vehicle_pbrs_v1`. Returns are finite-episode
 reward sums; the PBRS wrapper uses the same discount. A registered rollout-budget
 failure is a terminal outcome, not a collection slice to bootstrap. Terminal
 potentials are zero for both completion and failure. Auxiliary terminal bonuses
-and penalties remain separate from strict potential shaping. This revision does
-not introduce electricity prices or per-vehicle fees: benchmark selection still
-uses verified feasibility followed by directed distance.
+and penalties remain separate from strict potential shaping. The shared
+`rivian_energy_vehicle_cost_v1` profile defines both cost coefficients and the
+departure-fee rule. Benchmark selection uses verified feasibility followed by
+total cost. See the [cost objective contract](../COST_OBJECTIVE_CONTRACT_V1.md).
 
 Static encoder outputs are cached during collection only while parameters stay
 fixed. PPO recomputes a differentiable encoding for every minibatch/time chunk;
@@ -28,8 +29,9 @@ it never reuses collection embeddings or embeddings from before an optimizer
 update. Static input tensors and frozen behavior-policy log-probabilities may
 be retained. Encoder dropout is zero in the current implementation.
 
-Start this revision from scratch. Checkpoints with a different gamma or reward
-contract cannot be resumed, and a fresh launch refuses old training history.
+Start this revision from scratch. Checkpoints with a different objective,
+coefficient, gamma or reward contract cannot be resumed, and a fresh launch
+refuses old training history.
 Server output directories already include the Git commit, so pulling the new
 commit and using `full.sh` separates the new run without rebuilding shared ID
 streams. See the [server restart instructions](../scripts/rq_v1/README.md).
@@ -98,7 +100,7 @@ into an environment truncation, so an unfinished trajectory receives
 The diagnostic info records `rollout_budget_exhausted`, `remaining_customers`,
 and `remaining_customer_fraction`.
 
-## Cus15 Baselines
+## Historical Cus15 Baselines (distance-only)
 
 The default Cus15 setup trains two baselines with identical architecture and
 hyperparameters:
@@ -120,9 +122,11 @@ and cm3, but model-facing observations are normalized: locations are mapped to
 `[0, 1]`, demand and current load are fractions of vehicle capacity, time
 windows/service/current time are fractions of the operating horizon, battery
 state is a fraction of battery capacity, and the model-facing capacity scalars
-are `1.0`. Training rewards are distance-normalized for value-function stability;
-`objective_distance_km` in `info` and eval CSVs remains the physical kilometer
-objective used for benchmark comparison.
+are `1.0`. The active cost reward uses the cost-unit conversion of the existing
+training-pool normalizer; legacy runs remain distance-normalized.
+`objective_distance_km` stays in physical kilometres. `objective_cost_usd`,
+`electricity_cost_usd`, `vehicle_cost_usd` and `vehicles_started` describe the
+new cost objective separately; no km field stores a currency value.
 
 ## Periodic Evaluation
 

@@ -18,6 +18,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 TERRAN_CONFIG = ROOT / "TERRAN" / "configs" / "stage2_cus100_terran.yaml"
+RUNTIME_CONFIG = ROOT / "configs" / "drl_rq_runtime_candidates_v2.yaml"
 METHODS = {"am_evrptw", "evrptw_rl", "drl_ts", "terran"}
 REQUIRED_ENV = (
     "EVRPTW_REPO_ROOT",
@@ -129,15 +130,18 @@ def gpu_name_matches(name: str, accepted_patterns: str) -> bool:
 
 
 def training_contract(job: dict[str, Any]) -> dict[str, Any]:
-    """Keep the reward revision local to versioned TERRAN jobs, not data streams."""
-    if job.get("method") != "terran" or not any(
+    """Version the scientific objective independently of unchanged data streams."""
+    contract = {}
+    if "objective_config" in job:
+        contract["objective_config"] = job["objective_config"]
+    if job.get("method") == "terran" and any(
         field in job for field in ("reward_contract_id", "training_gamma")
     ):
-        return {}
-    return {
-        "reward_contract_id": job.get("reward_contract_id"),
-        "training_gamma": job.get("training_gamma"),
-    }
+        contract.update(
+            reward_contract_id=job.get("reward_contract_id"),
+            training_gamma=job.get("training_gamma"),
+        )
+    return contract
 
 
 def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
@@ -152,7 +156,7 @@ def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
         "training_gamma": float(training["gamma"]),
     }
     for job in terran_jobs:
-        if training_contract(job) != expected:
+        if any(job.get(key) != value for key, value in expected.items()):
             raise RuntimeError(
                 f"TERRAN manifest/config reward contract mismatch for {job['job_id']}: "
                 f"manifest={training_contract(job)} config={expected}; "
@@ -160,8 +164,30 @@ def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
             )
 
 
+def validate_objective_contracts(jobs: list[dict[str, Any]]) -> None:
+    """Reject stale/formally distance-only manifests before any launch side effects."""
+    scoped_jobs = [job for job in jobs if job["kind"] == "train"
+                   or "objective_config" in job or "objective_config_path" in job]
+    if not scoped_jobs:
+        return
+    cfg = yaml.safe_load(RUNTIME_CONFIG.read_text(encoding="utf-8"))
+    relative_path = cfg["objective_config_path"]
+    expected = json.loads(
+        (ROOT.parents[1] / relative_path).read_text(encoding="utf-8")
+    )["objective"]
+    for job in scoped_jobs:
+        if (job.get("objective_config_path") != relative_path
+                or job.get("objective_config") != expected
+                or job.get("candidate_selection") != cfg["evaluation"]["selection"]):
+            raise RuntimeError(
+                f"manifest/config objective contract mismatch for {job['job_id']}; "
+                "regenerate the RQ manifests and start cost training in a fresh root"
+            )
+
+
 def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str, Any]:
     validate_terran_training_contracts(jobs)
+    validate_objective_contracts(jobs)
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
     if missing:
         raise RuntimeError(f"missing required environment variables: {', '.join(missing)}")
@@ -372,6 +398,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             "--output-dir",
             str(out),
         ]
+    if job.get("objective_config_path"):
+        command.extend(["--objective-config", str(context["repo"] / job["objective_config_path"])])
     if job["method"] == "drl_ts" and job.get("soft_stage_end_epoch") is not None:
         command.extend(["--soft-stage-end-epoch", str(job["soft_stage_end_epoch"])])
     if job["method"] == "terran":
@@ -448,6 +476,8 @@ def evaluation_command(job: dict[str, Any], context: dict[str, Any], out: Path) 
         "--output-dir",
         str(out),
     ]
+    if job.get("objective_config_path"):
+        command.extend(["--objective-config", str(context["repo"] / job["objective_config_path"])])
     if job["method"] == "terran":
         command.extend(["--decode-mode", "greedy" if job["decode_type"] == "greedy" else "sample"])
     else:
@@ -535,13 +565,18 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
     resume_this_job = should_resume_job(job, out, resume)
     contract = training_contract(job)
     provenance_path = out / "provenance.json"
+    if resume_this_job and "objective_config" in contract and not provenance_path.is_file():
+        raise RuntimeError(
+            f"missing objective provenance for resume of {job['job_id']}; "
+            "start in a fresh directory instead of importing a historical checkpoint"
+        )
     if resume_this_job and contract and provenance_path.is_file():
         previous_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
         if training_contract(previous_provenance.get("job", {})) != contract or any(
             previous_provenance.get(key) != value for key, value in contract.items()
         ):
             raise RuntimeError(
-                f"TERRAN resume provenance reward contract mismatch for {job['job_id']}; "
+                f"resume provenance reward contract mismatch for {job['job_id']}; "
                 "start fresh without reusing the old training directory"
             )
     if job["kind"] == "train" and not resume_this_job:

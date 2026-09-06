@@ -53,7 +53,7 @@ shared route-local station mask. No invented CS reward is used.
 
 | Component | Published DRL-TS | EVRPTW-DB adapter |
 |---|---|---|
-| Objective | Total route distance | Sum of selected directed `distance_matrix_km` arcs |
+| Objective | Total route distance | Electricity plus dispatched-vehicle cost in the new formal track |
 | Node input | demand, TW bounds, node type | same plus service duration and station power |
 | Edge input | distance, time, nearest-neighbor indicator | same plus canonical path energy |
 | Energy transition | fixed consumption rate times distance | released directed running-time-path energy matrix |
@@ -73,10 +73,14 @@ Stage-1 minimization cost is total distance plus raw lateness, capacity, and
 electricity violations weighted by `alpha`, `beta`, and `gamma`; in Stage 2 it
 reduces to total distance. There is no CS visit term.
 
-The adapter preserves these four semantic terms, but uses explicit benchmark
-scaling:
+The adapter preserves the violation terms and two-stage strategy. New formal
+runs replace only the objective-facing distance term with the common
+electricity-plus-vehicle cost in
+[`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md).
+Legacy distance configurations remain supported. Benchmark scaling is explicit:
 
-- directed-road distance is divided by one deterministic training-pool scale;
+- the active objective is divided by the corresponding unit-converted,
+  deterministic training-pool scale;
 - excess demand is divided by vehicle cargo capacity;
 - lateness is divided by the operating-horizon duration;
 - energy deficit is divided by battery capacity.

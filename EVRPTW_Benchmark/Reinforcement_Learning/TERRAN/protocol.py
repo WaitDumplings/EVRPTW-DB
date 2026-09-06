@@ -21,7 +21,9 @@ from ..common.training_protocol import (
     require_training_rollout_steps,
     require_validation_decoding,
     validation_epochs,
+    validation_key,
 )
+from ..common.objective import resolve_objective
 from ..common.data_pass import DataPassState
 from ..common.training_stream import read_stream_view_ids
 
@@ -250,6 +252,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "gpu_hour_checkpoints": list(parse_float_checkpoints(getattr(args, "gpu_hour_checkpoints", ""))),
     }
     return configured, {
+        "objective": resolve_objective(configured.get("objective")).to_dict(),
         "views_per_pass": len(pool),
         "epochs_per_pass": epochs_per_pass,
         "physical_batch_size": physical,
@@ -280,6 +283,21 @@ def _validation_summary(
             else None
         ),
         "verifier_summary_passed": len(rows) > 0 and len(passed) == len(rows),
+        "mean_verified_objective": (
+            float(np.mean([float(row.get("objective_value") or row["objective_distance_km"]) for row in passed]))
+            if passed else None
+        ),
+        "objective_mode": rows[0].get("objective_mode", "distance") if rows else "distance",
+        "objective_unit": rows[0].get("objective_unit", "km") if rows else "km",
+        "mean_verified_cost_usd": (
+            float(np.mean([float(row["objective_cost_usd"]) for row in passed]))
+            if passed and all(row.get("objective_cost_usd") not in (None, "") for row in passed) else None
+        ),
+        **{
+            f"mean_verified_{name}": float(np.mean([float(row[name]) for row in passed]))
+            if passed and all(row.get(name) not in (None, "") for row in passed) else None
+            for name in ("objective_cost_usd", "electricity_cost_usd", "vehicle_cost_usd", "vehicle_count")
+        },
     }
 
 
@@ -373,11 +391,7 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             )
             with history_path.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(summary, sort_keys=True) + "\n")
-            distance = summary["mean_verified_distance_km"]
-            key = (
-                float(summary["complete_and_feasible_rate"]),
-                -float(distance) if distance is not None else -float("inf"),
-            )
+            key = validation_key(summary)
             records.append((key, checkpoint, summary))
         _, selected, selected_summary = max(records, key=lambda row: row[0])
         shutil.copy2(selected, output / "checkpoint_selected.pt")
@@ -489,6 +503,9 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             "status": "pilot_partial" if getattr(args, "pilot_mode", False) else ("early_stopped" if early_stopped else "passed"),
             "method": "TERRAN",
             "protocol_id": args.protocol_id,
+            "objective_config": resolve_objective(meta.get("objective")).to_dict(),
+            "objective_mode": resolve_objective(meta.get("objective")).mode,
+            "objective_unit": resolve_objective(meta.get("objective")).unit,
             "budget_mode": (
                 "fixed_customer_exposure" if getattr(args, "training_stream_path", None) is not None else
                 ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")

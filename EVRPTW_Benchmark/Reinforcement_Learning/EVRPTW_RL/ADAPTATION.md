@@ -36,7 +36,7 @@ included in every run manifest.
 
 | Component | Published method | EVRPTW-B adapter |
 |---|---|---|
-| Objective-facing term | Negative normalized Euclidean route length | Directed `distance_matrix_km`, normalized only for policy-gradient scale |
+| Objective-facing term | Negative normalized Euclidean route length | Normalized electricity plus dispatched-vehicle cost in the new formal track |
 | Edge input | Euclidean travel time | Canonical directed shortest-running-time matrix |
 | Local node state | coordinates, TW, remaining demand | same core state plus service duration, station power, and node type required by the released task |
 | Global state | time, battery, available finite EVs | time, battery, and remaining fraction of the nonbinding `N`-vehicle upper bound |
@@ -45,10 +45,13 @@ included in every run manifest.
 | Feasibility | paper masking plus soft battery/fleet penalties | canonical hard safe-continuation mask and independent verifier |
 | Data | fresh synthetic batch per update | sampling with replacement from the frozen training split |
 
-The published training reward already uses route distance as its main term.
-For physical instances, distance is divided by one deterministic median
-depot-customer-depot repair scale estimated from the frozen training pool
-before combining it with the published station coefficient 0.3. Directed
+The published training reward uses route distance as its main term. New formal
+runs adapt that term to the shared electricity-plus-vehicle cost in
+[`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md).
+The existing median depot-customer-depot training-pool scale is converted to
+cost units before combining the normalized objective with the unchanged
+published station coefficient 0.3. Legacy distance configurations retain the
+prior distance normalization. Directed
 travel-time edges are divided by the operating horizon. The fixed training
 scale is reused for validation/test and avoids reweighting cities or instances;
 it is an explicit benchmark adapter, not a normalization stated in the paper.

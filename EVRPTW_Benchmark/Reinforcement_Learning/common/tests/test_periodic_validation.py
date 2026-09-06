@@ -4,8 +4,10 @@ import json
 from types import SimpleNamespace
 
 import torch
+import pytest
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_trainers, training_protocol
+from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
 
 
 class _Pool:
@@ -28,12 +30,18 @@ class _ValidationPool:
         return [object() for _ in range(min(limit, 3))]
 
 
+@pytest.mark.parametrize("cost_objective", [False, True])
 def test_fixed_epoch_validation_selects_best_and_records_every_interval(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, cost_objective
 ) -> None:
     validation_calls = []
+    objective = ObjectiveConfig(
+        mode="energy_vehicle_cost" if cost_objective else "distance",
+        profile_id="cost-test" if cost_objective else "distance_v1",
+    )
 
-    def fake_validation(instances, _solve, *, seed):
+    def fake_validation(instances, _solve, *, seed, objective_config=None):
+        assert objective_config.to_dict() == objective.to_dict()
         validation_calls.append((len(list(instances)), seed))
         score = 10.0 - len(validation_calls)
         count = validation_calls[-1][0]
@@ -42,7 +50,11 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
             "instances": count,
             "complete_and_feasible": count,
             "complete_and_feasible_rate": 1.0,
-            "mean_verified_distance_km": score,
+            # Deliberately worsen distance while improving cost to prove that
+            # cost-mode checkpoint selection follows the active objective.
+            "mean_verified_distance_km": 20.0 - score if cost_objective else score,
+            "mean_verified_objective": score,
+            "objective_mode": objective.mode,
             "verifier_summary_passed": True,
             "rows": [],
         }
@@ -61,6 +73,8 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         return SimpleNamespace(
             cost=torch.ones(count, 1),
             objective=torch.ones(count, 1),
+            objective_value=torch.full((count, 1), float(objective.value(1.0, 1))),
+            vehicles_started=torch.ones(count, 1),
             feasible=torch.ones(count, 1, dtype=torch.bool),
             log_likelihood=log_likelihood,
             environment_transitions=count,
@@ -69,6 +83,7 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         )
 
     args = SimpleNamespace(
+        objective=objective.to_dict(),
         training_epochs=6,
         data_passes=None,
         max_batches_per_pass=None,
@@ -165,6 +180,7 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
     assert within_payload["logical_epoch"] == 4
     assert overall_payload["logical_epoch"] == 6
     assert selected_payload["logical_epoch"] == 6
+    assert selected_payload["objective_config"] == objective.to_dict()
     final_audit = json.loads(
         (output / "validation_final_audit.json").read_text()
     )
@@ -177,7 +193,8 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
 def test_fixed_epoch_early_stop_waits_until_after_start_epoch(tmp_path, monkeypatch) -> None:
     validation_calls = []
 
-    def flat_validation(instances, _solve, *, seed):
+    def flat_validation(instances, _solve, *, seed, objective_config=None):
+        assert objective_config.mode == "distance"
         count = len(list(instances))
         validation_calls.append(seed)
         return {
@@ -269,7 +286,8 @@ def test_completed_fixed_budget_can_resume_a_prefix_stable_extension(
 ) -> None:
     calls = []
 
-    def fake_validation(instances, _solve, *, seed):
+    def fake_validation(instances, _solve, *, seed, objective_config=None):
+        assert objective_config.mode == "distance"
         count = len(list(instances))
         calls.append(seed)
         return {
@@ -389,11 +407,11 @@ def test_verified_validation_disables_autograd(monkeypatch) -> None:
 
     monkeypatch.setattr(
         training_protocol,
-        "select_min_verified_distance",
-        lambda _instance, _info: (
+        "select_min_verified_objective",
+        lambda _instance, _info, _objective: (
             0,
             [[0, 1, 0]],
-            {"passed": True, "objective_distance_km": 7.5},
+            {"passed": True, "objective_distance_km": 7.5, "vehicles_started": 1},
         ),
     )
     summary = training_protocol.verified_validation([instance], solve, seed=1234)

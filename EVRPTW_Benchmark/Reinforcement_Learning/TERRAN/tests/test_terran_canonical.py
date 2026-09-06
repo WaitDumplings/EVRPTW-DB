@@ -544,7 +544,7 @@ def test_stage2_terran_config_uses_cus1000_reward_calibration() -> None:
     assert cfg["training"]["gamma"] == 1.0
     assert (
         cfg["training"]["reward_contract_id"]
-        == "terran_undiscounted_distance_pbrs_v1"
+        == "terran_undiscounted_energy_vehicle_pbrs_v1"
     )
     assert cfg["pbrs"]["annealing"]["end_epoch"] == 5000
 
@@ -741,8 +741,9 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
     assert int(row["effective_instances_per_optimizer_step"]) == 2
 
 
+@pytest.mark.parametrize("cost_mode", [False, True])
 def test_terran_online_selection_publishes_tail_best_as_formal_aliases(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, cost_mode: bool,
 ) -> None:
     class Pool:
         sample_count = 0
@@ -782,6 +783,9 @@ def test_terran_online_selection_publishes_tail_best_as_formal_aliases(
         del seed, device
         return {
             "eval_avg_objective_distance_km": 10.0 - epoch,
+            # Epoch 3 improves distance but worsens cost: cost selection must
+            # retain epoch 2, unlike the legacy distance-only run.
+            **({"eval_avg_objective": [100.0, 90.0, 95.0][epoch - 1]} if cost_mode else {}),
             "eval_feasible_rate": 1.0,
             "eval_num_instances": 2,
             "eval_complete_and_feasible": 2,
@@ -826,6 +830,8 @@ def test_terran_online_selection_publishes_tail_best_as_formal_aliases(
             "early_stop_start_epoch": 2,
         },
     }
+    if cost_mode:
+        cfg["objective"] = {"mode": "energy_vehicle_cost", "profile_id": "cost-selection-test"}
     terran_trainer.train_from_config(cfg, seed=1234, device="cpu")
 
     selected = torch.load(
@@ -842,11 +848,12 @@ def test_terran_online_selection_publishes_tail_best_as_formal_aliases(
         map_location="cpu",
         weights_only=False,
     )
-    assert selected["epoch"] == best["epoch"] == overall["epoch"] == 3
+    assert selected["epoch"] == best["epoch"] == overall["epoch"] == (2 if cost_mode else 3)
+    assert selected["config"]["objective"]["mode"] == ("energy_vehicle_cost" if cost_mode else "distance")
     assert within["epoch"] == 2
     assert json.loads((tmp_path / "validation_summary.json").read_text())[
         "logical_epoch"
-    ] == 3
+    ] == (2 if cost_mode else 3)
     assert json.loads(
         (tmp_path / "validation_summary_within_5000.json").read_text()
     )["logical_epoch"] == 2
@@ -854,7 +861,7 @@ def test_terran_online_selection_publishes_tail_best_as_formal_aliases(
         json.loads(line)
         for line in (tmp_path / "validation_history.jsonl").read_text().splitlines()
     ]
-    assert history[-1]["checkpoint_selected"] is True
+    assert history[-1]["checkpoint_selected"] is (not cost_mode)
     assert history[-1]["best_within_minimum_selected"] is False
 
 

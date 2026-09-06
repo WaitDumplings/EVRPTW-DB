@@ -227,6 +227,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
         info: dict[str, Any] = {
             "action_mask": action_mask.copy(),
             "objective_distance_km": self.objective_distance_km.copy(),
+            **self._objective_info(),
             "vehicle_count": self.vehicle_count.copy(),
             "success": success.copy(),
             "served_customers": self.served_customers.copy(),

@@ -8,13 +8,15 @@ from typing import Any
 import numpy as np
 import torch
 
-from ..AM_EVRPTW.rollout import stack_observations
+from ..AM_EVRPTW.rollout import rollout_objective_arrays, stack_observations
 from .model import EVRPTWRLPolicy
 
 
 @dataclass
 class EVRPTWRLRollout:
     training_cost: torch.Tensor
+    objective_value: torch.Tensor
+    vehicles_started: torch.Tensor
     objective_distance_km: torch.Tensor
     log_likelihood: torch.Tensor
     feasible: torch.Tensor
@@ -116,18 +118,18 @@ def rollout(
     customer_count = np.asarray(
         [env.unwrapped.num_customers for env in envs], dtype=np.float64
     )[:, None]
-    distance_scale = np.asarray(
-        [env.unwrapped.reward_distance_scale_km for env in envs], dtype=np.float64
-    )[:, None]
     incomplete_fraction = 1.0 - served / np.maximum(customer_count, 1.0)
+    objective_value, objective_scale, vehicles_started, _ = rollout_objective_arrays(envs, infos)
     training_cost = (
-        objective / np.maximum(distance_scale, 1e-12)
+        objective_value / np.maximum(objective_scale, 1e-12)
         + float(station_visit_penalty) * station_visits
         + (~feasible)
         * (float(incomplete_penalty) * (1.0 + incomplete_fraction))
     )
     return EVRPTWRLRollout(
         training_cost=torch.as_tensor(training_cost, device=policy.device).float(),
+        objective_value=torch.as_tensor(objective_value, device=policy.device).float(),
+        vehicles_started=torch.as_tensor(vehicles_started, device=policy.device).float(),
         objective_distance_km=torch.as_tensor(objective, device=policy.device).float(),
         log_likelihood=log_likelihood,
         feasible=torch.as_tensor(feasible, device=policy.device),

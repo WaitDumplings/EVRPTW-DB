@@ -313,6 +313,93 @@ def _terran_job():
     return job
 
 
+def _cost_job(method="am_evrptw"):
+    from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import build
+    return next(dict(job) for jobs in build().values() for job in jobs if job["method"] == method)
+
+
+def test_all_formal_cost_manifests_pass_and_commands_forward_profile(tmp_path):
+    for method in sorted(RUNTIME.METHODS):
+        job = _cost_job(method)
+        RUNTIME.validate_objective_contracts([job])
+        RUNTIME.validate_terran_training_contracts([job])
+        context = _context(tmp_path)
+        command = RUNTIME.training_command(job, context, tmp_path / "run", False)
+        assert command[command.index("--objective-config") + 1] == str(
+            context["repo"] / job["objective_config_path"]
+        )
+        assert RUNTIME.training_contract(job)["objective_config"] == job["objective_config"]
+
+
+@pytest.mark.parametrize("method", sorted(RUNTIME.METHODS))
+def test_cost_eval_and_transfer_also_require_the_checkpoint_objective(tmp_path, method):
+    job = _cost_job(method)
+    job.update(
+        kind="evaluate", eval_module="method.eval", dataset_index="test.parquet",
+        track_id="test1_new_seed", candidate_count=100, candidate_chunk_size=1,
+        expected_views=500, decode_type="sampling", source_scale="Cus100",
+        scale="Cus2000",
+    )
+    context = _context(tmp_path)
+    command = RUNTIME.evaluation_command(job, context, tmp_path / "eval")
+    assert command[command.index("--objective-config") + 1] == str(
+        context["repo"] / job["objective_config_path"]
+    )
+    RUNTIME.validate_objective_contracts([job])
+    job["objective_config"] = {**job["objective_config"], "mode": "distance"}
+    with pytest.raises(RuntimeError, match="objective contract mismatch"):
+        RUNTIME.validate_objective_contracts([job])
+
+
+@pytest.mark.parametrize("field", ["missing", "coefficient", "path", "selection"])
+def test_objective_preflight_rejects_stale_scientific_metadata(field):
+    job = _cost_job()
+    if field == "missing":
+        job.pop("objective_config")
+    elif field == "coefficient":
+        job["objective_config"] = {**job["objective_config"], "vehicle_fixed_cost_usd": 0.0}
+    elif field == "path":
+        job["objective_config_path"] = "old-profile.json"
+    else:
+        job["candidate_selection"] = "verifier_feasible_then_min_directed_distance"
+    with pytest.raises(RuntimeError, match="objective contract mismatch"):
+        RUNTIME.preflight(object(), [job])
+
+
+@pytest.mark.parametrize("method", sorted(RUNTIME.METHODS))
+def test_all_methods_completion_is_bound_to_exact_cost_profile(tmp_path, method):
+    context = _context(tmp_path)
+    context["dataset"].mkdir()
+    job = _cost_job(method)
+    output = RUNTIME.output_dir(job, context)
+    job["test_command"] = _artifact_command(output)
+    assert RUNTIME.run_job(job, context, 0, False, False)
+    assert RUNTIME.job_complete(job, output)
+    result_path = output / "job_result.json"
+    result = json.loads(result_path.read_text())
+    result["objective_config"]["vehicle_fixed_cost_usd"] = 0.0
+    result_path.write_text(json.dumps(result))
+    assert not RUNTIME.job_complete(job, output)
+    with pytest.raises(RuntimeError, match="refusing fresh training"):
+        RUNTIME.run_job(job, context, 0, False, False)
+
+
+@pytest.mark.parametrize("provenance", [None, {}, {"objective_config": {"mode": "distance"}}])
+def test_cost_resume_rejects_missing_or_legacy_provenance(tmp_path, provenance):
+    context = _context(tmp_path)
+    job = _cost_job()
+    output = RUNTIME.output_dir(job, context)
+    output.mkdir(parents=True)
+    (output / "data_pass_state.json").write_text("{}")
+    (output / "checkpoint_latest.pt").write_bytes(b"original")
+    if provenance is not None:
+        (output / "provenance.json").write_text(json.dumps(provenance))
+    with pytest.raises(RuntimeError, match="provenance"):
+        RUNTIME.run_job(job, context, 0, True, False)
+    assert (output / "checkpoint_latest.pt").read_bytes() == b"original"
+    assert not (output / "job_result.json").exists()
+
+
 def test_terran_manifest_contract_is_checked_before_preflight_side_effects(
     monkeypatch, tmp_path: Path,
 ) -> None:

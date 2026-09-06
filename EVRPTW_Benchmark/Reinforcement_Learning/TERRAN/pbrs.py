@@ -94,8 +94,29 @@ class PotentialRewardWrapper(Wrapper):
         else:
             distance_reward = -distance_delta
         distance_reward = distance_reward.astype(np.float32)
+        objective_delta = np.asarray(
+            info.get("objective_value", self.unwrapped.objective_distance_km), dtype=np.float64
+        ) - np.asarray(
+            prev_info.get("objective_value", prev_objective_distance), dtype=np.float64
+        )
+        objective_scale = (
+            max(float(getattr(self.unwrapped, "reward_objective_scale", self.unwrapped.reward_distance_scale_km)), 1e-12)
+            if bool(getattr(self.unwrapped, "normalize_reward", False)) else 1.0
+        )
+        objective_reward = (-objective_delta / objective_scale).astype(np.float32)
+        cost_rewards = {}
+        for name in ("electricity_cost", "vehicle_cost"):
+            current = info.get(f"{name}_usd")
+            previous = prev_info.get(f"{name}_usd")
+            cost_rewards[name] = (
+                -(np.asarray(current, dtype=np.float64) - np.asarray(previous, dtype=np.float64)) / objective_scale
+                if current is not None and previous is not None else np.zeros_like(distance_reward)
+            ).astype(np.float32)
+        # The environment already charged the active objective, including every
+        # vehicle departure. Only the residual is an invalid-action/task penalty.
+        # Keep historical normalized-km diagnostics separate from USD components.
         base_non_distance = (
-            base_reward.astype(np.float32) - distance_reward
+            base_reward.astype(np.float32) - objective_reward
         ).astype(np.float32)
 
         now_finished = np.asarray(terminated, dtype=bool) | np.asarray(truncated, dtype=bool)
@@ -128,6 +149,10 @@ class PotentialRewardWrapper(Wrapper):
         out_info["reward_components"] = {
             "base": base_reward.astype(np.float32).copy(),
             "distance": distance_reward.copy(),
+            "objective": objective_reward.copy(),
+            "electricity_cost": cost_rewards["electricity_cost"].copy(),
+            "vehicle_cost": cost_rewards["vehicle_cost"].copy(),
+            "base_non_objective": base_non_distance.copy(),
             "base_non_distance": base_non_distance.copy(),
             "pbrs_customer": customer.copy(),
             "pbrs_repair_distance": repair.copy(),
@@ -287,6 +312,10 @@ class PotentialRewardWrapper(Wrapper):
         info["reward_components"] = {
             "base": reward.copy(),
             "distance": reward.copy(),
+            "objective": reward.copy(),
+            "electricity_cost": reward.copy(),
+            "vehicle_cost": reward.copy(),
+            "base_non_objective": reward.copy(),
             "base_non_distance": reward.copy(),
             "pbrs_customer": reward.copy(),
             "pbrs_repair_distance": reward.copy(),
