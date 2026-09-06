@@ -32,6 +32,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
     resolved_training_signature_from_args,
     validation_epochs,
+    validation_rollout_steps,
 )
 
 
@@ -194,13 +195,25 @@ def validate_formal_launch_gates(
     if not isinstance(runtime, Mapping) or not isinstance(protocol, Mapping):
         raise RuntimeError("invalid frozen formal launch configuration")
 
-    def decision(document: Mapping[str, Any], label: str) -> tuple[str, bool, str, dict[str, str]]:
+    def decision(
+        document: Mapping[str, Any], label: str
+    ) -> tuple[str, bool, str, dict[str, str], tuple[str, ...]]:
         protocol_id = str(document.get("protocol_id", ""))
         allowed = document.get("formal_launch_allowed")
         policy = document.get("launch_policy")
         gates_raw = document.get("formal_launch_gates")
+        authorized_raw = document.get("authorized_job_ids")
         if not protocol_id or not isinstance(allowed, bool) or not isinstance(policy, str):
             raise RuntimeError(f"{label} has an incomplete formal launch decision")
+        if (
+            not isinstance(authorized_raw, list)
+            or not authorized_raw
+            or any(not isinstance(value, str) or not value.strip() for value in authorized_raw)
+            or len(authorized_raw) != len(set(authorized_raw))
+        ):
+            raise RuntimeError(
+                f"{label} must define a nonempty, unique authorized_job_ids list"
+            )
         if not isinstance(gates_raw, Mapping) or set(gates_raw) != {
             f"G{index}" for index in range(1, 9)
         }:
@@ -211,7 +224,13 @@ def validate_formal_launch_gates(
             if not isinstance(value, str) or not value.strip():
                 raise RuntimeError(f"{label} has an invalid {key} status")
             gates[str(key)] = value.strip()
-        return protocol_id, allowed, policy, gates
+        return (
+            protocol_id,
+            allowed,
+            policy,
+            gates,
+            tuple(sorted(value.strip() for value in authorized_raw)),
+        )
 
     runtime_decision = decision(runtime, "runtime config")
     protocol_decision = decision(protocol, "frozen protocol")
@@ -258,9 +277,28 @@ def validate_formal_launch_gates(
             raise RuntimeError(
                 "formal launch gate/runtime/protocol G1-G8 evidence disagrees"
             )
+        if any(item[4] != gate_decision[4] for item in decisions[1:]):
+            raise RuntimeError(
+                "formal launch gate/runtime/protocol authorized_job_ids disagree"
+            )
         if protocols != {gate_decision[0]}:
             raise RuntimeError(
                 "formal launch decision protocol does not match manifest jobs"
+            )
+        requested_job_ids = [str(job.get("job_id", "")) for job in gated_jobs]
+        if (
+            not requested_job_ids
+            or any(not job_id for job_id in requested_job_ids)
+            or len(requested_job_ids) != len(set(requested_job_ids))
+        ):
+            raise RuntimeError(
+                "formal launch requires a nonempty selection of unique job IDs"
+            )
+        unauthorized = sorted(set(requested_job_ids).difference(gate_decision[4]))
+        if unauthorized:
+            raise RuntimeError(
+                "formal job selection is outside authorized_job_ids: "
+                f"{unauthorized}"
             )
         if require_open and not gate_decision[1]:
             raise RuntimeError(
@@ -299,6 +337,7 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
         "training_stream_registry_path", "training_stream_registry_sha256",
         "training_epochs",
         "minimum_training_epochs", "training_rollout_steps",
+        "validation_rollout_steps",
         "physical_batch_size", "effective_batch_size",
         "training_trajectory_count", "customer_exposure_budget",
         "target_environments", "validation_index", "validation_views",
@@ -345,6 +384,7 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
         "training_epochs",
         "minimum_training_epochs",
         "training_rollout_steps",
+        "validation_rollout_steps",
         "physical_batch_size",
         "effective_batch_size",
         "training_trajectory_count",
@@ -726,6 +766,12 @@ def validate_completed_training_stream_contract(
 def expected_resolved_training_signature(
     job: Mapping[str, Any], context: Mapping[str, Any]
 ) -> dict[str, Any]:
+    validation_steps = int(
+        job.get(
+            "validation_rollout_steps",
+            validation_rollout_steps(int(job["training_rollout_steps"])),
+        )
+    )
     method_specific = None
     if job.get("method") == "terran":
         base = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))
@@ -783,11 +829,7 @@ def expected_resolved_training_signature(
                 "decode_mode": "sample" if raw_decode == "sampling" else "greedy",
                 "n_traj": int(job["validation_candidate_count"]),
                 "limit": int(job["validation_views"]),
-                "max_steps": (
-                    int(evaluation["eval_max_steps"])
-                    if evaluation.get("eval_max_steps") is not None
-                    else None
-                ),
+                "max_steps": validation_steps,
                 "batch_size": 1,
                 "num_batches": (
                     int(evaluation["eval_num_batches"])
@@ -801,6 +843,7 @@ def expected_resolved_training_signature(
                 "physical_batch_size": physical,
                 "effective_batch_size": effective,
                 "training_rollout_steps": rollout_steps,
+                "validation_rollout_steps": validation_steps,
                 "training_stream_contract_sha256": job[
                     "training_stream_contract_sha256"
                 ],
@@ -825,6 +868,7 @@ def expected_resolved_training_signature(
         training_epochs=job.get("training_epochs"),
         minimum_training_epochs=job.get("minimum_training_epochs"),
         training_rollout_steps=job.get("training_rollout_steps"),
+        validation_rollout_steps=validation_steps,
         physical_batch_size=job.get("physical_batch_size"),
         effective_batch_size=job.get("effective_batch_size"),
         samples_per_instance=job.get("training_trajectory_count"),
@@ -1306,6 +1350,12 @@ def output_dir(job: dict[str, Any], context: dict[str, Any]) -> Path:
 
 def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, resume: bool) -> list[str]:
     dataset = context["dataset"]
+    validation_steps = int(
+        job.get(
+            "validation_rollout_steps",
+            validation_rollout_steps(int(job["training_rollout_steps"])),
+        )
+    )
     if job["method"] == "terran":
         command = [
             sys.executable,
@@ -1337,6 +1387,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(job.get("post_minimum_validation_every_epochs", job.get("validation_every_epochs", job["training_epochs"]))),
             "--training-rollout-steps",
             str(job["training_rollout_steps"]),
+            "--validation-rollout-steps",
+            str(validation_steps),
             "--physical-batch-size",
             str(job["physical_batch_size"]),
             "--effective-batch-size",
@@ -1395,6 +1447,8 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             str(job.get("post_minimum_validation_every_epochs", job.get("validation_every_epochs", job["training_epochs"]))),
             "--training-rollout-steps",
             str(job["training_rollout_steps"]),
+            "--validation-rollout-steps",
+            str(validation_steps),
             "--physical-batch-size",
             str(job["physical_batch_size"]),
             "--effective-batch-size",

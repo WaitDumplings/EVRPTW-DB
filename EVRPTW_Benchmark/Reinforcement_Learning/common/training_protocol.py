@@ -73,6 +73,14 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--validation-candidates", type=int, default=1)
     parser.add_argument("--validation-seed", type=int)
+    parser.add_argument(
+        "--validation-rollout-steps",
+        type=int,
+        help=(
+            "Validation rollout cap. It must equal ceil(3/2 * "
+            "--training-rollout-steps)."
+        ),
+    )
     parser.add_argument("--final-validation-limit", type=int, default=0)
     parser.add_argument("--validation-every-passes", type=int, default=5)
     parser.add_argument("--validation-every-epochs", type=int)
@@ -156,6 +164,9 @@ def resolved_training_signature_from_args(args: Any) -> dict[str, Any]:
         "validation_decode_type": getattr(args, "validation_decode_type", None),
         "validation_candidates": getattr(args, "validation_candidates", None),
         "validation_seed": getattr(args, "validation_seed", None),
+        "validation_rollout_steps": getattr(
+            args, "validation_rollout_steps", None
+        ),
         "validation_every_epochs": getattr(args, "validation_every_epochs", None),
         "post_minimum_validation_every_epochs": getattr(
             args, "post_minimum_validation_every_epochs", None
@@ -187,6 +198,7 @@ def resolved_training_signature_from_args(args: Any) -> dict[str, Any]:
         "validation_limit",
         "validation_candidates",
         "validation_seed",
+        "validation_rollout_steps",
         "validation_every_epochs",
         "post_minimum_validation_every_epochs",
         "validation_checkpoints",
@@ -314,6 +326,35 @@ def require_training_rollout_steps(args: argparse.Namespace) -> int:
     if value <= 0:
         raise ValueError("training rollout steps must be positive")
     return value
+
+
+VALIDATION_ROLLOUT_STEPS_NUMERATOR = 3
+VALIDATION_ROLLOUT_STEPS_DENOMINATOR = 2
+
+
+def validation_rollout_steps(training_rollout_steps: int) -> int:
+    """Return ceil(1.5 * training steps) using exact integer arithmetic."""
+
+    training_steps = int(training_rollout_steps)
+    if training_steps <= 0:
+        raise ValueError("training rollout steps must be positive")
+    numerator = VALIDATION_ROLLOUT_STEPS_NUMERATOR * training_steps
+    denominator = VALIDATION_ROLLOUT_STEPS_DENOMINATOR
+    return (numerator + denominator - 1) // denominator
+
+
+def require_validation_rollout_steps(args: argparse.Namespace) -> int:
+    """Resolve and enforce the shared ceil(3/2) validation horizon."""
+
+    expected = validation_rollout_steps(require_training_rollout_steps(args))
+    configured = getattr(args, "validation_rollout_steps", None)
+    if configured is not None and int(configured) != expected:
+        raise ValueError(
+            "--validation-rollout-steps must equal ceil(3/2 * "
+            f"--training-rollout-steps): {configured} != {expected}"
+        )
+    setattr(args, "validation_rollout_steps", expected)
+    return expected
 
 
 def require_validation_decoding(args: argparse.Namespace) -> tuple[str, int]:

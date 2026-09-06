@@ -1,8 +1,12 @@
 {
   "schema": "drl_rq_formal_launch_gate_v1",
   "protocol_id": "drl_rq_protocol_frozen_v1",
-  "formal_launch_allowed": false,
-  "launch_policy": "reward_contract_v2_short_validation_pending_user_authorization",
+  "formal_launch_allowed": true,
+  "launch_policy": "reward_contract_v2_formal_user_authorized",
+  "authorized_job_ids": [
+    "full__G__Full-support__terran__Cus500__seed1234",
+    "full__G__Full-support__terran__Cus1000__seed1234"
+  ],
   "formal_launch_gates": {
     "G1": "PILOT_WAIVED_BY_USER",
     "G2": "IMPLEMENTED_UNIT_TESTED",
@@ -13,6 +17,6 @@
     "G7": "NOT_APPLICABLE_G_ONLY",
     "G8": "IMPLEMENTED_UNIT_TESTED"
   },
-  "note": "Pilot remains removed. Formal launch is fail-closed pending explicit user authorization. Opening requires the gate, runtime candidate, and frozen protocol to carry the same authorized policy and complete G1-G8 evidence.",
+  "note": "User authorized fresh formal training for TERRAN Cus500 and Cus1000 only. The exact authorized_job_ids allowlist is enforced across the gate, runtime candidate, and frozen protocol; all other DRL jobs remain fail-closed.",
   "file_hash_validation_performed": true
 }

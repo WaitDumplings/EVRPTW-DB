@@ -1,8 +1,11 @@
 protocol_id: drl_rq_protocol_frozen_v1
-status: reward_contract_v2_short_validation_active
-formal_launch_allowed: false
+status: reward_contract_v2_formal_terran_authorized
+formal_launch_allowed: true
 launch_mode: direct_full_after_user_authorization
-launch_policy: reward_contract_v2_short_validation_pending_user_authorization
+launch_policy: reward_contract_v2_formal_user_authorized
+authorized_job_ids:
+  - full__G__Full-support__terran__Cus500__seed1234
+  - full__G__Full-support__terran__Cus1000__seed1234
 runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
 supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
@@ -37,6 +40,16 @@ training_rollout_steps:
   Cus100: 120
   Cus500: 580
   Cus1000: 1200
+validation_rollout_step_limit:
+  relative_to: training_rollout_steps
+  numerator: 3
+  denominator: 2
+  rounding: ceiling
+validation_rollout_steps:
+  Cus50: 98
+  Cus100: 180
+  Cus500: 870
+  Cus1000: 1800
 
 research_questions:
   RQ1:

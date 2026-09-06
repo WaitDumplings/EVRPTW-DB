@@ -53,6 +53,7 @@ def _write_formal_gate(
     *,
     allowed: bool,
     protocol_id: str = "drl_rq_protocol_frozen_v1",
+    authorized_job_ids: list[str] | None = None,
 ) -> Path:
     statuses = {
         "G1": "PILOT_WAIVED_BY_USER",
@@ -69,6 +70,11 @@ def _write_formal_gate(
         if allowed
         else "reward_contract_v2_short_validation_pending_user_authorization"
     )
+    authorized = list(
+        authorized_job_ids
+        if authorized_job_ids is not None
+        else [_job()["job_id"]]
+    )
     registry = {
         "training_stream_registry_path": (
             "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
@@ -84,6 +90,7 @@ def _write_formal_gate(
                 "protocol_id": "drl_rq_protocol_frozen_v1",
                 "formal_launch_allowed": allowed,
                 "launch_policy": policy,
+                "authorized_job_ids": authorized,
                 "formal_launch_gates": statuses,
                 **registry,
             }
@@ -96,6 +103,7 @@ def _write_formal_gate(
                 "protocol_id": "drl_rq_protocol_frozen_v1",
                 "formal_launch_allowed": allowed,
                 "launch_policy": policy,
+                "authorized_job_ids": authorized,
                 "formal_launch_gates": {
                     key: {"status": value} for key, value in statuses.items()
                 },
@@ -112,6 +120,7 @@ def _write_formal_gate(
                 "protocol_id": protocol_id,
                 "formal_launch_allowed": allowed,
                 "launch_policy": policy,
+                "authorized_job_ids": authorized,
                 "formal_launch_gates": statuses,
             }
         ),
@@ -225,6 +234,56 @@ def test_consistent_explicitly_authorized_gate_can_open(tmp_path: Path) -> None:
     }
     RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=False)
     RUNTIME.validate_formal_launch_gates(tmp_path, [job], require_open=True)
+
+
+def test_formal_gate_allows_only_nonempty_subsets_of_authorized_job_ids(
+    tmp_path: Path,
+) -> None:
+    authorized_ids = ["formal-terran-cus500", "formal-terran-cus1000"]
+    gate = _write_formal_gate(
+        tmp_path,
+        allowed=True,
+        authorized_job_ids=authorized_ids,
+    )
+
+    def scoped_job(job_id: str) -> dict:
+        return {
+            **_job(job_id),
+            "protocol_id": "drl_rq_protocol_frozen_v1",
+            "formal_gate_file": gate.name,
+        }
+
+    first = scoped_job(authorized_ids[0])
+    second = scoped_job(authorized_ids[1])
+    RUNTIME.validate_formal_launch_gates(
+        tmp_path, [first], require_open=True
+    )
+    RUNTIME.validate_formal_launch_gates(
+        tmp_path, [first, second], require_open=True
+    )
+
+    with pytest.raises(RuntimeError, match="outside authorized_job_ids"):
+        RUNTIME.validate_formal_launch_gates(
+            tmp_path, [scoped_job("formal-am-cus500")], require_open=True
+        )
+
+
+def test_formal_gate_fails_closed_when_authorized_job_ids_disagree(
+    tmp_path: Path,
+) -> None:
+    gate_path = _write_formal_gate(tmp_path, allowed=True)
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["authorized_job_ids"].append("extra-job")
+    gate_path.write_text(json.dumps(gate), encoding="utf-8")
+    job = {
+        **_job(),
+        "protocol_id": "drl_rq_protocol_frozen_v1",
+        "formal_gate_file": gate_path.name,
+    }
+    with pytest.raises(RuntimeError, match="authorized_job_ids disagree"):
+        RUNTIME.validate_formal_launch_gates(
+            tmp_path, [job], require_open=False
+        )
 
 
 def test_consistent_open_boolean_without_authorized_policy_stays_closed(
@@ -589,6 +648,8 @@ def test_training_command_passes_frozen_rollout_budget_to_all_trainers(tmp_path:
         )
         index = command.index("--training-rollout-steps")
         assert command[index + 1] == "140"
+        validation_steps_index = command.index("--validation-rollout-steps")
+        assert command[validation_steps_index + 1] == "210"
         epoch_index = command.index("--training-epochs")
         assert command[epoch_index + 1] == "25"
         validation_index = command.index("--validation-every-epochs")

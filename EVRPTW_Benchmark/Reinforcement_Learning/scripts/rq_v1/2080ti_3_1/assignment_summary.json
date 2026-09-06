@@ -1,4 +1,5 @@
 {
+  "authorized_formal_job_ids": [],
   "formal_jobs": 0,
   "formal_launch_allowed": false,
   "gpu_count": 3,

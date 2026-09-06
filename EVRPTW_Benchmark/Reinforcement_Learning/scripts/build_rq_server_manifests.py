@@ -20,6 +20,11 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
     load_training_stream_contract,
     training_stream_contract_digest,
 )
+from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
+    VALIDATION_ROLLOUT_STEPS_DENOMINATOR,
+    VALIDATION_ROLLOUT_STEPS_NUMERATOR,
+    validation_rollout_steps,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +46,10 @@ CUS1000_PRIORITY_SCHEDULE = (
     ("evrptw_rl", 0),
     ("am_evrptw", 0),
 )
+TERRAN_FORMAL_SCHEDULE = (
+    ("Cus500", 0),
+    ("Cus1000", 1),
+)
 SERVERS = {
     "2080ti_4_1": ("2080ti", 4, "RTX 2080 Ti"),
     "2080ti_4_2": ("2080ti", 4, "RTX 2080 Ti"),
@@ -59,6 +68,24 @@ VALIDATION_INDEX = {
     "Cus500": "generation_plan/core/val/view_index.parquet",
     "Cus1000": "generation_plan/core/val/view_index.parquet",
 }
+
+
+def frozen_validation_rollout_steps(
+    cfg: Mapping[str, Any], training_steps: int
+) -> int:
+    contract = cfg.get("validation_rollout_step_limit")
+    expected_contract = {
+        "relative_to": "training_rollout_steps",
+        "numerator": VALIDATION_ROLLOUT_STEPS_NUMERATOR,
+        "denominator": VALIDATION_ROLLOUT_STEPS_DENOMINATOR,
+        "rounding": "ceiling",
+    }
+    if contract != expected_contract:
+        raise ValueError(
+            "runtime validation rollout-step contract mismatch: "
+            f"{contract!r} != {expected_contract!r}"
+        )
+    return validation_rollout_steps(training_steps)
 
 
 def load_training_stream_registry(cfg: Mapping[str, Any]) -> dict[str, Any]:
@@ -173,6 +200,7 @@ def job(
     marker_path = (
         f"{ARTIFACTS}/preparation_{cfg['runtime_budget_id']}_seeds_{seed_tag}.json"
     )
+    training_steps = int(cfg["rollout_steps"][scale])
     payload = {
         "schema": "drl_rq_job_manifest_v1",
         "protocol_id": "drl_rq_protocol_frozen_v1",
@@ -218,7 +246,10 @@ def job(
         ),
         "logical_environments_per_epoch": environments_per_epoch,
         "planned_logical_epochs": updates,
-        "training_rollout_steps": int(cfg["rollout_steps"][scale]),
+        "training_rollout_steps": training_steps,
+        "validation_rollout_steps": frozen_validation_rollout_steps(
+            cfg, training_steps
+        ),
         "optimizer_name": str(cfg["training_optimizer"]["name"]),
         "optimizer_weight_decay": float(
             cfg["training_optimizer"]["weight_decay"]
@@ -526,6 +557,52 @@ def build_a6000_cus1000_priority_queue(
     return priority
 
 
+def build_a6000_terran_formal_queue(
+    queues: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Place the two explicitly authorized TERRAN jobs on separate GPUs."""
+
+    source = (queues or build())["a6000_2_1"]
+    selected: dict[str, dict[str, Any]] = {}
+    for row in source:
+        if (
+            row["run_mode"] == "full"
+            and row["representation"] == "G"
+            and row["condition"] == "Full-support"
+            and row["method"] == "terran"
+            and int(row["seed"]) == 1234
+            and row["scale"] in {scale for scale, _slot in TERRAN_FORMAL_SCHEDULE}
+        ):
+            scale = str(row["scale"])
+            if scale in selected:
+                raise ValueError(f"duplicate authorized TERRAN job for {scale}")
+            selected[scale] = row
+
+    expected_scales = {scale for scale, _slot in TERRAN_FORMAL_SCHEDULE}
+    if set(selected) != expected_scales:
+        raise ValueError(
+            "TERRAN formal queue requires exactly one seed-1234 job for each "
+            f"authorized scale; found {sorted(selected)}"
+        )
+
+    rows: list[dict[str, Any]] = []
+    for scale, slot in TERRAN_FORMAL_SCHEDULE:
+        payload = dict(selected[scale])
+        payload["global_slot"] = slot
+        payload["queue_position"] = 0
+        rows.append(payload)
+
+    runtime = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    authorized = set(runtime.get("authorized_job_ids", ()))
+    actual = {str(row["job_id"]) for row in rows}
+    if actual != authorized:
+        raise ValueError(
+            "dedicated TERRAN queue must exactly match authorized_job_ids: "
+            f"queue={sorted(actual)}, authorized={sorted(authorized)}"
+        )
+    return rows
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build four frozen RQ training queues.")
     parser.add_argument("--output-root", type=Path, default=SCRIPT_ROOT)
@@ -533,6 +610,7 @@ def main() -> None:
     runtime_config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     formal_launch_allowed = bool(runtime_config["formal_launch_allowed"])
     launch_policy = str(runtime_config["launch_policy"])
+    authorized_job_ids = set(runtime_config["authorized_job_ids"])
     queues = build()
     for server, rows in queues.items():
         destination = args.output_root / server
@@ -548,7 +626,16 @@ def main() -> None:
             "gpu_count": SERVERS[server][1],
             "pilot_jobs": 0,
             "formal_jobs": sum(row["run_mode"] == "full" for row in rows),
-            "formal_launch_allowed": bool(rows) and formal_launch_allowed,
+            "formal_launch_allowed": bool(rows)
+            and formal_launch_allowed
+            and {str(row["job_id"]) for row in rows}.issubset(
+                authorized_job_ids
+            ),
+            "authorized_formal_job_ids": sorted(
+                authorized_job_ids.intersection(
+                    str(row["job_id"]) for row in rows
+                )
+            ),
             "launch_policy": (
                 launch_policy if rows else "blocked_no_calibrated_reward_scale"
             ),
@@ -570,7 +657,15 @@ def main() -> None:
         "gpu_count": 2,
         "pilot_jobs": 0,
         "formal_jobs": len(cus1000_priority),
-        "formal_launch_allowed": formal_launch_allowed,
+        "formal_launch_allowed": formal_launch_allowed
+        and {str(row["job_id"]) for row in cus1000_priority}.issubset(
+            authorized_job_ids
+        ),
+        "authorized_formal_job_ids": sorted(
+            authorized_job_ids.intersection(
+                str(row["job_id"]) for row in cus1000_priority
+            )
+        ),
         "launch_policy": launch_policy,
         "slot_queues": {
             "0": ["drl_ts", "evrptw_rl", "am_evrptw"],
@@ -579,6 +674,31 @@ def main() -> None:
     }
     (a6000_destination / "cus1000_assignment_summary.json").write_text(
         json.dumps(priority_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    terran_formal = build_a6000_terran_formal_queue(queues)
+    (a6000_destination / "terran_jobs.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in terran_formal),
+        encoding="utf-8",
+    )
+    terran_summary = {
+        "schema": "drl_rq_server_assignment_v1",
+        "server": "a6000_2_1",
+        "profile": "terran_formal",
+        "hardware": "a6000",
+        "gpu_count": 2,
+        "pilot_jobs": 0,
+        "formal_jobs": len(terran_formal),
+        "formal_launch_allowed": formal_launch_allowed,
+        "launch_policy": launch_policy,
+        "authorized_formal_job_ids": sorted(authorized_job_ids),
+        "slot_queues": {
+            "0": ["terran/Cus500"],
+            "1": ["terran/Cus1000"],
+        },
+    }
+    (a6000_destination / "terran_assignment_summary.json").write_text(
+        json.dumps(terran_summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     print(json.dumps({server: len(rows) for server, rows in queues.items()}, sort_keys=True))

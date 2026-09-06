@@ -12,7 +12,11 @@ from .stage2_data import make_envs
 from .objective import objective_from_args
 from .method_auxiliary import method_auxiliary_from_args
 from .reward_contract import reward_contract_from_args
-from .training_protocol import require_training_rollout_steps, require_validation_decoding
+from .training_protocol import (
+    require_training_rollout_steps,
+    require_validation_decoding,
+    require_validation_rollout_steps,
+)
 
 
 def _max_steps(envs: list[Any]) -> int:
@@ -40,6 +44,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..AM_EVRPTW.rollout import rollout
 
     training_rollout_steps = require_training_rollout_steps(args)
+    validation_rollout_steps = require_validation_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
     objective_config = objective_from_args(args)
@@ -108,6 +113,7 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             [instance],
             validation_decode_type,
             seed,
+            max_steps=validation_rollout_steps,
             candidate_count=validation_candidates,
         ).infos[0],
         legacy_batch_size=args.batch_size,
@@ -118,6 +124,7 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..EVRPTW_RL.rollout import rollout
 
     training_rollout_steps = require_training_rollout_steps(args)
+    validation_rollout_steps = require_validation_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
     objective_config = objective_from_args(args)
@@ -190,6 +197,7 @@ def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             [instance],
             validation_decode_type,
             seed,
+            max_steps=validation_rollout_steps,
             candidate_count=validation_candidates,
         ).infos[0],
         legacy_batch_size=args.batch_size,
@@ -210,6 +218,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     )
 
     training_rollout_steps = require_training_rollout_steps(args)
+    validation_rollout_steps = require_validation_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     reward_distance_scale_km = _training_reward_scale(args, pool)
     objective_config = objective_from_args(args)
@@ -381,6 +390,7 @@ def run_drl_ts(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
             False,
             validation_decode_type,
             seed,
+            max_steps=validation_rollout_steps,
             candidate_count=validation_candidates,
         ).infos[0],
         legacy_batch_size=args.batch_size,

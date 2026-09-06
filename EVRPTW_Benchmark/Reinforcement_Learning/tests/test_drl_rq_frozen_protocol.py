@@ -27,9 +27,9 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
     runtime = _runtime()
     gate_file = _formal_gate()
 
-    assert protocol["status"] == "reward_contract_v2_short_validation_active"
-    assert runtime["status"] == "reward_contract_v2_short_validation_active"
-    assert protocol["formal_launch_allowed"] is False
+    assert protocol["status"] == "reward_contract_v2_formal_terran_authorized"
+    assert runtime["status"] == "reward_contract_v2_formal_terran_authorized"
+    assert protocol["formal_launch_allowed"] is True
     assert (
         protocol["formal_launch_allowed"]
         == runtime["formal_launch_allowed"]
@@ -40,6 +40,16 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
         protocol["launch_policy"]
         == runtime["launch_policy"]
         == gate_file["launch_policy"]
+        == "reward_contract_v2_formal_user_authorized"
+    )
+    assert (
+        protocol["authorized_job_ids"]
+        == runtime["authorized_job_ids"]
+        == gate_file["authorized_job_ids"]
+        == [
+            "full__G__Full-support__terran__Cus500__seed1234",
+            "full__G__Full-support__terran__Cus1000__seed1234",
+        ]
     )
     assert (
         protocol["protocol_id"]
@@ -97,6 +107,21 @@ def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
         "Cus100": 120,
         "Cus500": 580,
         "Cus1000": 1200,
+    }
+    expected_limit = {
+        "relative_to": "training_rollout_steps",
+        "numerator": 3,
+        "denominator": 2,
+        "rounding": "ceiling",
+    }
+    assert protocol["validation_rollout_step_limit"] == runtime[
+        "validation_rollout_step_limit"
+    ] == expected_limit
+    assert protocol["validation_rollout_steps"] == {
+        "Cus50": 98,
+        "Cus100": 180,
+        "Cus500": 870,
+        "Cus1000": 1800,
     }
     assert questions["RQ1"]["same_scale"] == protocol["training_scales"]
     assert questions["RQ1"]["cross_scale_to_cus2000"] == [

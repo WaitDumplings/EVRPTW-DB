@@ -214,6 +214,8 @@ def test_formal_actor_baseline_and_validation_share_frozen_objective(
     pool = SimpleNamespace(reward_distance_scale_km=lambda _mode: 5.0, reward_scale_metadata={})
     runner(args, pool, object(), object())
     assert len(seen) == 5
+    assert [call["max_steps"] for call in seen[:4]] == [80] * 4
+    assert seen[-1]["max_steps"] == 120
 
 
 def test_reinforce_checkpoint_freezes_objective_and_rejects_changed_resume(tmp_path):

@@ -388,6 +388,23 @@ def resolved_terran_scientific_fields(
     eval_interval = int(evaluation.get("eval_interval", 0) or 0)
     eval_limit = _optional_int(evaluation.get("eval_limit"))
     eval_max_steps = _optional_int(evaluation.get("eval_max_steps"))
+    protocol_eval_max_steps = _optional_int(
+        protocol.get("validation_rollout_steps")
+    )
+    if (
+        protocol.get("protocol_id") == "drl_rq_protocol_frozen_v1"
+        and protocol_eval_max_steps is None
+    ):
+        raise ValueError(
+            "formal TERRAN protocol requires validation rollout steps"
+        )
+    if (
+        protocol_eval_max_steps is not None
+        and protocol_eval_max_steps != eval_max_steps
+    ):
+        raise ValueError(
+            "TERRAN protocol validation rollout steps disagree with evaluation"
+        )
     eval_num_batches = _optional_int(evaluation.get("eval_num_batches"))
     eval_batch_size = max(1, int(evaluation.get("eval_batch_size", 1)))
 
@@ -480,6 +497,7 @@ def resolved_terran_scientific_fields(
             "physical_batch_size": num_envs,
             "effective_batch_size": effective_batch,
             "training_rollout_steps": rollout_steps,
+            "validation_rollout_steps": eval_max_steps,
             "training_stream_contract_sha256": stream_sha,
             "minimum_training_epochs": minimum_epochs,
             "validation_every_epochs": validation_every,
@@ -527,6 +545,7 @@ def _resolved_terran_training_signature(
         training_epochs=int(training["epochs"]),
         minimum_training_epochs=protocol["minimum_training_epochs"],
         training_rollout_steps=int(training["rollout_steps"]),
+        validation_rollout_steps=evaluation["max_steps"],
         physical_batch_size=int(protocol["physical_batch_size"]),
         effective_batch_size=effective,
         n_traj=int(training["n_traj"]),

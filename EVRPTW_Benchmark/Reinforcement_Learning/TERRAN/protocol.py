@@ -20,6 +20,7 @@ from ..common.training_protocol import (
     require_registered_batches,
     require_training_rollout_steps,
     require_validation_decoding,
+    require_validation_rollout_steps,
     resolved_training_signature_digest,
     validation_epochs,
     validation_key,
@@ -191,6 +192,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     if effective % physical:
         raise ValueError("TERRAN requires an exact physical-batch divisor")
     training_rollout_steps = require_training_rollout_steps(args)
+    validation_rollout_steps = require_validation_rollout_steps(args)
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     validation_seed = int(
         getattr(args, "validation_seed", None)
@@ -337,6 +339,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
                 ),
                 "eval_limit": int(args.validation_limit),
                 "eval_n_traj": validation_candidates,
+                "eval_max_steps": validation_rollout_steps,
                 "eval_seed": validation_seed,
                 "eval_batch_size": 1,
                 "eval_decode_mode": (
@@ -364,6 +367,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "physical_batch_size": physical,
         "effective_batch_size": effective,
         "training_rollout_steps": training_rollout_steps,
+        "validation_rollout_steps": validation_rollout_steps,
         "validation_every_epochs": (
             validation_every_epochs if fixed_epochs else None
         ),
@@ -453,6 +457,7 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
     if meta is None:
         return
     validation_decode_type, validation_candidates = require_validation_decoding(args)
+    validation_rollout_steps = require_validation_rollout_steps(args)
     validation_seed = int(
         getattr(args, "validation_seed", None)
         if getattr(args, "validation_seed", None) is not None
@@ -521,6 +526,8 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
                 "1",
                 "--limit",
                 str(args.validation_limit),
+                "--max-steps",
+                str(validation_rollout_steps),
                 "--seed",
                 str(args.seed + data_pass * 100_000),
                 "--device",
@@ -574,6 +581,8 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             "1",
             "--limit",
             str(final_validation_limit),
+            "--max-steps",
+            str(validation_rollout_steps),
             "--seed",
             str(args.seed + 999_000_000),
             "--device",

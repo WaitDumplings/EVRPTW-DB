@@ -1,9 +1,12 @@
 schema: drl_rq_runtime_candidates_v2
-status: reward_contract_v2_short_validation_active
+status: reward_contract_v2_formal_terran_authorized
 protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
-formal_launch_allowed: false
-launch_policy: reward_contract_v2_short_validation_pending_user_authorization
+formal_launch_allowed: true
+launch_policy: reward_contract_v2_formal_user_authorized
+authorized_job_ids:
+  - full__G__Full-support__terran__Cus500__seed1234
+  - full__G__Full-support__terran__Cus1000__seed1234
 formal_launch_gates:
   G1: PILOT_WAIVED_BY_USER
   G2: IMPLEMENTED_UNIT_TESTED
@@ -57,12 +60,18 @@ training_trajectory_count_by_method:
 # DRL-TS retain one, while TERRAN retains its native 100-trajectory training.
 training_trajectory_count_by_method_scale: {}
 
-# TERRAN Cus1000 produces two base-environment groups per logical epoch at the
-# registered batch of 2. Process them as one PPO minibatch and evaluate up to
-# 736 recorded steps in one chunk. Keeping this override here (rather
-# than in TERRAN's shared base config) leaves every other scale unchanged.
+# Current-code RTX 6000 Ada calibration for TERRAN Cus500 at batch=64 and
+# n_traj=100 measured 40,932 MiB (39.97 GiB) with one minibatch and a 36-step
+# PPO chunk; chunk=42 measured 45.25 GiB and is intentionally rejected. TERRAN
+# Cus1000 produces two base-environment groups per logical epoch at batch=2;
+# process them as one PPO minibatch and evaluate up to 736 recorded steps in
+# one chunk. Keep scale-specific overrides here instead of changing the shared
+# base config.
 training_overrides_by_method_scale:
   terran:
+    Cus500:
+      num_minibatches: 1
+      ppo_step_chunk_size: 36
     Cus1000:
       num_minibatches: 1
       ppo_step_chunk_size: 736
@@ -70,6 +79,14 @@ training_overrides_by_method_scale:
 seeds: [1234]
 enabled_scales: [Cus500, Cus1000]
 rollout_steps: {Cus50: 65, Cus100: 120, Cus500: 580, Cus1000: 1200}
+# Validation is allowed 50% more decisions than training. Use exact integer
+# arithmetic and round upward, so odd training horizons are never shortened:
+# ceil(training_rollout_steps * 3 / 2).
+validation_rollout_step_limit:
+  relative_to: training_rollout_steps
+  numerator: 3
+  denominator: 2
+  rounding: ceiling
 
 # Only the two calibrated large graph scales are launchable in this revision.
 # The empty 2080 Ti assignment is deliberate until Cus50/Cus100 receive their

@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-chunk-size", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--max-steps", type=int)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -55,6 +56,8 @@ def main() -> None:
     args = parse_args()
     if args.decode_mode == "greedy" and args.candidates != 1:
         raise ValueError("greedy evaluation has exactly one candidate")
+    if args.max_steps is not None and args.max_steps <= 0:
+        raise ValueError("--max-steps must be positive")
     checkpoint = torch.load(
         args.checkpoint,
         map_location=args.device,
@@ -108,7 +111,11 @@ def main() -> None:
                     agent,
                     envs,
                     decode_mode=args.decode_mode,
-                    max_steps=max(env.unwrapped.max_steps for env in envs),
+                    max_steps=(
+                        int(args.max_steps)
+                        if args.max_steps is not None
+                        else max(env.unwrapped.max_steps for env in envs)
+                    ),
                     device=args.device,
                     seed=candidate_seed,
                     include_routes=True,

@@ -4,16 +4,35 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_trainers
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
     parse_float_checkpoints,
     parse_int_checkpoints,
+    require_validation_rollout_steps,
+    validation_rollout_steps,
 )
 
 
 def test_checkpoint_schedule_parsers_are_sorted_and_unique() -> None:
     assert parse_int_checkpoints("500,100,500") == (100, 500)
     assert parse_float_checkpoints("24,6,12,6") == (6.0, 12.0, 24.0)
+
+
+def test_validation_rollout_steps_are_exact_ceiling_three_halves() -> None:
+    assert validation_rollout_steps(580) == 870
+    assert validation_rollout_steps(1200) == 1800
+    assert validation_rollout_steps(65) == 98
+
+
+def test_validation_rollout_steps_reject_a_mismatched_explicit_cap() -> None:
+    args = SimpleNamespace(
+        training_rollout_steps=65,
+        validation_rollout_steps=97,
+    )
+    with pytest.raises(ValueError, match=r"ceil\(3/2"):
+        require_validation_rollout_steps(args)
 
 
 def test_registered_snapshot_crossing_is_idempotent(tmp_path: Path, monkeypatch) -> None:

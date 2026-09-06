@@ -267,6 +267,7 @@ def _terran_scientific_signature_config() -> dict:
             "eval_decode_mode": "sample",
             "eval_n_traj": 5,
             "eval_limit": 7,
+            "eval_max_steps": 12,
             "eval_interval": 5,
             "eval_batch_size": 1,
         },
@@ -276,6 +277,7 @@ def _terran_scientific_signature_config() -> dict:
             "effective_batch_size": 8,
             "logical_environments_per_epoch": 8,
             "training_rollout_steps": 8,
+            "validation_rollout_steps": 12,
             "validation_every_epochs": 5,
             "minimum_training_epochs": 5,
             "post_minimum_validation_every_epochs": 5,
@@ -331,7 +333,7 @@ def test_terran_resolved_training_signature_freezes_method_specific_fields() -> 
         "decode_mode": "sample",
         "n_traj": 5,
         "limit": 7,
-        "max_steps": None,
+        "max_steps": 12,
         "batch_size": 1,
         "num_batches": None,
         "interval": 5,
@@ -353,6 +355,7 @@ def test_terran_resolved_training_signature_freezes_method_specific_fields() -> 
         "eval_decode",
         "eval_n_traj",
         "eval_limit",
+        "eval_max_steps",
         "eval_schedule",
         "validation_epochs",
         "early_stop",
@@ -391,6 +394,9 @@ def test_terran_resume_rejects_resolved_scientific_signature_drift(
         current["protocol"]["validation_candidates"] = 6
     elif changed == "eval_limit":
         current["evaluation"]["eval_limit"] = 8
+    elif changed == "eval_max_steps":
+        current["evaluation"]["eval_max_steps"] = 13
+        current["protocol"]["validation_rollout_steps"] = 13
     elif changed == "eval_schedule":
         current["evaluation"]["eval_interval"] = 2
         current["protocol"]["validation_every_epochs"] = 2
@@ -1083,6 +1089,14 @@ def test_fixed_epoch_protocol_does_not_expand_to_a_full_data_pass(
         validation_checkpoints=12,
         early_stop_patience_validations=3,
         early_stop_start_epoch=100,
+        validation_dataset_path=Path("val.parquet"),
+        validation_family_root=Path("families"),
+        validation_limit=5,
+        validation_decode_type="sampling",
+        validation_candidates=100,
+        validation_seed=77,
+        training_representation="G",
+        euclidean_manifest=None,
         pilot_mode=False,
     )
     configured, meta = terran_protocol.configure_protocol(args, {})
@@ -1096,6 +1110,8 @@ def test_fixed_epoch_protocol_does_not_expand_to_a_full_data_pass(
     assert configured["protocol"]["budget_mode"] == "fixed_logical_epochs"
     assert configured["protocol"]["epochs_per_pass"] == 200
     assert configured["protocol"]["logical_environments_per_epoch"] == 2
+    assert configured["protocol"]["validation_rollout_steps"] == 210
+    assert configured["evaluation"]["eval_max_steps"] == 210
     assert configured["training"]["num_envs_per_gpu"] == 1
     assert configured["training"]["logical_microbatches_per_epoch"] == 2
     assert configured["protocol"]["views_per_pass"] == 5_000
@@ -1449,6 +1465,7 @@ def test_terran_finalizer_runs_full_audit_without_reselecting(
 
     assert len(observed_commands) == 1
     assert observed_commands[0][observed_commands[0].index("--limit") + 1] == "2"
+    assert observed_commands[0][observed_commands[0].index("--max-steps") + 1] == "1800"
     audit = json.loads((output / "validation_final_audit.json").read_text())
     assert audit["instances"] == 2
     assert audit["selection_logical_epoch"] == 75
@@ -1511,3 +1528,4 @@ def test_protocol_resume_carries_exact_optimizer_step_count(
     assert configured["data"]["stage2_completed_samples"] == 100
     assert configured["training"]["rollout_steps"] == 140
     assert configured["protocol"]["training_rollout_steps"] == 140
+    assert configured["protocol"]["validation_rollout_steps"] == 210

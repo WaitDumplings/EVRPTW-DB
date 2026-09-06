@@ -72,6 +72,21 @@ def test_server_env_preserves_priority_manifest_and_scale_overrides() -> None:
     assert output == [str(custom_manifest), "Cus1000"]
 
 
+def test_terran_wrappers_pin_the_dedicated_manifest_and_method_filter() -> None:
+    server = SCRIPT_ROOT / "a6000_2_1"
+    for name, mode in (
+        ("terran_full.sh", "full"),
+        ("terran_resume.sh", "resume"),
+        ("terran_status.sh", "status"),
+    ):
+        wrapper = server / name
+        source = wrapper.read_text(encoding="utf-8")
+        assert os.access(wrapper, os.X_OK)
+        assert 'DRL_MANIFEST="$SERVER_SCRIPT_DIR/terran_jobs.jsonl"' in source
+        assert 'DRL_SCALES="Cus500,Cus1000"' in source
+        assert f" {mode} --methods terran" in source
+
+
 def test_launcher_blocks_other_mode_but_ignores_stale_pid(tmp_path: Path) -> None:
     environment, log_dir = _launcher_test_environment(tmp_path)
     log_dir.mkdir(parents=True)

@@ -13,6 +13,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests i
     SCRIPT_ROOT,
     build,
     build_a6000_cus1000_priority_queue,
+    build_a6000_terran_formal_queue,
 )
 
 
@@ -68,7 +69,7 @@ def test_shared_stream_is_method_independent_within_condition_scale_seed() -> No
     )
 
 
-def test_checked_in_formal_decision_is_three_way_consistent_and_closed() -> None:
+def test_checked_in_formal_decision_is_three_way_consistent_and_scoped() -> None:
     gate = json.loads(
         (MANIFESTS.ROOT.parents[1] / MANIFESTS.GATE).read_text(encoding="utf-8")
     )
@@ -92,8 +93,17 @@ def test_checked_in_formal_decision_is_three_way_consistent_and_closed() -> None
         )
 
     assert decision(gate) == decision(runtime) == decision(protocol)
-    assert gate["formal_launch_allowed"] is False
-    assert "pending_user_authorization" in gate["launch_policy"]
+    assert (
+        gate["authorized_job_ids"]
+        == runtime["authorized_job_ids"]
+        == protocol["authorized_job_ids"]
+        == [
+            "full__G__Full-support__terran__Cus500__seed1234",
+            "full__G__Full-support__terran__Cus1000__seed1234",
+        ]
+    )
+    assert gate["formal_launch_allowed"] is True
+    assert gate["launch_policy"] == "reward_contract_v2_formal_user_authorized"
     assert set(gate["formal_launch_gates"]) == {
         f"G{index}" for index in range(1, 9)
     }
@@ -322,11 +332,16 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
 
 
 def test_scale_rollout_limits_match_current_protocol() -> None:
-    expected = {"Cus500": 580, "Cus1000": 1200}
+    expected = {
+        "Cus500": (580, 870),
+        "Cus1000": (1200, 1800),
+    }
     rows = [row for queue in build().values() for row in queue]
     assert rows
     for row in rows:
-        assert row["training_rollout_steps"] == expected[row["scale"]]
+        training_steps, validation_steps = expected[row["scale"]]
+        assert row["training_rollout_steps"] == training_steps
+        assert row["validation_rollout_steps"] == validation_steps
 
 
 def test_2080ti_jobs_are_blocked_until_small_scales_are_calibrated() -> None:
@@ -353,27 +368,20 @@ def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
         assert row["validation_views"] == 500
 
 
-def test_only_terran_cus1000_has_formal_ppo_overrides() -> None:
+def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     rows = [row for queue in build().values() for row in queue]
     overridden = [
         row
         for row in rows
         if "num_minibatches" in row or "ppo_step_chunk_size" in row
     ]
-    assert overridden
+    assert len(overridden) == 2
     assert all(row["method"] == "terran" for row in overridden)
-    assert all(row["scale"] == "Cus1000" for row in overridden)
     assert all(row["num_minibatches"] == 1 for row in overridden)
-    assert all(row["ppo_step_chunk_size"] == 736 for row in overridden)
-
-    terran_cus500 = [
-        row
-        for row in rows
-        if row["method"] == "terran" and row["scale"] == "Cus500"
-    ]
-    assert terran_cus500
-    assert all("num_minibatches" not in row for row in terran_cus500)
-    assert all("ppo_step_chunk_size" not in row for row in terran_cus500)
+    assert {row["scale"]: row["ppo_step_chunk_size"] for row in overridden} == {
+        "Cus500": 36,
+        "Cus1000": 736,
+    }
 
     priority_terran = [
         row
@@ -383,6 +391,14 @@ def test_only_terran_cus1000_has_formal_ppo_overrides() -> None:
     assert len(priority_terran) == 1
     assert priority_terran[0]["num_minibatches"] == 1
     assert priority_terran[0]["ppo_step_chunk_size"] == 736
+
+    dedicated = {
+        row["scale"]: row for row in build_a6000_terran_formal_queue()
+    }
+    assert dedicated["Cus500"]["num_minibatches"] == 1
+    assert dedicated["Cus500"]["ppo_step_chunk_size"] == 36
+    assert dedicated["Cus1000"]["num_minibatches"] == 1
+    assert dedicated["Cus1000"]["ppo_step_chunk_size"] == 736
 
 
 def test_a6000_cus1000_priority_queue_uses_approved_two_gpu_order() -> None:
@@ -428,6 +444,60 @@ def test_checked_in_a6000_cus1000_priority_manifest_matches_builder() -> None:
     assert checked_in == build_a6000_cus1000_priority_queue()
 
 
+def test_a6000_terran_formal_queue_uses_both_gpus_and_exact_authorized_scope() -> None:
+    canonical = build()["a6000_2_1"]
+    rows = build_a6000_terran_formal_queue()
+    assert [
+        (row["method"], row["scale"], row["global_slot"], row["queue_position"])
+        for row in rows
+    ] == [
+        ("terran", "Cus500", 0, 0),
+        ("terran", "Cus1000", 1, 0),
+    ]
+    runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
+    assert {row["job_id"] for row in rows} == set(runtime["authorized_job_ids"])
+
+    canonical_by_id = {row["job_id"]: row for row in canonical}
+    for row in rows:
+        scientific = {
+            key: value
+            for key, value in row.items()
+            if key not in {"global_slot", "queue_position"}
+        }
+        canonical_scientific = {
+            key: value
+            for key, value in canonical_by_id[row["job_id"]].items()
+            if key not in {"global_slot", "queue_position"}
+        }
+        assert scientific == canonical_scientific
+
+
+def test_checked_in_a6000_terran_formal_manifest_matches_builder() -> None:
+    manifest = SCRIPT_ROOT / "a6000_2_1" / "terran_jobs.jsonl"
+    checked_in = [
+        json.loads(line)
+        for line in manifest.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert checked_in == build_a6000_terran_formal_queue()
+    summary = json.loads(
+        (SCRIPT_ROOT / "a6000_2_1" / "terran_assignment_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
+    assert summary["profile"] == "terran_formal"
+    assert summary["formal_jobs"] == 2
+    assert summary["formal_launch_allowed"] is runtime["formal_launch_allowed"]
+    assert summary["authorized_formal_job_ids"] == sorted(
+        runtime["authorized_job_ids"]
+    )
+    assert summary["slot_queues"] == {
+        "0": ["terran/Cus500"],
+        "1": ["terran/Cus1000"],
+    }
+
+
 def test_checked_in_server_manifests_match_builder() -> None:
     for server, expected in build().items():
         manifest = SCRIPT_ROOT / server / "jobs.jsonl"
@@ -449,7 +519,16 @@ def test_checked_in_assignment_summaries_mark_empty_2080_queues_blocked() -> Non
         )
         assert summary["formal_jobs"] == len(rows)
         assert summary["formal_launch_allowed"] is (
-            bool(rows) and bool(runtime["formal_launch_allowed"])
+            bool(rows)
+            and bool(runtime["formal_launch_allowed"])
+            and {row["job_id"] for row in rows}.issubset(
+                set(runtime["authorized_job_ids"])
+            )
+        )
+        assert summary["authorized_formal_job_ids"] == sorted(
+            set(runtime["authorized_job_ids"]).intersection(
+                row["job_id"] for row in rows
+            )
         )
         assert summary["launch_policy"] == (
             runtime["launch_policy"]
