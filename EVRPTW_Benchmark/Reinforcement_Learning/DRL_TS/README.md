@@ -20,7 +20,12 @@ station power, normalized physical units, and independent verification.
 
 The paper permits repeated station visits but masks station selection directly
 from the depot or another station. Both training stages and evaluation enforce
-that rule; there is no charging-station visit penalty.
+that source-state rule; there is no charging-station visit penalty. Hard-stage
+FFP is configured with `allow_consecutive_station_actions=False`, so its return
+witness matches the paper mask: direct depot, or at most
+`customer -> one station -> depot`. It cannot admit a customer on the strength
+of a multi-station return path whose second charging action the paper mask
+would subsequently remove. The shared/TERRAN default remains `True`.
 
 See [ADAPTATION.md](ADAPTATION.md) for the equation-level correspondence and
 explicit deviations, and

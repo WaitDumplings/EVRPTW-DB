@@ -15,6 +15,14 @@ class DRLTSHardConstraintEnv(EVRPTWVectorEnvFast):
     global one-visit restriction.
     """
 
+    def __init__(self, *args, **kwargs) -> None:
+        # The base FFP must use the same station-transition policy as the
+        # paper mask below. Otherwise it can admit a customer using a
+        # customer -> CS -> CS -> depot witness and this subclass will remove
+        # the second CS action after the first station is reached.
+        kwargs["allow_consecutive_station_actions"] = False
+        super().__init__(*args, **kwargs)
+
     def _compute_action_mask(self) -> np.ndarray:
         mask = super()._compute_action_mask()
         for trajectory in range(self.n_traj):

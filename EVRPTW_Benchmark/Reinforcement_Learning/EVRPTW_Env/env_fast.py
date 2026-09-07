@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import numpy as np
 
 from .env import EVRPTWVectorEnv, Transition
-from .mask_jit import NUMBA_AVAILABLE, compute_action_mask_jit
+from .mask_jit import (
+    NUMBA_AVAILABLE,
+    compute_action_mask_jit,
+    refresh_route_return_times_jit,
+)
 
 
 class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
@@ -17,7 +20,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
     semantics while removing repeated work that dominates larger Cus/CS settings:
 
     - cache the previous action mask and reuse it to validate the next action;
-    - precompute stop-node shortest return times to depot once per instance;
+    - compute route-local station return witnesses inside the mask kernel;
     - cache static observation arrays that do not change during a rollout;
     - optionally compute action masks through a numba JIT array kernel;
     - optionally return light training info without route reconstruction.
@@ -29,17 +32,21 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
         self.info_level = info_level
         self.use_jit_mask = bool(use_jit_mask and NUMBA_AVAILABLE)
         self._current_action_mask: np.ndarray | None = None
-        self._stop_to_depot_time_s: np.ndarray | None = None
+        self._route_return_time_cache: np.ndarray | None = None
+        self._route_return_station_state_cache: np.ndarray | None = None
         self._static_obs_cache: dict[str, np.ndarray] | None = None
         super().__init__(*args, **kwargs)
 
     def set_instance(self, instance):
         super().set_instance(instance)
-        self._precompute_stop_return_times()
         self._build_static_observation_cache()
         self._current_action_mask = None
+        self._route_return_time_cache = None
+        self._route_return_station_state_cache = None
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
+        self._route_return_time_cache = None
+        self._route_return_station_state_cache = None
         obs, info = super().reset(seed=seed, options=options)
         self._current_action_mask = np.asarray(obs["action_mask"], dtype=bool).copy()
         return obs, info
@@ -87,20 +94,10 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
         info = self._make_info(action_mask)
         return obs, reward, self.terminated.copy(), self.truncated.copy(), info
 
-    def _precompute_stop_return_times(self) -> None:
-        out = np.full(self.num_nodes, math.inf, dtype=np.float64)
-        for node in self.stop_nodes:
-            if int(node) == 0:
-                out[int(node)] = 0.0
-                continue
-            value = super()._shortest_stop_time(int(node), 0)
-            if value is not None:
-                out[int(node)] = float(value)
-        self._stop_to_depot_time_s = out
-
     def _compute_action_mask(self) -> np.ndarray:
-        if not self.use_jit_mask or self._stop_to_depot_time_s is None:
+        if not self.use_jit_mask:
             return super()._compute_action_mask()
+        route_return_time_s = self._cached_route_return_times()
         return compute_action_mask_jit(
             n_traj=self.n_traj,
             num_nodes=self.num_nodes,
@@ -109,6 +106,7 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             last=self.last,
             visited=self.visited,
             cs_visited_current_route=self.cs_visited_current_route,
+            route_return_time_s=route_return_time_s,
             terminated=self.terminated,
             truncated=self.truncated,
             served_customers=self.served_customers,
@@ -121,7 +119,6 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             tw_s=self.tw_s,
             travel_time_s=self.travel_time_s,
             energy_kwh=self.energy_kwh,
-            stop_to_depot_time_s=self._stop_to_depot_time_s,
             battery_capacity_kwh=self.battery_capacity_kwh,
             cargo_capacity_cm3=self.cargo_capacity_cm3,
             full_charge_time_s=self.full_charge_time_s,
@@ -130,7 +127,52 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             working_end_s=self.working_end_s,
             station_power_full=self.charging_mode == "station_power_full",
             legacy_fixed_full=self.charging_mode == "legacy_fixed_full",
+            allow_consecutive_station_actions=(
+                self.allow_consecutive_station_actions
+            ),
         )
+
+    def _cached_route_return_times(self) -> np.ndarray:
+        expected_shape = (self.n_traj, self.num_nodes)
+        if (
+            self._route_return_time_cache is None
+            or self._route_return_time_cache.shape != expected_shape
+            or self._route_return_station_state_cache is None
+            or self._route_return_station_state_cache.shape != expected_shape
+        ):
+            self._route_return_time_cache = np.full(
+                expected_shape, np.inf, dtype=np.float64
+            )
+            self._route_return_station_state_cache = np.logical_not(
+                self.cs_visited_current_route
+            )
+
+        station_state = self._route_return_station_state_cache
+        return_time = self._route_return_time_cache
+        dirty = np.any(
+            station_state != self.cs_visited_current_route, axis=1
+        ) & (~self.terminated) & (~self.truncated)
+        if np.any(dirty):
+            refresh_route_return_times_jit(
+                route_return_time_s=return_time,
+                dirty_trajectories=dirty,
+                station_start=self.station_start,
+                num_nodes=self.num_nodes,
+                cs_visited_current_route=self.cs_visited_current_route,
+                travel_time_s=self.travel_time_s,
+                energy_kwh=self.energy_kwh,
+                battery_capacity_kwh=self.battery_capacity_kwh,
+                full_charge_time_s=self.full_charge_time_s,
+                charging_power_kw=self.charging_power_kw,
+                charging_power_derating_factor=self.charging_power_derating_factor,
+                station_power_full=self.charging_mode == "station_power_full",
+                legacy_fixed_full=self.charging_mode == "legacy_fixed_full",
+                allow_consecutive_station_actions=(
+                    self.allow_consecutive_station_actions
+                ),
+            )
+            station_state[dirty] = self.cs_visited_current_route[dirty]
+        return return_time
 
     def _build_static_observation_cache(self) -> None:
         coords = self._normalized_coords().astype(np.float32)
@@ -149,31 +191,6 @@ class EVRPTWVectorEnvFast(EVRPTWVectorEnv):
             "battery_capacity": np.array([1.0], dtype=np.float32),
             "loading_capacity": np.array([1.0], dtype=np.float32),
         }
-
-    def _can_return_to_depot(self, start: int, current_time_s: float, battery_used_kwh: float) -> bool:
-        if start == 0:
-            return True
-        if battery_used_kwh + self.energy_kwh[start, 0] <= self.battery_capacity_kwh + 1e-9:
-            return current_time_s + self.travel_time_s[start, 0] <= self.working_end_s + 1e-9
-        stop_to_depot = self._stop_to_depot_time_s
-        for first_station in self.station_nodes:
-            first = int(first_station)
-            battery_at_first = battery_used_kwh + self.energy_kwh[start, first]
-            if battery_at_first > self.battery_capacity_kwh + 1e-9:
-                continue
-            time_at_first = current_time_s + self.travel_time_s[start, first]
-            depart_first = time_at_first + self._charge_time_s(battery_at_first, first)
-            if stop_to_depot is None:
-                stop_plan = super()._shortest_stop_time(first, 0)
-                if stop_plan is None:
-                    continue
-            else:
-                stop_plan = float(stop_to_depot[first])
-                if not np.isfinite(stop_plan):
-                    continue
-            if depart_first + stop_plan <= self.working_end_s + 1e-9:
-                return True
-        return False
 
     def _make_observation(self) -> dict[str, np.ndarray]:
         action_mask = self._compute_action_mask()

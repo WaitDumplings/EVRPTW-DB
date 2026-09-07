@@ -48,6 +48,11 @@ The paper's additional mask remains active: `depot -> station` and consecutive
 `station -> station` actions are blocked because the vehicle is already full.
 `DRLTSSoftConstraintEnv` and `DRLTSHardConstraintEnv` combine that rule with the
 shared route-local station mask. No invented CS reward is used.
+Hard-stage FFP sets `allow_consecutive_station_actions=False` before computing
+the shared mask. Its safe-return witness is therefore limited to a direct
+depot leg or `customer -> one station -> depot`; it never relies on a second
+station action that the paper mask would remove. Python and JIT paths share
+this policy input.
 
 ## Benchmark adaptations
 

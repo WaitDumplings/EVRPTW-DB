@@ -147,6 +147,19 @@ written into both `train_log.csv` and `eval_log.csv`:
 - `eval_feasible_rate`
 - `eval_avg_runtime_s`
 
+FFP outcome monitoring partitions every candidate trajectory into exactly one
+of success, rollout-budget exhaustion, or non-horizon infeasibility. The last
+category is defined as an unsuccessful trajectory that did not hit either the
+registered TERRAN rollout horizon or the shared environment step limit.
+`train_log.csv` records `successful_trajectory_count/rate`,
+`rollout_budget_exhausted_count/rate`, and
+`non_horizon_infeasible_count/rate/reason_counts`. Validation additionally
+records the same candidate-level partition and the number/rate of instances
+for which every candidate ended in non-horizon infeasibility. These are mask
+health diagnostics: `candidate_success` means environment-level successful
+termination, not independent-verifier acceptance. The independently verified
+feasible rate remains the formal solution metric.
+
 ## Example
 
 ```bash

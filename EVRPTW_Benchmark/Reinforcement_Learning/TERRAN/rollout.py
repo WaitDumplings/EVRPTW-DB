@@ -18,6 +18,7 @@ from evrptw_core.schema import merge_route_sequences
 
 from ..common.route_info import finalize_route_infos
 from ..common.objective import resolve_objective
+from ..common.reward_contract import classify_rollout_failure_reasons
 from ..common.training_diagnostics import summarize_values
 from .models.attention_model_wrapper import (
     DYNAMIC_OBSERVATION_KEYS,
@@ -123,6 +124,150 @@ class RolloutBatch:
     trajectory_steps: torch.Tensor
     rollout_budget_exhausted: torch.Tensor
     reward_diagnostics: dict[str, float]
+
+
+def summarize_rollout_outcomes(
+    infos: Sequence[dict[str, Any]],
+    rollout_budget_exhausted: np.ndarray | torch.Tensor | None = None,
+) -> dict[str, Any]:
+    """Count mutually exclusive trajectory outcomes for FFP monitoring.
+
+    ``non_horizon_infeasible`` has one deliberately narrow definition:
+    ``(~success) & (~rollout_budget_exhausted)``. In particular, a rollout
+    that merely reaches the caller's step budget is not reported as an FFP
+    dead end. The optional mask is authoritative; the persisted info flag and
+    terminal-reason names are backward-compatible fallbacks for callers that
+    do not retain the rollout tensor.
+    """
+
+    explicit = None
+    if rollout_budget_exhausted is not None:
+        if isinstance(rollout_budget_exhausted, torch.Tensor):
+            explicit = rollout_budget_exhausted.detach().cpu().numpy()
+        else:
+            explicit = np.asarray(rollout_budget_exhausted)
+        explicit = np.asarray(explicit, dtype=bool)
+        if explicit.ndim == 1 and len(infos) == 1:
+            explicit = explicit.reshape(1, -1)
+        if explicit.ndim != 2 or explicit.shape[0] != len(infos):
+            raise ValueError(
+                "rollout_budget_exhausted must have shape (num_envs, n_traj)"
+            )
+
+    trajectory_count = 0
+    success_count = 0
+    budget_count = 0
+    non_horizon_count = 0
+    reason_counts: dict[str, int] = {}
+    for row_index, info in enumerate(infos):
+        success = np.asarray(info.get("success", []), dtype=bool).reshape(-1)
+        count = int(success.size)
+        if not count:
+            continue
+        reasons = np.asarray(
+            info.get("failure_reason", np.full(count, "terminal_failure")),
+            dtype=object,
+        ).reshape(-1)
+        if reasons.size != count:
+            raise ValueError("failure_reason and success trajectory counts disagree")
+
+        if explicit is not None:
+            budget = np.asarray(explicit[row_index], dtype=bool).reshape(-1)
+            if budget.size != count:
+                raise ValueError(
+                    "rollout_budget_exhausted and success trajectory counts disagree"
+                )
+        elif "rollout_budget_exhausted" in info:
+            budget = np.asarray(
+                info["rollout_budget_exhausted"], dtype=bool
+            ).reshape(-1)
+            if budget.size != count:
+                raise ValueError(
+                    "rollout_budget_exhausted and success trajectory counts disagree"
+                )
+        else:
+            # Legacy final infos did not persist the boolean horizon mask.
+            budget = np.asarray(
+                [
+                    str(value) == "environment_step_limit"
+                    or str(value).startswith("rollout_budget_exhausted")
+                    for value in reasons
+                ],
+                dtype=bool,
+            )
+
+        # A successfully completed trajectory is never a failed horizon case,
+        # even if a malformed legacy info record happens to set both flags.
+        budget_failure = (~success) & budget
+        non_horizon = (~success) & (~budget)
+        for value in reasons[non_horizon]:
+            reason = str(value)
+            if reason in {"", "None", "in_progress", "success"}:
+                reason = "terminal_failure"
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+        trajectory_count += count
+        success_count += int(success.sum())
+        budget_count += int(budget_failure.sum())
+        non_horizon_count += int(non_horizon.sum())
+
+    denominator = max(trajectory_count, 1)
+    if trajectory_count != success_count + budget_count + non_horizon_count:
+        raise RuntimeError("trajectory outcome monitoring is not exhaustive")
+    return {
+        "trajectory_count": trajectory_count,
+        "success_count": success_count,
+        "success_rate": success_count / denominator,
+        "rollout_budget_exhausted_count": budget_count,
+        "rollout_budget_exhausted_rate": budget_count / denominator,
+        "non_horizon_infeasible_count": non_horizon_count,
+        "non_horizon_infeasible_rate": non_horizon_count / denominator,
+        "non_horizon_infeasible_reason_counts": dict(sorted(reason_counts.items())),
+    }
+
+
+def _reported_rollout_budget_exhaustion(
+    infos: Sequence[dict[str, Any]], n_traj: int
+) -> np.ndarray:
+    """Read every environment-side indication that a step budget was hit.
+
+    The TERRAN horizon wrapper emits an explicit boolean array. Bare shared
+    environments instead terminate with ``environment_step_limit``; treating
+    that terminal reason as an FFP failure would make the diagnostic depend on
+    whether the wrapper happened to be installed.
+    """
+
+    rows: list[np.ndarray] = []
+    for info in infos:
+        explicit = np.asarray(
+            info.get(
+                "rollout_budget_exhausted",
+                np.zeros(n_traj, dtype=bool),
+            ),
+            dtype=bool,
+        ).reshape(-1)
+        if explicit.size != n_traj:
+            raise ValueError(
+                "rollout_budget_exhausted and environment trajectory counts disagree"
+            )
+        reasons = np.asarray(
+            info.get("failure_reason", np.full(n_traj, "in_progress")),
+            dtype=object,
+        ).reshape(-1)
+        if reasons.size != n_traj:
+            raise ValueError(
+                "failure_reason and environment trajectory counts disagree"
+            )
+        reason_horizon = np.asarray(
+            [
+                str(reason) == "environment_step_limit"
+                or str(reason).startswith("rollout_budget_exhausted")
+                for reason in reasons
+            ],
+            dtype=bool,
+        )
+        rows.append(explicit | reason_horizon)
+    return np.stack(rows, axis=0)
 
 
 def reset_envs(envs, seed: int | None = None):
@@ -473,23 +618,40 @@ def collect_rollout(
             break
 
     total_time_s = time.perf_counter() - total_start
-    explicit_budget_exhaustion = np.stack(
-        [
-            np.asarray(
-                info.get(
-                    "rollout_budget_exhausted",
-                    np.zeros(done.shape[1], dtype=bool),
-                ),
-                dtype=bool,
-            )
-            for info in infos
-        ],
-        axis=0,
+    explicit_budget_exhaustion = _reported_rollout_budget_exhaustion(
+        infos, done.shape[1]
     )
     # Preserve the legacy diagnostic for callers that construct an environment
     # without the TERRAN horizon wrapper, while retaining the explicit flag for
     # trajectories that were truncated exactly at the registered budget.
     rollout_budget_exhausted = explicit_budget_exhaustion | (~done)
+    success = np.stack(
+        [np.asarray(info.get("success"), dtype=bool) for info in infos], axis=0
+    )
+    served_customers = np.stack(
+        [
+            np.asarray(info.get("served_customers"), dtype=np.int32)
+            for info in infos
+        ],
+        axis=0,
+    )
+    customer_count = np.asarray(
+        [[int(getattr(env.unwrapped, "num_customers", 0))] for env in envs],
+        dtype=np.int32,
+    )
+    classify_rollout_failure_reasons(
+        infos,
+        done=done,
+        success=success,
+        served_customers=served_customers,
+        customer_count=customer_count,
+    )
+    for row_index, info in enumerate(infos):
+        # Persist the authoritative mask alongside the reason so downstream
+        # logging does not have to infer horizon status from a string label.
+        info["rollout_budget_exhausted"] = rollout_budget_exhausted[
+            row_index
+        ].copy()
     return RolloutBatch(
         observations=obs_steps,
         actions=torch.stack(actions_steps, dim=0),
@@ -637,6 +799,40 @@ def rollout_eval_batch(
             done = done | step_done
             if done.all():
                 break
+        explicit_budget_exhaustion = _reported_rollout_budget_exhaustion(
+            infos, n_traj
+        )
+        # Evaluation environments intentionally have no training horizon
+        # wrapper. Any trajectory still active when this loop exhausts its
+        # registered max_steps is nevertheless a horizon case, not an FFP
+        # failure.
+        rollout_budget_exhausted = explicit_budget_exhaustion | (~done)
+        success = np.stack(
+            [np.asarray(info.get("success"), dtype=bool) for info in infos],
+            axis=0,
+        )
+        served_customers = np.stack(
+            [
+                np.asarray(info.get("served_customers"), dtype=np.int32)
+                for info in infos
+            ],
+            axis=0,
+        )
+        customer_count = np.asarray(
+            [[int(getattr(env.unwrapped, "num_customers", 0))] for env in envs],
+            dtype=np.int32,
+        )
+        classify_rollout_failure_reasons(
+            infos,
+            done=done,
+            success=success,
+            served_customers=served_customers,
+            customer_count=customer_count,
+        )
+        for row_index, info in enumerate(infos):
+            info["rollout_budget_exhausted"] = rollout_budget_exhausted[
+                row_index
+            ].copy()
         if final_routes_only and (include_routes or return_final_info):
             infos = finalize_route_infos(envs, infos)
         # Include both the initial encoder/cache preparation above and the final
@@ -644,8 +840,36 @@ def rollout_eval_batch(
         elapsed = time.perf_counter() - start
     per_instance_runtime = float(elapsed) / max(len(envs), 1)
     rows: list[dict[str, Any]] = []
-    for info in infos:
+    for row_index, info in enumerate(infos):
         row = select_best_trajectory(info, include_routes=include_routes)
+        outcome = summarize_rollout_outcomes(
+            [info], rollout_budget_exhausted[row_index : row_index + 1]
+        )
+        row.update(
+            candidate_trajectory_count=outcome["trajectory_count"],
+            candidate_success_count=outcome["success_count"],
+            candidate_success_rate=outcome["success_rate"],
+            candidate_rollout_budget_exhausted_count=outcome[
+                "rollout_budget_exhausted_count"
+            ],
+            candidate_rollout_budget_exhausted_rate=outcome[
+                "rollout_budget_exhausted_rate"
+            ],
+            candidate_non_horizon_infeasible_count=outcome[
+                "non_horizon_infeasible_count"
+            ],
+            candidate_non_horizon_infeasible_rate=outcome[
+                "non_horizon_infeasible_rate"
+            ],
+            candidate_non_horizon_infeasible_reason_counts=json.dumps(
+                outcome["non_horizon_infeasible_reason_counts"], sort_keys=True
+            ),
+            no_success_all_candidates_non_horizon_infeasible=bool(
+                outcome["success_count"] == 0
+                and outcome["non_horizon_infeasible_count"]
+                == outcome["trajectory_count"]
+            ),
+        )
         row["runtime_s"] = per_instance_runtime
         row["batch_runtime_s"] = float(elapsed)
         if return_final_info:

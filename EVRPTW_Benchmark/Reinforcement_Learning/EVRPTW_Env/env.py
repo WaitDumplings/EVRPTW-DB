@@ -62,6 +62,7 @@ class EVRPTWVectorEnv(Env):
         reward_distance_scale_mode: str = "single_customer_repair_median",
         reward_objective_scale: float | None = None,
         objective_config: ObjectiveConfig | dict[str, Any] | None = None,
+        allow_consecutive_station_actions: bool = True,
     ) -> None:
         super().__init__()
         # Import at construction time: common also exposes environment factories.
@@ -94,6 +95,13 @@ class EVRPTWVectorEnv(Env):
             None if reward_objective_scale is None else float(reward_objective_scale)
         )
         self.reward_distance_scale_mode = str(reward_distance_scale_mode)
+        # Some paper adapters prohibit station -> station actions.  FFP must
+        # know that policy while constructing its return witness; filtering a
+        # permissive base mask afterwards can otherwise admit a customer whose
+        # only return uses an action the adapter will delete.
+        self.allow_consecutive_station_actions = bool(
+            allow_consecutive_station_actions
+        )
         valid_scale_modes = {
             "max_edge",
             "single_customer_repair_sum",
@@ -179,6 +187,7 @@ class EVRPTWVectorEnv(Env):
         )
 
         self.stop_adj = self._build_stop_adjacency()
+        self.stop_reverse_adj = self._build_stop_reverse_adjacency()
         self.max_steps = max(1, self.max_steps_factor * self.num_nodes)
         self._build_spaces()
 
@@ -293,6 +302,15 @@ class EVRPTWVectorEnv(Env):
         self.current_routes: list[list[int]] = [[0] for _ in range(self.n_traj)]
 
         obs = self._make_observation()
+        # Gymnasium reset has no terminated/truncated return. Mark a
+        # structurally dead initial state here and expose the depot sentinel so
+        # categorical policies receive a finite masked distribution. The first
+        # step will surface this as a non-horizon ``no_feasible_action`` end.
+        no_initial_action = ~obs["action_mask"].any(axis=1)
+        if np.any(no_initial_action):
+            self.truncated[no_initial_action] = True
+            self.failure_reason[no_initial_action] = "no_feasible_action"
+            obs = self._make_observation()
         info = self._make_info(obs["action_mask"])
         return obs, info
 
@@ -412,31 +430,53 @@ class EVRPTWVectorEnv(Env):
                 continue
             start = int(self.last[t])
             all_served = self.served_customers[t] == self.num_customers
+            route_return_time_s = self._route_local_stop_to_depot_times(t)
 
             if all_served:
                 if start == 0 or self._direct_depot_feasible(t):
                     mask[t, 0] = True
                 # Fall through so a charging-assisted return remains available.
 
-            if start != 0 and self.route_has_customer[t] and self._direct_depot_feasible(t):
+            if (
+                start != 0
+                and self.route_has_customer[t]
+                and self._direct_depot_feasible(t)
+            ):
                 mask[t, 0] = True
 
             for customer in self.customer_nodes:
                 c = int(customer)
                 if self.visited[t, c]:
                     continue
-                if self._customer_action_feasible(t, c):
+                if self._customer_action_feasible(t, c, route_return_time_s):
                     mask[t, c] = True
 
-            for station in self.station_nodes:
-                s = int(station)
-                if s == start or self.cs_visited_current_route[t, s]:
-                    continue
-                if self._station_action_feasible(t, s):
-                    mask[t, s] = True
+            if self.allow_consecutive_station_actions or not self._is_station(start):
+                for station in self.station_nodes:
+                    s = int(station)
+                    if s == start or self.cs_visited_current_route[t, s]:
+                        continue
+                    if self._station_action_feasible(t, s, route_return_time_s):
+                        mask[t, s] = True
+
+            # Preserve the benchmark rule that a route normally serves a
+            # customer before closing. If that gate would itself create an
+            # empty mask after a charger-only prefix, expose the physically
+            # feasible depot leg as an emergency FFP escape.
+            if (
+                not mask[t].any()
+                and start != 0
+                and self._direct_depot_feasible(t)
+            ):
+                mask[t, 0] = True
         return mask
 
-    def _customer_action_feasible(self, traj_idx: int, customer: int) -> bool:
+    def _customer_action_feasible(
+        self,
+        traj_idx: int,
+        customer: int,
+        route_return_time_s: np.ndarray | None = None,
+    ) -> bool:
         start = int(self.last[traj_idx])
         energy = float(self.energy_kwh[start, customer])
         battery_after = float(self.battery_used_kwh[traj_idx] + energy)
@@ -450,9 +490,20 @@ class EVRPTWVectorEnv(Env):
         service_departure = service_start + float(self.service_time_s[customer])
         if service_start > float(due) + 1e-9 or service_departure > self.working_end_s + 1e-9:
             return False
-        return self._can_return_to_depot(customer, service_departure, battery_after)
+        return self._can_return_to_depot(
+            customer,
+            service_departure,
+            battery_after,
+            traj_idx=traj_idx,
+            route_return_time_s=route_return_time_s,
+        )
 
-    def _station_action_feasible(self, traj_idx: int, station: int) -> bool:
+    def _station_action_feasible(
+        self,
+        traj_idx: int,
+        station: int,
+        route_return_time_s: np.ndarray | None = None,
+    ) -> bool:
         start = int(self.last[traj_idx])
         battery_after = float(self.battery_used_kwh[traj_idx] + self.energy_kwh[start, station])
         if battery_after > self.battery_capacity_kwh + 1e-9:
@@ -461,7 +512,17 @@ class EVRPTWVectorEnv(Env):
         departure = arrival + self._charge_time_s(battery_after, station)
         if departure > self.working_end_s + 1e-9:
             return False
-        return self._can_return_to_depot(station, departure, 0.0)
+        if route_return_time_s is None:
+            route_return_time_s = self._route_local_stop_to_depot_times(traj_idx)
+        # The candidate station is still available in the pre-action route
+        # state, so it may be the source of this witness exactly once.  The
+        # shortest path below never uses an already-visited station and, with
+        # non-negative edge costs, never needs to revisit the source.
+        return (
+            np.isfinite(route_return_time_s[station])
+            and departure + route_return_time_s[station]
+            <= self.working_end_s + 1e-9
+        )
 
     def _direct_depot_feasible(self, traj_idx: int) -> bool:
         start = int(self.last[traj_idx])
@@ -469,22 +530,37 @@ class EVRPTWVectorEnv(Env):
         arrival = float(self.current_time_s[traj_idx] + self.travel_time_s[start, 0])
         return battery_after <= self.battery_capacity_kwh + 1e-9 and arrival <= self.working_end_s + 1e-9
 
-    def _can_return_to_depot(self, start: int, current_time_s: float, battery_used_kwh: float) -> bool:
+    def _can_return_to_depot(
+        self,
+        start: int,
+        current_time_s: float,
+        battery_used_kwh: float,
+        *,
+        traj_idx: int | None = None,
+        route_return_time_s: np.ndarray | None = None,
+    ) -> bool:
         if start == 0:
             return True
         if battery_used_kwh + self.energy_kwh[start, 0] <= self.battery_capacity_kwh + 1e-9:
             return current_time_s + self.travel_time_s[start, 0] <= self.working_end_s + 1e-9
+        if route_return_time_s is None:
+            if traj_idx is None:
+                # Backwards-compatible private-helper behavior for callers
+                # without trajectory state: no route-local station is banned.
+                unavailable = np.zeros(self.num_nodes, dtype=bool)
+                route_return_time_s = self._stop_to_depot_times_excluding(unavailable)
+            else:
+                route_return_time_s = self._route_local_stop_to_depot_times(traj_idx)
         for first_station in self.station_nodes:
             first = int(first_station)
+            if first == int(start) or not np.isfinite(route_return_time_s[first]):
+                continue
             battery_at_first = battery_used_kwh + self.energy_kwh[start, first]
             if battery_at_first > self.battery_capacity_kwh + 1e-9:
                 continue
             time_at_first = current_time_s + self.travel_time_s[start, first]
             depart_first = time_at_first + self._charge_time_s(battery_at_first, first)
-            stop_plan = self._shortest_stop_time(first, 0)
-            if stop_plan is None:
-                continue
-            if depart_first + stop_plan <= self.working_end_s + 1e-9:
+            if depart_first + route_return_time_s[first] <= self.working_end_s + 1e-9:
                 return True
         return False
 
@@ -500,6 +576,69 @@ class EVRPTWVectorEnv(Env):
                 charge_time = self._charge_time_s(energy, j) if self._is_station(j) else 0.0
                 adjacency[i].append((j, float(self.travel_time_s[i, j]) + charge_time))
         return adjacency
+
+    def _build_stop_reverse_adjacency(self) -> dict[int, list[tuple[int, float]]]:
+        reverse: dict[int, list[tuple[int, float]]] = {
+            node: [] for node in self.stop_nodes
+        }
+        for predecessor, edges in self.stop_adj.items():
+            for successor, edge_cost in edges:
+                reverse[successor].append((predecessor, edge_cost))
+        return reverse
+
+    def _route_local_stop_to_depot_times(self, traj_idx: int) -> np.ndarray:
+        """Return exact stop-to-depot times using stations still legal this route."""
+
+        return self._stop_to_depot_times_excluding(
+            self.cs_visited_current_route[int(traj_idx)]
+        )
+
+    def _stop_to_depot_times_excluding(
+        self, unavailable_stations: np.ndarray
+    ) -> np.ndarray:
+        """Return executable station-to-depot times for the active policy.
+
+        When consecutive station visits are allowed, this is reverse Dijkstra
+        over depot plus currently available stations. Each edge includes travel
+        and, when its destination is a station, its charging time. When they are
+        forbidden, only direct station -> depot legs are returned, so a
+        customer witness contains at most customer -> one station -> depot.
+        Removing unavailable stations from the whole witness also preserves the
+        route-local no-station-revisit action rule.
+        """
+
+        unavailable = np.asarray(unavailable_stations, dtype=bool)
+        if unavailable.shape != (self.num_nodes,):
+            raise ValueError(
+                "unavailable_stations must have shape "
+                f"{(self.num_nodes,)}, got {unavailable.shape}"
+            )
+        distance = np.full(self.num_nodes, math.inf, dtype=np.float64)
+        distance[0] = 0.0
+        if not self.allow_consecutive_station_actions:
+            for station in self.station_nodes:
+                node = int(station)
+                if unavailable[node]:
+                    continue
+                if (
+                    self.energy_kwh[node, 0]
+                    <= self.battery_capacity_kwh + 1e-9
+                ):
+                    distance[node] = float(self.travel_time_s[node, 0])
+            return distance
+        heap: list[tuple[float, int]] = [(0.0, 0)]
+        while heap:
+            cost, successor = heapq.heappop(heap)
+            if cost > distance[successor] + 1e-12:
+                continue
+            for predecessor, edge_cost in self.stop_reverse_adj.get(successor, []):
+                if predecessor != 0 and unavailable[predecessor]:
+                    continue
+                candidate = cost + edge_cost
+                if candidate + 1e-12 < distance[predecessor]:
+                    distance[predecessor] = candidate
+                    heapq.heappush(heap, (candidate, predecessor))
+        return distance
 
     def _shortest_stop_time(self, start: int, target: int) -> float | None:
         heap: list[tuple[float, int]] = [(0.0, int(start))]

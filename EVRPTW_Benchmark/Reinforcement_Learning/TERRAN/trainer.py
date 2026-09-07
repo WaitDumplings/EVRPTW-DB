@@ -57,13 +57,31 @@ from .pbrs import (
     TERMINAL_TASK_REWARD_UNIT,
     PotentialRewardConfig,
 )
-from .rollout import BoundedBaseRewardStats, collect_rollout, compute_returns, rollout_eval_batch
+from .rollout import (
+    BoundedBaseRewardStats,
+    collect_rollout,
+    compute_returns,
+    rollout_eval_batch,
+    summarize_rollout_outcomes,
+)
 
 OBJECTIVE_EVAL_FIELDS = (
     "eval_objective_mode", "eval_objective_unit", "eval_avg_objective",
     "eval_avg_objective_cost_usd", "eval_avg_electricity_cost_usd", "eval_avg_vehicle_cost_usd",
 )
 OBJECTIVE_REWARD_COMPONENTS = ("objective", "electricity_cost", "vehicle_cost", "base_non_objective")
+EVAL_OUTCOME_FIELDS = (
+    "eval_candidate_trajectory_count",
+    "eval_candidate_success_count",
+    "eval_candidate_success_rate",
+    "eval_candidate_rollout_budget_exhausted_count",
+    "eval_candidate_rollout_budget_exhausted_rate",
+    "eval_candidate_non_horizon_infeasible_count",
+    "eval_candidate_non_horizon_infeasible_rate",
+    "eval_candidate_non_horizon_infeasible_reason_counts",
+    "eval_no_success_all_candidates_non_horizon_infeasible_instance_count",
+    "eval_no_success_all_candidates_non_horizon_infeasible_instance_rate",
+)
 
 
 def _summarize_tensor_parts(parts, max_quantile_samples: int = 8192) -> dict[str, Any]:
@@ -1289,6 +1307,97 @@ def make_envs(cfg: dict[str, Any], seed: int):
     ]
     return envs, pool
 
+
+def _decode_outcome_reason_counts(
+    value: Any, *, expected_count: int, context: str
+) -> dict[str, int]:
+    try:
+        decoded = json.loads(value) if isinstance(value, str) else dict(value)
+        normalized = {
+            str(reason): int(count) for reason, count in decoded.items()
+        }
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid {context} reason-count mapping") from exc
+    if any(count < 0 for count in normalized.values()):
+        raise ValueError(f"negative count in {context} reason-count mapping")
+    if sum(normalized.values()) != int(expected_count):
+        raise RuntimeError(
+            f"{context} reason counts do not sum to non-horizon infeasible count"
+        )
+    return normalized
+
+
+def summarize_eval_candidate_outcomes(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate per-instance candidate diagnostics produced by eval rollout."""
+
+    candidate_count = 0
+    success_count = 0
+    budget_count = 0
+    non_horizon_count = 0
+    all_non_horizon_instances = 0
+    reason_counts: Counter[str] = Counter()
+    monitored_instances = 0
+    for row in rows:
+        if "candidate_trajectory_count" not in row:
+            # Older/custom rollout adapters remain valid; their result simply
+            # has no candidate-level FFP diagnostic.
+            continue
+        monitored_instances += 1
+        candidate_count += int(row["candidate_trajectory_count"])
+        success_count += int(row.get("candidate_success_count", 0))
+        budget_count += int(row.get("candidate_rollout_budget_exhausted_count", 0))
+        row_non_horizon_count = int(
+            row.get("candidate_non_horizon_infeasible_count", 0)
+        )
+        non_horizon_count += row_non_horizon_count
+        all_non_horizon_instances += int(
+            bool(row.get("no_success_all_candidates_non_horizon_infeasible", False))
+        )
+        encoded_reasons = row.get(
+            "candidate_non_horizon_infeasible_reason_counts", "{}"
+        )
+        reason_counts.update(
+            _decode_outcome_reason_counts(
+                encoded_reasons,
+                expected_count=row_non_horizon_count,
+                context="per-instance candidate",
+            )
+        )
+
+    if candidate_count and candidate_count != (
+        success_count + budget_count + non_horizon_count
+    ):
+        raise RuntimeError("evaluation candidate outcome monitoring is not exhaustive")
+    return {
+        "eval_candidate_trajectory_count": candidate_count,
+        "eval_candidate_success_count": success_count,
+        "eval_candidate_success_rate": (
+            success_count / candidate_count if candidate_count else None
+        ),
+        "eval_candidate_rollout_budget_exhausted_count": budget_count,
+        "eval_candidate_rollout_budget_exhausted_rate": (
+            budget_count / candidate_count if candidate_count else None
+        ),
+        "eval_candidate_non_horizon_infeasible_count": non_horizon_count,
+        "eval_candidate_non_horizon_infeasible_rate": (
+            non_horizon_count / candidate_count if candidate_count else None
+        ),
+        "eval_candidate_non_horizon_infeasible_reason_counts": json.dumps(
+            dict(sorted(reason_counts.items())), sort_keys=True
+        ),
+        "eval_no_success_all_candidates_non_horizon_infeasible_instance_count": (
+            all_non_horizon_instances
+        ),
+        "eval_no_success_all_candidates_non_horizon_infeasible_instance_rate": (
+            all_non_horizon_instances / monitored_instances
+            if monitored_instances
+            else None
+        ),
+    }
+
+
 def evaluate_fixed_dataset(
     agent: Agent,
     cfg: dict[str, Any],
@@ -1436,6 +1545,7 @@ def evaluate_fixed_dataset(
         }
 
     feasible_rows = [row for row in rows if row["feasible"]]
+    outcome_summary = summarize_eval_candidate_outcomes(rows)
     return {
         "eval_num_instances": len(rows),
         "eval_complete_and_feasible": len(feasible_rows),
@@ -1472,6 +1582,7 @@ def evaluate_fixed_dataset(
         "eval_avg_runtime_s": float(
             np.mean([row["runtime_s"] for row in rows])
         ),
+        **outcome_summary,
         "eval_status": "ok",
     }
 
@@ -1902,6 +2013,8 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "rollout_steps",
         "trajectory_count",
         "terminal_outcome_reason_counts",
+        "successful_trajectory_count",
+        "successful_trajectory_rate",
         "mean_trajectory_steps",
         "trajectory_steps_p50",
         "trajectory_steps_p90",
@@ -1909,6 +2022,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "trajectory_steps_max",
         "rollout_budget_exhausted_count",
         "rollout_budget_exhausted_rate",
+        "non_horizon_infeasible_count",
+        "non_horizon_infeasible_rate",
+        "non_horizon_infeasible_reason_counts",
         "num_minibatches",
         "gradient_accumulation_steps",
         "logical_microbatches_per_epoch",
@@ -1941,6 +2057,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "eval_save_routes",
         "eval_status",
     ]
+    train_fields.extend(EVAL_OUTCOME_FIELDS)
     eval_fields = [
         "epoch",
         "eval_avg_objective_distance_km",
@@ -1958,6 +2075,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         "eval_save_routes",
         "eval_status",
     ]
+    eval_fields.extend(EVAL_OUTCOME_FIELDS)
     train_fields.extend(["train_avg_best_objective", "objective_mode", "objective_unit", "reward_objective_scale"])
     train_fields.extend(OBJECTIVE_EVAL_FIELDS)
     eval_fields.extend(OBJECTIVE_EVAL_FIELDS)
@@ -2003,6 +2121,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             rollout_timings: dict[str, float] = {}
             final_infos: list[dict[str, Any]] = []
             trajectory_parts: list[np.ndarray] = []
+            rollout_budget_parts: list[np.ndarray] = []
             reward_sum = 0.0
             reward_count = 0
             reward_diagnostics: dict[str, float] = {}
@@ -2065,6 +2184,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     batch.trajectory_steps.detach().cpu().numpy().reshape(-1)
                 )
                 final_infos.extend(batch.final_infos)
+                rollout_budget_parts.append(
+                    batch.rollout_budget_exhausted.detach().cpu().numpy()
+                )
                 rollout_budget_exhausted_count += int(
                     batch.rollout_budget_exhausted.sum().detach().cpu()
                 )
@@ -2074,6 +2196,20 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             environment_transitions_total += environment_transitions
             trajectory_steps = np.concatenate(trajectory_parts)
             trajectory_count = int(trajectory_steps.size)
+            outcome_summary = summarize_rollout_outcomes(
+                final_infos, np.concatenate(rollout_budget_parts, axis=0)
+            )
+            if outcome_summary["trajectory_count"] != trajectory_count:
+                raise RuntimeError(
+                    "trajectory outcome monitoring count disagrees with rollout buffers"
+                )
+            if (
+                outcome_summary["rollout_budget_exhausted_count"]
+                != rollout_budget_exhausted_count
+            ):
+                raise RuntimeError(
+                    "trajectory horizon monitoring count disagrees with rollout buffers"
+                )
             all_advantages = torch.cat(
                 [advantages[batch.valid] for batch, _, advantages in rollout_records]
             )
@@ -2337,6 +2473,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     f"train_obj={_format_float(train_summary['train_avg_best_objective'])}{objective_config.unit} "
                     f"train_veh={_format_float(train_summary['train_avg_vehicle_count'])} "
                     f"served={_format_float(train_summary['train_avg_served_customers'])} "
+                    f"non_horizon_infeasible="
+                    f"{outcome_summary['non_horizon_infeasible_count']}/"
+                    f"{outcome_summary['trajectory_count']} "
                     f"pbrs_scale={pbrs_scale:.4f} "
                     f"timing_reset={rollout_timings.get('rollout_reset_time_s', 0.0):.3f}s "
                     f"timing_model={rollout_timings.get('rollout_model_action_time_s', 0.0):.3f}s "
@@ -2388,6 +2527,62 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                             == int(eval_row["eval_num_instances"])
                         ),
                     }
+                    candidate_count = eval_row.get(
+                        "eval_candidate_trajectory_count"
+                    )
+                    if candidate_count is not None:
+                        candidate_non_horizon_count = int(
+                            eval_row.get(
+                                "eval_candidate_non_horizon_infeasible_count",
+                                0,
+                            )
+                        )
+                        decoded_reasons = _decode_outcome_reason_counts(
+                            eval_row.get(
+                                "eval_candidate_non_horizon_infeasible_reason_counts",
+                                "{}",
+                            ),
+                            expected_count=candidate_non_horizon_count,
+                            context="validation candidate aggregate",
+                        )
+                        validation.update(
+                            {
+                                "candidate_trajectory_count": int(candidate_count),
+                                "candidate_success_count": int(
+                                    eval_row.get("eval_candidate_success_count", 0)
+                                ),
+                                "candidate_success_rate": eval_row.get(
+                                    "eval_candidate_success_rate"
+                                ),
+                                "candidate_rollout_budget_exhausted_count": int(
+                                    eval_row.get(
+                                        "eval_candidate_rollout_budget_exhausted_count",
+                                        0,
+                                    )
+                                ),
+                                "candidate_rollout_budget_exhausted_rate": eval_row.get(
+                                    "eval_candidate_rollout_budget_exhausted_rate"
+                                ),
+                                "candidate_non_horizon_infeasible_count": (
+                                    candidate_non_horizon_count
+                                ),
+                                "candidate_non_horizon_infeasible_rate": eval_row.get(
+                                    "eval_candidate_non_horizon_infeasible_rate"
+                                ),
+                                "candidate_non_horizon_infeasible_reason_counts": (
+                                    decoded_reasons
+                                ),
+                                "no_success_all_candidates_non_horizon_infeasible_instance_count": int(
+                                    eval_row.get(
+                                        "eval_no_success_all_candidates_non_horizon_infeasible_instance_count",
+                                        0,
+                                    )
+                                ),
+                                "no_success_all_candidates_non_horizon_infeasible_instance_rate": eval_row.get(
+                                    "eval_no_success_all_candidates_non_horizon_infeasible_instance_rate"
+                                ),
+                            }
+                        )
                     verified_objective = eval_row.get("eval_avg_objective", verified_distance)
                     validation.update(
                         objective_mode=objective_config.mode,
@@ -2466,6 +2661,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     f"fr={_format_float(eval_row.get('eval_feasible_rate'))} "
                     f"obj={_format_float(eval_row.get('eval_avg_objective', eval_row.get('eval_avg_objective_distance_km')))}{objective_config.unit} "
                     f"veh={_format_float(eval_row.get('eval_avg_vehicle_count'))} "
+                    f"candidate_non_horizon_infeasible="
+                    f"{eval_row.get('eval_candidate_non_horizon_infeasible_count', 'n/a')}/"
+                    f"{eval_row.get('eval_candidate_trajectory_count', 'n/a')} "
                     f"runtime={_format_float(eval_row.get('eval_avg_runtime_s'))} "
                     f"eval_wall={eval_wall_time_s:.3f}s "
                     f"status={eval_row.get('eval_status')}",
@@ -2592,6 +2790,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "rollout_steps": rollout_steps,
                     "num_minibatches": minibatches,
                     "trajectory_count": trajectory_count,
+                    "successful_trajectory_count": outcome_summary[
+                        "success_count"
+                    ],
+                    "successful_trajectory_rate": outcome_summary["success_rate"],
                     "mean_trajectory_steps": float(trajectory_steps.mean()),
                     "trajectory_steps_p50": float(np.quantile(trajectory_steps, 0.50)),
                     "trajectory_steps_p90": float(np.quantile(trajectory_steps, 0.90)),
@@ -2602,6 +2804,16 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     ),
                     "rollout_budget_exhausted_rate": (
                         rollout_budget_exhausted_count / trajectory_count
+                    ),
+                    "non_horizon_infeasible_count": outcome_summary[
+                        "non_horizon_infeasible_count"
+                    ],
+                    "non_horizon_infeasible_rate": outcome_summary[
+                        "non_horizon_infeasible_rate"
+                    ],
+                    "non_horizon_infeasible_reason_counts": json.dumps(
+                        outcome_summary["non_horizon_infeasible_reason_counts"],
+                        sort_keys=True,
                     ),
                     "gradient_accumulation_steps": gradient_accumulation_steps,
                     "logical_microbatches_per_epoch": logical_microbatches_per_epoch,
@@ -2638,6 +2850,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     "eval_info_level": eval_row.get("eval_info_level", ""),
                     "eval_save_routes": eval_row.get("eval_save_routes", ""),
                     "eval_status": eval_row.get("eval_status", ""),
+                    **{
+                        field: eval_row.get(field, "")
+                        for field in EVAL_OUTCOME_FIELDS
+                    },
                 }
             )
             f.flush()

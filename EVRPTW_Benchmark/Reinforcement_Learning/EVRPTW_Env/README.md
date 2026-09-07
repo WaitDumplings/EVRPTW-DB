@@ -87,6 +87,29 @@ route. Returning to the depot closes that route and clears the station mask, so
 the same physical station remains available to later vehicles. This is a
 route-local anti-cycle rule, not a global station-copy limit.
 
+The hard action mask also enforces forward-feasible-path (FFP) safety. Every
+admitted customer or charging-station action has a time- and energy-feasible
+continuation back to the depot. The return witness may contain multiple
+charging stations, but removes every station already visited by the current
+route from the entire path, including intermediate hops. A candidate station
+may be used once as the witness source. The usual rule still requires a route
+to serve a customer before it closes; when that rule would otherwise leave a
+charger-only prefix with an empty mask, a physically feasible depot leg is
+exposed as an emergency escape. Python and JIT masks implement the same
+contract. If an instance is already actionless at reset under the selected
+method policy, the environment records `no_feasible_action` immediately and
+exposes only a depot sentinel; this lets the first rollout step report the
+non-horizon failure without presenting all-`-inf` logits to the policy.
+
+`allow_consecutive_station_actions` makes the station-transition assumption
+part of that FFP contract. It defaults to `True`, preserving the shared/TERRAN
+behavior and allowing a return witness with multiple unvisited stations. When
+set to `False`, station-to-station actions are masked and every return witness
+is restricted to a direct depot leg or `customer -> one station -> depot`.
+Paper adapters that remove consecutive charging actions must select this mode
+before the base mask is computed; filtering a permissive mask afterwards is
+not FFP-safe.
+
 Formal training uses one deterministic distance scale estimated only from its
 frozen training pool. Distance edges use that scale, travel-time edges use the
 operating horizon, and energy edges use battery capacity. Validation and test
