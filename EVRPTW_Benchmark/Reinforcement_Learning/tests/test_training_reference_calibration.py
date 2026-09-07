@@ -44,7 +44,9 @@ def objective() -> ObjectiveConfig:
 
 def synthetic_index(*, rows_per_stratum: int = 37) -> pd.DataFrame:
     rows = []
-    for scale, customers in (("Cus500", 500), ("Cus1000", 1000)):
+    for scale, customers in (
+        ("Cus50", 50), ("Cus100", 100), ("Cus500", 500), ("Cus1000", 1000)
+    ):
         for city_number in range(10):
             city = f"city-{city_number:02d}"
             for day_type in ("weekday", "weekend"):
@@ -55,7 +57,11 @@ def synthetic_index(*, rows_per_stratum: int = 37) -> pd.DataFrame:
                             "view_id": f"iv_{token}",
                             "family_id": f"mf_{token}",
                             "family_cohort_id": "core/train",
-                            "consumer_cohort_id": "core/train",
+                            "consumer_cohort_id": (
+                                "compatibility_cus50/train"
+                                if scale == "Cus50"
+                                else "core/train"
+                            ),
                             "split_id": "train",
                             "track_id": "train",
                             "city_slug": city,
@@ -75,13 +81,15 @@ def test_fixed_cohort_is_hash_ranked_stratified_and_order_independent() -> None:
         frame.sample(frac=1.0, random_state=991).reset_index(drop=True)
     )
 
-    assert len(first) == 1_000
+    assert len(first) == 2_000
     assert first["view_id"].is_unique
     pd.testing.assert_frame_equal(first, shuffled)
     counts = first.groupby(["scale_label", "city_slug", "day_type"]).size()
     assert set(counts.xs("weekday", level="day_type")) == {36}
     assert set(counts.xs("weekend", level="day_type")) == {14}
     assert first.groupby("scale_label").size().to_dict() == {
+        "Cus50": 500,
+        "Cus100": 500,
         "Cus500": 500,
         "Cus1000": 500,
     }
@@ -125,7 +133,7 @@ def test_cohort_rank_has_frozen_blake2b_vector() -> None:
                     frame.index == 0, "core/val"
                 )
             ),
-            "consumer_cohort_id=core/train",
+            "requires consumer_cohort_id=",
         ),
         (
             lambda frame: frame.assign(
@@ -220,7 +228,7 @@ def test_complete_results_bind_route_hash_D_K_and_C() -> None:
 
 def test_contract_schema_digest_and_per_scale_terms() -> None:
     rows = []
-    for scale in ("Cus500", "Cus1000"):
+    for scale in ("Cus50", "Cus100", "Cus500", "Cus1000"):
         rows.extend(
             {
                 "scale_label": scale,

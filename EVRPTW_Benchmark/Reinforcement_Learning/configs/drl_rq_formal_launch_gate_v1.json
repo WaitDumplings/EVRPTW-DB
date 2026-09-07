@@ -4,6 +4,22 @@
   "formal_launch_allowed": true,
   "launch_policy": "reward_contract_v2_formal_user_authorized",
   "authorized_job_ids": [
+    "full__G__Full-support__am_evrptw__Cus50__seed1234",
+    "full__G__Full-support__evrptw_rl__Cus50__seed1234",
+    "full__G__Full-support__drl_ts__Cus50__seed1234",
+    "full__G__Full-support__terran__Cus50__seed1234",
+    "full__G__Coverage-10%-support__terran__Cus100__seed1234",
+    "full__E__Full-support__am_evrptw__Cus100__seed1234",
+    "full__E__Full-support__evrptw_rl__Cus100__seed1234",
+    "full__E__Full-support__drl_ts__Cus100__seed1234",
+    "full__G__Full-support__am_evrptw__Cus100__seed1234",
+    "full__G__Full-support__evrptw_rl__Cus100__seed1234",
+    "full__G__Full-support__drl_ts__Cus100__seed1234",
+    "full__G__Full-support__terran__Cus100__seed1234",
+    "full__E__Full-support__terran__Cus100__seed1234",
+    "full__G__Random-10%-support__am_evrptw__Cus100__seed1234",
+    "full__G__Random-10%-support__terran__Cus100__seed1234",
+    "full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234",
     "full__G__Full-support__terran__Cus500__seed1234",
     "full__G__Full-support__terran__Cus1000__seed1234"
   ],
@@ -14,9 +30,9 @@
     "G4": "PILOT_WAIVED_BY_USER",
     "G5": "PILOT_WAIVED_BY_USER",
     "G6": "PILOT_WAIVED_BY_USER",
-    "G7": "NOT_APPLICABLE_G_ONLY",
+    "G7": "IMPLEMENTED_UNIT_TESTED",
     "G8": "IMPLEMENTED_UNIT_TESTED"
   },
-  "note": "User authorized fresh formal training for TERRAN Cus500 and Cus1000 only. The exact authorized_job_ids allowlist is enforced across the gate, runtime candidate, and frozen protocol; all other DRL jobs remain fail-closed.",
+  "note": "User authorized fresh formal training for all 16 RTX 2080 Ti Cus50/Cus100 jobs after independent training-only reward calibration. The two previously authorized TERRAN Cus500/Cus1000 jobs remain allowed; every other A6000 job remains fail-closed.",
   "file_hash_validation_performed": true
 }

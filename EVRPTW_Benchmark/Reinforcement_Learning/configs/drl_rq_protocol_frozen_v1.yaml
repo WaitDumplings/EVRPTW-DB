@@ -1,9 +1,25 @@
 protocol_id: drl_rq_protocol_frozen_v1
-status: reward_contract_v2_formal_terran_authorized
+status: reward_contract_v2_formal_2080_authorized
 formal_launch_allowed: true
 launch_mode: direct_full_after_user_authorization
 launch_policy: reward_contract_v2_formal_user_authorized
 authorized_job_ids:
+  - full__G__Full-support__am_evrptw__Cus50__seed1234
+  - full__G__Full-support__evrptw_rl__Cus50__seed1234
+  - full__G__Full-support__drl_ts__Cus50__seed1234
+  - full__G__Full-support__terran__Cus50__seed1234
+  - full__G__Coverage-10%-support__terran__Cus100__seed1234
+  - full__E__Full-support__am_evrptw__Cus100__seed1234
+  - full__E__Full-support__evrptw_rl__Cus100__seed1234
+  - full__E__Full-support__drl_ts__Cus100__seed1234
+  - full__G__Full-support__am_evrptw__Cus100__seed1234
+  - full__G__Full-support__evrptw_rl__Cus100__seed1234
+  - full__G__Full-support__drl_ts__Cus100__seed1234
+  - full__G__Full-support__terran__Cus100__seed1234
+  - full__E__Full-support__terran__Cus100__seed1234
+  - full__G__Random-10%-support__am_evrptw__Cus100__seed1234
+  - full__G__Random-10%-support__terran__Cus100__seed1234
+  - full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234
   - full__G__Full-support__terran__Cus500__seed1234
   - full__G__Full-support__terran__Cus1000__seed1234
 runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
@@ -14,15 +30,14 @@ objective_revision: rivian_energy_vehicle_cost_v1
 reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json
 reward_contract_revision: drl_energy_vehicle_reference_scale_v2
 training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
-training_stream_registry_sha256: 65653ce92932dec5e70de9d58daab74a33f3ae467569e25998bb8d22b6e1405d
-# The frozen study design below still records all four intended training
-# scales.  This reward-contract revision is currently launchable only on the
-# two independently calibrated scales; the smaller-scale runs remain blocked,
-# rather than borrowing a legacy or fabricated denominator.
-reward_contract_calibrated_scales: [Cus500, Cus1000]
-reward_contract_launch_enabled_scales: [Cus500, Cus1000]
-reward_contract_blocked_scales: [Cus50, Cus100]
-reward_contract_blocked_reason: missing_training_reference_calibration
+training_stream_registry_sha256: a11a0b3bd44dd93c55daba0de88928133447ae0f2414dbbbd432aae1600d5df7
+# All four intended training scales now have independent training-only reward
+# calibrations. This authorization enables the 16 measured 2080 Ti jobs while
+# retaining the two previously authorized TERRAN large-scale jobs.
+reward_contract_calibrated_scales: [Cus50, Cus100, Cus500, Cus1000]
+reward_contract_launch_enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
+reward_contract_blocked_scales: []
+reward_contract_blocked_reason: null
 method_auxiliary_profiles:
   drl_ts: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_ts_soft_auxiliary_v1.json
   evrptw_rl: EVRPTW_Benchmark/Reinforcement_Learning/configs/evrptw_rl_station_auxiliary_v1.json
@@ -55,6 +70,10 @@ validation_rollout_steps:
 # the longer horizon and completion reward below.
 training_overrides_by_method_scale:
   terran:
+    Cus50:
+      terran_terminal_success_bonus: 0.0
+    Cus100:
+      terran_terminal_success_bonus: 0.0
     Cus500:
       training_rollout_steps: 580
       validation_rollout_steps: 870
@@ -99,7 +118,7 @@ research_questions:
     graph_injection_enabled: false
 
 core_training_run_count: 24
-currently_launchable_core_training_run_count: 8
+currently_launchable_core_training_run_count: 18
 train_cus2000: false
 energy_relaxed_directed_vrptw_model: excluded
 
@@ -221,7 +240,7 @@ formal_launch_gates:
     status: PILOT_WAIVED_BY_USER
   G7:
     requirement: euclidean_distance_time_energy_generation_manifest
-    status: NOT_APPLICABLE_G_ONLY
+    status: IMPLEMENTED_UNIT_TESTED
   G8:
     requirement: parent_family_clustered_paired_bootstrap_aggregation
     status: IMPLEMENTED_UNIT_TESTED

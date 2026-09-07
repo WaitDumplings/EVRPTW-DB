@@ -8,9 +8,9 @@
     },
     "artifacts": {
       "cohort_file": "cohort.json",
-      "cohort_file_sha256": "026fc7373b31dbb4ddec2fadd6a3c81ddc8b44f1b45d3481a82d455508e40185",
+      "cohort_file_sha256": "078daebe785626c61fbbc9d5b0efb5e61338263376467dc798d04405012da594",
       "per_view_file": "per_view.jsonl",
-      "per_view_file_sha256": "c974078efdfbda10d3044851671c324ef91d6a460cdf71cdbd89c64d2e8529a1"
+      "per_view_file_sha256": "0cd24d98d1e4dfca5712e56ea231334cfaefe96023c0e56205f86ae530e11005"
     },
     "cohort": {
       "city_count": 10,
@@ -24,6 +24,8 @@
       ],
       "hash_scheme": "blake2b_training_reference_view_rank_v1",
       "scales": [
+        "Cus50",
+        "Cus100",
         "Cus500",
         "Cus1000"
       ],
@@ -54,6 +56,27 @@
     "objective_config_sha256": "003baea23800ef4b976da1b63b9a02aa78db5647509baf7506192139eef933a6",
     "representation": "G",
     "scale_statistics": {
+      "Cus100": {
+        "failure_base": 4.677670497930418,
+        "normalized_objective_q99_linear": 3.6776704979304182,
+        "objective_cost_usd": {
+          "max": 192.20933429468025,
+          "median": 40.12113182956686,
+          "min": 35.043406510412446,
+          "q99_linear": 147.5523028731751
+        },
+        "objective_distance_km": {
+          "max": 592.1171641945839,
+          "median": 124.07055629324168,
+          "min": 28.429192630574107
+        },
+        "sample_count": 500,
+        "vehicles_started": {
+          "max": 5,
+          "median": 1.0,
+          "min": 1
+        }
+      },
       "Cus1000": {
         "failure_base": 3.035830117996873,
         "normalized_objective_q99_linear": 2.035830117996873,
@@ -73,6 +96,27 @@
           "max": 46,
           "median": 19.0,
           "min": 6
+        }
+      },
+      "Cus50": {
+        "failure_base": 3.1506065620341146,
+        "normalized_objective_q99_linear": 2.1506065620341146,
+        "objective_cost_usd": {
+          "max": 125.02040858369683,
+          "median": 38.36160139217088,
+          "min": 34.71103212290107,
+          "q99_linear": 82.50071168413972
+        },
+        "objective_distance_km": {
+          "max": 466.47912050783634,
+          "median": 92.02174181863666,
+          "min": 22.059303175657988
+        },
+        "sample_count": 500,
+        "vehicles_started": {
+          "max": 3,
+          "median": 1.0,
+          "min": 1
         }
       },
       "Cus500": {
@@ -100,7 +144,18 @@
     "schema": "drl_training_reference_calibration_v1",
     "source_split": "train",
     "source_track": "train",
-    "source_view_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+    "source_view_index_hash_scheme": "sha256_canonical_training_index_set_v1",
+    "source_view_index_sha256": "cdd6748d34131c33f1d6e83f420ded4ffebd51fd477415084898ce6352c6dc57",
+    "source_view_indexes": [
+      {
+        "relative_path": "generation_plan/compatibility_cus50/train/view_index.parquet",
+        "sha256": "4ceb0aad91f38799116a2936f1f40b760b93335d6ad9cea340024625ca0e252e"
+      },
+      {
+        "relative_path": "generation_plan/core/train/view_index.parquet",
+        "sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56"
+      }
+    ],
     "verification": {
       "D_and_K_source": "same_verified_routes",
       "K_definition": "depot_to_nondepot_dispatch_count",
@@ -118,9 +173,19 @@
     "vehicle_fixed_cost_usd": 33.56
   },
   "scales": {
+    "Cus100": {
+      "failure_base": 4.677670497930418,
+      "objective_scale": 40.12113182956686,
+      "unserved_coefficient": 1.0
+    },
     "Cus1000": {
       "failure_base": 3.035830117996873,
       "objective_scale": 726.0507068707868,
+      "unserved_coefficient": 1.0
+    },
+    "Cus50": {
+      "failure_base": 3.1506065620341146,
+      "objective_scale": 38.36160139217088,
       "unserved_coefficient": 1.0
     },
     "Cus500": {
@@ -130,5 +195,5 @@
     }
   },
   "schema": "drl_reward_contract_v1",
-  "sha256": "425df9f07cfc9edd1ef4f03d78cb9075577f3096d23ae9e2bd81dc9116ad7e89"
+  "sha256": "6a60c434b2563becd87487c6415eb6fbc5e48a93f16e55f8502bdb484864d22f"
 }

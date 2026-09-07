@@ -16,6 +16,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from . import drl_job_runtime as runtime
+from ..common.training_stream import (
+    atomic_write_stream,
+    load_training_stream_contract,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -107,9 +111,46 @@ def _prepare_short_streams(
                 raise RuntimeError(
                     f"short stream has {table.num_rows} rows; expected {expected_rows}"
                 )
-            pq.write_table(table, target)
+            frame = table.to_pandas()
+            source_manifest_path = source.with_suffix(
+                source.suffix + ".manifest.json"
+            )
+            source_manifest = json.loads(
+                source_manifest_path.read_text(encoding="utf-8")
+            )
+            manifest = dict(source_manifest)
+            manifest["sample_count"] = expected_rows
+            customers = int(str(manifest["scale"]).removeprefix("Cus"))
+            manifest["customer_exposures"] = expected_rows * customers
+            manifest["realized_unique_family_count"] = int(
+                frame["family_id"].astype(str).nunique()
+            )
+            manifest["realized_unique_view_count"] = int(
+                frame["view_id"].astype(str).nunique()
+            )
+            manifest["replacement"] = expected_rows > int(
+                manifest["pool_view_count"]
+            )
+            observed = (
+                frame.groupby(["city_slug", "day_type"], sort=True)
+                .size()
+                .to_dict()
+            )
+            manifest["strata"] = [
+                {
+                    **row,
+                    "stream_draws": int(
+                        observed.get((row["city_slug"], row["day_type"]), 0)
+                    ),
+                }
+                for row in source_manifest.get("strata", [])
+            ]
+            atomic_write_stream(target, frame, manifest)
             cached[key] = target
+        contract = load_training_stream_contract(target)
         job["training_stream_path"] = str(target.resolve())
+        job["training_stream_contract_sha256"] = contract["sha256"]
+        job["training_stream_contract_snapshot"] = contract
 
 
 def _run_one(

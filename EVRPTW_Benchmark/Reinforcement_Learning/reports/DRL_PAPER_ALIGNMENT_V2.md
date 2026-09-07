@@ -1,23 +1,23 @@
 # DRL paper-alignment audit v2
 
-Audit date: 2026-09-03. Benchmark objective:
-`min_directed_road_distance_km`.
+Audit updated: 2026-09-06. Benchmark objective:
+`rivian_energy_vehicle_cost_v1` (electricity cost plus fixed vehicle-start cost).
 
 ## Release decision
 
-The adapters are not a set of exact paper reproductions. Formal training remains
-blocked by the existing signed launch gate. A model is called paper-aligned only
+The adapters are not a set of exact paper reproductions. Formal training is
+limited to the exact job IDs in the signed fail-closed launch gate. A model is called paper-aligned only
 for components supported by a full primary source or fixed author code. Necessary
 changes for EVRPTW-DB are labelled benchmark adaptations; missing evidence is
 labelled unresolved.
 
 | Model | Evidence | Architecture | Normalization and reward | Status |
 |---|---|---|---|---|
-| AM-EVRPTW | Full paper and official code at `c9abf41ac2f878a55b20dc7e829bc942bb999631` | Encoder is byte-identical to the selected upstream file; local decoder is an EVRPTW adaptation | Paper route length becomes raw directed-road km; unfinished penalty is adapter-only | verified adaptation |
-| EVRPTW-RL | Full accepted manuscript | Structure2Vec, two attention stages and LSTM checked against equations | Paper distance and station penalty retained; physical km is scaled explicitly; fleet and negative-battery penalties are zero under benchmark semantics | verified paper-guided adaptation |
+| AM-EVRPTW | Full paper and official code at `c9abf41ac2f878a55b20dc7e829bc942bb999631` | Encoder is byte-identical to the selected upstream file; local decoder is an EVRPTW adaptation | Common normalized electricity-plus-vehicle task cost replaces paper route length; unfinished penalty is adapter-only | verified adaptation |
+| EVRPTW-RL | Full accepted manuscript | Structure2Vec, two attention stages and LSTM checked against equations | Common normalized electricity-plus-vehicle task cost is combined with the separately versioned station auxiliary; fleet and negative-battery penalties are zero under benchmark semantics | verified paper-guided adaptation |
 | DRL-TS | Full PPSN chapter supplied by the user | Node/edge GAT, GRU/context decoder, masks and training equations checked; EVRPTW-DB feature additions documented | Common normalized task cost plus a separately versioned, bounded fixed-`N` Stage-1 violation profile; no CS penalty | verified paper-guided adaptation |
 | TERRAN | User-designated CaliRoute reference code | Target model tree and PBRS implementation checked against project source | Shared Stage-2 normalization is documented; distance/PBRS and remaining-customer horizon penalty are named separately | reference-code verified adaptation |
-| Edge-DIRECT-H | Full paper; no author code | Current scaled-dot-product/LayerNorm encoder does not match the published additive-GAT/BatchNorm encoder | Travel-time reward was intentionally changed to directed distance | **blocked and excluded from formal methods** |
+| Edge-DIRECT-H | Full paper; no author code | Current scaled-dot-product/LayerNorm encoder does not match the published additive-GAT/BatchNorm encoder | Travel-time reward was intentionally changed to the benchmark economic objective | **blocked and excluded from formal methods** |
 
 ## Shared observation normalization
 
@@ -40,9 +40,10 @@ paper-exact normalization.
 
 ### AM-EVRPTW
 
-For a complete rollout, training cost is exactly the sum of selected canonical
-`distance_matrix_km` arcs. An incomplete rollout adds the separately named
-training-only guard `P_km * (1 + unserved_fraction)`. The guard never ranks
+For a complete rollout, task cost is the frozen electricity-plus-vehicle
+objective divided by the scale-specific training-reference median. An incomplete
+rollout adds the separately named training-only guard
+`failure_base + unserved_coefficient * unserved_fraction`. The guard never ranks
 reported solutions.
 
 The official AM rollout baseline uses exponential warmup with beta 0.8 during
@@ -53,9 +54,9 @@ name for optimizer updates.
 
 ### EVRPTW-RL
 
-The paper reward is represented as the negative of a minimization cost:
-
-`distance_km / distance_scale_km + 0.3 * station_visits`.
+The formal adapter uses the common normalized electricity-plus-vehicle task
+cost. It retains the paper-guided station auxiliary as
+`0.3 * executed_legal_station_visits / num_customers`.
 
 The benchmark hard safe-continuation mask prevents negative battery, so the
 paper's negative-battery penalty is zero. Unlimited homogeneous vehicles make
@@ -108,8 +109,8 @@ and terminal guard are documented adaptations, not paper-exact normalization.
 ### TERRAN
 
 The model, PPO path and PBRS formula are inherited from the project code. For
-the Stage-2 adapter, the base reward remains negative normalized directed
-distance. PBRS components remain separately logged. If the registered rollout
+the Stage-2 adapter, the base reward is the negative common normalized
+electricity-plus-vehicle task cost. PBRS components remain separately logged. If the registered rollout
 horizon is exhausted, the project failure heuristic adds
 
 `-failure_penalty * remaining_customer_fraction`.

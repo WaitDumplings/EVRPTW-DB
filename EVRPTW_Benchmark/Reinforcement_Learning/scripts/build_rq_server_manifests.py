@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -125,9 +126,21 @@ def load_training_stream_registry(cfg: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
+@lru_cache(maxsize=32)
+def _load_training_stream_contract_for_file_identity(
+    path: Path, mtime_ns: int, size: int,
+) -> dict[str, Any]:
+    # mtime/size are intentional cache-key fields. A replaced artifact is
+    # revalidated, while repeated manifest builds avoid rehashing 10M rows.
+    del mtime_ns, size
+    return load_training_stream_contract(path)
+
+
 def job(
     cfg: dict[str, Any], *, method: str, scale: str, seed: int,
     representation: str, condition: str, hardware: str,
+    registry: Mapping[str, Any] | None = None,
+    stream_contract_cache: dict[Path, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     training_overrides = (
         cfg.get("training_overrides_by_method_scale", {})
@@ -194,7 +207,8 @@ def job(
         f"{ARTIFACTS}/streams/{cfg['runtime_budget_id']}/"
         f"formal/{condition}/{scale}/seed_{seed}.parquet"
     )
-    registry = load_training_stream_registry(cfg)
+    if registry is None:
+        registry = load_training_stream_registry(cfg)
     registry_key = f"{representation}/{condition}/{scale}/seed_{seed}"
     try:
         registered_stream = registry["streams"][registry_key]
@@ -213,7 +227,18 @@ def job(
         raise ValueError("training-stream registry contains an invalid snapshot")
     artifact_path = ROOT.parents[1] / stream
     if artifact_path.is_file():
-        actual_stream_contract = load_training_stream_contract(artifact_path)
+        actual_stream_contract = (
+            stream_contract_cache.get(artifact_path)
+            if stream_contract_cache is not None
+            else None
+        )
+        if actual_stream_contract is None:
+            stat = artifact_path.stat()
+            actual_stream_contract = _load_training_stream_contract_for_file_identity(
+                artifact_path, stat.st_mtime_ns, stat.st_size
+            )
+            if stream_contract_cache is not None:
+                stream_contract_cache[artifact_path] = actual_stream_contract
         if actual_stream_contract != stream_contract:
             raise ValueError("local training stream disagrees with frozen registry")
     if (
@@ -490,9 +515,10 @@ def validate_reward_contract_scope(cfg: dict[str, Any]) -> None:
 def build() -> dict[str, list[dict[str, Any]]]:
     cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     validate_reward_contract_scope(cfg)
-    # Materialize empty server queues too.  In this contract revision the
-    # 2080 Ti bundles intentionally contain no jobs until Cus50/Cus100 are
-    # calibrated, and their checked-in empty manifests are part of the gate.
+    registry = load_training_stream_registry(cfg)
+    stream_contract_cache: dict[Path, dict[str, Any]] = {}
+    # Materialize every server queue, including any legitimately empty queue,
+    # so checked-in manifests remain a complete scheduling contract.
     queues: dict[str, list[dict[str, Any]]] = {
         server: [] for server in SERVERS
     }
@@ -532,6 +558,8 @@ def build() -> dict[str, list[dict[str, Any]]]:
                     representation="G",
                     condition="Full-support",
                     hardware=hardware,
+                    registry=registry,
+                    stream_contract_cache=stream_contract_cache,
                 )
                 for method in METHODS
             )
@@ -546,6 +574,8 @@ def build() -> dict[str, list[dict[str, Any]]]:
                     representation="G",
                     condition=condition,
                     hardware=cus100_hardware,
+                    registry=registry,
+                    stream_contract_cache=stream_contract_cache,
                 )
                 for condition in ("Random-10%-support", "Coverage-10%-support")
                 for method in ("am_evrptw", "terran")
@@ -559,6 +589,8 @@ def build() -> dict[str, list[dict[str, Any]]]:
                     representation="E",
                     condition="Full-support",
                     hardware=cus100_hardware,
+                    registry=registry,
+                    stream_contract_cache=stream_contract_cache,
                 )
                 for method in METHODS
             )
@@ -637,9 +669,9 @@ def build_a6000_terran_formal_queue(
     runtime = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     authorized = set(runtime.get("authorized_job_ids", ()))
     actual = {str(row["job_id"]) for row in rows}
-    if actual != authorized:
+    if not actual.issubset(authorized):
         raise ValueError(
-            "dedicated TERRAN queue must exactly match authorized_job_ids: "
+            "dedicated TERRAN queue contains job IDs outside authorized_job_ids: "
             f"queue={sorted(actual)}, authorized={sorted(authorized)}"
         )
     return rows
@@ -784,9 +816,16 @@ def main() -> None:
         "gpu_count": 2,
         "pilot_jobs": 0,
         "formal_jobs": len(terran_formal),
-        "formal_launch_allowed": formal_launch_allowed,
+        "formal_launch_allowed": formal_launch_allowed
+        and {str(row["job_id"]) for row in terran_formal}.issubset(
+            authorized_job_ids
+        ),
         "launch_policy": launch_policy,
-        "authorized_formal_job_ids": sorted(authorized_job_ids),
+        "authorized_formal_job_ids": sorted(
+            authorized_job_ids.intersection(
+                str(row["job_id"]) for row in terran_formal
+            )
+        ),
         "slot_queues": {
             "0": ["terran/Cus500"],
             "1": ["terran/Cus1000"],

@@ -1,10 +1,26 @@
 schema: drl_rq_runtime_candidates_v2
-status: reward_contract_v2_formal_terran_authorized
+status: reward_contract_v2_formal_2080_authorized
 protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
 formal_launch_allowed: true
 launch_policy: reward_contract_v2_formal_user_authorized
 authorized_job_ids:
+  - full__G__Full-support__am_evrptw__Cus50__seed1234
+  - full__G__Full-support__evrptw_rl__Cus50__seed1234
+  - full__G__Full-support__drl_ts__Cus50__seed1234
+  - full__G__Full-support__terran__Cus50__seed1234
+  - full__G__Coverage-10%-support__terran__Cus100__seed1234
+  - full__E__Full-support__am_evrptw__Cus100__seed1234
+  - full__E__Full-support__evrptw_rl__Cus100__seed1234
+  - full__E__Full-support__drl_ts__Cus100__seed1234
+  - full__G__Full-support__am_evrptw__Cus100__seed1234
+  - full__G__Full-support__evrptw_rl__Cus100__seed1234
+  - full__G__Full-support__drl_ts__Cus100__seed1234
+  - full__G__Full-support__terran__Cus100__seed1234
+  - full__E__Full-support__terran__Cus100__seed1234
+  - full__G__Random-10%-support__am_evrptw__Cus100__seed1234
+  - full__G__Random-10%-support__terran__Cus100__seed1234
+  - full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234
   - full__G__Full-support__terran__Cus500__seed1234
   - full__G__Full-support__terran__Cus1000__seed1234
 formal_launch_gates:
@@ -14,18 +30,17 @@ formal_launch_gates:
   G4: PILOT_WAIVED_BY_USER
   G5: PILOT_WAIVED_BY_USER
   G6: PILOT_WAIVED_BY_USER
-  G7: NOT_APPLICABLE_G_ONLY
+  G7: IMPLEMENTED_UNIT_TESTED
   G8: IMPLEMENTED_UNIT_TESTED
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
 reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json
 reward_contract_revision: drl_energy_vehicle_reference_scale_v2
 training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
-training_stream_registry_sha256: 65653ce92932dec5e70de9d58daab74a33f3ae467569e25998bb8d22b6e1405d
-# This contract has training-only reference calibrations for these two scales.
-# The queue builder rejects any enabled scale outside this set before emitting
-# a job, so Cus50/Cus100 cannot silently inherit a made-up or legacy scale.
-reward_contract_calibrated_scales: [Cus500, Cus1000]
-reward_contract_blocked_scales: [Cus50, Cus100]
+training_stream_registry_sha256: a11a0b3bd44dd93c55daba0de88928133447ae0f2414dbbbd432aae1600d5df7
+# This contract has independent training-only reference calibrations for all
+# four training scales. The queue builder rejects any enabled scale outside it.
+reward_contract_calibrated_scales: [Cus50, Cus100, Cus500, Cus1000]
+reward_contract_blocked_scales: []
 
 # Method-specific auxiliary objectives are versioned independently of the
 # shared C/S + terminal-failure reward contract. DRL-TS uses its profile only
@@ -70,6 +85,10 @@ training_trajectory_count_by_method_scale: {}
 # the Cus1000 horizons of the other three DRL methods.
 training_overrides_by_method_scale:
   terran:
+    Cus50:
+      terran_terminal_success_bonus: 0.0
+    Cus100:
+      terran_terminal_success_bonus: 0.0
     Cus500:
       num_minibatches: 1
       ppo_step_chunk_size: 36
@@ -82,7 +101,7 @@ training_overrides_by_method_scale:
       terran_terminal_success_bonus: 1.0
 
 seeds: [1234]
-enabled_scales: [Cus500, Cus1000]
+enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
 rollout_steps: {Cus50: 65, Cus100: 120, Cus500: 580, Cus1000: 1200}
 # Validation is allowed 50% more decisions than training. Use exact integer
 # arithmetic and round upward, so odd training horizons are never shortened:
@@ -93,11 +112,10 @@ validation_rollout_step_limit:
   denominator: 2
   rounding: ceiling
 
-# Only the two calibrated large graph scales are launchable in this revision.
-# The empty 2080 Ti assignment is deliberate until Cus50/Cus100 receive their
-# own frozen training-reference calibration under this reward contract.
+# Cus50/Cus100 run on the measured 11 GiB profiles; large graph scales remain
+# assigned to the two RTX 6000 Ada GPUs.
 scale_hardware:
-  2080ti: []
+  2080ti: [Cus50, Cus100]
   a6000: [Cus500, Cus1000]
 
 # One logical epoch is one benchmark outer training iteration over the listed

@@ -1,10 +1,10 @@
 # DRL RQ server launch bundles
 
 The pilot queue remains removed: there is no extra two-epoch pilot phase in a
-formal run.  The current reward-contract revision is nevertheless held behind
-an explicit fail-closed authorization gate while controlled and short-training
-validation is completed.  Until that gate is deliberately reopened,
-`full.sh`/`resume.sh` refuse to start a formal process.
+formal run. The current reward-contract revision is protected by an explicit
+fail-closed authorization gate. The 16 RTX 2080 Ti Cus50/Cus100 jobs and the two
+previously approved A6000 TERRAN jobs are authorized; every other A6000 job
+remains blocked until separately approved.
 
 Defaults are derived from the checked-out repository. Dataset discovery uses
 the repository-relative `EVRPTW_Dataset/Instances_v2` tree, with optional
@@ -44,25 +44,25 @@ gradient statistics without changing training. See
 [`TRAINING_REWARD_DIAGNOSTICS.md`](../../TRAINING_REWARD_DIAGNOSTICS.md)
 for units, method-specific interpretation, sampling and resume boundaries.
 
-This contract revision has frozen training-reference calibrations only for
-Cus500 and Cus1000.  Consequently, the active formal queue is the A6000 bundle;
-the three checked-in 2080 Ti manifests are intentionally empty and fail closed
-until Cus50/Cus100 are calibrated.  Do not copy the large-scale denominator to
-those smaller scales.
+This contract revision has independent frozen training-reference calibrations
+for Cus50, Cus100, Cus500 and Cus1000. Cus50 uses the compatibility training
+view index; the other scales use the core training view index. Each scale uses
+its own deterministic 500-view, 10-city, weekday/weekend-stratified reference
+cohort; denominators are never copied across scales.
 
-After all validation gates pass and formal launch is explicitly authorized,
-restart **all four methods** from scratch, without loading an older checkpoint:
+On each RTX 2080 Ti server, start its complete authorized queue from scratch
+without loading an older checkpoint:
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/full.sh --seed 1234
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/status.sh --seed 1234
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080-server>/full.sh --seed 1234
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080-server>/status.sh --seed 1234
 ```
 
-Do not use the prior `--methods terran` filter for the requested all-method
-restart. The four bundles contain 0, 0, 0 and 8 jobs for `2080ti_4_1`,
-`2080ti_4_2`, `2080ti_3_1` and `a6000_2_1`, respectively.  The frozen protocol
-continues to record the Cus100 coverage and Euclidean controls, but this runtime
-revision does not emit them without a Cus100 reward calibration.
+The four canonical bundles contain 8, 5, 3 and 8 jobs for `2080ti_4_1`,
+`2080ti_4_2`, `2080ti_3_1` and `a6000_2_1`, respectively. The three 2080 Ti
+bundles are fully authorized. The general A6000 bundle still contains all eight
+large-scale jobs for planning, but only its dedicated two-job TERRAN queue is
+currently authorized.
 For Cus1000 only on the two-GPU large-scale server, use the following instead of
 its full queue; do not launch both queues together:
 
@@ -80,22 +80,19 @@ objective or gamma/reward contract, or a fresh launch over existing training
 history, is rejected. The launcher passes the same versioned objective JSON to
 every method and records its resolved values in each job's provenance.
 
-The local CPU regression suite excludes vendored `reference_materials` and
-`tests/test_rq_server_environment.py`: the latter needs Linux utilities
-(`flock`, GNU `realpath -m`) unavailable on the macOS test host. Local CPU
-validation does not establish GPU convergence or a full Linux server launch.
-The integrated cost revision passed 409 local CPU tests; the exact scope and
-command are recorded in
-[`COST_OBJECTIVE_V1_LOCAL_VERIFICATION.md`](../../reports/COST_OBJECTIVE_V1_LOCAL_VERIFICATION.md).
+The local CPU regression suite excludes vendored `reference_materials`.
+`tests/test_rq_server_environment.py` additionally requires Linux utilities
+(`flock`, GNU `realpath -m`) on non-Linux hosts. Local CPU validation does not
+establish GPU convergence or a full Linux server launch. Verification commands
+and platform boundaries are recorded with each implementation change.
 
-The enabled manifests contain seed 1234 only. The two RTX 6000 Ada GPUs own
-Cus500/Cus1000. Cus50/Cus100 remain part of the frozen intended design but are
-not currently launchable.
+The enabled manifests contain seed 1234 only. RTX 2080 Ti servers own the
+Cus50/Cus100 jobs; the two RTX 6000 Ada GPUs own Cus500/Cus1000.
 
 | Scale | Runtime status | Hardware | Minimum epochs | Hard cap | Environments/epoch | Maximum environments | Maximum customer exposures |
 |---|---|---|---:|---:|---:|---:|---:|
-| Cus50 | blocked: uncalibrated | RTX 2080 Ti | 5,000 | 10,000 | 1,024 | 10,240,000 | 512,000,000 |
-| Cus100 | blocked: uncalibrated | RTX 2080 Ti | 5,000 | 10,000 | 256 | 2,560,000 | 256,000,000 |
+| Cus50 | calibrated / authorized | RTX 2080 Ti | 5,000 | 10,000 | 1,024 | 10,240,000 | 512,000,000 |
+| Cus100 | calibrated / authorized | RTX 2080 Ti | 5,000 | 10,000 | 256 | 2,560,000 | 256,000,000 |
 | Cus500 | enabled | RTX 6000 Ada | 5,000 | 10,000 | 64 | 640,000 | 320,000,000 |
 | Cus1000 | enabled | RTX 6000 Ada | 5,000 | 10,000 | 2 | 20,000 | 20,000,000 |
 
@@ -132,7 +129,7 @@ checkpoint. DRL-TS always switches from soft to hard training after epoch 2,500,
 independent of the 10,000-epoch cap.
 
 TERRAN Cus1000 has a manifest-level PPO hyperparameter override of
-`num_minibatches=1` and `ppo_step_chunk_size=736`. Batch 2, 100 training
+`num_minibatches=1` and `ppo_step_chunk_size=720`. Batch 2, 100 training
 trajectories, three PPO epochs, and the registered exposure budget are
 unchanged. With two base environments, the minibatch override reduces Adam
 updates from six to three per logical epoch; the larger step chunk reduces
@@ -194,7 +191,7 @@ export EVRPTW_RESTORE_ROOT="../../../evrptw_runtime"
 ## Runtime optimizations (2026-09-04)
 
 New launches use rollout-local static caches, final-only route export during
-online validation, and compact TERRAN observations. The v12 logical budgets,
+online validation, and compact TERRAN observations. The v13 logical budgets,
 seeds and best-of-100 evaluation are unchanged. Physical batches and rollout
 limits use the current post-optimization calibration. The TERRAN Cus1000 PPO
 override documented above is the only update-schedule change.

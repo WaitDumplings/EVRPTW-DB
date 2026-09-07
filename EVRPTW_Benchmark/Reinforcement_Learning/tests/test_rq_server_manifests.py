@@ -18,21 +18,24 @@ from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests i
 )
 
 
-def test_four_server_queues_enable_only_two_calibrated_scales() -> None:
+def test_four_server_queues_cover_frozen_24_job_matrix() -> None:
     queues = build()
     assert set(queues) == set(SERVERS)
     rows = [row for queue in queues.values() for row in queue]
     formal = [row for row in rows if row["run_mode"] == "full"]
-    assert len(formal) == 8
+    assert len(formal) == 24
     assert rows == formal
-    assert len({row["job_id"] for row in formal}) == 8
+    assert len({row["job_id"] for row in formal}) == 24
     assert {row["seed"] for row in rows} == {1234}
     assert Counter((row["representation"], row["condition"]) for row in formal) == {
-        ("G", "Full-support"): 8,
+        ("G", "Full-support"): 16,
+        ("G", "Random-10%-support"): 2,
+        ("G", "Coverage-10%-support"): 2,
+        ("E", "Full-support"): 4,
     }
     assert {row["formal_gate_file"] for row in formal} == {MANIFESTS.GATE}
     assert all(not row["training_stream_path"].startswith("/") for row in rows)
-    assert {row["scale"] for row in rows} == {"Cus500", "Cus1000"}
+    assert {row["scale"] for row in rows} == {"Cus50", "Cus100", "Cus500", "Cus1000"}
 
 
 def test_shared_stream_is_method_independent_within_condition_scale_seed() -> None:
@@ -43,12 +46,16 @@ def test_shared_stream_is_method_independent_within_condition_scale_seed() -> No
         if row["run_mode"] == "full"
     ]
     grouped: dict[tuple[str, str, str, int], set[tuple[str, str, str]]] = {}
+    actual_by_path: dict[str, dict] = {}
     for row in rows:
         key = (row["representation"], row["condition"], row["scale"], row["seed"])
         snapshot = row["training_stream_contract_snapshot"]
-        actual = MANIFESTS.load_training_stream_contract(
-            MANIFESTS.ROOT.parents[1] / row["training_stream_path"]
-        )
+        stream_path = row["training_stream_path"]
+        if stream_path not in actual_by_path:
+            actual_by_path[stream_path] = MANIFESTS.load_training_stream_contract(
+                MANIFESTS.ROOT.parents[1] / stream_path
+            )
+        actual = actual_by_path[stream_path]
         assert actual == snapshot
         assert snapshot["sha256"] == row["training_stream_contract_sha256"]
         assert snapshot["sample_count"] == row["target_environments"]
@@ -62,12 +69,21 @@ def test_shared_stream_is_method_independent_within_condition_scale_seed() -> No
             )
         )
     assert all(len(paths) == 1 for paths in grouped.values())
-    assert all(
-        {row["method"] for row in rows if (
-            row["representation"], row["condition"], row["scale"], row["seed"]
-        ) == key} == set(MANIFESTS.METHODS)
-        for key in grouped
-    )
+    for key in grouped:
+        representation, condition, scale, seed = key
+        methods = {
+            row["method"]
+            for row in rows
+            if (
+                row["representation"], row["condition"], row["scale"], row["seed"]
+            ) == key
+        }
+        expected_methods = (
+            set(MANIFESTS.METHODS)
+            if condition == "Full-support"
+            else {"am_evrptw", "terran"}
+        )
+        assert methods == expected_methods
 
 
 def test_checked_in_formal_decision_is_three_way_consistent_and_scoped() -> None:
@@ -98,11 +114,8 @@ def test_checked_in_formal_decision_is_three_way_consistent_and_scoped() -> None
         gate["authorized_job_ids"]
         == runtime["authorized_job_ids"]
         == protocol["authorized_job_ids"]
-        == [
-            "full__G__Full-support__terran__Cus500__seed1234",
-            "full__G__Full-support__terran__Cus1000__seed1234",
-        ]
     )
+    assert len(gate["authorized_job_ids"]) == 18
     assert gate["formal_launch_allowed"] is True
     assert gate["launch_policy"] == "reward_contract_v2_formal_user_authorized"
     assert set(gate["formal_launch_gates"]) == {
@@ -152,7 +165,7 @@ def test_every_formal_job_uses_the_same_versioned_cost_objective() -> None:
     assert expected["vehicle_fixed_cost_usd"] == 33.56
     queues = build()
     rows = [row for queue in queues.values() for row in queue]
-    assert len(rows) == 8
+    assert len(rows) == 24
     for row in rows:
         assert row["objective_config"] == expected
         assert row["objective_config_path"] == profile_path
@@ -209,11 +222,11 @@ def test_reward_contract_is_shared_by_every_formal_method(tmp_path, monkeypatch)
                 assert row["training_gamma"] == training["gamma"] == 1.0
             else:
                 assert "training_gamma" not in row
-    assert terran_count == 2
+    assert terran_count == 7
 
-    assert set(reward_contract.scales) == {"Cus500", "Cus1000"}
+    assert set(reward_contract.scales) == {"Cus50", "Cus100", "Cus500", "Cus1000"}
     assert set(cfg["enabled_scales"]) == set(cfg["reward_contract_calibrated_scales"])
-    assert set(cfg["reward_contract_blocked_scales"]) == {"Cus50", "Cus100"}
+    assert cfg["reward_contract_blocked_scales"] == []
     frozen = yaml.safe_load(
         (MANIFESTS.ROOT / "configs/drl_rq_protocol_frozen_v1.yaml").read_text()
     )
@@ -224,7 +237,7 @@ def test_reward_contract_is_shared_by_every_formal_method(tmp_path, monkeypatch)
     assert set(frozen["reward_contract_launch_enabled_scales"]) == set(
         reward_contract.scales
     )
-    assert set(frozen["reward_contract_blocked_scales"]) == {"Cus50", "Cus100"}
+    assert frozen["reward_contract_blocked_scales"] == []
 
     # TERRAN keeps a method-specific gamma, but not a method-specific task contract.
     alternate = tmp_path / "terran.yaml"
@@ -256,27 +269,31 @@ def test_manifest_build_fails_closed_for_an_uncalibrated_enabled_scale(
     tmp_path, monkeypatch,
 ) -> None:
     cfg = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
-    cfg["enabled_scales"].append("Cus100")
-    cfg["scale_hardware"]["2080ti"] = ["Cus100"]
+    cfg["enabled_scales"].append("Cus2000")
+    cfg["scale_hardware"]["2080ti"].append("Cus2000")
     alternate = tmp_path / "runtime.yaml"
     alternate.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
     monkeypatch.setattr(MANIFESTS, "CONFIG", alternate)
-    with pytest.raises(ValueError, match="no frozen reward calibration.*Cus100"):
+    with pytest.raises(ValueError, match="no frozen reward calibration.*Cus2000"):
         build()
 
 
 def test_scale_aware_hardware_assignment_is_strict() -> None:
     queues = build()
     for server, rows in queues.items():
-        if server.startswith("2080ti_"):
-            assert rows == []
-        else:
-            assert rows
-            assert all(row["scale"] in {"Cus500", "Cus1000"} for row in rows)
+        assert rows
+        expected_scales = (
+            {"Cus50", "Cus100"}
+            if server.startswith("2080ti_")
+            else {"Cus500", "Cus1000"}
+        )
+        assert {row["scale"] for row in rows}.issubset(expected_scales)
 
 
 def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() -> None:
     expected = {
+        "Cus50": (10_000, 1_024, 10_240_000, 512_000_000),
+        "Cus100": (10_000, 256, 2_560_000, 256_000_000),
         "Cus500": (10_000, 64, 640_000, 320_000_000),
         "Cus1000": (10_000, 2, 20_000, 20_000_000),
     }
@@ -334,6 +351,8 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
 
 def test_scale_rollout_limits_match_current_protocol() -> None:
     expected = {
+        "Cus50": (65, 98),
+        "Cus100": (120, 180),
         "Cus500": (580, 870),
         "Cus1000": (1200, 1800),
     }
@@ -349,13 +368,15 @@ def test_scale_rollout_limits_match_current_protocol() -> None:
         assert row["validation_rollout_steps"] == validation_steps
 
 
-def test_2080ti_jobs_are_blocked_until_small_scales_are_calibrated() -> None:
+def test_2080ti_jobs_match_authorized_small_scale_assignment() -> None:
     queues = build()
-    assert all(
-        not queue
-        for server, queue in queues.items()
-        if server.startswith("2080ti_")
-    )
+    assert {server: len(queues[server]) for server in (
+        "2080ti_4_1", "2080ti_4_2", "2080ti_3_1"
+    )} == {"2080ti_4_1": 8, "2080ti_4_2": 5, "2080ti_3_1": 3}
+    runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
+    authorized = set(runtime["authorized_job_ids"])
+    for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1"):
+        assert {row["job_id"] for row in queues[server]}.issubset(authorized)
 
 
 def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
@@ -464,7 +485,10 @@ def test_a6000_terran_formal_queue_uses_both_gpus_and_exact_authorized_scope() -
         ("terran", "Cus1000", 1, 0),
     ]
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
-    assert {row["job_id"] for row in rows} == set(runtime["authorized_job_ids"])
+    authorized = set(runtime["authorized_job_ids"])
+    assert {row["job_id"] for row in rows} == {
+        job_id for job_id in authorized if "__terran__Cus500__" in job_id or "__terran__Cus1000__" in job_id
+    }
 
     canonical_by_id = {row["job_id"]: row for row in canonical}
     for row in rows:
@@ -499,7 +523,7 @@ def test_checked_in_a6000_terran_formal_manifest_matches_builder() -> None:
     assert summary["formal_jobs"] == 2
     assert summary["formal_launch_allowed"] is runtime["formal_launch_allowed"]
     assert summary["authorized_formal_job_ids"] == sorted(
-        runtime["authorized_job_ids"]
+        row["job_id"] for row in checked_in
     )
     assert summary["slot_queues"] == {
         "0": ["terran/Cus500"],
@@ -559,7 +583,7 @@ def test_checked_in_server_manifests_match_builder() -> None:
         assert checked_in == expected
 
 
-def test_checked_in_assignment_summaries_mark_empty_2080_queues_blocked() -> None:
+def test_checked_in_assignment_summaries_match_authorized_scope() -> None:
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
     for server, rows in build().items():
         summary = json.loads(
@@ -587,17 +611,19 @@ def test_checked_in_assignment_summaries_mark_empty_2080_queues_blocked() -> Non
         )
 
 
-def test_artifact_preparation_uses_v12_manifest_exposure_budgets() -> None:
+def test_artifact_preparation_uses_v13_manifest_exposure_budgets() -> None:
     script = (SCRIPT_ROOT / "prepare_artifacts.sh").read_text(encoding="utf-8")
     assert "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50" in script
     assert "drl_rq_runtime_budget_v11_min5000_max6000_tailval50" not in script
     assert "drl_rq_runtime_budget_v10_min5000_max10000_tailval50" not in script
     for scale, exposure in {
+        "Cus50": 512_000_000,
+        "Cus100": 256_000_000,
         "Cus500": 320_000_000,
         "Cus1000": 20_000_000,
     }.items():
         assert f"[{scale}]={exposure}" in script
-    assert "for scale in Cus500 Cus1000" in script
+    assert "for scale in Cus50 Cus100 Cus500 Cus1000" in script
     assert "file_hash_validation_performed\": True" in script
     assert '"training_stream_contracts": contracts' in script
     assert '"marker_sha256"' in script

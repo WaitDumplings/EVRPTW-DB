@@ -4,9 +4,30 @@ Date: 2026-09-05
 
 Status: historical, frozen and non-launchable. All 16 jobs assigned to the
 three RTX 2080 Ti bundles at the time completed the required calibration run;
-formal training remained stopped. The current 2080 Ti formal manifests are
-intentionally empty because Cus50/Cus100 do not yet have a frozen reference
-scale under `drl_energy_vehicle_reference_scale_v2`.
+formal training remained stopped. This statement describes the 2026-09-05
+evidence only. As of 2026-09-06, Cus50/Cus100 have independent frozen reference
+calibrations and the signed gate authorizes the 16 current RTX 2080 Ti jobs.
+The historical inventory remains disabled and cannot be executed as a current
+formal manifest.
+
+## 2026-09-06 current-contract smoke addendum
+
+After reward/FFP integration, all four Cus50 methods completed two training
+epochs followed by the full fixed 500-view, best-of-100 validation. All four
+returned exit code 0 and their verifier summaries passed. This was an isolated
+`/tmp` smoke run, not a formal training result.
+
+| Method | Physical batch | Peak process GPU (GiB) | Wall time (s) | Train+validation |
+|---|---:|---:|---:|---|
+| AM-EVRPTW | 1,024 | 4.66 | 159.05 | PASS |
+| EVRPTW-RL | 224 | 8.09 | 181.65 | PASS |
+| DRL-TS | 132 | 8.76 | 189.67 | PASS |
+| TERRAN | 256 | 9.91 | 322.64 | PASS |
+
+The smoke ran from executable base `f688fcd` plus the pending four-scale
+reward/manifest changes recorded by the commit that adds this addendum. TERRAN
+batch 256 remains below the 11,264 MiB device limit; its next exact-divisor
+step is 128 and would materially underuse the card.
 
 ## Frozen calibration contract
 

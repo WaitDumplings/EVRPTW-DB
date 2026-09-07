@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Render the frozen, non-launchable RTX 2080 Ti calibration inventory.
 
-The measurements predate the current shared reward contract.  Cus50/Cus100
-have no training-reference reward calibration in that contract, so the active
-2080 Ti formal queues are intentionally empty.  This tool reads a dedicated
-historical inventory instead of treating those active queues as source data.
-Rendered rows are explicitly disabled and are rejected by the calibration
-runner; they preserve the old two-epoch calibration metadata for audit only.
+The measurements predate the current four-scale shared reward contract. This
+tool reads a dedicated historical inventory instead of treating today's active
+formal queues as source data. Rendered rows remain explicitly disabled and are
+rejected by the calibration runner; they preserve the old two-epoch calibration
+metadata for audit only and cannot authorize a current launch.
 """
 
 from __future__ import annotations

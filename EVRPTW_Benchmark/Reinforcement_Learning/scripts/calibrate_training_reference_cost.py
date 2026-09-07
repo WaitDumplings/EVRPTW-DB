@@ -62,10 +62,11 @@ CALIBRATION_SCHEMA = "drl_training_reference_calibration_v1"
 COHORT_SCHEMA = "drl_training_reference_cohort_v1"
 PER_VIEW_SCHEMA = "drl_training_reference_view_v1"
 COHORT_HASH_SCHEME = "blake2b_training_reference_view_rank_v1"
+SOURCE_INDEX_SET_HASH_SCHEME = "sha256_canonical_training_index_set_v1"
 ROUTE_HASH_SCHEME = "sha256_canonical_routes_v1"
 CONSTRUCTOR_PROFILE_ID = "alns_singleton_best_fit_deterministic_reference_v1"
 OBJECTIVE_VERIFIER_PROFILE_ID = "gurobi_stage2_route_validator_v1"
-DEFAULT_SCALES = ("Cus500", "Cus1000")
+DEFAULT_SCALES = ("Cus50", "Cus100", "Cus500", "Cus1000")
 DEFAULT_CITY_COUNT = 10
 DEFAULT_DAY_QUOTAS = {"weekday": 36, "weekend": 14}
 DEFAULT_VIEWS_PER_CITY = sum(DEFAULT_DAY_QUOTAS.values())
@@ -130,6 +131,37 @@ def file_sha256(path: str | Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def source_index_members(
+    paths: Sequence[str | Path], family_root: str | Path,
+) -> list[dict[str, str]]:
+    """Describe disjoint scale indexes without recording machine-local roots."""
+
+    dataset_root = Path(family_root).resolve().parents[1]
+    members: list[dict[str, str]] = []
+    for raw_path in paths:
+        source = Path(raw_path).resolve()
+        try:
+            label = source.relative_to(dataset_root).as_posix()
+        except ValueError:
+            label = source.name
+        members.append({"relative_path": label, "sha256": file_sha256(source)})
+    members.sort(key=lambda item: item["relative_path"])
+    if len({item["relative_path"] for item in members}) != len(members):
+        raise CalibrationError("training index provenance labels are not unique")
+    return members
+
+
+def source_index_set_sha256(members: Sequence[Mapping[str, str]]) -> str:
+    encoded = json.dumps(
+        list(members),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def route_sha256(routes: Sequence[Sequence[int]]) -> str:
@@ -206,10 +238,16 @@ def select_fixed_training_cohort(
             raise CalibrationError(
                 f"{scale} source contains validation/test rows; calibration is training-only"
             )
-        for cohort_field in ("consumer_cohort_id", "family_cohort_id"):
-            if set(candidates[cohort_field].astype(str)) != {"core/train"}:
+        expected_cohorts = {
+            "consumer_cohort_id": (
+                "compatibility_cus50/train" if scale == "Cus50" else "core/train"
+            ),
+            "family_cohort_id": "core/train",
+        }
+        for cohort_field, expected_cohort in expected_cohorts.items():
+            if set(candidates[cohort_field].astype(str)) != {expected_cohort}:
                 raise CalibrationError(
-                    f"{scale} requires {cohort_field}=core/train"
+                    f"{scale} requires {cohort_field}={expected_cohort}"
                 )
         expected_customers = int(scale.removeprefix("Cus"))
         if set(candidates["customer_count"].astype(int)) != {expected_customers}:
@@ -282,13 +320,24 @@ def select_fixed_training_cohort(
 
 
 def build_work_items(
-    train_index: str | Path,
+    train_index: str | Path | Sequence[str | Path],
     family_root: str | Path,
     cohort: pd.DataFrame,
     objective: ObjectiveConfig | Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     objective_config = resolve_objective(objective)
-    tasks = read_stage2_tasks(train_index, family_root=family_root)
+    index_paths = (
+        [train_index]
+        if isinstance(train_index, (str, Path))
+        else list(train_index)
+    )
+    if not index_paths:
+        raise CalibrationError("at least one training index is required")
+    tasks = [
+        task
+        for index_path in index_paths
+        for task in read_stage2_tasks(index_path, family_root=family_root)
+    ]
     by_view: dict[str, Stage2ViewTask] = {}
     for task in tasks:
         if task.view_id in by_view:
@@ -547,6 +596,7 @@ def build_contract_payload(
     source_index_sha256: str,
     cohort_file_sha256: str,
     per_view_file_sha256: str,
+    source_index_members: Sequence[Mapping[str, str]] | None = None,
     cohort_seed: int = DEFAULT_COHORT_SEED,
     day_quotas: Mapping[str, int] = DEFAULT_DAY_QUOTAS,
     expected_city_count: int = DEFAULT_CITY_COUNT,
@@ -599,6 +649,16 @@ def build_contract_payload(
             "source_split": "train",
             "source_track": "train",
             "source_view_index_sha256": str(source_index_sha256),
+            "source_view_index_hash_scheme": (
+                SOURCE_INDEX_SET_HASH_SCHEME
+                if source_index_members is not None
+                else "sha256_file_v1"
+            ),
+            "source_view_indexes": (
+                [dict(item) for item in source_index_members]
+                if source_index_members is not None
+                else None
+            ),
             "objective_config_sha256": objective_digest,
             "cohort": {
                 "schema": COHORT_SCHEMA,
@@ -660,7 +720,10 @@ def build_contract_payload(
 
 
 def cohort_payload(
-    cohort: pd.DataFrame, *, source_index_sha256: str
+    cohort: pd.DataFrame,
+    *,
+    source_index_sha256: str,
+    source_index_members: Sequence[Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     records = []
     for raw in cohort.sort_values("cohort_position").to_dict(orient="records"):
@@ -685,6 +748,16 @@ def cohort_payload(
         "source_split": "train",
         "source_track": "train",
         "source_view_index_sha256": str(source_index_sha256),
+        "source_view_index_hash_scheme": (
+            SOURCE_INDEX_SET_HASH_SCHEME
+            if source_index_members is not None
+            else "sha256_file_v1"
+        ),
+        "source_view_indexes": (
+            [dict(item) for item in source_index_members]
+            if source_index_members is not None
+            else None
+        ),
         "hash_scheme": COHORT_HASH_SCHEME,
         "seed": DEFAULT_COHORT_SEED,
         "day_quota_per_city": dict(DEFAULT_DAY_QUOTAS),
@@ -718,12 +791,15 @@ def write_calibration_outputs(
     rows: Sequence[Mapping[str, Any]],
     objective: ObjectiveConfig | Mapping[str, Any],
     source_index_sha256: str,
+    source_index_members: Sequence[Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Atomically write complete artifacts, publishing the contract last."""
 
     validate_complete_results(cohort, rows, objective)
     cohort_document = cohort_payload(
-        cohort, source_index_sha256=source_index_sha256
+        cohort,
+        source_index_sha256=source_index_sha256,
+        source_index_members=source_index_members,
     )
     cohort_bytes = canonical_json_bytes(cohort_document, pretty=True)
     per_view_bytes = b"".join(
@@ -737,6 +813,7 @@ def write_calibration_outputs(
         source_index_sha256=source_index_sha256,
         cohort_file_sha256=cohort_digest,
         per_view_file_sha256=per_view_digest,
+        source_index_members=source_index_members,
     )
 
     artifact_root = Path(artifact_dir)
@@ -751,11 +828,18 @@ def write_calibration_outputs(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Calibrate Cus500/Cus1000 DRL reward terms from deterministic, "
+            "Calibrate Cus50/Cus100/Cus500/Cus1000 DRL reward terms from "
+            "deterministic, "
             "training-only ALNS constructive references."
         )
     )
-    parser.add_argument("--train-index", type=Path, required=True)
+    parser.add_argument(
+        "--train-index",
+        type=Path,
+        action="append",
+        required=True,
+        help="Training view index; repeat for disjoint scale-specific indexes.",
+    )
     parser.add_argument("--family-root", type=Path, required=True)
     parser.add_argument("--objective-config", type=Path, default=DEFAULT_OBJECTIVE)
     parser.add_argument("--artifact-dir", type=Path, default=DEFAULT_ARTIFACT_DIR)
@@ -766,27 +850,35 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
-    if not args.train_index.is_file():
-        raise FileNotFoundError(args.train_index)
+    for train_index in args.train_index:
+        if not train_index.is_file():
+            raise FileNotFoundError(train_index)
     if not args.family_root.is_dir():
         raise FileNotFoundError(args.family_root)
     objective = load_objective(args.objective_config)
     if not objective.is_cost:
         raise CalibrationError("objective config must use energy_vehicle_cost")
-    index = pd.read_parquet(args.train_index)
+    index = pd.concat(
+        [pd.read_parquet(path) for path in args.train_index],
+        ignore_index=True,
+    )
+    if index["view_id"].astype(str).duplicated().any():
+        raise CalibrationError("combined training indexes contain duplicate view IDs")
     cohort = select_fixed_training_cohort(index)
     work_items = build_work_items(
         args.train_index, args.family_root, cohort, objective
     )
     rows = run_work_items(work_items, num_workers=args.num_workers)
     validate_complete_results(cohort, rows, objective)
+    index_members = source_index_members(args.train_index, args.family_root)
     contract = write_calibration_outputs(
         artifact_dir=args.artifact_dir,
         contract_path=args.output_contract,
         cohort=cohort,
         rows=rows,
         objective=objective,
-        source_index_sha256=file_sha256(args.train_index),
+        source_index_sha256=source_index_set_sha256(index_members),
+        source_index_members=index_members,
     )
     print(
         json.dumps(

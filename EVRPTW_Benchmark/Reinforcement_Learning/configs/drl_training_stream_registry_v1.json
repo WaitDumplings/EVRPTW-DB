@@ -1,11 +1,59 @@
 {
-  "artifact_preparation_marker_sha256": "a4dc4158eaee08806cd21e8c76c6b401420d5d7bc61eece62a7910fe4820fbff",
+  "artifact_preparation_marker_sha256": "eece4c59e57e024db47648ee942856a9406cf07435bf29cca64dfd7a3005e91e",
   "registry_id": "drl_rq_formal_training_streams_v1",
   "runtime_budget_id": "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50",
   "schema": "drl_training_stream_registry_v1",
-  "sha256": "65653ce92932dec5e70de9d58daab74a33f3ae467569e25998bb8d22b6e1405d",
+  "sha256": "a11a0b3bd44dd93c55daba0de88928133447ae0f2414dbbbd432aae1600d5df7",
   "source_scope": "training_split_and_track_only",
   "streams": {
+    "E/Full-support/Cus100/seed_1234": {
+      "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Full-support/Cus100/seed_1234.parquet",
+      "snapshot": {
+        "allowed_family_ids_sha256": null,
+        "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+        "manifest_sha256": "07e1f501932095a47b24f61f501a5565eb4f8069f58705cd2b80cf4c37bf1266",
+        "sample_count": 2560000,
+        "scale": "Cus100",
+        "schema": "drl_training_stream_contract_v1",
+        "seed": 1234,
+        "sha256": "8ea92e4bebf9326ab4def633240acd0a23d4a52151200dd54f33a0591ca512a2",
+        "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+        "stream_content_sha256": "efad0fa5b5d02ed6c3c2795146b3b40955fc09abaf318a8fc58966490e9be1a3",
+        "stream_schema": "drl_training_id_stream_v3"
+      }
+    },
+    "G/Coverage-10%-support/Cus100/seed_1234": {
+      "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Coverage-10%-support/Cus100/seed_1234.parquet",
+      "snapshot": {
+        "allowed_family_ids_sha256": "9b4ac5485c3658e4b6dde10878cf9626bf0d41a3fa2f822689347a4cb666373a",
+        "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+        "manifest_sha256": "2b491aa26b4577d716975f1614e0f47864c4eb3bcfbaf0fafe15b92efa3a0768",
+        "sample_count": 2560000,
+        "scale": "Cus100",
+        "schema": "drl_training_stream_contract_v1",
+        "seed": 1234,
+        "sha256": "537db007b0f4aae7873756811f5ebe28878137d2a09e074398364beeafbb65b9",
+        "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+        "stream_content_sha256": "ffeba291fecffc646488363df82ae7cbf4088b73af69a8215fe532a5cadea57c",
+        "stream_schema": "drl_training_id_stream_v3"
+      }
+    },
+    "G/Full-support/Cus100/seed_1234": {
+      "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Full-support/Cus100/seed_1234.parquet",
+      "snapshot": {
+        "allowed_family_ids_sha256": null,
+        "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+        "manifest_sha256": "07e1f501932095a47b24f61f501a5565eb4f8069f58705cd2b80cf4c37bf1266",
+        "sample_count": 2560000,
+        "scale": "Cus100",
+        "schema": "drl_training_stream_contract_v1",
+        "seed": 1234,
+        "sha256": "8ea92e4bebf9326ab4def633240acd0a23d4a52151200dd54f33a0591ca512a2",
+        "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+        "stream_content_sha256": "efad0fa5b5d02ed6c3c2795146b3b40955fc09abaf318a8fc58966490e9be1a3",
+        "stream_schema": "drl_training_id_stream_v3"
+      }
+    },
     "G/Full-support/Cus1000/seed_1234": {
       "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Full-support/Cus1000/seed_1234.parquet",
       "snapshot": {
@@ -22,6 +70,22 @@
         "stream_schema": "drl_training_id_stream_v3"
       }
     },
+    "G/Full-support/Cus50/seed_1234": {
+      "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Full-support/Cus50/seed_1234.parquet",
+      "snapshot": {
+        "allowed_family_ids_sha256": null,
+        "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+        "manifest_sha256": "ec042d4179dc58f07eb08bb172f6aff818311f8bccc95c6f0319a0520da35f3d",
+        "sample_count": 10240000,
+        "scale": "Cus50",
+        "schema": "drl_training_stream_contract_v1",
+        "seed": 1234,
+        "sha256": "bb8002a3a5da5a53a413e83b8201a4f2ed3ae62fe98598117d5ad11baae05264",
+        "source_index_sha256": "4ceb0aad91f38799116a2936f1f40b760b93335d6ad9cea340024625ca0e252e",
+        "stream_content_sha256": "c8db6af55733b66c8398415d6defb20e2903be29fe5e8d01ff8f99d50da84497",
+        "stream_schema": "drl_training_id_stream_v3"
+      }
+    },
     "G/Full-support/Cus500/seed_1234": {
       "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Full-support/Cus500/seed_1234.parquet",
       "snapshot": {
@@ -35,6 +99,22 @@
         "sha256": "7be15b658af71fa3f04f9f41577ba2524b68b30a29e12bee47bf4bb13ac01712",
         "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
         "stream_content_sha256": "aa098be4afcec914acde374559532938acbabf64a26d7ef65b737d0a606c2cc7",
+        "stream_schema": "drl_training_id_stream_v3"
+      }
+    },
+    "G/Random-10%-support/Cus100/seed_1234": {
+      "path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50/formal/Random-10%-support/Cus100/seed_1234.parquet",
+      "snapshot": {
+        "allowed_family_ids_sha256": "93e3f5d941f2af5ff4f3f3dd76be307f649f88e493dd5480b3873cd1f8f15103",
+        "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+        "manifest_sha256": "f2d298f6fa4e378df254e6dcf4f25b0f90ea81dd9af43edbefd468a5b440108e",
+        "sample_count": 2560000,
+        "scale": "Cus100",
+        "schema": "drl_training_stream_contract_v1",
+        "seed": 1234,
+        "sha256": "f2affd54eb3de67266f1f3ac4e2360291e539ed03b32bb8a1bf1367a3f8a48a9",
+        "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+        "stream_content_sha256": "447dd845fcc8b382169dde303ceb4f0dbd68178dfb47ef4e56a7d030138ced6b",
         "stream_schema": "drl_training_id_stream_v3"
       }
     }

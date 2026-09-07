@@ -1,10 +1,14 @@
 {
-  "authorized_formal_job_ids": [],
-  "formal_jobs": 0,
-  "formal_launch_allowed": false,
+  "authorized_formal_job_ids": [
+    "full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234",
+    "full__G__Random-10%-support__am_evrptw__Cus100__seed1234",
+    "full__G__Random-10%-support__terran__Cus100__seed1234"
+  ],
+  "formal_jobs": 3,
+  "formal_launch_allowed": true,
   "gpu_count": 3,
   "hardware": "2080ti",
-  "launch_policy": "blocked_no_calibrated_reward_scale",
+  "launch_policy": "reward_contract_v2_formal_user_authorized",
   "pilot_jobs": 0,
   "schema": "drl_rq_server_assignment_v1",
   "server": "2080ti_3_1"
