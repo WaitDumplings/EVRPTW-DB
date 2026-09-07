@@ -1,0 +1,78 @@
+{
+  "schema": "drl_terran_warmstart_launcher_profile_v1",
+  "profile_id": "terran_cus1000_warmstart_epoch1250_b4_v1",
+  "launcher_id": "terran_cus1000_warmstart_epoch1250_b4_v1",
+  "protocol_id": "drl_rq_terran_cus1000_warmstart_epoch1250_b4_v1",
+  "output_suffix": "terran_cus1000_warmstart_epoch1250_b4_v1",
+  "expected_branch": "drl-benchmark-adapters",
+  "server": "a6000_2_1",
+  "hardware": "a6000",
+  "gpu_index": 1,
+  "method": "terran",
+  "representation": "G",
+  "condition": "Full-support",
+  "scale": "Cus1000",
+  "num_customers": 1000,
+  "seed": 1234,
+  "source_checkpoint": {
+    "relative_path": "EVRPTW_Benchmark/results/DRL_rq_v1/G/Full-support/terran/Cus1000/seed_1234/f688fcda89a8151f1ed622793348e20357021aa8/best.ckpt",
+    "sha256": "abcd752c556108280bc93f6f3a48f5072649e7c7fdb0c08ed44db440ff3197dd",
+    "epoch": 1250,
+    "seed": 1234,
+    "load_policy": "model_weights_only_fresh_adamw"
+  },
+  "training": {
+    "maximum_global_epoch": 10000,
+    "planned_future_epochs": 8750,
+    "physical_batch_size": 4,
+    "effective_batch_size": 4,
+    "n_traj": 50,
+    "rollout_steps": 1250,
+    "ppo_step_chunk_size": 624,
+    "ppo_update_epochs": 3,
+    "num_minibatches": 1,
+    "gradient_accumulation_steps": 1,
+    "optimizer": "adamw",
+    "learning_rate": 0.00005,
+    "weight_decay": 0.01,
+    "minimum_training_epoch": 5000,
+    "early_stop_start_epoch": 5000,
+    "early_stop_patience_validations": 10,
+    "terminal_success_bonus": 1.0
+  },
+  "validation": {
+    "rollout_steps": 1875,
+    "limit": 500,
+    "decode_type": "sampling",
+    "candidates": 100,
+    "seed": 910001234,
+    "base_every_epochs": 250,
+    "post_minimum_every_epochs": 50,
+    "future_checkpoints": 115,
+    "final_validation_limit": 0
+  },
+  "training_stream": {
+    "relative_path": "EVRPTW_Benchmark/results/DRL_rq_v1/artifacts/streams/terran_cus1000_warmstart_epoch1250_b4_v1/seed_1234.parquet",
+    "contract_sha256": "1573ace3278c02a3012f92e2161f42bf515ae4cd2feb896e92e9a29f14aa1c9a",
+    "sample_count": 35000,
+    "customer_exposures": 35000000,
+    "exposure_checkpoints": [10000000, 20000000, 35000000],
+    "gpu_hour_checkpoints": [6, 12, 24]
+  },
+  "dataset": {
+    "train_index": "generation_plan/core/train/view_index.parquet",
+    "train_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+    "validation_index": "generation_plan/core/val/view_index.parquet",
+    "validation_index_sha256": "c6701d1f9d02b7c4ce25dacc6c9c04fadbea59fd37958ebf01428875f2480b25",
+    "family_root": "materialized/families"
+  },
+  "files": {
+    "terran_config": "EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/configs/stage2_cus100_terran.yaml",
+    "terran_config_sha256": "45a9f7ffb73b7c821916119105bc696bbd25d056f7da512048cb0ce41c483fe0",
+    "objective_config": "EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json",
+    "objective_config_sha256": "7d1e3b24afefc8b77351dd09caf04bd5d7e5040d2efb9bbb84eeea277478ec23",
+    "reward_contract": "EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json",
+    "reward_contract_file_sha256": "9eb5345fbe173a7777827b8bd5246410fee3af5cc46d1a76e3fc1f04a5cbb039",
+    "reward_contract_sha256": "425df9f07cfc9edd1ef4f03d78cb9075577f3096d23ae9e2bd81dc9116ad7e89"
+  }
+}

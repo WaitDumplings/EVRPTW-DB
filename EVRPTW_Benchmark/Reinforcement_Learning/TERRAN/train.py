@@ -25,6 +25,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-traj", type=int, default=None)
     parser.add_argument("--num-minibatches", type=int, default=None)
     parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=None,
+        help="AdamW learning rate (a warm start still creates a fresh optimizer).",
+    )
+    parser.add_argument(
+        "--warm-start-epoch-mode",
+        choices=("reset", "continue_global"),
+        default="reset",
+        help=(
+            "reset (default) starts epoch, data-stream, validation, and early-"
+            "stop schedules at zero; continue_global treats the checkpoint "
+            "epoch as the global epoch and trains only the remaining budget."
+        ),
+    )
+    parser.add_argument(
         "--terminal-success-bonus",
         type=float,
         default=None,
@@ -85,7 +101,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--async-instance-queue-batches", type=int, default=None)
     parser.add_argument("--output-dir", type=Path)
     add_data_pass_arguments(parser)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.resume and args.warm_start_checkpoint is not None:
+        parser.error("--resume and --warm-start-checkpoint are mutually exclusive")
+    if (
+        not args.resume
+        and args.warm_start_checkpoint is None
+        and args.warm_start_epoch_mode != "reset"
+    ):
+        parser.error(
+            "--warm-start-epoch-mode=continue_global requires "
+            "--warm-start-checkpoint"
+        )
+    return args
 
 
 def main() -> None:
@@ -166,6 +194,8 @@ def main() -> None:
         overrides["training"]["n_traj"] = args.n_traj
     if args.num_minibatches is not None:
         overrides["training"]["num_minibatches"] = args.num_minibatches
+    if args.learning_rate is not None:
+        overrides["training"]["learning_rate"] = args.learning_rate
     if args.terminal_success_bonus is not None:
         overrides["pbrs"]["terminal_success_bonus"] = (
             args.terminal_success_bonus

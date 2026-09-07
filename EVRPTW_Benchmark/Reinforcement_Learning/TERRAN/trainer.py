@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from copy import deepcopy
 from dataclasses import asdict
+import hashlib
 import json
 import math
 import os
@@ -513,7 +514,7 @@ def resolved_terran_scientific_fields(
         raise ValueError(
             "TERRAN protocol terminal success bonus disagrees with task reward"
         )
-    return {
+    result = {
         "method": "TERRAN",
         "task_reward": {
             "terminal_success_bonus": completion_bonus,
@@ -564,6 +565,28 @@ def resolved_terran_scientific_fields(
             "early_stop_start_epoch": early_stop_start,
         },
     }
+    warm_start = protocol.get("warm_start")
+    has_warm_start = bool(protocol.get("warm_start_checkpoint")) or warm_start is not None
+    if has_warm_start:
+        mode = warm_start_epoch_mode(cfg)
+        result["protocol"]["warm_start_epoch_mode"] = mode
+    if warm_start is not None:
+        if not isinstance(warm_start, Mapping):
+            raise ValueError("TERRAN warm-start provenance must be a mapping")
+        result["protocol"]["warm_start"] = json.loads(
+            json.dumps(dict(warm_start), sort_keys=True, allow_nan=False)
+        )
+        result["protocol"]["planned_training_epochs"] = int(
+            protocol.get(
+                "planned_training_epochs",
+                (
+                    epochs - int(warm_start.get("source_epoch", 0))
+                    if mode == "continue_global"
+                    else epochs
+                ),
+            )
+        )
+    return result
 
 
 def _resolved_terran_training_signature(
@@ -581,8 +604,13 @@ def _resolved_terran_training_signature(
     if stream_path is None:
         stream_path = data.get("stage2_training_stream_path")
     effective = int(protocol["effective_batch_size"])
+    planned_training_epochs = int(
+        (cfg.get("protocol", {}) or {}).get(
+            "planned_training_epochs", training["epochs"]
+        )
+    )
     exposure_budget = (
-        int(training["epochs"])
+        planned_training_epochs
         * effective
         * int(str(raw_scale).removeprefix("Cus"))
         if stream_path is not None
@@ -789,63 +817,107 @@ def _allows_legacy_training_prefix_extension(
     return saved_normalized == current_normalized
 
 
-def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
-    """Do not silently continue a discounted/older reward run as a new protocol."""
-    saved_training = payload.get("config", {}).get("training", {})
+def _validate_task_reward_compatibility(
+    cfg: dict[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    operation: str,
+) -> None:
+    """Validate the semantics that make pretrained policy weights meaningful."""
+
+    saved_cfg = payload.get("config", {})
+    if not isinstance(saved_cfg, Mapping):
+        raise ValueError(f"TERRAN {operation} checkpoint is missing its config")
+    saved_training = saved_cfg.get("training", {})
+    if not isinstance(saved_training, Mapping):
+        raise ValueError(
+            f"TERRAN {operation} checkpoint has invalid training configuration"
+        )
     if "gamma" not in saved_training:
-        raise ValueError("TERRAN resume checkpoint is missing training.gamma; start a fresh run")
-    if training_gamma(payload["config"]) != training_gamma(cfg):
-        raise ValueError("TERRAN resume gamma mismatch; start a fresh run in a new output directory")
+        raise ValueError(
+            f"TERRAN {operation} checkpoint is missing training.gamma; "
+            "start a fresh run"
+        )
+    if training_gamma(dict(saved_cfg)) != training_gamma(cfg):
+        raise ValueError(
+            f"TERRAN {operation} gamma mismatch; start a fresh run in a new "
+            "output directory"
+        )
     current_contract = cfg.get("training", {}).get("reward_contract_id")
     if saved_training.get("reward_contract_id") != current_contract:
-        raise ValueError("TERRAN resume reward contract mismatch; start a fresh run")
+        raise ValueError(
+            f"TERRAN {operation} reward contract mismatch; start a fresh run"
+        )
     current_snapshot = cfg.get("reward_contract")
-    saved_snapshot = payload.get("config", {}).get("reward_contract")
+    saved_snapshot = saved_cfg.get("reward_contract")
     if (current_snapshot is None) != (saved_snapshot is None):
-        raise ValueError("TERRAN resume reward contract snapshot mismatch; start a fresh run")
+        raise ValueError(
+            f"TERRAN {operation} reward contract snapshot mismatch; "
+            "start a fresh run"
+        )
     if current_snapshot is not None:
         try:
             current_frozen = RewardContract.from_payload(current_snapshot)
             saved_frozen = RewardContract.from_payload(saved_snapshot)
         except (TypeError, ValueError) as error:
             raise ValueError(
-                "TERRAN resume reward contract snapshot is invalid; start a fresh run"
+                f"TERRAN {operation} reward contract snapshot is invalid; "
+                "start a fresh run"
             ) from error
         if current_frozen.digest != saved_frozen.digest:
             raise ValueError(
-                "TERRAN resume reward contract digest mismatch; start a fresh run"
+                f"TERRAN {operation} reward contract digest mismatch; "
+                "start a fresh run"
             )
         current_terms = _selected_reward_contract_terms(
             cfg, current_frozen, source="current configuration",
         )
         saved_terms = _selected_reward_contract_terms(
-            payload["config"], saved_frozen, source="resume checkpoint",
+            dict(saved_cfg), saved_frozen, source=f"{operation} checkpoint",
         )
         if current_terms.scale_label != saved_terms.scale_label:
             raise ValueError(
-                "TERRAN resume reward contract scale mismatch; start a fresh run"
+                f"TERRAN {operation} reward contract scale mismatch; "
+                "start a fresh run"
             )
         if current_terms.to_dict() != saved_terms.to_dict():
             raise ValueError(
-                "TERRAN resume derived reward contract mismatch; start a fresh run"
+                f"TERRAN {operation} derived reward contract mismatch; "
+                "start a fresh run"
             )
     current_pbrs = cfg.get("pbrs_reward_semantics")
-    saved_pbrs = payload.get("config", {}).get("pbrs_reward_semantics")
+    saved_pbrs = saved_cfg.get("pbrs_reward_semantics")
     if (current_pbrs is None) != (saved_pbrs is None):
         raise ValueError(
-            "TERRAN resume PBRS shaping snapshot mismatch; start a fresh run"
+            f"TERRAN {operation} PBRS shaping snapshot mismatch; start a fresh run"
         )
     if current_pbrs is not None:
         current_resolved = _resolved_pbrs_reward_semantics(cfg)
-        saved_resolved = _resolved_pbrs_reward_semantics(payload["config"])
+        saved_resolved = _resolved_pbrs_reward_semantics(dict(saved_cfg))
         if current_pbrs != current_resolved or saved_pbrs != saved_resolved:
             raise ValueError(
-                "TERRAN resume PBRS shaping snapshot is inconsistent with its config"
+                f"TERRAN {operation} PBRS shaping snapshot is inconsistent "
+                "with its config"
             )
         if current_pbrs != saved_pbrs:
             raise ValueError(
-                "TERRAN resume PBRS shaping semantics mismatch; start a fresh run"
+                f"TERRAN {operation} PBRS shaping semantics mismatch; "
+                "start a fresh run"
             )
+    current_objective = resolve_objective(cfg.get("objective"))
+    try:
+        objective_from_checkpoint(dict(payload), override=current_objective)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"TERRAN {operation} objective configuration mismatch; "
+            f"start a fresh run: {error}"
+        ) from error
+
+
+def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
+    """Do not silently continue a discounted/older reward run as a new protocol."""
+    _validate_task_reward_compatibility(cfg, payload, operation="resume")
+    saved_training = payload.get("config", {}).get("training", {})
     current_stream_sha = _validated_training_stream_sha(
         cfg, source="current configuration"
     )
@@ -893,39 +965,181 @@ def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]
                 "TERRAN resume optimizer state weight decay mismatch; "
                 "start a fresh run"
             )
-    current_objective = resolve_objective(cfg.get("objective"))
+
+
+def _warm_start_model_signature(cfg: Mapping[str, Any]) -> dict[str, Any]:
+    model = cfg.get("model", {}) or {}
+    if not isinstance(model, Mapping):
+        raise ValueError("TERRAN warm-start model configuration must be a mapping")
+    return {
+        "embedding_dim": int(model.get("embedding_dim", 256)),
+        "tanh_clipping": float(model.get("tanh_clipping", 15.0)),
+        "n_encode_layers": int(model.get("n_encode_layers", 3)),
+        "use_graph_token": bool(model.get("use_graph_token", False)),
+        "use_dynamic_embedding": bool(model.get("use_dynamic_embedding", False)),
+    }
+
+
+def _warm_start_scale_signature(cfg: Mapping[str, Any]) -> dict[str, Any]:
+    data = cfg.get("data", {}) or {}
+    if not isinstance(data, Mapping):
+        raise ValueError("TERRAN warm-start data configuration must be a mapping")
+    raw_scale = data.get("stage2_scale")
+    num_customers = int(
+        data.get(
+            "num_customers",
+            str(raw_scale).removeprefix("Cus") if raw_scale not in (None, "") else 15,
+        )
+    )
+    scale = str(raw_scale) if raw_scale not in (None, "") else f"Cus{num_customers}"
+    return {
+        "scale": scale,
+        "num_customers": num_customers,
+        "num_charging_stations": int(data.get("num_charging_stations", 3)),
+        "representation": str(data.get("stage2_training_representation", "G")),
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_warm_start_checkpoint(
+    cfg: dict[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    checkpoint_path: str | Path,
+) -> int:
+    """Validate a weights-only initialization and return its global epoch."""
+
+    protocol = cfg.get("protocol", {}) or {}
+    if warm_start_epoch_mode(cfg) != "continue_global":
+        raise ValueError(
+            "global-epoch warm-start validation requires continue_global mode"
+        )
+    provenance = protocol.get("warm_start") if isinstance(protocol, Mapping) else None
+    if not isinstance(provenance, Mapping):
+        raise ValueError("TERRAN warm start requires frozen protocol provenance")
+    if provenance.get("schema") != "terran_weights_only_warm_start_v1":
+        raise ValueError("TERRAN warm-start provenance schema is invalid")
+    source = Path(checkpoint_path).expanduser().resolve(strict=True)
+    if str(source) != provenance.get("source_checkpoint_path"):
+        raise ValueError("TERRAN warm-start source path disagrees with provenance")
+    actual_digest = _sha256_file(source)
+    if actual_digest != provenance.get("source_checkpoint_sha256"):
+        raise ValueError("TERRAN warm-start checkpoint SHA256 mismatch")
     try:
-        objective_from_checkpoint(payload, override=current_objective)
-    except (TypeError, ValueError) as error:
-        raise ValueError(f"TERRAN resume objective configuration mismatch; start a fresh run: {error}") from error
+        source_epoch = int(payload["epoch"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("TERRAN warm-start checkpoint has no valid epoch") from error
+    if source_epoch < 0 or source_epoch != int(provenance.get("source_epoch", -1)):
+        raise ValueError("TERRAN warm-start source epoch disagrees with provenance")
+    source_seed = payload.get("seed")
+    expected_source_seed = int(source_seed) if source_seed is not None else None
+    if provenance.get("source_seed") != expected_source_seed:
+        raise ValueError("TERRAN warm-start source seed disagrees with provenance")
+    if int(cfg.get("training", {}).get("epochs", 0)) <= source_epoch:
+        raise ValueError(
+            "TERRAN warm-start target epoch must be greater than source epoch"
+        )
+    expected_planned_epochs = int(cfg["training"]["epochs"]) - source_epoch
+    if int(protocol.get("planned_training_epochs", -1)) != expected_planned_epochs:
+        raise ValueError("TERRAN warm-start planned epoch budget is inconsistent")
+    if int(protocol.get("warm_start_epoch_offset", source_epoch)) != source_epoch:
+        raise ValueError("TERRAN warm-start global epoch offset is inconsistent")
+    if (
+        provenance.get("model_state_dict_loaded") is not True
+        or provenance.get("optimizer_state_dict_loaded") is not False
+        or provenance.get("optimizer_reset") is not True
+        or str(provenance.get("optimizer_name", "")).lower() != "adamw"
+    ):
+        raise ValueError("TERRAN warm-start optimizer-reset provenance is invalid")
+    if not isinstance(payload.get("model_state_dict"), Mapping):
+        raise ValueError("TERRAN warm-start checkpoint is missing model_state_dict")
+
+    _validate_task_reward_compatibility(cfg, payload, operation="warm-start")
+    saved_cfg = payload.get("config", {})
+    if _warm_start_model_signature(cfg) != _warm_start_model_signature(saved_cfg):
+        raise ValueError("TERRAN warm-start model configuration mismatch")
+    if _warm_start_scale_signature(cfg) != _warm_start_scale_signature(saved_cfg):
+        raise ValueError("TERRAN warm-start scale configuration mismatch")
+    return source_epoch
+
+
+def warm_start_epoch_mode(cfg: Mapping[str, Any]) -> str:
+    """Return the explicit weights-only warm-start epoch policy.
+
+    Upstream warm starts restart the logical training schedule at epoch one.
+    The calibrated Cus1000 continuation profile instead keeps the source
+    checkpoint's global epoch so PBRS, validation, and the fixed budget remain
+    on the original schedule.
+    """
+
+    protocol = cfg.get("protocol", {}) or {}
+    if not isinstance(protocol, Mapping):
+        raise ValueError("TERRAN protocol configuration must be a mapping")
+    provenance = protocol.get("warm_start")
+    nested_mode = (
+        provenance.get("epoch_mode")
+        if isinstance(provenance, Mapping)
+        else None
+    )
+    configured_mode = protocol.get("warm_start_epoch_mode")
+    mode = str(
+        configured_mode
+        if configured_mode is not None
+        else nested_mode
+        if nested_mode is not None
+        # The original 8584788 provenance schema predated the mode field and
+        # unambiguously represented global-epoch continuation.
+        else "continue_global"
+        if isinstance(provenance, Mapping)
+        else "reset"
+    ).strip().lower()
+    if mode not in {"reset", "continue_global"}:
+        raise ValueError(
+            "TERRAN warm_start_epoch_mode must be 'reset' or "
+            "'continue_global'"
+        )
+    if nested_mode is not None and str(nested_mode) != mode:
+        raise ValueError(
+            "TERRAN warm-start epoch mode disagrees with its provenance"
+        )
+    if protocol.get("warm_start_epoch_offset") is not None:
+        source_epoch = (
+            int(provenance.get("source_epoch", 0))
+            if isinstance(provenance, Mapping)
+            else 0
+        )
+        expected_offset = source_epoch if mode == "continue_global" else 0
+        if int(protocol["warm_start_epoch_offset"]) != expected_offset:
+            raise ValueError(
+                "TERRAN warm-start epoch offset disagrees with its mode"
+            )
+    return mode
 
 
 def validate_warm_start_contract(
-    cfg: dict[str, Any], payload: dict[str, Any], *, current_seed: int
+    cfg: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    current_seed: int,
+    checkpoint_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Validate scientific compatibility without inheriting training state."""
 
     saved_cfg = payload.get("config")
     if not isinstance(saved_cfg, dict):
         raise ValueError("TERRAN warm-start checkpoint is missing its frozen config")
-    current_objective = resolve_objective(cfg.get("objective"))
-    try:
-        objective_from_checkpoint(payload, override=current_objective)
-    except (TypeError, ValueError) as error:
-        raise ValueError(f"TERRAN warm-start objective mismatch: {error}") from error
-    current_reward = cfg.get("reward_contract")
-    saved_reward = saved_cfg.get("reward_contract")
-    if (current_reward is None) != (saved_reward is None):
-        raise ValueError("TERRAN warm-start reward contract mismatch")
-    if current_reward is not None:
-        current_frozen = RewardContract.from_payload(current_reward)
-        saved_frozen = RewardContract.from_payload(saved_reward)
-        if current_frozen.digest != saved_frozen.digest:
-            raise ValueError("TERRAN warm-start reward contract digest mismatch")
-    if _resolved_pbrs_reward_semantics(cfg) != _resolved_pbrs_reward_semantics(saved_cfg):
-        raise ValueError("TERRAN warm-start PBRS reward semantics mismatch")
-    if saved_cfg.get("model") != cfg.get("model"):
+    _validate_task_reward_compatibility(cfg, payload, operation="warm-start")
+    if _warm_start_model_signature(saved_cfg) != _warm_start_model_signature(cfg):
         raise ValueError("TERRAN warm-start model architecture mismatch")
+    if _warm_start_scale_signature(saved_cfg) != _warm_start_scale_signature(cfg):
+        raise ValueError("TERRAN warm-start scale configuration mismatch")
     saved_protocol = saved_cfg.get("protocol", {})
     saved_signature = saved_protocol.get("resolved_training_signature", {})
     current_protocol = cfg.get("protocol", {})
@@ -935,14 +1149,46 @@ def validate_warm_start_contract(
             raise ValueError(f"TERRAN warm-start {field} mismatch")
     if int(payload.get("seed", -1)) != int(current_seed):
         raise ValueError("TERRAN warm-start seed mismatch")
-    if "model_state_dict" not in payload:
+    if not isinstance(payload.get("model_state_dict"), Mapping):
         raise ValueError("TERRAN warm-start checkpoint is missing model weights")
+    try:
+        source_epoch = int(payload["epoch"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("TERRAN warm-start checkpoint has no valid epoch") from error
+    if source_epoch < 0:
+        raise ValueError("TERRAN warm-start checkpoint epoch cannot be negative")
+    source = Path(
+        checkpoint_path
+        if checkpoint_path is not None
+        else current_protocol["warm_start_checkpoint"]
+    ).expanduser().resolve(strict=True)
+    declared = current_protocol.get("warm_start")
+    if declared is not None:
+        if not isinstance(declared, Mapping):
+            raise ValueError("TERRAN warm-start provenance must be a mapping")
+        if str(declared.get("source_checkpoint_path", "")) != str(source):
+            raise ValueError("TERRAN warm-start source path disagrees with provenance")
+        if int(declared.get("source_epoch", -1)) != source_epoch:
+            raise ValueError("TERRAN warm-start source epoch disagrees with provenance")
+        if declared.get("source_seed") != int(payload["seed"]):
+            raise ValueError("TERRAN warm-start source seed disagrees with provenance")
+        declared_digest = str(declared.get("source_checkpoint_sha256", ""))
+        if declared_digest != _sha256_file(source):
+            raise ValueError("TERRAN warm-start checkpoint SHA256 mismatch")
+    mode = warm_start_epoch_mode(cfg)
     return {
-        "checkpoint": str(Path(current_protocol["warm_start_checkpoint"]).resolve()),
+        "checkpoint": str(source),
         "method": "TERRAN",
-        "source_epoch": int(payload.get("epoch", 0) or 0),
+        "source_epoch": source_epoch,
+        "source_seed": int(payload["seed"]),
+        "source_checkpoint_path": str(source),
+        "source_checkpoint_sha256": _sha256_file(source),
+        "model_state_dict_loaded": True,
+        "optimizer_state_dict_loaded": False,
+        "optimizer_name": "adamw",
         "optimizer_reset": True,
-        "epoch_reset": True,
+        "warm_start_epoch_mode": mode,
+        "epoch_reset": mode == "reset",
         "validation_state_reset": True,
         "early_stop_state_reset": True,
     }
@@ -960,6 +1206,7 @@ def validate_fresh_training_output(cfg: dict[str, Any]) -> None:
             "best.ckpt", "best_overall.ckpt", "best_within_5000.ckpt",
             "training_result.json", "validation_history.jsonl", "validation_summary.json",
             "validation_summary_overall.json", "validation_summary_within_5000.json",
+            "warm_start_initial.ckpt",
             "logs/train_log.csv", "logs/eval_log.csv",
         )
         if (output / name).exists()
@@ -1635,6 +1882,115 @@ def evaluate_fixed_dataset(
     }
 
 
+def validation_summary_from_eval_row(
+    eval_row: Mapping[str, Any],
+    *,
+    objective_config: Any,
+    logical_epoch: int,
+    validation_seed: int,
+    validation_wall_time_s: float,
+) -> dict[str, Any] | None:
+    """Convert one fixed-dataset evaluation into selection evidence."""
+
+    if eval_row.get("eval_status") != "ok":
+        return None
+    verified_distance = eval_row.get("eval_avg_objective_distance_km")
+    validation: dict[str, Any] = {
+        "schema": "drl_validation_summary_v1",
+        "split": "validation",
+        "logical_epoch": int(logical_epoch),
+        "validation_seed": int(validation_seed),
+        "instances": int(eval_row["eval_num_instances"]),
+        "complete_and_feasible": int(eval_row["eval_complete_and_feasible"]),
+        "complete_and_feasible_rate": float(eval_row["eval_feasible_rate"]),
+        "mean_verified_distance_km": (
+            float(verified_distance)
+            if verified_distance is not None
+            and np.isfinite(float(verified_distance))
+            else None
+        ),
+        "validation_wall_time_s": float(validation_wall_time_s),
+        "verifier_summary_passed": bool(
+            eval_row.get("eval_independent_verifier", False)
+            and int(eval_row["eval_complete_and_feasible"])
+            == int(eval_row["eval_num_instances"])
+        ),
+    }
+    candidate_count = eval_row.get("eval_candidate_trajectory_count")
+    if candidate_count is not None:
+        candidate_non_horizon_count = int(
+            eval_row.get("eval_candidate_non_horizon_infeasible_count", 0)
+        )
+        decoded_reasons = _decode_outcome_reason_counts(
+            eval_row.get(
+                "eval_candidate_non_horizon_infeasible_reason_counts", "{}"
+            ),
+            expected_count=candidate_non_horizon_count,
+            context="validation candidate aggregate",
+        )
+        validation.update(
+            {
+                "candidate_trajectory_count": int(candidate_count),
+                "candidate_success_count": int(
+                    eval_row.get("eval_candidate_success_count", 0)
+                ),
+                "candidate_success_rate": eval_row.get(
+                    "eval_candidate_success_rate"
+                ),
+                "candidate_rollout_budget_exhausted_count": int(
+                    eval_row.get(
+                        "eval_candidate_rollout_budget_exhausted_count", 0
+                    )
+                ),
+                "candidate_rollout_budget_exhausted_rate": eval_row.get(
+                    "eval_candidate_rollout_budget_exhausted_rate"
+                ),
+                "candidate_non_horizon_infeasible_count": (
+                    candidate_non_horizon_count
+                ),
+                "candidate_non_horizon_infeasible_rate": eval_row.get(
+                    "eval_candidate_non_horizon_infeasible_rate"
+                ),
+                "candidate_non_horizon_infeasible_reason_counts": decoded_reasons,
+                "no_success_all_candidates_non_horizon_infeasible_instance_count": int(
+                    eval_row.get(
+                        "eval_no_success_all_candidates_non_horizon_infeasible_instance_count",
+                        0,
+                    )
+                ),
+                "no_success_all_candidates_non_horizon_infeasible_instance_rate": eval_row.get(
+                    "eval_no_success_all_candidates_non_horizon_infeasible_instance_rate"
+                ),
+            }
+        )
+    verified_objective = eval_row.get(
+        "eval_avg_objective", verified_distance
+    )
+    validation.update(
+        objective_mode=objective_config.mode,
+        objective_unit=objective_config.unit,
+        objective_config=objective_config.to_dict(),
+        mean_verified_objective=(
+            float(verified_objective)
+            if verified_objective is not None
+            and np.isfinite(float(verified_objective))
+            else None
+        ),
+        mean_verified_vehicle_count=eval_row.get("eval_avg_vehicle_count"),
+        mean_verified_objective_cost_usd=eval_row.get(
+            "eval_avg_objective_cost_usd"
+        ),
+        mean_verified_cost_usd=eval_row.get("eval_avg_objective_cost_usd"),
+        mean_verified_electricity_cost_usd=eval_row.get(
+            "eval_avg_electricity_cost_usd"
+        ),
+        mean_verified_vehicle_cost_usd=eval_row.get(
+            "eval_avg_vehicle_cost_usd"
+        ),
+    )
+    return validation
+
+
 def summarize_train_infos(final_infos: list[dict[str, Any]]) -> dict[str, Any]:
     if not final_infos:
         return {
@@ -1808,6 +2164,36 @@ def save_checkpoint(path: Path, agent: Agent, optimizer: torch.optim.Optimizer, 
     )
 
 
+def apply_training_initialization(
+    agent: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    *,
+    resume_payload: Mapping[str, Any] | None = None,
+    warm_start_payload: Mapping[str, Any] | None = None,
+    warm_start_mode: str = "continue_global",
+) -> int:
+    """Load a continuation checkpoint or weights-only initialization."""
+
+    if resume_payload is not None and warm_start_payload is not None:
+        raise ValueError("resume and weights-only warm start are mutually exclusive")
+    if resume_payload is not None:
+        agent.load_state_dict(resume_payload["model_state_dict"])
+        optimizer.load_state_dict(resume_payload["optimizer_state_dict"])
+        return int(resume_payload["epoch"]) + 1
+    if warm_start_payload is not None:
+        agent.load_state_dict(warm_start_payload["model_state_dict"], strict=True)
+        if optimizer.state:
+            raise RuntimeError("TERRAN warm-start AdamW optimizer was not reset")
+        if warm_start_mode == "reset":
+            return 1
+        if warm_start_mode == "continue_global":
+            return int(warm_start_payload["epoch"]) + 1
+        raise ValueError(
+            "TERRAN warm_start_mode must be 'reset' or 'continue_global'"
+        )
+    return 1
+
+
 def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None, overrides: dict[str, Any] | None = None) -> Path:
     cfg = deep_update(cfg, overrides or {})
     set_seed(seed)
@@ -1848,9 +2234,30 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     protocol_cfg = cfg.get("protocol", {})
     resume_checkpoint = protocol_cfg.get("resume_checkpoint")
     warm_start_checkpoint = protocol_cfg.get("warm_start_checkpoint")
+    if resume_checkpoint and warm_start_checkpoint:
+        raise ValueError(
+            "TERRAN resume and weights-only warm start are mutually exclusive"
+        )
+    inherited_warm_start = protocol_cfg.get("warm_start")
+    warm_start_mode = (
+        warm_start_epoch_mode(cfg)
+        if warm_start_checkpoint or inherited_warm_start is not None
+        else "reset"
+    )
+    warm_start_continues_global_epoch = (
+        warm_start_checkpoint is not None
+        and warm_start_mode == "continue_global"
+    )
+    warm_start_accounting_source_epoch = (
+        int(inherited_warm_start.get("source_epoch", 0))
+        if warm_start_mode == "continue_global"
+        and isinstance(inherited_warm_start, Mapping)
+        else 0
+    )
     resume_payload = None
     warm_start_payload = None
-    warm_start_provenance = None
+    warm_start_provenance: dict[str, Any] | None = None
+    warm_start_source_epoch: int | None = None
     if resume_checkpoint:
         resume_payload = torch.load(resume_checkpoint, map_location="cpu", weights_only=False)
         validate_resume_reward_contract(cfg, resume_payload)
@@ -1859,14 +2266,37 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             warm_start_checkpoint, map_location="cpu", weights_only=False
         )
         warm_start_provenance = validate_warm_start_contract(
-            cfg, warm_start_payload, current_seed=seed
+            cfg,
+            warm_start_payload,
+            current_seed=seed,
+            checkpoint_path=warm_start_checkpoint,
         )
-        protocol_cfg["warm_start_provenance"] = warm_start_provenance
+        warm_start_source_epoch = int(warm_start_provenance["source_epoch"])
+        warm_start_accounting_source_epoch = (
+            warm_start_source_epoch
+            if warm_start_continues_global_epoch
+            else 0
+        )
+        if warm_start_continues_global_epoch:
+            strict_source_epoch = validate_warm_start_checkpoint(
+                cfg,
+                warm_start_payload,
+                checkpoint_path=warm_start_checkpoint,
+            )
+            if strict_source_epoch != warm_start_source_epoch:
+                raise RuntimeError(
+                    "TERRAN warm-start validators disagree on source epoch"
+                )
         validate_fresh_training_output(cfg)
     else:
         validate_fresh_training_output(cfg)
     training_started = time.perf_counter()
     eval_cfg = cfg.get("evaluation", {})
+    if warm_start_continues_global_epoch and not eval_cfg.get("eval_path"):
+        raise ValueError(
+            "TERRAN continue_global warm start requires fixed validation data "
+            "so the initialization incumbent can be selected"
+        )
     model_cfg = cfg.get("model", {})
     run_name = str(cfg.get("run_name", "TERRAN"))
     num_customers = int(cfg["data"].get("num_customers", 15))
@@ -1923,15 +2353,25 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         protocol_cfg.get("environment_transitions", 0) or 0
     )
     optimizer_steps_total = int(protocol_cfg.get("optimizer_steps", 0) or 0)
-    start_epoch = 1
-    if warm_start_payload is not None:
-        agent.load_state_dict(warm_start_payload["model_state_dict"])
-        del warm_start_payload
+    start_epoch = apply_training_initialization(
+        agent,
+        optimizer,
+        resume_payload=resume_payload,
+        warm_start_payload=warm_start_payload,
+        warm_start_mode=warm_start_mode,
+    )
     if resume_payload is not None:
-        agent.load_state_dict(resume_payload["model_state_dict"])
-        optimizer.load_state_dict(resume_payload["optimizer_state_dict"])
-        start_epoch = int(resume_payload["epoch"]) + 1
         del resume_payload
+    if warm_start_payload is not None:
+        assert warm_start_source_epoch is not None
+        expected_start_epoch = (
+            warm_start_source_epoch + 1
+            if warm_start_continues_global_epoch
+            else 1
+        )
+        if start_epoch != expected_start_epoch:
+            raise RuntimeError("TERRAN warm-start epoch initialization failed")
+        del warm_start_payload
 
     if cfg.get("output_dir"):
         out_root = Path(cfg["output_dir"])
@@ -1956,9 +2396,20 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     best_within_minimum_path = out_root / "best_within_5000.ckpt"
     best_overall_path = out_root / "best_overall.ckpt"
     selected_checkpoint_path = out_root / "checkpoint_selected.pt"
+    warm_start_initial_checkpoint_path = out_root / "warm_start_initial.ckpt"
     minimum_training_epochs = int(
         train_cfg.get("minimum_training_epochs", epochs) or epochs
     )
+    if warm_start_continues_global_epoch:
+        assert warm_start_source_epoch is not None
+        save_checkpoint(
+            warm_start_initial_checkpoint_path,
+            agent,
+            optimizer,
+            cfg,
+            warm_start_source_epoch,
+            seed,
+        )
     best_eval_key = (-math.inf, -math.inf)
     best_within_minimum_key = (-math.inf, -math.inf)
     previous_overall_path = (
@@ -2007,14 +2458,21 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 continue
             row = json.loads(line)
             key = validation_key(row)
-            completed_validation_checks += 1
+            is_warm_start_baseline = bool(
+                row.get("warm_start_initialization", False)
+            )
+            if not is_warm_start_baseline:
+                completed_validation_checks += 1
             logical_epoch = int(row.get("logical_epoch", 0) or 0)
             if key > history_best_key:
                 history_best_key = key
                 validation_checks_without_improvement = 0
-            elif logical_epoch > early_stop_start_epoch:
+            elif (
+                not is_warm_start_baseline
+                and logical_epoch > early_stop_start_epoch
+            ):
                 validation_checks_without_improvement += 1
-            else:
+            elif not is_warm_start_baseline:
                 validation_checks_without_improvement = 0
     early_stopped = False
     early_stop_epoch: int | None = None
@@ -2148,7 +2606,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         for suffix in ("mean", "per_trajectory", "discounted_per_trajectory")
     )
 
-    log_mode = "a" if start_epoch > 1 else "w"
+    log_mode = "a" if resume_checkpoint else "w"
     needs_header = log_mode == "w" or not log_path.exists()
     with log_path.open(log_mode, newline="", encoding="utf-8") as f, eval_log_path.open(log_mode, newline="", encoding="utf-8") as ef, debug_log_path.open(log_mode, encoding="utf-8") as df:
         writer = csv.DictWriter(f, fieldnames=train_fields)
@@ -2170,6 +2628,75 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             f"eval_info_level={eval_cfg.get('eval_info_level', 'light')} "
             f"pbrs_annealing={cfg.get('pbrs', {}).get('annealing', {})}",
         )
+        if warm_start_continues_global_epoch:
+            assert warm_start_source_epoch is not None
+            baseline_start = time.perf_counter()
+            baseline_eval_row = evaluate_fixed_dataset(
+                agent,
+                cfg,
+                seed=seed,
+                epoch=warm_start_source_epoch,
+                device=device,
+            )
+            baseline_wall_time_s = time.perf_counter() - baseline_start
+            eval_writer.writerow(
+                {"epoch": warm_start_source_epoch, **baseline_eval_row}
+            )
+            ef.flush()
+            baseline_validation = validation_summary_from_eval_row(
+                baseline_eval_row,
+                objective_config=objective_config,
+                logical_epoch=warm_start_source_epoch,
+                validation_seed=validation_seed,
+                validation_wall_time_s=baseline_wall_time_s,
+            )
+            if baseline_validation is None:
+                raise RuntimeError(
+                    "TERRAN warm-start initialization validation did not complete"
+                )
+            baseline_key = validation_key(baseline_validation)
+            baseline_validation.update(
+                {
+                    "warm_start_initialization": True,
+                    "warm_start_source_checkpoint": str(
+                        warm_start_checkpoint
+                    ),
+                    "checkpoint_selected": True,
+                    "best_within_minimum_selected": True,
+                    "best_overall_selected": True,
+                    "minimum_training_epochs": minimum_training_epochs,
+                    "validation_checks_without_improvement": 0,
+                    "early_stop_start_epoch": early_stop_start_epoch,
+                    "early_stop_eligible": False,
+                    "early_stop_due": False,
+                }
+            )
+            append_jsonl(validation_history_path, baseline_validation)
+            best_eval_key = baseline_key
+            best_within_minimum_key = baseline_key
+            history_best_key = baseline_key
+            shutil.copy2(warm_start_initial_checkpoint_path, best_overall_path)
+            shutil.copy2(
+                warm_start_initial_checkpoint_path, best_within_minimum_path
+            )
+            shutil.copy2(warm_start_initial_checkpoint_path, best_checkpoint_path)
+            shutil.copy2(
+                warm_start_initial_checkpoint_path, selected_checkpoint_path
+            )
+            atomic_json(validation_summary_overall_path, baseline_validation)
+            atomic_json(validation_summary_within_path, baseline_validation)
+            atomic_json(validation_summary_path, baseline_validation)
+            _debug_log(
+                debug_enabled,
+                df,
+                "[WarmStartEval] "
+                f"epoch={warm_start_source_epoch}/{epochs} "
+                f"fr={_format_float(baseline_eval_row.get('eval_feasible_rate'))} "
+                f"obj={_format_float(baseline_eval_row.get('eval_avg_objective', baseline_eval_row.get('eval_avg_objective_distance_km')))}"
+                f"{objective_config.unit} "
+                f"veh={_format_float(baseline_eval_row.get('eval_avg_vehicle_count'))} "
+                f"eval_wall={baseline_wall_time_s:.3f}s",
+            )
         for epoch in range(start_epoch, epochs + 1):
             completed_epoch = epoch
             epoch_seed = seed + epoch * 100_000
@@ -2561,106 +3088,14 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 eval_wall_time_s = time.perf_counter() - eval_start
                 eval_writer.writerow({"epoch": epoch, **eval_row})
                 ef.flush()
-                if eval_row.get("eval_status") == "ok":
-                    verified_distance = eval_row.get(
-                        "eval_avg_objective_distance_km"
-                    )
-                    validation = {
-                        "schema": "drl_validation_summary_v1",
-                        "split": "validation",
-                        "logical_epoch": epoch,
-                        "validation_seed": validation_seed,
-                        "instances": int(eval_row["eval_num_instances"]),
-                        "complete_and_feasible": int(
-                            eval_row["eval_complete_and_feasible"]
-                        ),
-                        "complete_and_feasible_rate": float(
-                            eval_row["eval_feasible_rate"]
-                        ),
-                        "mean_verified_distance_km": (
-                            float(verified_distance)
-                            if verified_distance is not None
-                            and np.isfinite(float(verified_distance))
-                            else None
-                        ),
-                        "validation_wall_time_s": eval_wall_time_s,
-                        "verifier_summary_passed": bool(
-                            eval_row.get("eval_independent_verifier", False)
-                            and int(eval_row["eval_complete_and_feasible"])
-                            == int(eval_row["eval_num_instances"])
-                        ),
-                    }
-                    candidate_count = eval_row.get(
-                        "eval_candidate_trajectory_count"
-                    )
-                    if candidate_count is not None:
-                        candidate_non_horizon_count = int(
-                            eval_row.get(
-                                "eval_candidate_non_horizon_infeasible_count",
-                                0,
-                            )
-                        )
-                        decoded_reasons = _decode_outcome_reason_counts(
-                            eval_row.get(
-                                "eval_candidate_non_horizon_infeasible_reason_counts",
-                                "{}",
-                            ),
-                            expected_count=candidate_non_horizon_count,
-                            context="validation candidate aggregate",
-                        )
-                        validation.update(
-                            {
-                                "candidate_trajectory_count": int(candidate_count),
-                                "candidate_success_count": int(
-                                    eval_row.get("eval_candidate_success_count", 0)
-                                ),
-                                "candidate_success_rate": eval_row.get(
-                                    "eval_candidate_success_rate"
-                                ),
-                                "candidate_rollout_budget_exhausted_count": int(
-                                    eval_row.get(
-                                        "eval_candidate_rollout_budget_exhausted_count",
-                                        0,
-                                    )
-                                ),
-                                "candidate_rollout_budget_exhausted_rate": eval_row.get(
-                                    "eval_candidate_rollout_budget_exhausted_rate"
-                                ),
-                                "candidate_non_horizon_infeasible_count": (
-                                    candidate_non_horizon_count
-                                ),
-                                "candidate_non_horizon_infeasible_rate": eval_row.get(
-                                    "eval_candidate_non_horizon_infeasible_rate"
-                                ),
-                                "candidate_non_horizon_infeasible_reason_counts": (
-                                    decoded_reasons
-                                ),
-                                "no_success_all_candidates_non_horizon_infeasible_instance_count": int(
-                                    eval_row.get(
-                                        "eval_no_success_all_candidates_non_horizon_infeasible_instance_count",
-                                        0,
-                                    )
-                                ),
-                                "no_success_all_candidates_non_horizon_infeasible_instance_rate": eval_row.get(
-                                    "eval_no_success_all_candidates_non_horizon_infeasible_instance_rate"
-                                ),
-                            }
-                        )
-                    verified_objective = eval_row.get("eval_avg_objective", verified_distance)
-                    validation.update(
-                        objective_mode=objective_config.mode,
-                        objective_unit=objective_config.unit,
-                        objective_config=objective_config.to_dict(),
-                        mean_verified_objective=(
-                            float(verified_objective)
-                            if verified_objective is not None and np.isfinite(float(verified_objective)) else None
-                        ),
-                        mean_verified_vehicle_count=eval_row.get("eval_avg_vehicle_count"),
-                        mean_verified_objective_cost_usd=eval_row.get("eval_avg_objective_cost_usd"),
-                        mean_verified_cost_usd=eval_row.get("eval_avg_objective_cost_usd"),
-                        mean_verified_electricity_cost_usd=eval_row.get("eval_avg_electricity_cost_usd"),
-                        mean_verified_vehicle_cost_usd=eval_row.get("eval_avg_vehicle_cost_usd"),
-                    )
+                validation = validation_summary_from_eval_row(
+                    eval_row,
+                    objective_config=objective_config,
+                    logical_epoch=epoch,
+                    validation_seed=validation_seed,
+                    validation_wall_time_s=eval_wall_time_s,
+                )
+                if validation is not None:
                     selection_key = validation_key(validation)
                     is_best_overall = selection_key > best_eval_key
                     is_best_within_minimum = bool(
@@ -2929,6 +3364,7 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 normalization_records=normalization_records, preclip_norms=preclip_norms,
                 optimizer_steps_total=optimizer_steps_total, pbrs_scale=pbrs_scale,
             )
+            diagnostic_record["warm_start"] = protocol_cfg.get("warm_start")
             diagnostic_record["diagnostics_compute_wall_time_s"] = time.perf_counter() - diagnostics_start
             append_jsonl(reward_diagnostics_path, diagnostic_record)
             if should_eval or epoch % checkpoint_interval == 0 or epoch == epochs:
@@ -2978,7 +3414,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                     epoch,
                     seed,
                 )
-                completed = epoch // protocol_epochs
+                source_epoch = warm_start_accounting_source_epoch
+                local_completed_epochs = epoch - source_epoch
+                completed = local_completed_epochs // protocol_epochs
                 state = DataPassState(
                     protocol_id=str(protocol_cfg["protocol_id"]),
                     completed_data_passes=completed,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import shutil
 import subprocess
@@ -34,6 +35,151 @@ from ..common.training_stream import (
     training_stream_contract_from_args,
 )
 from .pbrs import TERMINAL_TASK_REWARD_UNIT
+
+
+WARM_START_SCHEMA = "terran_weights_only_warm_start_v1"
+WARM_START_EPOCH_MODES = frozenset({"reset", "continue_global"})
+
+
+def _validated_warm_start_epoch_mode(value: Any) -> str:
+    mode = str(value or "reset")
+    if mode not in WARM_START_EPOCH_MODES:
+        choices = ", ".join(sorted(WARM_START_EPOCH_MODES))
+        raise ValueError(
+            f"invalid TERRAN warm-start epoch mode {mode!r}; expected one of: {choices}"
+        )
+    return mode
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _explicit_warm_start_provenance(
+    checkpoint: Path,
+    *,
+    epoch_mode: str,
+) -> dict[str, Any]:
+    source = checkpoint.expanduser().resolve(strict=True)
+    resolved_epoch_mode = _validated_warm_start_epoch_mode(epoch_mode)
+    if not source.is_file():
+        raise FileNotFoundError(f"TERRAN warm-start checkpoint is not a file: {source}")
+    payload = torch.load(source, map_location="cpu", weights_only=False)
+    if not isinstance(payload, Mapping):
+        raise ValueError("TERRAN warm-start checkpoint payload must be a mapping")
+    try:
+        source_epoch = int(payload["epoch"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(
+            "TERRAN warm-start checkpoint is missing a valid source epoch"
+        ) from error
+    if source_epoch < 0:
+        raise ValueError("TERRAN warm-start source epoch cannot be negative")
+    if not isinstance(payload.get("model_state_dict"), Mapping):
+        raise ValueError(
+            "TERRAN warm-start checkpoint is missing model_state_dict"
+        )
+    source_seed = payload.get("seed")
+    return {
+        "schema": WARM_START_SCHEMA,
+        "epoch_mode": resolved_epoch_mode,
+        "method": "TERRAN",
+        "checkpoint": str(source),
+        "source_checkpoint_path": str(source),
+        "source_checkpoint_sha256": _file_sha256(source),
+        "source_epoch": source_epoch,
+        "source_seed": int(source_seed) if source_seed is not None else None,
+        "model_state_dict_loaded": True,
+        "optimizer_state_dict_loaded": False,
+        "optimizer_reset": True,
+        "optimizer_name": "adamw",
+        "epoch_reset": resolved_epoch_mode == "reset",
+        "data_stream_cursor_reset": True,
+        "validation_state_reset": True,
+        "early_stop_state_reset": True,
+        "source_baseline_evaluated": resolved_epoch_mode == "continue_global",
+    }
+
+
+def _inherited_warm_start_provenance(checkpoint: Path) -> dict[str, Any] | None:
+    try:
+        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    except Exception:
+        # Resume validation in the trainer remains the authority for checkpoint
+        # integrity.  Legacy configure-only callers historically used a marker
+        # file here, and they cannot carry warm-start provenance.
+        return None
+    config = payload.get("config", {}) if isinstance(payload, Mapping) else {}
+    protocol = config.get("protocol", {}) if isinstance(config, Mapping) else {}
+    provenance = protocol.get("warm_start") if isinstance(protocol, Mapping) else None
+    if provenance is None:
+        return None
+    if not isinstance(provenance, Mapping) or provenance.get("schema") != WARM_START_SCHEMA:
+        raise ValueError("TERRAN resume checkpoint has invalid warm-start provenance")
+    required = {
+        "source_checkpoint_path",
+        "source_checkpoint_sha256",
+        "source_epoch",
+        "model_state_dict_loaded",
+        "optimizer_state_dict_loaded",
+        "optimizer_reset",
+        "optimizer_name",
+    }
+    if required.difference(provenance):
+        raise ValueError("TERRAN resume checkpoint has incomplete warm-start provenance")
+    normalized = dict(provenance)
+    # Checkpoints produced by the original A6000 continuation implementation
+    # predate the explicit mode field. Their schema has only ever meant global
+    # epoch continuation, so preserve that meaning when such a run is resumed.
+    normalized.setdefault("epoch_mode", "continue_global")
+    if (
+        normalized.get("model_state_dict_loaded") is not True
+        or normalized.get("optimizer_state_dict_loaded") is not False
+        or normalized.get("optimizer_reset") is not True
+        or str(normalized.get("optimizer_name")).lower() != "adamw"
+        or int(normalized.get("source_epoch", -1)) < 0
+    ):
+        raise ValueError("TERRAN resume checkpoint has inconsistent warm-start provenance")
+    normalized["epoch_mode"] = _validated_warm_start_epoch_mode(
+        normalized.get("epoch_mode")
+    )
+    if (
+        normalized.get("method", "TERRAN") != "TERRAN"
+        or str(
+            normalized.get(
+                "checkpoint", normalized["source_checkpoint_path"]
+            )
+        )
+        != str(normalized["source_checkpoint_path"])
+        or bool(normalized.get("epoch_reset", normalized["epoch_mode"] == "reset"))
+        != (normalized["epoch_mode"] == "reset")
+        or normalized.get("data_stream_cursor_reset", True) is not True
+        or normalized.get("validation_state_reset", True) is not True
+        or normalized.get("early_stop_state_reset", True) is not True
+        or bool(
+            normalized.get(
+                "source_baseline_evaluated",
+                normalized["epoch_mode"] == "continue_global",
+            )
+        )
+        != (normalized["epoch_mode"] == "continue_global")
+    ):
+        raise ValueError("TERRAN resume checkpoint has inconsistent warm-start mode flags")
+    normalized.setdefault("method", "TERRAN")
+    normalized.setdefault("checkpoint", normalized["source_checkpoint_path"])
+    normalized.setdefault("epoch_reset", normalized["epoch_mode"] == "reset")
+    normalized.setdefault("data_stream_cursor_reset", True)
+    normalized.setdefault("validation_state_reset", True)
+    normalized.setdefault("early_stop_state_reset", True)
+    normalized.setdefault(
+        "source_baseline_evaluated",
+        normalized["epoch_mode"] == "continue_global",
+    )
+    return normalized
 
 
 def _checkpoint_reward_contract_provenance(
@@ -208,15 +354,110 @@ def _checkpoint_training_signature_provenance(
     }
 
 
+def _checkpoint_warm_start_provenance(
+    checkpoint: Path,
+) -> dict[str, Any] | None:
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    config = payload.get("config")
+    if not isinstance(config, Mapping):
+        raise RuntimeError(f"TERRAN checkpoint is missing its frozen config: {checkpoint}")
+    protocol = config.get("protocol", {})
+    provenance = protocol.get("warm_start") if isinstance(protocol, Mapping) else None
+    if provenance is None:
+        return None
+    if not isinstance(provenance, Mapping) or provenance.get("schema") != WARM_START_SCHEMA:
+        raise RuntimeError(
+            f"TERRAN checkpoint has invalid warm-start provenance: {checkpoint}"
+        )
+    try:
+        source_epoch = int(provenance["source_epoch"])
+        source_path = str(provenance["source_checkpoint_path"])
+        source_sha = str(provenance["source_checkpoint_sha256"])
+        epoch_mode = _validated_warm_start_epoch_mode(
+            provenance.get("epoch_mode", "continue_global")
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"TERRAN checkpoint has incomplete warm-start provenance: {checkpoint}"
+        ) from error
+    if (
+        source_epoch < 0
+        or not source_path
+        or len(source_sha) != 64
+        or provenance.get("model_state_dict_loaded") is not True
+        or provenance.get("optimizer_state_dict_loaded") is not False
+        or provenance.get("optimizer_reset") is not True
+        or str(provenance.get("optimizer_name", "")).lower() != "adamw"
+    ):
+        raise RuntimeError(
+            f"TERRAN checkpoint has inconsistent warm-start provenance: {checkpoint}"
+        )
+    normalized = dict(provenance)
+    normalized["epoch_mode"] = epoch_mode
+    if (
+        normalized.get("method", "TERRAN") != "TERRAN"
+        or str(normalized.get("checkpoint", source_path)) != source_path
+        or bool(normalized.get("epoch_reset", epoch_mode == "reset"))
+        != (epoch_mode == "reset")
+        or normalized.get("data_stream_cursor_reset", True) is not True
+        or normalized.get("validation_state_reset", True) is not True
+        or normalized.get("early_stop_state_reset", True) is not True
+        or bool(
+            normalized.get(
+                "source_baseline_evaluated", epoch_mode == "continue_global"
+            )
+        )
+        != (epoch_mode == "continue_global")
+    ):
+        raise RuntimeError(
+            f"TERRAN checkpoint has inconsistent warm-start mode flags: {checkpoint}"
+        )
+    normalized.setdefault("method", "TERRAN")
+    normalized.setdefault("checkpoint", normalized["source_checkpoint_path"])
+    normalized.setdefault("epoch_reset", epoch_mode == "reset")
+    normalized.setdefault("data_stream_cursor_reset", True)
+    normalized.setdefault("validation_state_reset", True)
+    normalized.setdefault("early_stop_state_reset", True)
+    normalized.setdefault(
+        "source_baseline_evaluated", epoch_mode == "continue_global"
+    )
+    return normalized
+
+
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
     warm_start_checkpoint = getattr(args, "warm_start_checkpoint", None)
-    if bool(getattr(args, "resume", False)) and warm_start_checkpoint is not None:
-        raise ValueError("--resume and --warm-start-checkpoint are mutually exclusive")
-    if warm_start_checkpoint is not None and not Path(warm_start_checkpoint).is_file():
+    resume_requested = bool(getattr(args, "resume", False))
+    requested_warm_start_epoch_mode = _validated_warm_start_epoch_mode(
+        getattr(args, "warm_start_epoch_mode", "reset")
+    )
+    if resume_requested and warm_start_checkpoint is not None:
+        raise ValueError(
+            "--resume and --warm-start-checkpoint are mutually exclusive"
+        )
+    if (
+        warm_start_checkpoint is not None
+        and not Path(warm_start_checkpoint).expanduser().is_file()
+    ):
         raise FileNotFoundError(
             f"TERRAN warm-start checkpoint is missing: {warm_start_checkpoint}"
         )
-    if getattr(args, "training_epochs", None) is None and args.data_passes is None:
+    if (
+        not resume_requested
+        and warm_start_checkpoint is None
+        and requested_warm_start_epoch_mode != "reset"
+    ):
+        raise ValueError(
+            "--warm-start-epoch-mode=continue_global requires "
+            "--warm-start-checkpoint"
+        )
+    if (
+        getattr(args, "training_epochs", None) is None
+        and getattr(args, "data_passes", None) is None
+    ):
+        if warm_start_checkpoint is not None:
+            raise ValueError(
+                "TERRAN weights-only warm start requires --training-epochs"
+            )
         return overrides, None
     if (
         getattr(args, "protocol_id", None) == "drl_rq_protocol_frozen_v1"
@@ -233,7 +474,8 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     environment_transitions = 0
     optimizer_steps = 0
     resume_checkpoint = None
-    if args.resume:
+    warm_start_provenance = None
+    if resume_requested:
         state_path = Path(args.output_dir) / "data_pass_state.json"
         resume_checkpoint = Path(args.output_dir) / "checkpoint_latest.pt"
         if not state_path.is_file() or not resume_checkpoint.is_file():
@@ -245,6 +487,14 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         completed_samples = int(state.instances_seen)
         environment_transitions = int(state.environment_transitions)
         optimizer_steps = int(state.optimizer_steps)
+        warm_start_provenance = _inherited_warm_start_provenance(
+            resume_checkpoint
+        )
+    elif warm_start_checkpoint is not None:
+        warm_start_provenance = _explicit_warm_start_provenance(
+            Path(warm_start_checkpoint),
+            epoch_mode=requested_warm_start_epoch_mode,
+        )
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
     if effective % physical:
         raise ValueError("TERRAN requires an exact physical-batch divisor")
@@ -292,16 +542,40 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         epochs = int(args.training_epochs)
         if epochs <= 0:
             raise ValueError("--training-epochs must be positive")
+        source_epoch = int(
+            warm_start_provenance.get("source_epoch", 0)
+            if warm_start_provenance is not None
+            else 0
+        )
+        warm_start_epoch_mode = (
+            _validated_warm_start_epoch_mode(
+                warm_start_provenance.get("epoch_mode")
+            )
+            if warm_start_provenance is not None
+            else None
+        )
+        warm_start_epoch_offset = (
+            source_epoch if warm_start_epoch_mode == "continue_global" else 0
+        )
+        if warm_start_epoch_offset >= epochs:
+            raise ValueError(
+                "TERRAN warm-start source epoch must be smaller than "
+                "--training-epochs in continue_global mode"
+            )
+        planned_training_epochs = epochs - warm_start_epoch_offset
         if early_stop_start_epoch >= epochs:
             raise ValueError(
                 "--early-stop-start-epoch must be smaller than --training-epochs"
             )
-        if stream_path is None and epochs * physical > len(pool):
+        if stream_path is None and planned_training_epochs * physical > len(pool):
             raise ValueError("fixed training budget exceeds the no-replacement training pool")
         if stream_path is not None:
-            expected_instances = epochs * effective
+            expected_instances = planned_training_epochs * effective
             if len(read_stream_view_ids(stream_path)) != expected_instances:
-                raise ValueError("TERRAN training stream length does not match its budget")
+                raise ValueError(
+                    "TERRAN training stream length does not match its "
+                    "post-warm-start budget"
+                )
             expected_exposures = expected_instances * int(
                 str(args.stage2_scale).removeprefix("Cus")
             )
@@ -316,6 +590,15 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         minimum_training_epochs = int(
             getattr(args, "minimum_training_epochs", None) or epochs
         )
+        if (
+            warm_start_epoch_mode == "continue_global"
+            and source_epoch > minimum_training_epochs
+        ):
+            raise ValueError(
+                "TERRAN warm-start source epoch cannot exceed "
+                "--minimum-training-epochs because the minimum-budget incumbent "
+                "could not be reconstructed"
+            )
         post_minimum_validation_every_epochs = int(
             getattr(args, "post_minimum_validation_every_epochs", None)
             or validation_every_epochs
@@ -326,6 +609,11 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             minimum_epochs=minimum_training_epochs,
             post_minimum_interval=post_minimum_validation_every_epochs,
         )
+        if warm_start_epoch_mode == "continue_global":
+            scheduled_validation_epochs = [
+                epoch for epoch in scheduled_validation_epochs
+                if epoch > source_epoch
+            ]
         if int(getattr(args, "validation_checkpoints", 1)) != len(scheduled_validation_epochs):
             raise ValueError(
                 "fixed-epoch validation checkpoint count does not match "
@@ -335,9 +623,17 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             raise ValueError(
                 "early stopping cannot start before --minimum-training-epochs"
             )
-        epochs_per_pass = epochs
+        epochs_per_pass = planned_training_epochs
         total_passes = 1
     else:
+        if warm_start_provenance is not None:
+            raise ValueError(
+                "TERRAN weights-only warm start requires --training-epochs"
+            )
+        source_epoch = 0
+        warm_start_epoch_mode = None
+        warm_start_epoch_offset = 0
+        planned_training_epochs = 0
         if len(pool) % physical:
             raise ValueError(f"TERRAN pass size {len(pool)} is not divisible by {physical}")
         epochs_per_pass = len(pool) // physical
@@ -417,6 +713,18 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")
         ),
         "training_epochs": epochs if fixed_epochs else None,
+        "planned_training_epochs": (
+            planned_training_epochs if fixed_epochs else None
+        ),
+        "warm_start": warm_start_provenance,
+        "warm_start_epoch_mode": warm_start_epoch_mode,
+        "warm_start_epoch_offset": warm_start_epoch_offset,
+        "warm_start_checkpoint": (
+            warm_start_provenance["source_checkpoint_path"]
+            if warm_start_checkpoint is not None
+            and warm_start_provenance is not None
+            else None
+        ),
         "logical_environments_per_epoch": effective if fixed_epochs else None,
         "data_passes": total_passes,
         "views_per_pass": len(pool),
@@ -445,6 +753,13 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             else None
         ),
         "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
+        "warm_start_baseline_validation_checkpoints": (
+            1 if warm_start_epoch_mode == "continue_global" else 0
+        ),
+        "total_validation_checkpoints_including_warm_start": (
+            int(getattr(args, "validation_checkpoints", 1))
+            + (1 if warm_start_epoch_mode == "continue_global" else 0)
+        ),
         "validation_decode_type": validation_decode_type,
         "validation_candidates": validation_candidates,
         "validation_seed": validation_seed,
@@ -454,7 +769,6 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "environment_transitions": environment_transitions,
         "optimizer_steps": optimizer_steps,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
-        "warm_start_checkpoint": str(Path(warm_start_checkpoint).resolve()) if warm_start_checkpoint else None,
         "training_stream_path": str(stream_path) if stream_path is not None else None,
         "training_stream_contract_sha256": (
             stream_contract["sha256"] if stream_contract is not None else None
@@ -472,6 +786,12 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "epochs_per_pass": epochs_per_pass,
         "physical_batch_size": physical,
         "effective_batch_size": effective,
+        "planned_training_epochs": (
+            planned_training_epochs if fixed_epochs else None
+        ),
+        "warm_start": warm_start_provenance,
+        "warm_start_epoch_mode": warm_start_epoch_mode,
+        "warm_start_epoch_offset": warm_start_epoch_offset,
         "scheduled_validation_epochs": (
             list(scheduled_validation_epochs) if fixed_epochs else []
         ),
@@ -705,8 +1025,32 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             environment_transitions = int(float(rows[-1].get("environment_transitions_total", 0)))
             optimizer_steps = int(float(rows[-1].get("optimizer_steps_total", 0)))
             wall_time_s = sum(float(row["epoch_wall_time_s"]) for row in rows)
+    warm_start_provenance = meta.get("warm_start")
+    warm_start_source_epoch = int(
+        warm_start_provenance.get("source_epoch", 0)
+        if isinstance(warm_start_provenance, Mapping)
+        else 0
+    )
+    warm_start_epoch_mode = (
+        _validated_warm_start_epoch_mode(
+            meta.get("warm_start_epoch_mode")
+            or (
+                warm_start_provenance.get("epoch_mode", "continue_global")
+                if isinstance(warm_start_provenance, Mapping)
+                else "reset"
+            )
+        )
+        if warm_start_provenance is not None
+        else None
+    )
+    warm_start_epoch_offset = int(
+        meta.get("warm_start_epoch_offset", warm_start_source_epoch)
+        if warm_start_epoch_mode == "continue_global"
+        else 0
+    )
     expected = (
-        int(completed_training_epochs) * meta["effective_batch_size"]
+        (int(completed_training_epochs) - warm_start_epoch_offset)
+        * meta["effective_batch_size"]
         if fixed_epochs
         else (
             int(args.max_batches_per_pass) * meta["physical_batch_size"]
@@ -813,20 +1157,42 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
         "resolved_training_signature_sha256": None,
         "resolved_training_signature": None,
     }
-    final_payload = torch.load(final_checkpoint, map_location="cpu", weights_only=False)
-    selected_payload = torch.load(
-        output / "checkpoint_selected.pt", map_location="cpu", weights_only=False
+    checkpoint_warm_start = _checkpoint_warm_start_provenance(final_checkpoint)
+    selected_warm_start = _checkpoint_warm_start_provenance(
+        output / "checkpoint_selected.pt"
     )
-    warm_start_provenance = (
-        final_payload.get("config", {}).get("protocol", {}).get("warm_start_provenance")
-    )
-    selected_warm_start_provenance = (
-        selected_payload.get("config", {}).get("protocol", {}).get("warm_start_provenance")
-    )
-    if warm_start_provenance != selected_warm_start_provenance:
+    if checkpoint_warm_start != selected_warm_start:
         raise RuntimeError(
             "TERRAN final and selected checkpoints disagree on warm-start provenance"
         )
+    if checkpoint_warm_start != warm_start_provenance:
+        raise RuntimeError(
+            "TERRAN completed checkpoints do not contain the configured "
+            "warm-start provenance"
+        )
+    warm_start_fields = {
+        "warm_start": checkpoint_warm_start,
+        "warm_start_source_checkpoint": (
+            checkpoint_warm_start.get("source_checkpoint_path")
+            if checkpoint_warm_start is not None else None
+        ),
+        "warm_start_source_checkpoint_sha256": (
+            checkpoint_warm_start.get("source_checkpoint_sha256")
+            if checkpoint_warm_start is not None else None
+        ),
+        "warm_start_source_epoch": (
+            int(checkpoint_warm_start["source_epoch"])
+            if checkpoint_warm_start is not None else None
+        ),
+        "warm_start_optimizer_reset": (
+            bool(checkpoint_warm_start["optimizer_reset"])
+            if checkpoint_warm_start is not None else False
+        ),
+        "warm_start_epoch_mode": (
+            checkpoint_warm_start.get("epoch_mode")
+            if checkpoint_warm_start is not None else None
+        ),
+    }
     atomic_json(
         output / "training_result.json",
         {
@@ -840,14 +1206,29 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             **reward_contract_fields,
             **stream_contract_fields,
             **training_signature_fields,
-            "warm_start_requested": warm_start_provenance is not None,
-            "warm_start_provenance": warm_start_provenance,
+            # Retain the cross-method field names introduced by the generic
+            # weights-only warm-start contract while publishing TERRAN's richer
+            # immutable provenance alongside them.
+            "warm_start_requested": checkpoint_warm_start is not None,
+            "warm_start_provenance": checkpoint_warm_start,
+            **warm_start_fields,
             "budget_mode": (
                 "fixed_customer_exposure" if getattr(args, "training_stream_path", None) is not None else
                 ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")
             ),
             "requested_training_epochs": int(args.training_epochs) if fixed_epochs else None,
+            "planned_training_epochs": (
+                int(
+                    meta.get("planned_training_epochs")
+                    or int(args.training_epochs) - warm_start_epoch_offset
+                )
+                if fixed_epochs else None
+            ),
             "completed_training_epochs": completed_training_epochs,
+            "completed_post_warm_start_epochs": (
+                int(completed_training_epochs) - warm_start_epoch_offset
+                if fixed_epochs else None
+            ),
             "early_stopped": early_stopped,
             "early_stop_epoch": early_stop_state.get("early_stop_epoch"),
             "logical_environments_per_epoch": meta["effective_batch_size"] if fixed_epochs else None,
@@ -896,6 +1277,13 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             ),
             "validation_checkpoints": int(getattr(args, "validation_checkpoints", 1)),
             "completed_validation_checkpoints": int(early_stop_state.get("completed_validation_checkpoints", 0)),
+            "warm_start_baseline_validation_checkpoints": (
+                1 if warm_start_epoch_mode == "continue_global" else 0
+            ),
+            "completed_validation_checkpoints_including_warm_start": (
+                int(early_stop_state.get("completed_validation_checkpoints", 0))
+                + (1 if warm_start_epoch_mode == "continue_global" else 0)
+            ),
             "early_stop_patience_validations": int(getattr(args, "early_stop_patience_validations", 0) or 0),
             "early_stop_start_epoch": int(getattr(args, "early_stop_start_epoch", 0) or 0),
             "validation_seed": validation_seed,
