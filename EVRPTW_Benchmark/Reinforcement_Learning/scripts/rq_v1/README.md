@@ -13,11 +13,14 @@ data path is committed.
 
 ## Active single-seed calibrated-scale configuration
 
-Runtime budget: `drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50`.
-This is a fresh candidate budget.  After explicit formal authorization, start
-it with `full.sh`; do not use a v8, v9, v10, v11, or v12 checkpoint as a v13
-resume source. `resume.sh` is only for interruption recovery within the same
-v13 job, commit and reward/auxiliary contracts.
+Runtime budget: `drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart`.
+Validation and test use 50 candidates. RTX 2080 Ti batches are calibrated per
+method and are intentionally not exposure-matched. A fresh `full.sh` launch
+may initialize from the exact matching job's `best.ckpt` at commit `4811763`;
+only model weights are imported. Optimizer, epoch, baseline history, validation
+and early-stop state restart from zero. Missing exact-job checkpoints fall back
+to a recorded fresh start. `resume.sh` remains interruption recovery only for
+the same v15 job and executable commit.
 
 ### All-method electricity + vehicle-cost restart
 
@@ -50,8 +53,7 @@ view index; the other scales use the core training view index. Each scale uses
 its own deterministic 500-view, 10-city, weekday/weekend-stratified reference
 cohort; denominators are never copied across scales.
 
-On each RTX 2080 Ti server, start its complete authorized queue from scratch
-without loading an older checkpoint:
+On each RTX 2080 Ti server, start its complete authorized queue in a new output root; exact available checkpoints are used only through the frozen weights-only warm-start contract:
 
 ```bash
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080-server>/full.sh --seed 1234
@@ -72,9 +74,9 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/cus1000_ful
 
 Each run writes under
 `$EVRPTW_OUTPUT_ROOT/<representation>/<condition>/<method>/<scale>/seed_1234/<git-commit>/`.
-The new commit provides a new output root; old results remain untouched. Shared
-artifacts are still under the unchanged v13 budget, so this update does not
-require dataset or stream regeneration. Only use `resume.sh`
+The new commit provides a new output root; old results remain untouched. Training streams are method-specific under v15. Run artifact preparation after
+pulling this revision; it creates or validates those streams without changing
+the restored dataset. Only use `resume.sh`
 to recover an interrupted run of this same revision and commit. A mismatched
 objective or gamma/reward contract, or a fresh launch over existing training
 history, is rejected. The launcher passes the same versioned objective JSON to
@@ -89,20 +91,21 @@ and platform boundaries are recorded with each implementation change.
 The enabled manifests contain seed 1234 only. RTX 2080 Ti servers own the
 Cus50/Cus100 jobs; the two RTX 6000 Ada GPUs own Cus500/Cus1000.
 
-| Scale | Runtime status | Hardware | Minimum epochs | Hard cap | Environments/epoch | Maximum environments | Maximum customer exposures |
-|---|---|---|---:|---:|---:|---:|---:|
-| Cus50 | calibrated / authorized | RTX 2080 Ti | 5,000 | 10,000 | 1,024 | 10,240,000 | 512,000,000 |
-| Cus100 | calibrated / authorized | RTX 2080 Ti | 5,000 | 10,000 | 256 | 2,560,000 | 256,000,000 |
-| Cus500 | enabled | RTX 6000 Ada | 5,000 | 10,000 | 64 | 640,000 | 320,000,000 |
-| Cus1000 | enabled | RTX 6000 Ada | 5,000 | 10,000 | 2 | 20,000 | 20,000,000 |
-
-Physical batches use exact sample-weighted gradient accumulation. REINFORCE
-jobs may use a smaller final remainder microbatch; TERRAN keeps exact divisors:
+Every scale retains a 5,000-epoch minimum and 10,000-epoch hard cap. The
+logical environments per epoch are now architecture-specific:
 
 | Scale | AM | EVRPTW-RL | DRL-TS | TERRAN |
 |---|---:|---:|---:|---:|
-| Cus50 | 1,024 | 224 | 132 | 256 |
-| Cus100 | 256 | 68 | 34 | 128 |
+| Cus50 | 2,304 | 336 | 144 | 480 |
+| Cus100 | 800 | 96 | 40 | 280 |
+| Cus500 | 64 | 64 | 64 | 64 |
+| Cus1000 | 2 | 2 | 2 | 2 |
+
+The RTX 2080 Ti physical batch equals the logical batch. Large-scale Ada
+physical microbatches remain conservative pending n-traj=50 calibration:
+
+| Scale | AM | EVRPTW-RL | DRL-TS | TERRAN |
+|---|---:|---:|---:|---:|
 | Cus500 | 8 | 16 | 8 | 64 |
 | Cus1000 | 2 | 2 | 2 | 2 |
 
@@ -112,10 +115,9 @@ Larger method-specific batches could not simultaneously satisfy the 40--45 GiB
 target, the common-exposure contract, the even-batch constraint, and the formal
 deadline; batch 2 is therefore intentional rather than an uncalibrated default.
 
-AM uses 5 training trajectories on every scale; TERRAN uses 100. EVRPTW-RL and
-DRL-TS use one because sample-100 exceeded memory even at physical batch 1.
-Validation and test use stochastic best-of-100 decoding on 500 fixed validation
-views. Validation runs every 250 epochs through epoch 5,000, then every 50 epochs.
+AM uses 5 training trajectories on every scale; TERRAN uses 50. EVRPTW-RL and
+DRL-TS retain one training trajectory. Validation and test use stochastic
+best-of-50 decoding on 500 fixed validation views. Validation runs every 250 epochs through epoch 5,000, then every 50 epochs.
 Early stopping is disabled through epoch 5,000; after that, ten consecutive
 non-improving validations stop the run, with a hard cap of 10,000 epochs and an
 earliest stop at epoch 5,500. `best.ckpt`, `checkpoint_selected.pt`, and
@@ -129,7 +131,7 @@ checkpoint. DRL-TS always switches from soft to hard training after epoch 2,500,
 independent of the 10,000-epoch cap.
 
 TERRAN Cus1000 has a manifest-level PPO hyperparameter override of
-`num_minibatches=1` and `ppo_step_chunk_size=720`. Batch 2, 100 training
+`num_minibatches=1` and `ppo_step_chunk_size=720`. Batch 2, 50 training
 trajectories, three PPO epochs, and the registered exposure budget are
 unchanged. With two base environments, the minibatch override reduces Adam
 updates from six to three per logical epoch; the larger step chunk reduces
@@ -168,8 +170,8 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/status.sh --
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/resume.sh --seed 1234
 ```
 
-Once the explicit gate is open, `full.sh` prepares deterministic shared
-artifacts if necessary and launches the formal per-GPU queues through
+Once the explicit gate is open, `full.sh` prepares deterministic method-specific
+training streams if necessary and launches the formal per-GPU queues through
 `nohup`/`setsid`. While the gate is closed it fails before spawning a trainer.
 `status.sh` is read-only.
 `resume.sh` resumes only jobs with complete resume evidence. Launcher provenance
@@ -191,9 +193,9 @@ export EVRPTW_RESTORE_ROOT="../../../evrptw_runtime"
 ## Runtime optimizations (2026-09-04)
 
 New launches use rollout-local static caches, final-only route export during
-online validation, and compact TERRAN observations. The v13 logical budgets,
-seeds and best-of-100 evaluation are unchanged. Physical batches and rollout
-limits use the current post-optimization calibration. The TERRAN Cus1000 PPO
+online validation, and compact TERRAN observations. The active v15 profile uses
+method-specific batches and best-of-50 evaluation. Rollout limits remain
+Cus50=65, Cus100=120, Cus500=580 and Cus1000=1200. The TERRAN Cus1000 PPO
 override documented above is the only update-schedule change.
 
 TERRAN's encoder Dropout modules are retained for checkpoint-key compatibility
@@ -208,6 +210,6 @@ for equivalence tests, timing boundaries, an optional idle-GPU diagnostic and
 cross-commit resume precautions. No formal training was launched by this patch.
 
 The complete 2080 Ti evidence is in
-[`RTX2080TI_PER_JOB_MEMORY_CALIBRATION_V4.md`](../../reports/RTX2080TI_PER_JOB_MEMORY_CALIBRATION_V4.md).
+[`RTX2080TI_PER_JOB_MEMORY_CALIBRATION_V5.md`](../../reports/RTX2080TI_PER_JOB_MEMORY_CALIBRATION_V5.md).
 Ada revalidation instructions are in
 [`RTX6000_ADA_MEMORY_CALIBRATION_HANDOFF_V2.md`](../../reports/RTX6000_ADA_MEMORY_CALIBRATION_HANDOFF_V2.md).

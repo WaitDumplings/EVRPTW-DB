@@ -440,6 +440,8 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
         "minimum_training_epochs", "training_rollout_steps",
         "validation_rollout_steps",
         "physical_batch_size", "effective_batch_size",
+        "warm_start_source_commit", "warm_start_scope",
+        "warm_start_checkpoint_name", "warm_start_missing_policy",
         "training_trajectory_count", "customer_exposure_budget",
         "target_environments", "validation_index", "validation_views",
         "validation_decode_type", "validation_candidate_count",
@@ -489,6 +491,10 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
         "validation_rollout_steps",
         "physical_batch_size",
         "effective_batch_size",
+        "warm_start_source_commit",
+        "warm_start_scope",
+        "warm_start_checkpoint_name",
+        "warm_start_missing_policy",
         "training_trajectory_count",
         "customer_exposure_budget",
         "target_environments",
@@ -698,7 +704,7 @@ def validate_training_stream_contracts(
 ) -> None:
     """Bind every formal job to one exact, training-only ordered ID stream."""
 
-    grouped: dict[tuple[str, str, str, int], set[tuple[str, str]]] = {}
+    grouped: dict[tuple[str, str, str, str, int], set[tuple[str, str]]] = {}
     verified_markers: dict[Path, Mapping[str, Any]] = {}
     verified_registries: dict[Path, Mapping[str, Any]] = {}
     for job in jobs:
@@ -754,6 +760,7 @@ def validate_training_stream_contracts(
             raise RuntimeError("manifest training-stream registry SHA256 mismatch")
         registry_key = (
             f"{job.get('representation')}/{job.get('condition')}/"
+            f"{job.get('method')}/"
             f"{job.get('scale')}/seed_{int(job.get('seed'))}"
         )
         if (registry.get("streams") or {}).get(registry_key) != {
@@ -844,6 +851,7 @@ def validate_training_stream_contracts(
         key = (
             str(job.get("representation")),
             str(job.get("condition")),
+            str(job.get("method")),
             str(job.get("scale")),
             int(job.get("seed")),
         )
@@ -851,7 +859,7 @@ def validate_training_stream_contracts(
     disagreeing = {key: values for key, values in grouped.items() if len(values) != 1}
     if disagreeing:
         raise RuntimeError(
-            f"methods do not share the exact training stream: {disagreeing}"
+            f"one exact method-specific job maps to multiple streams: {disagreeing}"
         )
 
 
@@ -1530,6 +1538,31 @@ def output_dir(job: dict[str, Any], context: dict[str, Any]) -> Path:
     return root
 
 
+def resolve_warm_start_checkpoint(
+    job: Mapping[str, Any], context: Mapping[str, Any]
+) -> Path | None:
+    """Resolve an exact-job source checkpoint, never across task conditions."""
+
+    source_commit = str(job.get("warm_start_source_commit", "")).strip()
+    if not source_commit:
+        return None
+    if str(job.get("warm_start_scope", "")) != "exact_job_only":
+        raise RuntimeError("warm-start scope must be exact_job_only")
+    source_context = dict(context)
+    source_context["commit"] = source_commit
+    candidate = output_dir(dict(job), source_context) / str(
+        job.get("warm_start_checkpoint_name", "best.ckpt")
+    )
+    if candidate.is_file():
+        return candidate.resolve()
+    policy = str(job.get("warm_start_missing_policy", "error"))
+    if policy == "fresh":
+        return None
+    raise FileNotFoundError(
+        f"exact-job warm-start checkpoint is missing: {candidate}"
+    )
+
+
 def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, resume: bool) -> list[str]:
     dataset = context["dataset"]
     validation_steps = int(
@@ -1734,6 +1767,10 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
         )
     if resume:
         command.append("--resume")
+    else:
+        warm_start = resolve_warm_start_checkpoint(job, context)
+        if warm_start is not None:
+            command.extend(["--warm-start-checkpoint", str(warm_start)])
     return command
 
 
@@ -1916,6 +1953,10 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
                 f"resume provenance reward contract mismatch for {job['job_id']}; "
                 "start fresh without reusing the old training directory"
             )
+    warm_start_checkpoint = (
+        resolve_warm_start_checkpoint(job, context)
+        if job["kind"] == "train" and not resume_this_job else None
+    )
     if job["kind"] == "train" and not resume_this_job:
         previous_state = existing_training_state(out)
         if previous_state:
@@ -1930,6 +1971,8 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         "command": command,
         "git_commit": context["commit"],
         "git_branch": context["branch"],
+        "warm_started_from_checkpoint": warm_start_checkpoint is not None,
+        "warm_start_checkpoint": str(warm_start_checkpoint) if warm_start_checkpoint else None,
         "dataset_release_id": (context["dataset"] / "release_manifest.json").read_text(encoding="utf-8")[:4096]
         if (context["dataset"] / "release_manifest.json").exists()
         else "unavailable",

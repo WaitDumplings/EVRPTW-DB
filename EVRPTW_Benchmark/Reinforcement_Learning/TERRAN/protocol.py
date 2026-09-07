@@ -209,6 +209,13 @@ def _checkpoint_training_signature_provenance(
 
 
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    warm_start_checkpoint = getattr(args, "warm_start_checkpoint", None)
+    if bool(getattr(args, "resume", False)) and warm_start_checkpoint is not None:
+        raise ValueError("--resume and --warm-start-checkpoint are mutually exclusive")
+    if warm_start_checkpoint is not None and not Path(warm_start_checkpoint).is_file():
+        raise FileNotFoundError(
+            f"TERRAN warm-start checkpoint is missing: {warm_start_checkpoint}"
+        )
     if getattr(args, "training_epochs", None) is None and args.data_passes is None:
         return overrides, None
     if (
@@ -447,6 +454,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         "environment_transitions": environment_transitions,
         "optimizer_steps": optimizer_steps,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
+        "warm_start_checkpoint": str(Path(warm_start_checkpoint).resolve()) if warm_start_checkpoint else None,
         "training_stream_path": str(stream_path) if stream_path is not None else None,
         "training_stream_contract_sha256": (
             stream_contract["sha256"] if stream_contract is not None else None
@@ -805,6 +813,20 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
         "resolved_training_signature_sha256": None,
         "resolved_training_signature": None,
     }
+    final_payload = torch.load(final_checkpoint, map_location="cpu", weights_only=False)
+    selected_payload = torch.load(
+        output / "checkpoint_selected.pt", map_location="cpu", weights_only=False
+    )
+    warm_start_provenance = (
+        final_payload.get("config", {}).get("protocol", {}).get("warm_start_provenance")
+    )
+    selected_warm_start_provenance = (
+        selected_payload.get("config", {}).get("protocol", {}).get("warm_start_provenance")
+    )
+    if warm_start_provenance != selected_warm_start_provenance:
+        raise RuntimeError(
+            "TERRAN final and selected checkpoints disagree on warm-start provenance"
+        )
     atomic_json(
         output / "training_result.json",
         {
@@ -818,6 +840,8 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             **reward_contract_fields,
             **stream_contract_fields,
             **training_signature_fields,
+            "warm_start_requested": warm_start_provenance is not None,
+            "warm_start_provenance": warm_start_provenance,
             "budget_mode": (
                 "fixed_customer_exposure" if getattr(args, "training_stream_path", None) is not None else
                 ("fixed_logical_epochs" if fixed_epochs else "complete_data_passes")

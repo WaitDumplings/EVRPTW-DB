@@ -63,6 +63,9 @@ def prepare_training_objective(args: Any):
         args.validation_seed = int(args.seed) + 910_000_000
     freeze_resolved_training_signature(args)
     resume = bool(getattr(args, "resume", False))
+    warm_start = getattr(args, "warm_start_checkpoint", None)
+    if resume and warm_start is not None:
+        raise ValueError("--resume and --warm-start-checkpoint are mutually exclusive")
     formal = (
         getattr(args, "data_passes", None) is not None
         or getattr(args, "training_epochs", None) is not None
@@ -73,6 +76,12 @@ def prepare_training_objective(args: Any):
         )
     if resume and not formal:
         raise ValueError("standalone training does not implement --resume; use a formal training protocol")
+    if warm_start is not None and not formal:
+        raise ValueError(
+            "standalone training does not implement warm-start; use a formal training protocol"
+        )
+    if warm_start is not None and not Path(warm_start).is_file():
+        raise FileNotFoundError(f"warm-start checkpoint is missing: {warm_start}")
     output = Path(args.output_dir)
     if resume and (output / "checkpoint_latest.pt").is_file():
         payload = torch.load(output / "checkpoint_latest.pt", map_location="cpu", weights_only=False)
@@ -551,6 +560,65 @@ def _load_checkpoint(
     return payload
 
 
+def _load_warm_start_checkpoint(
+    path: Path,
+    *,
+    method: str,
+    policy: torch.nn.Module,
+    baseline: torch.nn.Module,
+    objective_config: Any,
+    contract_args: Any,
+) -> dict[str, Any]:
+    """Load compatible model weights while resetting all training state."""
+
+    policy_device = getattr(policy, "device", None)
+    if policy_device is None:
+        policy_device = next(policy.parameters()).device
+    payload = torch.load(path, map_location=policy_device, weights_only=False)
+    if payload.get("method") != method:
+        raise ValueError(
+            f"warm-start method mismatch: {payload.get('method')!r} != {method!r}"
+        )
+    objective_from_checkpoint(payload, override=objective_config)
+    assert_checkpoint_reward_contract(payload, contract_args)
+    _assert_checkpoint_soft_stage_contract(payload, contract_args)
+    expected_auxiliary_method = getattr(
+        contract_args, "method_auxiliary_method", None
+    )
+    if expected_auxiliary_method is not None:
+        assert_checkpoint_method_auxiliary(
+            payload,
+            contract_args,
+            expected_method=expected_auxiliary_method,
+        )
+    saved_args = payload.get("args", {}) or {}
+    if not isinstance(saved_args, dict):
+        saved_args = vars(saved_args)
+    for field in ("scale", "training_representation", "seed"):
+        requested = getattr(contract_args, field, None)
+        saved = saved_args.get(field)
+        if requested is not None and saved is not None and str(saved) != str(requested):
+            raise ValueError(
+                f"warm-start {field} mismatch: {saved!r} != {requested!r}"
+            )
+    state_dict = payload.get("model")
+    if not isinstance(state_dict, dict):
+        raise ValueError("warm-start checkpoint is missing model weights")
+    policy.load_state_dict(state_dict)
+    baseline.load_state_dict(policy.state_dict())
+    return {
+        "checkpoint": str(path.resolve()),
+        "method": payload.get("method"),
+        "source_logical_epoch": int(payload.get("logical_epoch", 0) or 0),
+        "source_data_pass": int(payload.get("data_pass", 0) or 0),
+        "optimizer_reset": True,
+        "epoch_reset": True,
+        "baseline_history_reset": True,
+        "validation_state_reset": True,
+        "early_stop_state_reset": True,
+    }
+
+
 def _save_registered_snapshots(
     *,
     output: Path,
@@ -750,6 +818,18 @@ def train_reinforce_data_passes(
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
+    warm_start_provenance: dict[str, Any] | None = None
+    warm_start_checkpoint = getattr(args, "warm_start_checkpoint", None)
+    if warm_start_checkpoint is not None:
+        warm_start_provenance = _load_warm_start_checkpoint(
+            Path(warm_start_checkpoint),
+            method=method,
+            policy=policy,
+            baseline=baseline,
+            objective_config=objective_config,
+            contract_args=args,
+        )
+        args.warm_start_provenance = warm_start_provenance
     resume_extra: dict[str, Any] = {}
     if args.resume:
         if not checkpoint.exists():
@@ -816,6 +896,8 @@ def train_reinforce_data_passes(
         "session_id": str(time.time_ns()),
         "resume_requested": bool(args.resume),
         "resume_checkpoint": str(checkpoint) if args.resume else None,
+        "warm_start_requested": warm_start_checkpoint is not None,
+        "warm_start_provenance": warm_start_provenance,
         "session_start_optimizer_steps": starting_optimizer_steps,
         "session_start_logical_epoch": completed_logical_epochs,
         "session_start_completed_data_passes": int(state.completed_data_passes),
@@ -1581,6 +1663,8 @@ def train_reinforce_data_passes(
         "resolved_training_signature": getattr(
             args, "resolved_training_signature", None
         ),
+        "warm_start_requested": warm_start_checkpoint is not None,
+        "warm_start_provenance": warm_start_provenance,
         "optimizer_steps": int(optimizer_steps),
         "baseline_eval_count": baseline_eval_count,
         "baseline_update_count": baseline_update_count,

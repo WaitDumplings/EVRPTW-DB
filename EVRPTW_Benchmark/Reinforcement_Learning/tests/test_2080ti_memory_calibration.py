@@ -18,42 +18,29 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
 )
 
 
-def test_historical_calibration_inventory_covers_each_2080ti_job_once() -> None:
+def test_launchable_calibration_inventory_covers_each_2080ti_job_once() -> None:
     rows = builder._load_jobs()
     assert len(rows) == 16
     assert len({row["job_id"] for row in rows}) == 16
-    counts = {
-        wave: sum(builder._wave(row) == wave for row in rows)
-        for wave in builder.WAVES
+    assert {wave: sum(builder._wave(row) == wave for row in rows) for wave in builder.WAVES} == {
+        "cus50": 4, "cus100_g": 4, "cus100_e": 4, "cus100_support": 4,
     }
-    assert counts == {
-        "cus50": 4,
-        "cus100_g": 4,
-        "cus100_e": 4,
-        "cus100_support": 4,
+    assert all(row.get("historical_only") is not True for row in rows)
+    assert all(row.get("enabled", True) is True for row in rows)
+    assert {row["validation_candidate_count"] for row in rows} == {50}
+    assert {
+        (row["method"], row["scale"]): row["effective_batch_size"]
+        for row in rows if row["condition"] == "Full-support" and row["representation"] == "G"
+    } == {
+        ("am_evrptw", "Cus50"): 2304,
+        ("evrptw_rl", "Cus50"): 336,
+        ("drl_ts", "Cus50"): 144,
+        ("terran", "Cus50"): 480,
+        ("am_evrptw", "Cus100"): 800,
+        ("evrptw_rl", "Cus100"): 96,
+        ("drl_ts", "Cus100"): 40,
+        ("terran", "Cus100"): 280,
     }
-    assert all(row["historical_only"] is True for row in rows)
-    assert all(row["enabled"] is False for row in rows)
-    assert all(
-        row["calibration_source_status"] == "historical_frozen_nonlaunchable"
-        for row in rows
-    )
-    assert all(row["nonlaunchable_reason"] for row in rows)
-
-    # Historical memory evidence remains audit-only. After independent reward
-    # calibration and explicit authorization, the active queues must cover the
-    # same 16 scientific job IDs without inheriting executable history flags.
-    active_root = builder.ROOT / "scripts" / "rq_v1"
-    active = []
-    for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1"):
-        active.extend(
-            json.loads(line)
-            for line in (active_root / server / "jobs.jsonl").read_text().splitlines()
-            if line.strip()
-        )
-    assert {row["job_id"] for row in active} == {row["job_id"] for row in rows}
-    assert all(row.get("historical_only") is not True for row in active)
-    assert all(row.get("enabled", True) is True for row in active)
 
 
 def test_calibration_job_preserves_formal_semantics_but_uses_two_epochs() -> None:
@@ -62,18 +49,18 @@ def test_calibration_job_preserves_formal_semantics_but_uses_two_epochs() -> Non
     assert row["calibration_original_job_id"] == source["job_id"]
     assert row["training_rollout_steps"] == source["training_rollout_steps"]
     assert row["validation_views"] == 500
-    assert row["validation_candidate_count"] == 100
+    assert row["validation_candidate_count"] == 50
     assert row["training_epochs"] == 2
     assert row["soft_stage_end_epoch"] == 1
-    assert row["target_environments"] == 2 * source["effective_batch_size"]
-    assert row["historical_only"] is True
-    assert row["enabled"] is False
+    assert row["target_environments"] == 34
+    assert row["effective_batch_size"] == row["physical_batch_size"] == 17
+    assert row["historical_only"] is False
+    assert row["enabled"] is True
 
 
-def test_terran_rejects_nondivisor_calibration_batch() -> None:
+def test_calibration_batch_override_need_not_match_fairness_budget() -> None:
     source = next(row for row in builder._load_jobs() if row["method"] == "terran")
-    with pytest.raises(ValueError, match="must divide"):
-        builder._batch_for(source, {f"terran:{source['scale']}": 3})
+    assert builder._batch_for(source, {f"terran:{source['scale']}": 3}) == 3
 
 
 def test_runner_rejects_truncated_validation_contract(tmp_path: Path) -> None:
@@ -85,15 +72,6 @@ def test_runner_rejects_truncated_validation_contract(tmp_path: Path) -> None:
     manifest = tmp_path / "jobs.jsonl"
     manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="unsafe calibration manifest"):
-        runner._load_manifest(manifest)
-
-
-def test_runner_refuses_historical_inventory_as_executable_work(tmp_path: Path) -> None:
-    source = builder._load_jobs()[0]
-    row = builder._calibration_job(source, batch=1, slot=0)
-    manifest = tmp_path / "historical_jobs.jsonl"
-    manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="historical.*audit-only.*not executable"):
         runner._load_manifest(manifest)
 
 

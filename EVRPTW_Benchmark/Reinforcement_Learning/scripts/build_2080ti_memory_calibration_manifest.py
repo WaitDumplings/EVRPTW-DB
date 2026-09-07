@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Render the frozen, non-launchable RTX 2080 Ti calibration inventory.
+"""Render launchable two-epoch RTX 2080 Ti n-traj=50 calibration waves.
 
-The measurements predate the current four-scale shared reward contract. This
-tool reads a dedicated historical inventory instead of treating today's active
-formal queues as source data. Rendered rows remain explicitly disabled and are
-rejected by the calibration runner; they preserve the old two-epoch calibration
-metadata for audit only and cannot authorize a current launch.
+Each row is derived from the checked-in formal server manifests, then isolated
+into a disposable two-epoch train plus full 500-view validation probe. Batch
+overrides change both physical and logical environments for per-method tuning.
 """
 
 from __future__ import annotations
@@ -18,39 +16,32 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INVENTORY = ROOT / "configs" / "drl_rq_2080ti_memory_calibration_inventory_v1.json"
 WAVES = ("cus50", "cus100_g", "cus100_e", "cus100_support")
 
 
 def _load_jobs() -> list[dict[str, Any]]:
-    payload = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    if (
-        payload.get("schema")
-        != "drl_rq_2080ti_memory_calibration_inventory_v1"
-        or payload.get("status") != "historical_frozen_nonlaunchable"
-    ):
-        raise RuntimeError("invalid RTX 2080 Ti historical calibration inventory")
-    reason = str(payload.get("nonlaunchable_reason", "")).strip()
-    if not reason:
-        raise RuntimeError("historical calibration inventory lacks blocked reason")
-    rows = []
-    for source in payload.get("jobs", []):
-        row = dict(source)
-        row.update(
-            {
-                "enabled": False,
-                "historical_only": True,
-                "calibration_source_status": payload["status"],
-                "calibration_source_commit": payload["source_commit"],
-                "calibration_source_inventory": str(INVENTORY.relative_to(ROOT)),
-                "nonlaunchable_reason": reason,
-            }
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1"):
+        path = ROOT / "scripts" / "rq_v1" / server / "jobs.jsonl"
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("run_mode") != "full" or row.get("scale") not in {
+                "Cus50", "Cus100"
+            }:
+                continue
+            row = dict(row)
+            row["validation_candidate_count"] = 50
+            row["test_candidate_count"] = 50
+            if row.get("method") == "terran":
+                row["training_trajectory_count"] = 50
+            rows_by_id[str(row["job_id"])] = row
+    rows = list(rows_by_id.values())
+    if len(rows) != 16:
+        raise RuntimeError(
+            f"expected exactly 16 unique active RTX 2080 Ti jobs; found {len(rows)}"
         )
-        rows.append(row)
-    if len(rows) != 16 or len({row["job_id"] for row in rows}) != 16:
-        raise RuntimeError("expected exactly 16 unique historical RTX 2080 Ti jobs")
-    if {row["scale"] for row in rows} != {"Cus50", "Cus100"}:
-        raise RuntimeError("historical RTX 2080 Ti inventory has unexpected scales")
     return rows
 
 
@@ -82,17 +73,6 @@ def _batch_for(row: dict[str, Any], overrides: dict[str, int]) -> int:
             overrides.get(method_scale, row["physical_batch_size"]),
         )
     )
-    logical = int(row["effective_batch_size"])
-    if batch > logical:
-        raise ValueError(
-            f"physical batch {batch} exceeds logical batch {logical}: "
-            f"{row['job_id']}"
-        )
-    if row["method"] == "terran" and logical % batch:
-        raise ValueError(
-            f"TERRAN physical batch {batch} must divide logical batch {logical}: "
-            f"{row['job_id']}"
-        )
     return batch
 
 
@@ -107,7 +87,7 @@ def _calibration_job(
     original_job_id = str(source["job_id"])
     original_condition = str(source["condition"])
     customers = int(str(source["scale"]).removeprefix("Cus"))
-    effective = int(source["effective_batch_size"])
+    effective = batch
     environments = 2 * effective
     exposures = environments * customers
     tag = f"b{batch}"
@@ -115,7 +95,7 @@ def _calibration_job(
         {
             "schema": "drl_rq_memory_calibration_job_v1",
             "job_id": f"memory_calibration__{_slug(original_job_id)}__{tag}",
-            "runtime_budget_id": "drl_rq_2080ti_memory_calibration_2epoch_val500_c100_v1",
+            "runtime_budget_id": "drl_rq_2080ti_memory_calibration_2epoch_val500_c50_v2",
             "stage": "memory_calibration",
             "condition": (
                 f"Memory-calibration__{_slug(original_condition)}__{tag}"
@@ -123,6 +103,8 @@ def _calibration_job(
             "calibration_original_job_id": original_job_id,
             "calibration_original_condition": original_condition,
             "physical_batch_size": batch,
+            "effective_batch_size": effective,
+            "logical_environments_per_epoch": effective,
             "training_epochs": 2,
             "minimum_training_epochs": 2,
             "planned_optimizer_updates": 2,
@@ -139,8 +121,8 @@ def _calibration_job(
             "gpu_hour_checkpoints": [],
             "global_slot": slot,
             "queue_position": 0,
-            "enabled": False,
-            "historical_only": True,
+            "enabled": True,
+            "historical_only": False,
         }
     )
     if row["method"] == "drl_ts":
@@ -150,7 +132,7 @@ def _calibration_job(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Render a non-launchable historical 2080 Ti calibration manifest."
+        description="Render a launchable 2080 Ti n-traj=50 calibration manifest."
     )
     parser.add_argument("--wave", choices=(*WAVES, "all"), required=True)
     parser.add_argument(
@@ -196,9 +178,8 @@ def main() -> None:
         json.dumps(
             {
                 "schema": "drl_rq_memory_calibration_manifest_summary_v1",
-                "status": "historical_frozen_nonlaunchable",
-                "launchable": False,
-                "nonlaunchable_reason": generated[0]["nonlaunchable_reason"],
+                "status": "launchable_calibration_only",
+                "launchable": True,
                 "wave": args.wave,
                 "output": str(args.output.resolve()),
                 "jobs": [

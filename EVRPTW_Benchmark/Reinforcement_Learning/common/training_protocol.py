@@ -91,6 +91,15 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--early-stop-start-epoch", type=int, default=0)
     parser.add_argument("--protocol-id", default="legacy_cli_defaults")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--warm-start-checkpoint",
+        type=Path,
+        help=(
+            "Initialize only model weights from a compatible checkpoint. "
+            "Epoch, optimizer, baseline history, validation state, and early-stop "
+            "state are reset; this is intentionally different from --resume."
+        ),
+    )
     parser.add_argument("--max-batches-per-pass", type=int)
     parser.add_argument("--pilot-mode", action="store_true")
 

@@ -167,13 +167,8 @@ def job(
             f"unsupported training override(s) for {method}/{scale}: "
             f"{sorted(unexpected_training_overrides)}"
         )
-    logical = int(cfg["candidate_logical_batch"][scale])
-    environments_per_epoch = int(cfg["candidate_environments_per_epoch"][scale])
-    if logical != environments_per_epoch:
-        raise ValueError(
-            f"logical batch must equal environments per epoch for {scale}: "
-            f"{logical} != {environments_per_epoch}"
-        )
+    logical = int(cfg["candidate_logical_batch_by_method_scale"][method][scale])
+    environments_per_epoch = logical
     cap = int(cfg["physical_batch_caps"][method][scale])
     physical = cap
     if not 0 < physical <= logical:
@@ -187,7 +182,9 @@ def job(
     if not 0 < minimum_updates <= updates:
         raise ValueError("minimum logical epochs must not exceed the hard cap")
     target_environments = updates * environments_per_epoch
-    exposure = int(cfg["candidate_customer_exposure_budget"][scale])
+    exposure = int(
+        cfg["candidate_customer_exposure_budget_by_method_scale"][method][scale]
+    )
     derived_exposure = target_environments * int(scale.removeprefix("Cus"))
     if exposure != derived_exposure:
         raise ValueError(
@@ -205,11 +202,11 @@ def job(
     ).get(scale)
     stream = (
         f"{ARTIFACTS}/streams/{cfg['runtime_budget_id']}/"
-        f"formal/{condition}/{scale}/seed_{seed}.parquet"
+        f"formal/{condition}/{method}/{scale}/seed_{seed}.parquet"
     )
     if registry is None:
         registry = load_training_stream_registry(cfg)
-    registry_key = f"{representation}/{condition}/{scale}/seed_{seed}"
+    registry_key = f"{representation}/{condition}/{method}/{scale}/seed_{seed}"
     try:
         registered_stream = registry["streams"][registry_key]
         stream_contract = registered_stream["snapshot"]
@@ -285,6 +282,10 @@ def job(
         "method": method,
         "scale": scale,
         "seed": seed,
+        "warm_start_source_commit": str(cfg["warm_start"]["source_commit"]),
+        "warm_start_scope": str(cfg["warm_start"]["scope"]),
+        "warm_start_checkpoint_name": str(cfg["warm_start"]["checkpoint_name"]),
+        "warm_start_missing_policy": str(cfg["warm_start"]["missing_exact_job"]),
         "train_module": METHODS[method],
         "train_index": TRAIN_INDEX[scale],
         "validation_index": VALIDATION_INDEX[scale],

@@ -76,7 +76,7 @@ def _load_manifest(path: Path) -> list[dict[str, Any]]:
             "training_epochs": 2,
             "minimum_training_epochs": 2,
             "validation_views": 500,
-            "validation_candidate_count": 100,
+            "validation_candidate_count": 50,
             "validation_every_epochs": 2,
         }
         for key, expected in required.items():
@@ -235,7 +235,7 @@ def _run_one(
         and int(training.get("completed_training_epochs", 0)) == 2
         and len(validation_rows) == 1
         and int(validation_rows[0].get("instances", 0)) == 500
-        and int(validation_candidates) == 100
+        and int(validation_candidates) == 50
         and validation_rows[0].get("verifier_summary_passed") is not None
     )
     result = {

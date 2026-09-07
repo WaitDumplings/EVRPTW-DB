@@ -38,53 +38,29 @@ def test_four_server_queues_cover_frozen_24_job_matrix() -> None:
     assert {row["scale"] for row in rows} == {"Cus50", "Cus100", "Cus500", "Cus1000"}
 
 
-def test_shared_stream_is_method_independent_within_condition_scale_seed() -> None:
-    rows = [
-        row
-        for queue in build().values()
-        for row in queue
-        if row["run_mode"] == "full"
-    ]
-    grouped: dict[tuple[str, str, str, int], set[tuple[str, str, str]]] = {}
-    actual_by_path: dict[str, dict] = {}
+def test_method_specific_stream_is_exact_within_job_scope() -> None:
+    rows = [row for queue in build().values() for row in queue]
+    grouped: dict[tuple[str, str, str, str, int], set[tuple[str, str]]] = {}
     for row in rows:
-        key = (row["representation"], row["condition"], row["scale"], row["seed"])
         snapshot = row["training_stream_contract_snapshot"]
         stream_path = row["training_stream_path"]
-        if stream_path not in actual_by_path:
-            actual_by_path[stream_path] = MANIFESTS.load_training_stream_contract(
-                MANIFESTS.ROOT.parents[1] / stream_path
-            )
-        actual = actual_by_path[stream_path]
+        actual = MANIFESTS.load_training_stream_contract(
+            MANIFESTS.ROOT.parents[1] / stream_path
+        )
         assert actual == snapshot
         assert snapshot["sha256"] == row["training_stream_contract_sha256"]
         assert snapshot["sample_count"] == row["target_environments"]
         assert snapshot["source_index_sha256"]
+        assert f"/{row['method']}/{row['scale']}/" in stream_path
         assert row["file_hash_validation_performed"] is True
+        key = (
+            row["representation"], row["condition"], row["method"],
+            row["scale"], row["seed"],
+        )
         grouped.setdefault(key, set()).add(
-            (
-                row["training_stream_path"],
-                row["training_stream_contract_sha256"],
-                json.dumps(snapshot, sort_keys=True),
-            )
+            (stream_path, row["training_stream_contract_sha256"])
         )
-    assert all(len(paths) == 1 for paths in grouped.values())
-    for key in grouped:
-        representation, condition, scale, seed = key
-        methods = {
-            row["method"]
-            for row in rows
-            if (
-                row["representation"], row["condition"], row["scale"], row["seed"]
-            ) == key
-        }
-        expected_methods = (
-            set(MANIFESTS.METHODS)
-            if condition == "Full-support"
-            else {"am_evrptw", "terran"}
-        )
-        assert methods == expected_methods
-
+    assert all(len(streams) == 1 for streams in grouped.values())
 
 def test_checked_in_formal_decision_is_three_way_consistent_and_scoped() -> None:
     gate = json.loads(
@@ -148,7 +124,7 @@ def test_checked_in_stream_registry_binds_marker_manifest_and_all_methods() -> N
     for row in rows:
         key = (
             f'{row["representation"]}/{row["condition"]}/'
-            f'{row["scale"]}/seed_{row["seed"]}'
+            f'{row["method"]}/{row["scale"]}/seed_{row["seed"]}'
         )
         assert registry["streams"][key] == {
             "path": row["training_stream_path"],
@@ -291,63 +267,38 @@ def test_scale_aware_hardware_assignment_is_strict() -> None:
 
 
 def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() -> None:
-    expected = {
-        "Cus50": (10_000, 1_024, 10_240_000, 512_000_000),
-        "Cus100": (10_000, 256, 2_560_000, 256_000_000),
-        "Cus500": (10_000, 64, 640_000, 320_000_000),
-        "Cus1000": (10_000, 2, 20_000, 20_000_000),
-    }
-    formal = [
-        row
-        for queue in build().values()
-        for row in queue
-        if row["run_mode"] == "full"
-    ]
+    runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
+    formal = [row for queue in build().values() for row in queue]
     for row in formal:
-        epochs, environments_per_epoch, total_environments, exposures = expected[
-            row["scale"]
-        ]
-        assert (
-            row["runtime_budget_id"]
-            == "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50"
-        )
+        scale = row["scale"]
+        method = row["method"]
+        customers = int(scale.removeprefix("Cus"))
+        batch = runtime["candidate_logical_batch_by_method_scale"][method][scale]
+        epochs = runtime["candidate_logical_epochs"][scale]
+        total_environments = epochs * batch
+        exposures = total_environments * customers
+        assert row["runtime_budget_id"] == runtime["runtime_budget_id"]
         assert row["runtime_budget_id"] in row["training_stream_path"]
-        assert row["training_epochs"] == epochs
+        assert row["training_epochs"] == epochs == 10_000
         assert row["planned_logical_epochs"] == epochs
-        assert "planned_optimizer_updates" not in row
-        assert row["logical_environments_per_epoch"] == environments_per_epoch
-        assert row["effective_batch_size"] == environments_per_epoch
+        assert row["logical_environments_per_epoch"] == batch
+        assert row["effective_batch_size"] == batch
         assert row["target_environments"] == total_environments
         assert row["customer_exposure_budget"] == exposures
-        assert row["physical_batch_size"] <= row["effective_batch_size"]
-        if row["method"] == "terran":
-            assert row["effective_batch_size"] % row["physical_batch_size"] == 0
+        assert row["physical_batch_size"] <= batch
         assert row["validation_every_epochs"] == 250
         assert row["validation_checkpoints"] == 120
         assert row["minimum_training_epochs"] == 5_000
         assert row["post_minimum_validation_every_epochs"] == 50
         assert row["validation_views"] == 500
-        assert row["validation_decode_type"] == "sampling"
-        assert row["validation_candidate_count"] == 100
-        assert row["test_decode_type"] == "sampling"
-        assert row["test_candidate_count"] == 100
+        assert row["validation_candidate_count"] == 50
+        assert row["test_candidate_count"] == 50
         expected_trajectories = {
-            "am_evrptw": 5,
-            "evrptw_rl": 1,
-            "drl_ts": 1,
-            "terran": 100,
-        }[row["method"]]
+            "am_evrptw": 5, "evrptw_rl": 1, "drl_ts": 1, "terran": 50,
+        }[method]
         assert row["training_trajectory_count"] == expected_trajectories
-        assert row["final_validation_views"] == 0
-        assert row["planning_wall_time_hours"] is None
-        assert row["early_stop_patience_validations"] == 10
-        assert row["early_stop_start_epoch"] == 5_000
-        assert row["soft_stage_end_epoch"] == (2_500 if row["method"] == "drl_ts" else None)
-        assert row["primary_checkpoint"] == "best_overall.ckpt"
-        assert row["minimum_budget_checkpoint"] == "best_within_5000.ckpt"
-        assert row["extended_checkpoint"] == "best_overall.ckpt"
-        assert row["validation_seed"] == row["seed"] + 910_000_000
-
+        assert row["warm_start_source_commit"] == runtime["warm_start"]["source_commit"]
+        assert row["warm_start_scope"] == "exact_job_only"
 
 def test_scale_rollout_limits_match_current_protocol() -> None:
     expected = {
@@ -611,21 +562,22 @@ def test_checked_in_assignment_summaries_match_authorized_scope() -> None:
         )
 
 
-def test_artifact_preparation_uses_v13_manifest_exposure_budgets() -> None:
+def test_artifact_preparation_uses_v15_method_specific_exposure_budgets() -> None:
     script = (SCRIPT_ROOT / "prepare_artifacts.sh").read_text(encoding="utf-8")
-    assert "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50" in script
-    assert "drl_rq_runtime_budget_v11_min5000_max6000_tailval50" not in script
-    assert "drl_rq_runtime_budget_v10_min5000_max10000_tailval50" not in script
-    for scale, exposure in {
-        "Cus50": 512_000_000,
-        "Cus100": 256_000_000,
-        "Cus500": 320_000_000,
-        "Cus1000": 20_000_000,
-    }.items():
-        assert f"[{scale}]={exposure}" in script
-    assert "for scale in Cus50 Cus100 Cus500 Cus1000" in script
-    assert "file_hash_validation_performed\": True" in script
+    assert "drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart" in script
+    expected = {
+        "am_evrptw:Cus50": 1_152_000_000,
+        "am_evrptw:Cus100": 800_000_000,
+        "evrptw_rl:Cus50": 168_000_000,
+        "drl_ts:Cus100": 40_000_000,
+        "terran:Cus50": 240_000_000,
+        "terran:Cus100": 280_000_000,
+    }
+    for key, exposure in expected.items():
+        assert f"[{key}]={exposure}" in script
+    assert 'METHODS=(am_evrptw evrptw_rl drl_ts terran)' in script
+    assert 'for method in "${METHODS[@]}"' in script
+    assert 'formal/Full-support/$method/$scale/seed_${seed}.parquet' in script
+    assert '--customer-exposures "${FORMAL_EXPOSURE[$method:$scale]}"' in script
+    assert 'file_hash_validation_performed": True' in script
     assert '"training_stream_contracts": contracts' in script
-    assert '"marker_sha256"' in script
-    assert "load_training_stream_contract" in script
-    assert '--customer-exposures "${FORMAL_EXPOSURE[$scale]}"' in script

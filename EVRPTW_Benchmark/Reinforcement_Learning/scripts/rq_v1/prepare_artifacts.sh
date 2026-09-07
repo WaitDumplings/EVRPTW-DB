@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/dataset_root.sh"
 DATASET_ROOT="$(resolve_evrptw_dataset_root "$REPO_ROOT")"
 OUTPUT_ROOT="${EVRPTW_OUTPUT_ROOT:-$REPO_ROOT/EVRPTW_Benchmark/results/DRL_rq_v1}"
 ARTIFACT_ROOT="$OUTPUT_ROOT/artifacts"
-RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50"
+RUNTIME_BUDGET_ID="drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart"
 STREAM_ROOT="$ARTIFACT_ROOT/streams/$RUNTIME_BUDGET_ID"
 STREAM_REGISTRY="$REPO_ROOT/EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json"
 TRAIN_CORE="$DATASET_ROOT/generation_plan/core/train/view_index.parquet"
@@ -63,7 +63,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import load_
 p = pathlib.Path(sys.argv[1])
 d = json.loads(p.read_text())
 paths = [pathlib.Path(item) for item in d.get("required_artifacts", [])]
-valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50"
+valid_budget = d.get("runtime_budget_id") == "drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart"
 valid_dataset = pathlib.Path(d.get("dataset_root", "")).resolve() == pathlib.Path(sys.argv[2]).resolve()
 canonical = {
     key: value for key, value in d.items()
@@ -121,11 +121,16 @@ declare -A INDEX=(
   [Cus500]="$TRAIN_CORE"
   [Cus1000]="$TRAIN_CORE"
 )
+METHODS=(am_evrptw evrptw_rl drl_ts terran)
 declare -A FORMAL_EXPOSURE=(
-  [Cus50]=512000000
-  [Cus100]=256000000
-  [Cus500]=320000000
-  [Cus1000]=20000000
+  [am_evrptw:Cus50]=1152000000 [am_evrptw:Cus100]=800000000
+  [am_evrptw:Cus500]=320000000 [am_evrptw:Cus1000]=20000000
+  [evrptw_rl:Cus50]=168000000 [evrptw_rl:Cus100]=96000000
+  [evrptw_rl:Cus500]=320000000 [evrptw_rl:Cus1000]=20000000
+  [drl_ts:Cus50]=72000000 [drl_ts:Cus100]=40000000
+  [drl_ts:Cus500]=320000000 [drl_ts:Cus1000]=20000000
+  [terran:Cus50]=240000000 [terran:Cus100]=280000000
+  [terran:Cus500]=320000000 [terran:Cus1000]=20000000
 )
 IFS=',' read -r -a SEEDS <<< "$SEED_SELECTION"
 for seed in "${SEEDS[@]}"; do
@@ -136,27 +141,31 @@ done
 REQUIRED=("$E_MANIFEST" "$SUPPORT_ROOT/support_selection_manifest.json")
 
 for scale in Cus50 Cus100 Cus500 Cus1000; do
-  for seed in "${SEEDS[@]}"; do
-    formal="$STREAM_ROOT/formal/Full-support/$scale/seed_${seed}.parquet"
-    mkdir -p "$(dirname "$formal")"
-    python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_training_stream \
-      --index "${INDEX[$scale]}" --scale "$scale" --seed "$seed" \
-      --customer-exposures "${FORMAL_EXPOSURE[$scale]}" \
-      --output "$formal"
-    REQUIRED+=("$formal" "$formal.manifest.json")
+  for method in "${METHODS[@]}"; do
+    for seed in "${SEEDS[@]}"; do
+      formal="$STREAM_ROOT/formal/Full-support/$method/$scale/seed_${seed}.parquet"
+      mkdir -p "$(dirname "$formal")"
+      python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_training_stream \
+        --index "${INDEX[$scale]}" --scale "$scale" --seed "$seed" \
+        --customer-exposures "${FORMAL_EXPOSURE[$method:$scale]}" \
+        --output "$formal"
+      REQUIRED+=("$formal" "$formal.manifest.json")
+    done
   done
 done
 
 for support in Random-10%-support Coverage-10%-support; do
-  for seed in "${SEEDS[@]}"; do
-    stream="$STREAM_ROOT/formal/$support/Cus100/seed_${seed}.parquet"
-    mkdir -p "$(dirname "$stream")"
-    python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_training_stream \
-      --index "$TRAIN_CORE" --scale Cus100 --seed "$seed" \
-      --customer-exposures "${FORMAL_EXPOSURE[Cus100]}" \
-      --allowed-family-ids "$SUPPORT_ROOT/$support.txt" \
-      --output "$stream"
-    REQUIRED+=("$stream" "$stream.manifest.json")
+  for method in am_evrptw terran; do
+    for seed in "${SEEDS[@]}"; do
+      stream="$STREAM_ROOT/formal/$support/$method/Cus100/seed_${seed}.parquet"
+      mkdir -p "$(dirname "$stream")"
+      python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_training_stream \
+        --index "$TRAIN_CORE" --scale Cus100 --seed "$seed" \
+        --customer-exposures "${FORMAL_EXPOSURE[$method:Cus100]}" \
+        --allowed-family-ids "$SUPPORT_ROOT/$support.txt" \
+        --output "$stream"
+      REQUIRED+=("$stream" "$stream.manifest.json")
+    done
   done
 done
 
@@ -174,7 +183,7 @@ for path in stream_paths:
     contracts.append({"relative_path": path, "sha256": snapshot["sha256"], "snapshot": snapshot})
 payload = {
     "schema": "drl_rq_artifact_preparation_v2",
-    "runtime_budget_id": "drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50",
+    "runtime_budget_id": "drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart",
     "status": "passed",
     "dataset_root": sys.argv[2],
     "required_artifacts": required,

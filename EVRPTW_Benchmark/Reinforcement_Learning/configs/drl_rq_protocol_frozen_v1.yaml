@@ -22,7 +22,7 @@ authorized_job_ids:
   - full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234
   - full__G__Full-support__terran__Cus500__seed1234
   - full__G__Full-support__terran__Cus1000__seed1234
-runtime_budget_id: drl_rq_runtime_budget_v13_am5_min5000_max10000_tailval50
+runtime_budget_id: drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart
 supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
@@ -30,7 +30,7 @@ objective_revision: rivian_energy_vehicle_cost_v1
 reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json
 reward_contract_revision: drl_energy_vehicle_reference_scale_v2
 training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
-training_stream_registry_sha256: a11a0b3bd44dd93c55daba0de88928133447ae0f2414dbbbd432aae1600d5df7
+training_stream_registry_sha256: 2ae41f6da136d07aa5d66b392f73935cf67b1590925434b8de8aa7b47152f1fe
 # All four intended training scales now have independent training-only reward
 # calibrations. This authorization enables the 16 measured 2080 Ti jobs while
 # retaining the two previously authorized TERRAN large-scale jobs.
@@ -140,39 +140,36 @@ ev_integrity:
     - optimal_battery_ablation
     - globally_necessary_charging_visit
 
-training_fairness:
-  primary: customer_exposure_matched
-  secondary: gpu_hour_matched
-  sampling: prefix_stable_full_pool_shuffle_cycle
-  shared_stream_within_scale_seed: true
+training_budget:
+  primary: method_specific_device_utilization
+  exposure_matched_across_methods: false
+  sampling: prefix_stable_full_pool_shuffle_cycle_per_method
+  shared_stream_within_scale_seed: false
   test_used_for_checkpoint_selection: false
   statistical_unit: parent_family
   wall_clock_checkpoints_h: [6, 12, 24]
-  exposure_checkpoints:
-    Cus50: [128000000, 256000000, 512000000]
-    Cus100: [64000000, 128000000, 256000000]
-    Cus500: [80000000, 160000000, 320000000]
-    Cus1000: [5000000, 10000000, 20000000]
-  customer_exposure_budget_by_scale:
-    Cus50: 512000000
-    Cus100: 256000000
-    Cus500: 320000000
-    Cus1000: 20000000
-  logical_batch_by_scale:
-    Cus50: 1024
-    Cus100: 256
-    Cus500: 64
-    Cus1000: 2
+  logical_batch_by_method_scale:
+    am_evrptw: {Cus50: 2304, Cus100: 800, Cus500: 64, Cus1000: 2}
+    evrptw_rl: {Cus50: 336, Cus100: 96, Cus500: 64, Cus1000: 2}
+    drl_ts: {Cus50: 144, Cus100: 40, Cus500: 64, Cus1000: 2}
+    terran: {Cus50: 480, Cus100: 280, Cus500: 64, Cus1000: 2}
+  customer_exposure_budget_by_method_scale:
+    am_evrptw: {Cus50: 1152000000, Cus100: 800000000, Cus500: 320000000, Cus1000: 20000000}
+    evrptw_rl: {Cus50: 168000000, Cus100: 96000000, Cus500: 320000000, Cus1000: 20000000}
+    drl_ts: {Cus50: 72000000, Cus100: 40000000, Cus500: 320000000, Cus1000: 20000000}
+    terran: {Cus50: 240000000, Cus100: 280000000, Cus500: 320000000, Cus1000: 20000000}
   physical_microbatch_by_method_scale:
-    am_evrptw: {Cus50: 1024, Cus100: 256, Cus500: 8, Cus1000: 2}
-    evrptw_rl: {Cus50: 224, Cus100: 68, Cus500: 16, Cus1000: 2}
-    drl_ts: {Cus50: 132, Cus100: 34, Cus500: 8, Cus1000: 2}
-    terran: {Cus50: 256, Cus100: 128, Cus500: 64, Cus1000: 2}
+    am_evrptw: {Cus50: 2304, Cus100: 800, Cus500: 8, Cus1000: 2}
+    evrptw_rl: {Cus50: 336, Cus100: 96, Cus500: 16, Cus1000: 2}
+    drl_ts: {Cus50: 144, Cus100: 40, Cus500: 8, Cus1000: 2}
+    terran: {Cus50: 480, Cus100: 280, Cus500: 64, Cus1000: 2}
+  rtx2080ti_calibration: two_epochs_plus_500_views_x_50_candidates_all_16_jobs_passed
+  a6000_batches: conservative_previous_values_pending_remote_ntraj50_calibration
 
 model_selection:
   validation_views: 500
   validation_decode_type: sampling
-  validation_candidate_count: 100
+  validation_candidate_count: 50
   candidate_selection: independent_verifier_feasible_then_min_total_cost_usd
   minimum_training_epochs: 5000
   maximum_training_epochs: 10000
@@ -193,7 +190,7 @@ model_selection:
 
 test_inference:
   decode_type: sampling
-  candidate_count: 100
+  candidate_count: 50
   candidate_selection: independent_verifier_feasible_then_min_total_cost_usd
   note: common benchmark budget; paper-supported but not paper-exact candidate counts
 
@@ -207,8 +204,18 @@ training_trajectories_per_instance:
   am_evrptw: 5
   evrptw_rl: 1
   drl_ts: 1
-  terran: 100
+  terran: 50
 training_trajectories_per_instance_by_method_scale: {}
+
+warm_start:
+  source_commit: 481176332c1e683f52b28777d3423d036f5c010f
+  checkpoint_name: best.ckpt
+  scope: exact_job_only
+  missing_exact_job: fresh
+  inherited_state: model_weights_only
+  optimizer_state: reset
+  epoch_counter: reset_to_zero
+  validation_and_early_stop_state: reset
 
 euclidean:
   distance: symmetric_straight_line_from_fixed_coordinates
@@ -221,16 +228,16 @@ euclidean:
 
 formal_launch_gates:
   G1:
-    requirement: customer_exposure_budget_for_every_scale
+    requirement: explicit_customer_exposure_budget_for_every_method_and_scale
     status: PILOT_WAIVED_BY_USER
   G2:
-    requirement: shared_deterministic_stratified_shuffle_cycle_id_stream
+    requirement: deterministic_method_specific_stratified_shuffle_cycle_id_stream
     status: IMPLEMENTED_UNIT_TESTED
   G3:
     requirement: exposure_and_gpu_hour_checkpoints
     status: PILOT_WAIVED_BY_USER
   G4:
-    requirement: common_logical_batch_for_every_scale
+    requirement: calibrated_method_specific_logical_batch_for_every_scale
     status: PILOT_WAIVED_BY_USER
   G5:
     requirement: per_method_physical_microbatch_and_oom_policy

@@ -154,45 +154,30 @@ def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
     assert questions["RQ3"]["graph_injection_enabled"] is False
 
 
-def test_frozen_fairness_numbers_match_v13_runtime_configuration() -> None:
+def test_frozen_method_specific_budget_matches_v15_runtime_configuration() -> None:
     protocol = _protocol()
     runtime = _runtime()
-    fairness = protocol["training_fairness"]
-
+    budget = protocol["training_budget"]
     assert protocol["runtime_budget_id"] == runtime["runtime_budget_id"]
-    assert fairness["customer_exposure_budget_by_scale"] == runtime[
-        "candidate_customer_exposure_budget"
+    assert budget["exposure_matched_across_methods"] is False
+    assert budget["shared_stream_within_scale_seed"] is False
+    assert budget["logical_batch_by_method_scale"] == runtime[
+        "candidate_logical_batch_by_method_scale"
     ]
-    assert fairness["logical_batch_by_scale"] == runtime["candidate_logical_batch"]
-    assert fairness["physical_microbatch_by_method_scale"] == runtime[
+    assert budget["customer_exposure_budget_by_method_scale"] == runtime[
+        "candidate_customer_exposure_budget_by_method_scale"
+    ]
+    assert budget["physical_microbatch_by_method_scale"] == runtime[
         "physical_batch_caps"
     ]
-
-    fractions = runtime["formal_candidate"]["exposure_checkpoints_fraction"]
-    assert fairness["exposure_checkpoints"] == {
-        scale: [int(exposure * float(fraction)) for fraction in fractions]
-        for scale, exposure in runtime["candidate_customer_exposure_budget"].items()
-    }
-
-    for scale in protocol["training_scales"]:
-        customers = int(scale.removeprefix("Cus"))
-        expected_exposure = (
-            int(runtime["candidate_logical_epochs"][scale])
-            * int(runtime["candidate_environments_per_epoch"][scale])
-            * customers
-        )
-        assert fairness["customer_exposure_budget_by_scale"][scale] == expected_exposure
-        assert fairness["logical_batch_by_scale"][scale] == runtime[
-            "candidate_environments_per_epoch"
-        ][scale]
-
+    for method, scales in budget["logical_batch_by_method_scale"].items():
+        for scale, batch in scales.items():
+            customers = int(scale.removeprefix("Cus"))
+            expected = runtime["candidate_logical_epochs"][scale] * batch * customers
+            assert budget["customer_exposure_budget_by_method_scale"][method][scale] == expected
     assert protocol["training_trajectories_per_instance"] == runtime[
         "training_trajectory_count_by_method"
     ]
-    assert protocol[
-        "training_trajectories_per_instance_by_method_scale"
-    ] == runtime["training_trajectory_count_by_method_scale"] == {}
-
 
 def test_reference_and_integrity_claims_are_conservative() -> None:
     protocol = _protocol()
@@ -206,13 +191,13 @@ def test_reference_and_integrity_claims_are_conservative() -> None:
     assert protocol["ev_integrity"]["preserves_customer_order"] is True
 
 
-def test_validation_and_test_use_common_best_of_100_sampling_budget() -> None:
+def test_validation_and_test_use_common_best_of_50_sampling_budget() -> None:
     protocol = _protocol()
     runtime = _runtime()
     selection = protocol["model_selection"]
     evaluation = protocol["test_inference"]
     assert selection["validation_decode_type"] == "sampling"
-    assert selection["validation_candidate_count"] == 100
+    assert selection["validation_candidate_count"] == 50
     assert selection["early_stopping"] == "enabled_after_minimum_budget"
     assert selection["minimum_training_epochs"] == 5_000
     assert selection["maximum_training_epochs"] == 10_000
@@ -224,7 +209,7 @@ def test_validation_and_test_use_common_best_of_100_sampling_budget() -> None:
     assert selection["minimum_budget_checkpoint"] == "best_within_5000.ckpt"
     assert selection["extended_checkpoint"] == "best_overall.ckpt"
     assert evaluation["decode_type"] == "sampling"
-    assert evaluation["candidate_count"] == 100
+    assert evaluation["candidate_count"] == 50
     assert selection["minimum_training_epochs"] == min(
         runtime["candidate_minimum_logical_epochs"].values()
     )
@@ -249,7 +234,7 @@ def test_support_sampling_and_statistics_use_parent_families() -> None:
         "Full-support",
     ]
     assert rq2["selection_uses_validation_or_test"] is False
-    fairness = protocol["training_fairness"]
-    assert fairness["sampling"] == "prefix_stable_full_pool_shuffle_cycle"
-    assert fairness["shared_stream_within_scale_seed"] is True
-    assert fairness["statistical_unit"] == "parent_family"
+    budget = protocol["training_budget"]
+    assert budget["sampling"] == "prefix_stable_full_pool_shuffle_cycle_per_method"
+    assert budget["shared_stream_within_scale_seed"] is False
+    assert budget["statistical_unit"] == "parent_family"

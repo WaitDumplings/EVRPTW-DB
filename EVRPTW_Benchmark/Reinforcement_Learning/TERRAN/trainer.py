@@ -900,6 +900,54 @@ def validate_resume_reward_contract(cfg: dict[str, Any], payload: dict[str, Any]
         raise ValueError(f"TERRAN resume objective configuration mismatch; start a fresh run: {error}") from error
 
 
+def validate_warm_start_contract(
+    cfg: dict[str, Any], payload: dict[str, Any], *, current_seed: int
+) -> dict[str, Any]:
+    """Validate scientific compatibility without inheriting training state."""
+
+    saved_cfg = payload.get("config")
+    if not isinstance(saved_cfg, dict):
+        raise ValueError("TERRAN warm-start checkpoint is missing its frozen config")
+    current_objective = resolve_objective(cfg.get("objective"))
+    try:
+        objective_from_checkpoint(payload, override=current_objective)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"TERRAN warm-start objective mismatch: {error}") from error
+    current_reward = cfg.get("reward_contract")
+    saved_reward = saved_cfg.get("reward_contract")
+    if (current_reward is None) != (saved_reward is None):
+        raise ValueError("TERRAN warm-start reward contract mismatch")
+    if current_reward is not None:
+        current_frozen = RewardContract.from_payload(current_reward)
+        saved_frozen = RewardContract.from_payload(saved_reward)
+        if current_frozen.digest != saved_frozen.digest:
+            raise ValueError("TERRAN warm-start reward contract digest mismatch")
+    if _resolved_pbrs_reward_semantics(cfg) != _resolved_pbrs_reward_semantics(saved_cfg):
+        raise ValueError("TERRAN warm-start PBRS reward semantics mismatch")
+    if saved_cfg.get("model") != cfg.get("model"):
+        raise ValueError("TERRAN warm-start model architecture mismatch")
+    saved_protocol = saved_cfg.get("protocol", {})
+    saved_signature = saved_protocol.get("resolved_training_signature", {})
+    current_protocol = cfg.get("protocol", {})
+    current_signature = current_protocol.get("resolved_training_signature", {})
+    for field in ("scale", "training_representation"):
+        if saved_signature.get(field) != current_signature.get(field):
+            raise ValueError(f"TERRAN warm-start {field} mismatch")
+    if int(payload.get("seed", -1)) != int(current_seed):
+        raise ValueError("TERRAN warm-start seed mismatch")
+    if "model_state_dict" not in payload:
+        raise ValueError("TERRAN warm-start checkpoint is missing model weights")
+    return {
+        "checkpoint": str(Path(current_protocol["warm_start_checkpoint"]).resolve()),
+        "method": "TERRAN",
+        "source_epoch": int(payload.get("epoch", 0) or 0),
+        "optimizer_reset": True,
+        "epoch_reset": True,
+        "validation_state_reset": True,
+        "early_stop_state_reset": True,
+    }
+
+
 def validate_fresh_training_output(cfg: dict[str, Any]) -> None:
     """A fresh launch may have launcher logs, but must not inherit training history."""
     if not cfg.get("output_dir"):
@@ -1799,10 +1847,22 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     _freeze_resolved_terran_training_signature(cfg, seed=seed)
     protocol_cfg = cfg.get("protocol", {})
     resume_checkpoint = protocol_cfg.get("resume_checkpoint")
+    warm_start_checkpoint = protocol_cfg.get("warm_start_checkpoint")
     resume_payload = None
+    warm_start_payload = None
+    warm_start_provenance = None
     if resume_checkpoint:
         resume_payload = torch.load(resume_checkpoint, map_location="cpu", weights_only=False)
         validate_resume_reward_contract(cfg, resume_payload)
+    elif warm_start_checkpoint:
+        warm_start_payload = torch.load(
+            warm_start_checkpoint, map_location="cpu", weights_only=False
+        )
+        warm_start_provenance = validate_warm_start_contract(
+            cfg, warm_start_payload, current_seed=seed
+        )
+        protocol_cfg["warm_start_provenance"] = warm_start_provenance
+        validate_fresh_training_output(cfg)
     else:
         validate_fresh_training_output(cfg)
     training_started = time.perf_counter()
@@ -1864,6 +1924,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
     )
     optimizer_steps_total = int(protocol_cfg.get("optimizer_steps", 0) or 0)
     start_epoch = 1
+    if warm_start_payload is not None:
+        agent.load_state_dict(warm_start_payload["model_state_dict"])
+        del warm_start_payload
     if resume_payload is not None:
         agent.load_state_dict(resume_payload["model_state_dict"])
         optimizer.load_state_dict(resume_payload["optimizer_state_dict"])

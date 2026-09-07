@@ -48,6 +48,28 @@ def _job(job_id: str = "train__R__am_evrptw__Cus100__seed1234"):
     }
 
 
+
+def test_exact_job_warm_start_resolution_never_crosses_scope(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    job = _job("full__G__Full-support__am_evrptw__Cus50__seed1234")
+    job.update(
+        representation="G",
+        condition="Full-support",
+        warm_start_source_commit="source-commit",
+        warm_start_scope="exact_job_only",
+        warm_start_checkpoint_name="best.ckpt",
+        warm_start_missing_policy="fresh",
+    )
+    source_context = {**context, "commit": "source-commit"}
+    expected = RUNTIME.output_dir(job, source_context) / "best.ckpt"
+    assert RUNTIME.resolve_warm_start_checkpoint(job, context) is None
+    expected.parent.mkdir(parents=True)
+    expected.write_bytes(b"weights")
+    assert RUNTIME.resolve_warm_start_checkpoint(job, context) == expected.resolve()
+    wrong_scope = {**job, "warm_start_scope": "method_scale"}
+    with pytest.raises(RuntimeError, match="exact_job_only"):
+        RUNTIME.resolve_warm_start_checkpoint(wrong_scope, context)
+
 def _write_formal_gate(
     root: Path,
     *,
@@ -988,7 +1010,7 @@ def test_formal_completion_revalidates_stream_result_checkpoint_and_provenance(
     assert not RUNTIME.job_complete(job, output, context)
 
 
-def test_stream_preflight_requires_every_method_to_share_exact_snapshot(
+def test_stream_preflight_validates_each_method_specific_exact_snapshot(
     tmp_path: Path, monkeypatch,
 ) -> None:
     from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import build
@@ -1000,7 +1022,7 @@ def test_stream_preflight_requires_every_method_to_share_exact_snapshot(
         if item["scale"] == "Cus1000"
     ]
     assert {job["method"] for job in jobs} == RUNTIME.METHODS
-    assert len({job["training_stream_contract_sha256"] for job in jobs}) == 1
+    assert len({job["training_stream_path"] for job in jobs}) == 4
     repository = tmp_path / "repo"
     source_repository = ROOT.parents[1]
     for relative in {job["training_stream_path"] for job in jobs}:

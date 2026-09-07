@@ -228,3 +228,72 @@ def test_diagnostic_collector_owns_values_and_writes_strict_nonfinite_json(tmp_p
     assert row["normalization"]["reward_objective_scale"]["count"] == 0
     assert torch.equal(before, torch.get_rng_state())
     assert values.grad is None
+
+
+def test_warm_start_imports_policy_only_and_resets_training_state(tmp_path: Path) -> None:
+    args = _args(tmp_path / "target", fixed=True, cost=True)
+    args.scale = "Cus50"
+    args.training_representation = "G"
+    args.soft_stage_contract_snapshot = None
+    protocol_trainers.reward_contract_from_args(
+        args,
+        objective=ObjectiveConfig(**args.objective),
+        scale=args.scale,
+    )
+    source = torch.nn.Linear(1, 1, bias=False)
+    source_baseline = torch.nn.Linear(1, 1, bias=False)
+    with torch.no_grad():
+        source.weight.fill_(3.0)
+        source_baseline.weight.fill_(9.0)
+    saved_args = {
+        "scale": args.scale,
+        "training_representation": args.training_representation,
+        "reward_contract_snapshot": args.reward_contract_snapshot,
+        "reward_contract_scale": args.reward_contract_scale,
+        "reward_contract_id": args.reward_contract_id,
+        "reward_contract_sha256": args.reward_contract_sha256,
+        "reward_objective_scale": args.reward_objective_scale,
+        "reward_failure_base": args.reward_failure_base,
+        "reward_unserved_coefficient": args.reward_unserved_coefficient,
+    }
+    checkpoint = tmp_path / "source.ckpt"
+    torch.save(
+        {
+            "method": "AM-EVRPTW",
+            "model": source.state_dict(),
+            "baseline": source_baseline.state_dict(),
+            "optimizer": {"sentinel": "must-not-load"},
+            "logical_epoch": 4321,
+            "objective_config": args.objective,
+            "reward_contract": args.reward_contract_snapshot,
+            "soft_stage_contract": None,
+            "args": saved_args,
+        },
+        checkpoint,
+    )
+    policy = torch.nn.Linear(1, 1, bias=False)
+    baseline = torch.nn.Linear(1, 1, bias=False)
+    provenance = protocol_trainers._load_warm_start_checkpoint(
+        checkpoint,
+        method="AM-EVRPTW",
+        policy=policy,
+        baseline=baseline,
+        objective_config=args.objective,
+        contract_args=args,
+    )
+    assert policy.weight.item() == pytest.approx(3.0)
+    assert baseline.weight.item() == pytest.approx(3.0)
+    assert provenance["source_logical_epoch"] == 4321
+    assert provenance["optimizer_reset"] is True
+    assert provenance["epoch_reset"] is True
+    assert provenance["validation_state_reset"] is True
+    args.training_representation = "E"
+    with pytest.raises(ValueError, match="training_representation mismatch"):
+        protocol_trainers._load_warm_start_checkpoint(
+            checkpoint,
+            method="AM-EVRPTW",
+            policy=policy,
+            baseline=baseline,
+            objective_config=args.objective,
+            contract_args=args,
+        )
