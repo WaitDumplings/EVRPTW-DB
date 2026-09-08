@@ -1951,15 +1951,14 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
         if context.get("reuse_preverified_training_streams", False):
             snapshot = job.get("training_stream_contract_snapshot")
             if (
-                job.get("method") != "terran"
-                or job.get("stream_integrity_mode")
+                job.get("stream_integrity_mode")
                 != STREAM_INTEGRITY_MODE_PREVERIFIED
                 or job.get("file_hash_validation_performed") is not False
                 or not isinstance(snapshot, Mapping)
             ):
                 raise RuntimeError(
-                    "no-rehash stream reuse is restricted to an explicitly "
-                    "preverified TERRAN manifest"
+                    "no-rehash stream reuse requires an explicitly "
+                    "preverified manifest"
                 )
             command.extend(
                 [
