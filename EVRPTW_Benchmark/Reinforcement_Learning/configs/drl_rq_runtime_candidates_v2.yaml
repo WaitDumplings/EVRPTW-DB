@@ -7,9 +7,9 @@ launch_policy: reward_contract_v3_formal_user_authorized
 authorized_job_ids:
   - full__G__Full-support__terran__Cus500__seed1234
   - full__G__Full-support__terran__Cus1000__seed1234
-authorized_terran_training_trajectory_count_by_scale:
-  Cus500: 42
-  Cus1000: 50
+authorized_terran_training_profile_by_scale:
+  Cus500: {physical_batch_size: 112, effective_batch_size: 112, training_trajectory_count: 50}
+  Cus1000: {physical_batch_size: 4, effective_batch_size: 4, training_trajectory_count: 50}
 formal_launch_gates:
   G1: PILOT_WAIVED_BY_USER
   G2: IMPLEMENTED_UNIT_TESTED
@@ -23,7 +23,7 @@ objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_en
 reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v3.json
 reward_contract_revision: drl_energy_vehicle_reference_scale_v3
 training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
-training_stream_registry_sha256: 5f0dc6454d9d32ed11be629f3c49c5e0ed96742aad3003663fadbf8c7659310b
+training_stream_registry_sha256: 81f3366acc12cc34898bcd09613cb54903fcf5fb5191c83d87f91f3f84a4c2ba
 # This contract has independent training-only reference calibrations for all
 # four training scales. The queue builder rejects any enabled scale outside it.
 reward_contract_calibrated_scales: [Cus50, Cus100, Cus500, Cus1000]
@@ -59,11 +59,8 @@ training_trajectory_count_by_method:
   terran: 50
 # Keep each method's training-trajectory semantics hardware invariant. AM uses
 # five sampled trajectories per base instance on every scale; EVRPTW-RL and
-# DRL-TS retain one. TERRAN remains at 50 except for the final Cus500 memory
-# correction below.
-training_trajectory_count_by_method_scale:
-  terran:
-    Cus500: 42
+# DRL-TS retain one, while TERRAN uses 50.
+training_trajectory_count_by_method_scale: {}
 
 warm_start:
   source_commit: ""
@@ -71,9 +68,8 @@ warm_start:
   scope: exact_job_only
   missing_exact_job: fresh
 
-# The final A6000 TERRAN profile keeps the 1,280,000-instance stream and
-# batch=128 at Cus500, but lowers n_traj from 50 to 42 after b128*n50 measured
-# 47.37 GiB; n42 is estimated near 40.8 GiB. Cus1000 uses the sustained
+# The final A6000 TERRAN profile uses batch=112 x n_traj=50 at Cus500 after
+# batch=128 exceeded the usable device-memory boundary. Cus1000 uses the sustained
 # batch=4 x n_traj=50 profile with a 1,250-step train horizon, its derived
 # 1,875-step validation horizon, a 624-step PPO chunk, and an explicit
 # completion reward. These overrides do not change the other DRL methods.
@@ -137,19 +133,19 @@ candidate_logical_batch_by_method_scale:
   am_evrptw: {Cus50: 2304, Cus100: 800, Cus500: 64, Cus1000: 2}
   evrptw_rl: {Cus50: 336, Cus100: 96, Cus500: 64, Cus1000: 2}
   drl_ts: {Cus50: 144, Cus100: 40, Cus500: 64, Cus1000: 2}
-  terran: {Cus50: 480, Cus100: 280, Cus500: 128, Cus1000: 4}
+  terran: {Cus50: 480, Cus100: 280, Cus500: 112, Cus1000: 4}
 candidate_customer_exposure_budget_by_method_scale:
   am_evrptw: {Cus50: 1152000000, Cus100: 800000000, Cus500: 320000000, Cus1000: 20000000}
   evrptw_rl: {Cus50: 168000000, Cus100: 96000000, Cus500: 320000000, Cus1000: 20000000}
   drl_ts: {Cus50: 72000000, Cus100: 40000000, Cus500: 320000000, Cus1000: 20000000}
-  terran: {Cus50: 240000000, Cus100: 280000000, Cus500: 640000000, Cus1000: 40000000}
+  terran: {Cus50: 240000000, Cus100: 280000000, Cus500: 560000000, Cus1000: 40000000}
 # Ada caps are restricted to exact divisors of the frozen logical batch. The
 # user-authorized workflow launches the formal queues directly without pilots.
 physical_batch_caps:
   am_evrptw: {Cus50: 2304, Cus100: 800, Cus500: 8, Cus1000: 2}
   evrptw_rl: {Cus50: 336, Cus100: 96, Cus500: 16, Cus1000: 2}
   drl_ts: {Cus50: 144, Cus100: 40, Cus500: 8, Cus1000: 2}
-  terran: {Cus50: 480, Cus100: 280, Cus500: 128, Cus1000: 4}
+  terran: {Cus50: 480, Cus100: 280, Cus500: 112, Cus1000: 4}
 
 formal_candidate:
   selection_validation_views:

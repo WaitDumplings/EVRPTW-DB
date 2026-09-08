@@ -79,7 +79,7 @@ def test_selective_refresh_uses_sidecar_without_reading_parquet(tmp_path) -> Non
         "stream_content_sha256": "b" * 64,
         "source_index_sha256": "c" * 64,
         "allowed_family_ids_sha256": None,
-        "sample_count": 1280000,
+        "sample_count": 1120000,
         "scale": "Cus500",
         "seed": 1234,
         "file_hash_validation_performed": True,
@@ -126,7 +126,7 @@ def test_selective_refresh_uses_sidecar_without_reading_parquet(tmp_path) -> Non
     refreshed_marker = json.loads(marker_path.read_text(encoding="utf-8"))
     refreshed_registry = json.loads(registry_path.read_text(encoding="utf-8"))
     snapshot = refreshed_marker["training_stream_contracts"][0]["snapshot"]
-    assert snapshot["sample_count"] == 1280000
+    assert snapshot["sample_count"] == 1120000
     assert refreshed_registry["streams"][
         "G/Full-support/terran/Cus500/seed_1234"
     ]["snapshot"] == snapshot

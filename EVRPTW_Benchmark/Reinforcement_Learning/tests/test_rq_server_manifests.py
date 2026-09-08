@@ -327,8 +327,6 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         expected_trajectories = {
             "am_evrptw": 5, "evrptw_rl": 1, "drl_ts": 1, "terran": 50,
         }[method]
-        if method == "terran" and scale == "Cus500":
-            expected_trajectories = 42
         assert row["training_trajectory_count"] == expected_trajectories
         assert row["warm_start_source_commit"] == runtime["warm_start"]["source_commit"]
         assert row["warm_start_scope"] == "exact_job_only"
@@ -463,7 +461,7 @@ def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
         "am_evrptw": {"Cus500": 8, "Cus1000": 2},
         "evrptw_rl": {"Cus500": 16, "Cus1000": 2},
         "drl_ts": {"Cus500": 8, "Cus1000": 2},
-        "terran": {"Cus500": 128, "Cus1000": 4},
+        "terran": {"Cus500": 112, "Cus1000": 4},
     }
     rows = build()["a6000_2_1"]
     assert rows
@@ -507,10 +505,18 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     }
     assert dedicated["Cus500"]["num_minibatches"] == 1
     assert dedicated["Cus500"]["ppo_step_chunk_size"] == 36
-    assert dedicated["Cus500"]["physical_batch_size"] == 128
-    assert dedicated["Cus500"]["training_trajectory_count"] == 42
-    assert dedicated["Cus500"]["target_environments"] == 1_280_000
-    assert dedicated["Cus500"]["customer_exposure_budget"] == 640_000_000
+    assert dedicated["Cus500"]["physical_batch_size"] == 112
+    assert dedicated["Cus500"]["effective_batch_size"] == 112
+    assert dedicated["Cus500"]["training_trajectory_count"] == 50
+    assert dedicated["Cus500"]["target_environments"] == 1_120_000
+    assert dedicated["Cus500"]["minimum_target_environments"] == 560_000
+    assert dedicated["Cus500"]["customer_exposure_budget"] == 560_000_000
+    assert dedicated["Cus500"]["minimum_customer_exposure_budget"] == 280_000_000
+    assert dedicated["Cus500"]["exposure_checkpoints"] == [
+        140_000_000,
+        280_000_000,
+        560_000_000,
+    ]
     assert dedicated["Cus1000"]["num_minibatches"] == 1
     assert dedicated["Cus1000"]["ppo_step_chunk_size"] == 624
     assert dedicated["Cus1000"]["physical_batch_size"] == 4
