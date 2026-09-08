@@ -208,8 +208,10 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/status.sh --
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/resume.sh --seed 1234
 ```
 
-Once the explicit gate is open, `full.sh` prepares deterministic method-specific
-training streams if necessary and launches the formal per-GPU queues through
+Once the explicit gate is open, the three RTX 2080 Ti `full.sh` and `resume.sh`
+wrappers reuse their frozen preverified stream metadata by default, avoiding a
+large-file rescan. The shared launcher prepares deterministic method-specific
+training streams when that explicit reuse option is absent, and launches queues through
 `nohup`/`setsid`. While the gate is closed it fails before spawning a trainer.
 `status.sh` is read-only.
 `resume.sh` resumes only jobs with complete resume evidence. Launcher provenance
