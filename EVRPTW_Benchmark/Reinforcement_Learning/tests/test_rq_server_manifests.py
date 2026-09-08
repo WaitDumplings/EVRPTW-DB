@@ -330,6 +330,47 @@ def test_2080ti_jobs_match_authorized_small_scale_assignment() -> None:
         assert {row["job_id"] for row in queues[server]}.issubset(authorized)
 
 
+def test_aa114d0_special_manifests_only_override_exact_warm_start_source() -> None:
+    for server in sorted(MANIFESTS.SPECIAL_WARM_START_SERVERS):
+        canonical = [
+            json.loads(line)
+            for line in (SCRIPT_ROOT / server / "jobs.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        special = [
+            json.loads(line)
+            for line in (
+                SCRIPT_ROOT / server / MANIFESTS.SPECIAL_WARM_START_MANIFEST
+            ).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert len(special) == len(canonical) > 0
+        for baseline, warm in zip(canonical, special, strict=True):
+            changed = {
+                key
+                for key in baseline.keys() | warm.keys()
+                if baseline.get(key) != warm.get(key)
+            }
+            assert changed == {
+                "warm_start_source_commit", "warm_start_missing_policy"
+            }
+            assert (
+                warm["warm_start_source_commit"]
+                == MANIFESTS.SPECIAL_WARM_START_COMMIT
+            )
+            assert warm["warm_start_scope"] == "exact_job_only"
+            assert warm["warm_start_checkpoint_name"] == "best.ckpt"
+            assert warm["warm_start_missing_policy"] == "error"
+            assert warm["validation_candidate_count"] == 50
+            assert warm["test_candidate_count"] == 50
+
+        wrapper = SCRIPT_ROOT / server / "warm_start_aa114d0.sh"
+        assert wrapper.is_file()
+        assert wrapper.stat().st_mode & 0o111
+
+
 def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
     expected = {
         "am_evrptw": {"Cus500": 8, "Cus1000": 2},

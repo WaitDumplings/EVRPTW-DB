@@ -60,6 +60,26 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080-server>/full.sh
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080-server>/status.sh --seed 1234
 ```
 
+The `2080ti_4_2` and `2080ti_3_1` servers have an additional fail-closed
+launcher for their locally retained checkpoints from executable commit
+`aa114d06995cdd35429bcc793bee4cff14590eb5`. It preserves every v15 training,
+batch, trajectory, validation and early-stop field, changing only the exact-job
+warm-start source. It imports model weights only; optimizer, epoch, data-stream
+cursor, baseline and early-stop state start as a new v15 run. Unlike the
+canonical launcher, it refuses to start if any assigned exact-job `best.ckpt`
+is absent:
+
+```bash
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080ti_4_2-or-2080ti_3_1>/warm_start_aa114d0.sh preflight
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080ti_4_2-or-2080ti_3_1>/warm_start_aa114d0.sh start --seed 1234
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080ti_4_2-or-2080ti_3_1>/warm_start_aa114d0.sh status --seed 1234
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<2080ti_4_2-or-2080ti_3_1>/warm_start_aa114d0.sh logs
+```
+
+Use its `resume` subcommand only to recover an interrupted run produced by this
+same special launcher and current executable commit; it does not resume the
+old `aa114d0` optimizer state.
+
 The four canonical bundles contain 8, 5, 3 and 8 jobs for `2080ti_4_1`,
 `2080ti_4_2`, `2080ti_3_1` and `a6000_2_1`, respectively. The three 2080 Ti
 bundles are fully authorized. The general A6000 bundle still contains all eight

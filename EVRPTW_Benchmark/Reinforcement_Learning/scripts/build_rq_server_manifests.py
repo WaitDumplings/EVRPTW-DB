@@ -61,6 +61,10 @@ SERVERS = {
     "2080ti_3_1": ("2080ti", 3, "RTX 2080 Ti"),
     "a6000_2_1": ("a6000", 2, "RTX A6000|RTX 6000 Ada Generation"),
 }
+SPECIAL_WARM_START_COMMIT = "aa114d06995cdd35429bcc793bee4cff14590eb5"
+SPECIAL_WARM_START_SERVERS = {"2080ti_4_2", "2080ti_3_1"}
+SPECIAL_WARM_START_MANIFEST = "jobs_warm_start_aa114d0.jsonl"
+
 TRAIN_INDEX = {
     "Cus50": "generation_plan/compatibility_cus50/train/view_index.parquet",
     "Cus100": "generation_plan/core/train/view_index.parquet",
@@ -747,6 +751,19 @@ def main() -> None:
             "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
             encoding="utf-8",
         )
+        if server in SPECIAL_WARM_START_SERVERS:
+            warm_rows = []
+            for row in rows:
+                payload = dict(row)
+                payload["warm_start_source_commit"] = SPECIAL_WARM_START_COMMIT
+                payload["warm_start_missing_policy"] = "error"
+                warm_rows.append(payload)
+            (destination / SPECIAL_WARM_START_MANIFEST).write_text(
+                "".join(
+                    json.dumps(row, sort_keys=True) + "\n" for row in warm_rows
+                ),
+                encoding="utf-8",
+            )
         summary = {
             "schema": "drl_rq_server_assignment_v1",
             "server": server,
