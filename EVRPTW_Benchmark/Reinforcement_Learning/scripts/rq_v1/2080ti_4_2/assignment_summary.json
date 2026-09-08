@@ -1,7 +1,13 @@
 {
-  "authorized_formal_job_ids": [],
+  "authorized_formal_job_ids": [
+    "full__E__Full-support__terran__Cus100__seed1234",
+    "full__G__Full-support__am_evrptw__Cus100__seed1234",
+    "full__G__Full-support__drl_ts__Cus100__seed1234",
+    "full__G__Full-support__evrptw_rl__Cus100__seed1234",
+    "full__G__Full-support__terran__Cus100__seed1234"
+  ],
   "formal_jobs": 5,
-  "formal_launch_allowed": false,
+  "formal_launch_allowed": true,
   "gpu_count": 4,
   "hardware": "2080ti",
   "launch_policy": "reward_contract_v3_formal_user_authorized",

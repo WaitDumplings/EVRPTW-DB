@@ -27,8 +27,8 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
     runtime = _runtime()
     gate_file = _formal_gate()
 
-    assert protocol["status"] == "reward_contract_v3_formal_terran_authorized"
-    assert runtime["status"] == "reward_contract_v3_formal_terran_authorized"
+    assert protocol["status"] == "reward_contract_v3_formal_2080ti_terran_authorized"
+    assert runtime["status"] == "reward_contract_v3_formal_2080ti_terran_authorized"
     assert protocol["formal_launch_allowed"] is True
     assert (
         protocol["formal_launch_allowed"]
@@ -47,11 +47,20 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
         == runtime["authorized_job_ids"]
         == gate_file["authorized_job_ids"]
     )
-    assert set(gate_file["authorized_job_ids"]) == {
+    manifest_root = ROOT / "scripts" / "rq_v1"
+    expected_2080 = {
+        json.loads(line)["job_id"]
+        for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1")
+        for line in (manifest_root / server / "jobs.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    }
+    assert set(gate_file["authorized_job_ids"]) == expected_2080 | {
         "full__G__Full-support__terran__Cus500__seed1234",
         "full__G__Full-support__terran__Cus1000__seed1234",
     }
-    assert len(gate_file["authorized_job_ids"]) == 2
+    assert len(gate_file["authorized_job_ids"]) == 18
     assert (
         protocol["authorized_terran_training_profile_by_scale"]
         == runtime["authorized_terran_training_profile_by_scale"]

@@ -1,9 +1,25 @@
 protocol_id: drl_rq_protocol_frozen_v1
-status: reward_contract_v3_formal_terran_authorized
+status: reward_contract_v3_formal_2080ti_terran_authorized
 formal_launch_allowed: true
 launch_mode: direct_full_after_user_authorization
 launch_policy: reward_contract_v3_formal_user_authorized
 authorized_job_ids:
+  - full__G__Full-support__am_evrptw__Cus50__seed1234
+  - full__G__Full-support__evrptw_rl__Cus50__seed1234
+  - full__G__Full-support__drl_ts__Cus50__seed1234
+  - full__G__Full-support__terran__Cus50__seed1234
+  - full__G__Coverage-10%-support__terran__Cus100__seed1234
+  - full__E__Full-support__am_evrptw__Cus100__seed1234
+  - full__E__Full-support__evrptw_rl__Cus100__seed1234
+  - full__E__Full-support__drl_ts__Cus100__seed1234
+  - full__G__Full-support__am_evrptw__Cus100__seed1234
+  - full__G__Full-support__evrptw_rl__Cus100__seed1234
+  - full__G__Full-support__drl_ts__Cus100__seed1234
+  - full__G__Full-support__terran__Cus100__seed1234
+  - full__E__Full-support__terran__Cus100__seed1234
+  - full__G__Random-10%-support__am_evrptw__Cus100__seed1234
+  - full__G__Random-10%-support__terran__Cus100__seed1234
+  - full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234
   - full__G__Full-support__terran__Cus500__seed1234
   - full__G__Full-support__terran__Cus1000__seed1234
 authorized_terran_training_profile_by_scale:
@@ -19,8 +35,8 @@ reward_contract_revision: drl_energy_vehicle_reference_scale_v3
 training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
 training_stream_registry_sha256: 3cc81d4beb90c849f78bf8820d77edb1b1bb4a3a3192f6237f2a717b44b1a041
 # All four intended training scales have independent training-only reward
-# calibrations for objective v2. This authorization is intentionally limited
-# to the two fresh large-scale TERRAN jobs requested by the user.
+# calibrations for objective v2. The user authorized all 16 RTX 2080 Ti
+# jobs plus the two fresh large-scale TERRAN jobs.
 reward_contract_calibrated_scales: [Cus50, Cus100, Cus500, Cus1000]
 reward_contract_launch_enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
 reward_contract_blocked_scales: []

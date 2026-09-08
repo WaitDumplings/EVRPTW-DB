@@ -1,10 +1,26 @@
 schema: drl_rq_runtime_candidates_v2
-status: reward_contract_v3_formal_terran_authorized
+status: reward_contract_v3_formal_2080ti_terran_authorized
 protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart
 formal_launch_allowed: true
 launch_policy: reward_contract_v3_formal_user_authorized
 authorized_job_ids:
+  - full__G__Full-support__am_evrptw__Cus50__seed1234
+  - full__G__Full-support__evrptw_rl__Cus50__seed1234
+  - full__G__Full-support__drl_ts__Cus50__seed1234
+  - full__G__Full-support__terran__Cus50__seed1234
+  - full__G__Coverage-10%-support__terran__Cus100__seed1234
+  - full__E__Full-support__am_evrptw__Cus100__seed1234
+  - full__E__Full-support__evrptw_rl__Cus100__seed1234
+  - full__E__Full-support__drl_ts__Cus100__seed1234
+  - full__G__Full-support__am_evrptw__Cus100__seed1234
+  - full__G__Full-support__evrptw_rl__Cus100__seed1234
+  - full__G__Full-support__drl_ts__Cus100__seed1234
+  - full__G__Full-support__terran__Cus100__seed1234
+  - full__E__Full-support__terran__Cus100__seed1234
+  - full__G__Random-10%-support__am_evrptw__Cus100__seed1234
+  - full__G__Random-10%-support__terran__Cus100__seed1234
+  - full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234
   - full__G__Full-support__terran__Cus500__seed1234
   - full__G__Full-support__terran__Cus1000__seed1234
 authorized_terran_training_profile_by_scale:
