@@ -264,3 +264,121 @@ def test_weights_only_initialization_resets_adamw_and_continues_global_epoch() -
         target.parameters(), source.parameters()
     ):
         torch.testing.assert_close(target_parameter, source_parameter)
+
+
+def test_resume_accepts_only_legacy_continue_global_signature_enrichment() -> None:
+    saved_cfg = _semantic_config()
+    saved_cfg["training"].update(
+        {
+            "num_envs_per_gpu": 1,
+            "logical_microbatches_per_epoch": 1,
+            "validation_epochs": [5, 10],
+            "minimum_training_epochs": 10,
+            "post_minimum_validation_every_epochs": 5,
+            "early_stop_patience_validations": 0,
+            "early_stop_start_epoch": 0,
+            "optimizer": "adamw",
+            "weight_decay": 0.01,
+        }
+    )
+    saved_cfg["evaluation"] = {
+        "eval_seed": 77,
+        "eval_decode_mode": "sample",
+        "eval_n_traj": 100,
+        "eval_interval": 5,
+        "eval_limit": 2,
+        "eval_max_steps": 12,
+        "eval_batch_size": 1,
+        "eval_num_batches": None,
+    }
+    legacy_provenance = {
+        "schema": protocol.WARM_START_SCHEMA,
+        "source_checkpoint_path": "/tmp/legacy-source.pt",
+        "source_checkpoint_sha256": "a" * 64,
+        "source_epoch": 4,
+        "source_seed": 1234,
+        "model_state_dict_loaded": True,
+        "optimizer_state_dict_loaded": False,
+        "optimizer_reset": True,
+        "optimizer_name": "adamw",
+    }
+    saved_cfg["protocol"] = {
+        "protocol_id": "legacy-warm-start-test",
+        "physical_batch_size": 1,
+        "effective_batch_size": 1,
+        "logical_environments_per_epoch": 1,
+        "training_rollout_steps": 8,
+        "validation_rollout_steps": 12,
+        "minimum_training_epochs": 10,
+        "validation_every_epochs": 5,
+        "post_minimum_validation_every_epochs": 5,
+        "scheduled_validation_epochs": [5, 10],
+        "validation_checkpoints": 2,
+        "early_stop_patience_validations": 0,
+        "early_stop_start_epoch": 0,
+        "validation_seed": 77,
+        "validation_candidates": 100,
+        "validation_decode_type": "sampling",
+        "training_stream_contract_sha256": None,
+        "warm_start": legacy_provenance,
+        "warm_start_checkpoint": "/tmp/legacy-source.pt",
+        "planned_training_epochs": 6,
+    }
+    legacy_signature = trainer._resolved_terran_training_signature(
+        saved_cfg, seed=1234
+    )
+    legacy_signature["method_specific"]["protocol"].pop(
+        "warm_start_epoch_mode"
+    )
+    legacy_signature["sha256"] = trainer.resolved_training_signature_digest(
+        legacy_signature
+    )
+    saved_cfg["protocol"]["resolved_training_signature"] = legacy_signature
+    saved_cfg["protocol"]["resolved_training_signature_sha256"] = (
+        legacy_signature["sha256"]
+    )
+    saved_cfg["protocol"]["resolved_training_method_fields"] = legacy_signature[
+        "method_specific"
+    ]
+    payload = {"seed": 1234, "config": saved_cfg}
+
+    current_cfg = deepcopy(saved_cfg)
+    current_cfg["protocol"]["warm_start"] = {
+        **legacy_provenance,
+        "epoch_mode": "continue_global",
+        "method": "TERRAN",
+        "checkpoint": legacy_provenance["source_checkpoint_path"],
+        "epoch_reset": False,
+        "data_stream_cursor_reset": True,
+        "validation_state_reset": True,
+        "early_stop_state_reset": True,
+        "source_baseline_evaluated": True,
+    }
+    current_cfg["protocol"]["warm_start_epoch_mode"] = "continue_global"
+    current_cfg["protocol"]["warm_start_epoch_offset"] = 4
+    current_cfg["protocol"]["warm_start_checkpoint"] = None
+    for field in (
+        "resolved_training_signature",
+        "resolved_training_signature_sha256",
+        "resolved_training_method_fields",
+    ):
+        current_cfg["protocol"].pop(field)
+    trainer._freeze_resolved_terran_training_signature(current_cfg, seed=1234)
+
+    trainer._validate_resume_training_signature(
+        current_cfg, payload, current_seed=1234
+    )
+
+    changed_cfg = deepcopy(current_cfg)
+    changed_cfg["training"]["n_traj"] = 50
+    for field in (
+        "resolved_training_signature",
+        "resolved_training_signature_sha256",
+        "resolved_training_method_fields",
+    ):
+        changed_cfg["protocol"].pop(field)
+    trainer._freeze_resolved_terran_training_signature(changed_cfg, seed=1234)
+    with pytest.raises(ValueError, match="resolved training signature mismatch"):
+        trainer._validate_resume_training_signature(
+            changed_cfg, payload, current_seed=1234
+        )

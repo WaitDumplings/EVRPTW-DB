@@ -689,6 +689,128 @@ def _freeze_resolved_terran_training_signature(
     return signature
 
 
+_LEGACY_CONTINUE_GLOBAL_WARM_START_KEYS = frozenset(
+    {
+        "schema",
+        "source_checkpoint_path",
+        "source_checkpoint_sha256",
+        "source_epoch",
+        "source_seed",
+        "model_state_dict_loaded",
+        "optimizer_state_dict_loaded",
+        "optimizer_reset",
+        "optimizer_name",
+    }
+)
+_CONTINUE_GLOBAL_WARM_START_COMPATIBILITY_KEYS = frozenset(
+    {
+        "epoch_mode",
+        "method",
+        "checkpoint",
+        "epoch_reset",
+        "data_stream_cursor_reset",
+        "validation_state_reset",
+        "early_stop_state_reset",
+        "source_baseline_evaluated",
+    }
+)
+
+
+def _legacy_continue_global_warm_start_provenance(
+    cfg: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Recognize the exact pre-mode TERRAN warm-start provenance shape.
+
+    The first A6000 continuation checkpoints used the current schema name but
+    predated ``epoch_mode``.  That schema had only one meaning: continue the
+    source checkpoint's global epoch.  Keep this detector deliberately narrow
+    so no other signature drift is hidden during resume validation.
+    """
+
+    protocol = cfg.get("protocol", {}) or {}
+    provenance = protocol.get("warm_start") if isinstance(protocol, Mapping) else None
+    if not isinstance(provenance, Mapping):
+        return None
+    if set(provenance) != _LEGACY_CONTINUE_GLOBAL_WARM_START_KEYS:
+        return None
+    try:
+        source_epoch = int(provenance["source_epoch"])
+        source_sha = str(provenance["source_checkpoint_sha256"])
+        source_path = str(provenance["source_checkpoint_path"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        provenance.get("schema") != "terran_weights_only_warm_start_v1"
+        or source_epoch < 0
+        or not source_path
+        or len(source_sha) != 64
+        or provenance.get("model_state_dict_loaded") is not True
+        or provenance.get("optimizer_state_dict_loaded") is not False
+        or provenance.get("optimizer_reset") is not True
+        or str(provenance.get("optimizer_name", "")).lower() != "adamw"
+    ):
+        return None
+    return dict(provenance)
+
+
+def _project_signature_to_legacy_continue_global(
+    signature: Mapping[str, Any],
+    *,
+    legacy_provenance: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Remove only fields added when epoch-mode provenance was introduced."""
+
+    projected = deepcopy(dict(signature))
+    method = projected.get("method_specific")
+    method_protocol = method.get("protocol") if isinstance(method, Mapping) else None
+    signature_provenance = (
+        method_protocol.get("warm_start")
+        if isinstance(method_protocol, Mapping)
+        else None
+    )
+    if not isinstance(method_protocol, dict) or not isinstance(
+        signature_provenance, Mapping
+    ):
+        return None
+    if any(
+        signature_provenance.get(key) != legacy_provenance.get(key)
+        for key in _LEGACY_CONTINUE_GLOBAL_WARM_START_KEYS
+    ):
+        return None
+    extra_keys = set(signature_provenance).difference(
+        _LEGACY_CONTINUE_GLOBAL_WARM_START_KEYS
+    )
+    if not extra_keys.issubset(
+        _CONTINUE_GLOBAL_WARM_START_COMPATIBILITY_KEYS
+    ):
+        return None
+    expected_extras = {
+        "epoch_mode": "continue_global",
+        "method": "TERRAN",
+        "checkpoint": legacy_provenance["source_checkpoint_path"],
+        "epoch_reset": False,
+        "data_stream_cursor_reset": True,
+        "validation_state_reset": True,
+        "early_stop_state_reset": True,
+        "source_baseline_evaluated": True,
+    }
+    if any(
+        signature_provenance.get(key) != expected_extras[key]
+        for key in extra_keys
+    ):
+        return None
+    declared_mode = method_protocol.get("warm_start_epoch_mode")
+    if declared_mode not in (None, "continue_global"):
+        return None
+    method_protocol.pop("warm_start_epoch_mode", None)
+    method_protocol["warm_start"] = {
+        key: signature_provenance[key]
+        for key in _LEGACY_CONTINUE_GLOBAL_WARM_START_KEYS
+    }
+    projected["sha256"] = resolved_training_signature_digest(projected)
+    return projected
+
+
 def _validate_resume_training_signature(
     cfg: Mapping[str, Any],
     payload: Mapping[str, Any],
@@ -722,6 +844,15 @@ def _validate_resume_training_signature(
     expected_saved = _resolved_terran_training_signature(
         saved_cfg, seed=int(saved_seed)
     )
+    legacy_warm_start = _legacy_continue_global_warm_start_provenance(saved_cfg)
+    legacy_expected_saved = (
+        _project_signature_to_legacy_continue_global(
+            expected_saved,
+            legacy_provenance=legacy_warm_start,
+        )
+        if legacy_warm_start is not None
+        else None
+    )
     if (
         dict(current) != expected_current
         or current.get("sha256")
@@ -732,8 +863,12 @@ def _validate_resume_training_signature(
         raise ValueError(
             "TERRAN current resolved training signature is inconsistent"
         )
+    saved_matches_expected = (
+        dict(saved) == expected_saved
+        or dict(saved) == legacy_expected_saved
+    )
     if (
-        dict(saved) != expected_saved
+        not saved_matches_expected
         or saved.get("sha256") != resolved_training_signature_digest(dict(saved))
         or saved_protocol.get("resolved_training_method_fields")
         != saved.get("method_specific")
@@ -741,10 +876,18 @@ def _validate_resume_training_signature(
         raise ValueError(
             "TERRAN resume checkpoint resolved training signature is inconsistent"
         )
+    comparison_current = dict(current)
+    if legacy_warm_start is not None:
+        projected_current = _project_signature_to_legacy_continue_global(
+            current,
+            legacy_provenance=legacy_warm_start,
+        )
+        if projected_current is not None:
+            comparison_current = projected_current
     if (
-        dict(current) != dict(saved)
+        comparison_current != dict(saved)
         and not _allows_legacy_training_prefix_extension(
-            saved=dict(saved), current=dict(current)
+            saved=dict(saved), current=comparison_current
         )
     ):
         raise ValueError(
