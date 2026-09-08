@@ -53,6 +53,12 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
     }
     assert len(gate_file["authorized_job_ids"]) == 2
     assert (
+        protocol["authorized_terran_training_trajectory_count_by_scale"]
+        == runtime["authorized_terran_training_trajectory_count_by_scale"]
+        == gate_file["authorized_terran_training_trajectory_count_by_scale"]
+        == {"Cus500": 42, "Cus1000": 50}
+    )
+    assert (
         protocol["protocol_id"]
         == runtime["protocol_id"]
         == gate_file["protocol_id"]
@@ -174,6 +180,11 @@ def test_frozen_method_specific_budget_matches_v15_runtime_configuration() -> No
     assert protocol["training_trajectories_per_instance"] == runtime[
         "training_trajectory_count_by_method"
     ]
+    assert protocol[
+        "training_trajectories_per_instance_by_method_scale"
+    ] == runtime["training_trajectory_count_by_method_scale"] == {
+        "terran": {"Cus500": 42}
+    }
 
 def test_reference_and_integrity_claims_are_conservative() -> None:
     protocol = _protocol()

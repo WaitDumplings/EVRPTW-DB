@@ -6,6 +6,9 @@ launch_policy: reward_contract_v3_formal_user_authorized
 authorized_job_ids:
   - full__G__Full-support__terran__Cus500__seed1234
   - full__G__Full-support__terran__Cus1000__seed1234
+authorized_terran_training_trajectory_count_by_scale:
+  Cus500: 42
+  Cus1000: 50
 runtime_budget_id: drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart
 supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
@@ -148,7 +151,7 @@ training_budget:
     drl_ts: {Cus50: 144, Cus100: 40, Cus500: 8, Cus1000: 2}
     terran: {Cus50: 480, Cus100: 280, Cus500: 128, Cus1000: 4}
   rtx2080ti_calibration: two_epochs_plus_500_views_x_50_candidates_all_16_jobs_passed
-  a6000_batches: terran_final_ntraj50_b128_cus500_b4_cus1000
+  a6000_batches: terran_final_cus500_ntraj42_b128_cus1000_ntraj50_b4
 
 model_selection:
   validation_views: 500
@@ -189,7 +192,9 @@ training_trajectories_per_instance:
   evrptw_rl: 1
   drl_ts: 1
   terran: 50
-training_trajectories_per_instance_by_method_scale: {}
+training_trajectories_per_instance_by_method_scale:
+  terran:
+    Cus500: 42
 
 warm_start:
   source_commit: ""

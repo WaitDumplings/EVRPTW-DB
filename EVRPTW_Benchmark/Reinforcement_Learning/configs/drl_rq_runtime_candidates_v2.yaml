@@ -7,6 +7,9 @@ launch_policy: reward_contract_v3_formal_user_authorized
 authorized_job_ids:
   - full__G__Full-support__terran__Cus500__seed1234
   - full__G__Full-support__terran__Cus1000__seed1234
+authorized_terran_training_trajectory_count_by_scale:
+  Cus500: 42
+  Cus1000: 50
 formal_launch_gates:
   G1: PILOT_WAIVED_BY_USER
   G2: IMPLEMENTED_UNIT_TESTED
@@ -56,8 +59,11 @@ training_trajectory_count_by_method:
   terran: 50
 # Keep each method's training-trajectory semantics hardware invariant. AM uses
 # five sampled trajectories per base instance on every scale; EVRPTW-RL and
-# DRL-TS retain one, while TERRAN uses the requested 50-trajectory training.
-training_trajectory_count_by_method_scale: {}
+# DRL-TS retain one. TERRAN remains at 50 except for the final Cus500 memory
+# correction below.
+training_trajectory_count_by_method_scale:
+  terran:
+    Cus500: 42
 
 warm_start:
   source_commit: ""
@@ -65,8 +71,9 @@ warm_start:
   scope: exact_job_only
   missing_exact_job: fresh
 
-# The final A6000 TERRAN profile preserves 6,400 parallel trajectories for
-# Cus500 as batch=128 x n_traj=50. Cus1000 uses the previously sustained
+# The final A6000 TERRAN profile keeps the 1,280,000-instance stream and
+# batch=128 at Cus500, but lowers n_traj from 50 to 42 after b128*n50 measured
+# 47.37 GiB; n42 is estimated near 40.8 GiB. Cus1000 uses the sustained
 # batch=4 x n_traj=50 profile with a 1,250-step train horizon, its derived
 # 1,875-step validation horizon, a 624-step PPO chunk, and an explicit
 # completion reward. These overrides do not change the other DRL methods.

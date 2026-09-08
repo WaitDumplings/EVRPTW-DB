@@ -293,7 +293,13 @@ def test_scale_aware_hardware_assignment_is_strict() -> None:
 
 def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() -> None:
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
-    formal = [row for queue in build().values() for row in queue]
+    formal = [
+        row
+        for queue in MANIFESTS.build(
+            reuse_preverified_training_streams=True
+        ).values()
+        for row in queue
+    ]
     for row in formal:
         scale = row["scale"]
         method = row["method"]
@@ -321,6 +327,8 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         expected_trajectories = {
             "am_evrptw": 5, "evrptw_rl": 1, "drl_ts": 1, "terran": 50,
         }[method]
+        if method == "terran" and scale == "Cus500":
+            expected_trajectories = 42
         assert row["training_trajectory_count"] == expected_trajectories
         assert row["warm_start_source_commit"] == runtime["warm_start"]["source_commit"]
         assert row["warm_start_scope"] == "exact_job_only"
@@ -466,7 +474,8 @@ def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
 
 
 def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
-    rows = [row for queue in build().values() for row in queue]
+    queues = MANIFESTS.build(reuse_preverified_training_streams=True)
+    rows = [row for queue in queues.values() for row in queue]
     overridden = [
         row
         for row in rows
@@ -486,7 +495,7 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
 
     priority_terran = [
         row
-        for row in build_a6000_cus1000_priority_queue()
+        for row in build_a6000_cus1000_priority_queue(queues)
         if row["method"] == "terran"
     ]
     assert len(priority_terran) == 1
@@ -494,12 +503,18 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     assert priority_terran[0]["ppo_step_chunk_size"] == 624
 
     dedicated = {
-        row["scale"]: row for row in build_a6000_terran_formal_queue()
+        row["scale"]: row for row in build_a6000_terran_formal_queue(queues)
     }
     assert dedicated["Cus500"]["num_minibatches"] == 1
     assert dedicated["Cus500"]["ppo_step_chunk_size"] == 36
+    assert dedicated["Cus500"]["physical_batch_size"] == 128
+    assert dedicated["Cus500"]["training_trajectory_count"] == 42
+    assert dedicated["Cus500"]["target_environments"] == 1_280_000
+    assert dedicated["Cus500"]["customer_exposure_budget"] == 640_000_000
     assert dedicated["Cus1000"]["num_minibatches"] == 1
     assert dedicated["Cus1000"]["ppo_step_chunk_size"] == 624
+    assert dedicated["Cus1000"]["physical_batch_size"] == 4
+    assert dedicated["Cus1000"]["training_trajectory_count"] == 50
 
 
 def test_a6000_cus1000_priority_queue_uses_approved_two_gpu_order() -> None:
@@ -542,12 +557,14 @@ def test_checked_in_a6000_cus1000_priority_manifest_matches_builder() -> None:
         for line in manifest.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert checked_in == build_a6000_cus1000_priority_queue()
+    queues = MANIFESTS.build(reuse_preverified_training_streams=True)
+    assert checked_in == build_a6000_cus1000_priority_queue(queues)
 
 
 def test_a6000_terran_candidate_queue_uses_both_gpus_and_is_authorized() -> None:
-    canonical = build()["a6000_2_1"]
-    rows = build_a6000_terran_formal_queue()
+    queues = MANIFESTS.build(reuse_preverified_training_streams=True)
+    canonical = queues["a6000_2_1"]
+    rows = build_a6000_terran_formal_queue(queues)
     assert [
         (row["method"], row["scale"], row["global_slot"], row["queue_position"])
         for row in rows
@@ -592,7 +609,8 @@ def test_checked_in_a6000_terran_formal_manifest_matches_builder() -> None:
         for line in manifest.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert checked_in == build_a6000_terran_formal_queue()
+    queues = MANIFESTS.build(reuse_preverified_training_streams=True)
+    assert checked_in == build_a6000_terran_formal_queue(queues)
     summary = json.loads(
         (SCRIPT_ROOT / "a6000_2_1" / "terran_assignment_summary.json").read_text(
             encoding="utf-8"
