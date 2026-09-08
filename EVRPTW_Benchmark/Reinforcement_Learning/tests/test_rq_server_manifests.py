@@ -91,9 +91,18 @@ def test_checked_in_formal_decision_is_three_way_consistent_and_scoped() -> None
         == runtime["authorized_job_ids"]
         == protocol["authorized_job_ids"]
     )
-    assert len(gate["authorized_job_ids"]) == 18
-    assert gate["formal_launch_allowed"] is True
-    assert gate["launch_policy"] == "reward_contract_v2_formal_user_authorized"
+    # Migrating the economic objective invalidates the earlier formal
+    # authorization.  Candidate manifests remain materialized for review, but
+    # launch must stay fail-closed until the v2/v3 pair is explicitly approved.
+    assert gate["authorized_job_ids"] == []
+    assert gate["formal_launch_allowed"] is False
+    assert (
+        gate["launch_policy"]
+        == "reward_contract_v3_pending_formal_authorization"
+    )
+    assert set(decision(gate)[-1].values()) == {
+        "PENDING_NEW_OBJECTIVE_AUTHORIZATION"
+    }
     assert set(gate["formal_launch_gates"]) == {
         f"G{index}" for index in range(1, 9)
     }
@@ -137,8 +146,14 @@ def test_every_formal_job_uses_the_same_versioned_cost_objective() -> None:
     profile_path = cfg["objective_config_path"]
     expected = json.loads((MANIFESTS.ROOT.parents[1] / profile_path).read_text())["objective"]
     assert expected["mode"] == "energy_vehicle_cost"
-    assert expected["electricity_price_usd_per_kwh"] == 0.1341
-    assert expected["vehicle_fixed_cost_usd"] == 33.56
+    assert expected["profile_id"] == "rivian_energy_vehicle_cost_v2"
+    assert expected["electricity_price_usd_per_kwh"] == 0.39
+    assert expected["consumption_kwh_per_km"] == pytest.approx(100 / 257)
+    assert expected["vehicle_fixed_cost_usd"] == 413.6331536717643
+    assert (
+        expected["electricity_price_usd_per_kwh"]
+        * expected["consumption_kwh_per_km"]
+    ) == pytest.approx(0.151750972762646)
     queues = build()
     rows = [row for queue in queues.values() for row in queue]
     assert len(rows) == 24
@@ -319,18 +334,39 @@ def test_scale_rollout_limits_match_current_protocol() -> None:
         assert row["validation_rollout_steps"] == validation_steps
 
 
-def test_2080ti_jobs_match_authorized_small_scale_assignment() -> None:
+def test_2080ti_candidate_jobs_remain_assigned_but_are_not_authorized() -> None:
     queues = build()
     assert {server: len(queues[server]) for server in (
         "2080ti_4_1", "2080ti_4_2", "2080ti_3_1"
     )} == {"2080ti_4_1": 8, "2080ti_4_2": 5, "2080ti_3_1": 3}
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
     authorized = set(runtime["authorized_job_ids"])
+    assert runtime["formal_launch_allowed"] is False
+    assert authorized == set()
     for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1"):
-        assert {row["job_id"] for row in queues[server]}.issubset(authorized)
+        assert {row["job_id"] for row in queues[server]}.isdisjoint(authorized)
+        for row in queues[server]:
+            assert row["objective_config"]["profile_id"] == (
+                "rivian_energy_vehicle_cost_v2"
+            )
+            assert row["reward_contract_id"] == (
+                "drl_energy_vehicle_reference_scale_v3"
+            )
+            assert row["warm_start_source_commit"] == ""
 
 
-def test_aa114d0_special_manifests_only_override_exact_warm_start_source() -> None:
+def test_aa114d0_special_manifests_remain_bound_to_historical_contract() -> None:
+    historical_fields = {
+        "objective_config",
+        "objective_config_path",
+        "reward_contract_config_path",
+        "reward_contract_id",
+        "reward_contract_sha256",
+        "reward_failure_base",
+        "reward_objective_scale",
+        "warm_start_source_commit",
+        "warm_start_missing_policy",
+    }
     for server in sorted(MANIFESTS.SPECIAL_WARM_START_SERVERS):
         canonical = [
             json.loads(line)
@@ -353,9 +389,39 @@ def test_aa114d0_special_manifests_only_override_exact_warm_start_source() -> No
                 for key in baseline.keys() | warm.keys()
                 if baseline.get(key) != warm.get(key)
             }
-            assert changed == {
-                "warm_start_source_commit", "warm_start_missing_policy"
+            assert changed == historical_fields
+
+            # The canonical candidate is intentionally fresh-start under the
+            # new objective.  A historical aa114d0 checkpoint must never be
+            # silently relabelled with that objective/reward contract.
+            assert baseline["objective_config"]["profile_id"] == (
+                "rivian_energy_vehicle_cost_v2"
+            )
+            assert baseline["reward_contract_id"] == (
+                "drl_energy_vehicle_reference_scale_v3"
+            )
+            assert baseline["warm_start_source_commit"] == ""
+            assert baseline["warm_start_missing_policy"] == "fresh"
+
+            assert warm["objective_config"] == {
+                "mode": "energy_vehicle_cost",
+                "profile_id": "rivian_energy_vehicle_cost_v1",
+                "electricity_price_usd_per_kwh": 0.1341,
+                "consumption_kwh_per_km": 0.38910505836575876,
+                "vehicle_fixed_cost_usd": 33.56,
             }
+            assert warm["objective_config_path"].endswith(
+                "/rivian_energy_vehicle_cost_v1.json"
+            )
+            assert warm["reward_contract_id"] == (
+                "drl_energy_vehicle_reference_scale_v2"
+            )
+            assert warm["reward_contract_config_path"].endswith(
+                "/drl_reward_contract_energy_vehicle_v2.json"
+            )
+            assert warm["reward_contract_sha256"] == (
+                "6a60c434b2563becd87487c6415eb6fbc5e48a93f16e55f8502bdb484864d22f"
+            )
             assert (
                 warm["warm_start_source_commit"]
                 == MANIFESTS.SPECIAL_WARM_START_COMMIT
@@ -466,7 +532,7 @@ def test_checked_in_a6000_cus1000_priority_manifest_matches_builder() -> None:
     assert checked_in == build_a6000_cus1000_priority_queue()
 
 
-def test_a6000_terran_formal_queue_uses_both_gpus_and_exact_authorized_scope() -> None:
+def test_a6000_terran_candidate_queue_uses_both_gpus_and_is_fail_closed() -> None:
     canonical = build()["a6000_2_1"]
     rows = build_a6000_terran_formal_queue()
     assert [
@@ -478,9 +544,19 @@ def test_a6000_terran_formal_queue_uses_both_gpus_and_exact_authorized_scope() -
     ]
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
     authorized = set(runtime["authorized_job_ids"])
-    assert {row["job_id"] for row in rows} == {
-        job_id for job_id in authorized if "__terran__Cus500__" in job_id or "__terran__Cus1000__" in job_id
-    }
+    assert runtime["formal_launch_allowed"] is False
+    assert authorized == set()
+    assert {row["job_id"] for row in rows}.isdisjoint(authorized)
+    assert all(
+        row["objective_config"]["profile_id"]
+        == "rivian_energy_vehicle_cost_v2"
+        for row in rows
+    )
+    assert all(
+        row["reward_contract_id"] == "drl_energy_vehicle_reference_scale_v3"
+        for row in rows
+    )
+    assert all(row["warm_start_source_commit"] == "" for row in rows)
 
     canonical_by_id = {row["job_id"]: row for row in canonical}
     for row in rows:
@@ -515,7 +591,9 @@ def test_checked_in_a6000_terran_formal_manifest_matches_builder() -> None:
     assert summary["formal_jobs"] == 2
     assert summary["formal_launch_allowed"] is runtime["formal_launch_allowed"]
     assert summary["authorized_formal_job_ids"] == sorted(
-        row["job_id"] for row in checked_in
+        set(runtime["authorized_job_ids"]).intersection(
+            row["job_id"] for row in checked_in
+        )
     )
     assert summary["slot_queues"] == {
         "0": ["terran/Cus500"],

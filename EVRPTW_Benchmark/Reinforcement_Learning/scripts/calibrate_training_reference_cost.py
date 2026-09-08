@@ -57,7 +57,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (  # 
 )
 
 
-CONTRACT_ID = "drl_energy_vehicle_reference_scale_v2"
+CONTRACT_ID = "drl_energy_vehicle_reference_scale_v3"
 CALIBRATION_SCHEMA = "drl_training_reference_calibration_v1"
 COHORT_SCHEMA = "drl_training_reference_cohort_v1"
 PER_VIEW_SCHEMA = "drl_training_reference_view_v1"
@@ -76,14 +76,14 @@ DEFAULT_OBJECTIVE = (
     / "EVRPTW_Benchmark"
     / "Reinforcement_Learning"
     / "configs"
-    / "rivian_energy_vehicle_cost_v1.json"
+    / "rivian_energy_vehicle_cost_v2.json"
 )
 DEFAULT_CONTRACT_OUTPUT = (
     REPO_ROOT
     / "EVRPTW_Benchmark"
     / "Reinforcement_Learning"
     / "configs"
-    / "drl_reward_contract_energy_vehicle_v2.json"
+    / "drl_reward_contract_energy_vehicle_v3.json"
 )
 DEFAULT_ARTIFACT_DIR = (
     REPO_ROOT
@@ -91,7 +91,7 @@ DEFAULT_ARTIFACT_DIR = (
     / "results"
     / "DRL_rq_v1"
     / "artifacts"
-    / "reward_contract_energy_vehicle_v2"
+    / "reward_contract_energy_vehicle_v3"
 )
 REQUIRED_INDEX_COLUMNS = {
     "view_id",

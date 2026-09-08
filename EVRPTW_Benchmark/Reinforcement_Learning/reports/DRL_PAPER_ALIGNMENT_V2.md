@@ -1,7 +1,12 @@
 # DRL paper-alignment audit v2
 
-Audit updated: 2026-09-06. Benchmark objective:
-`rivian_energy_vehicle_cost_v1` (electricity cost plus fixed vehicle-start cost).
+Audit updated: 2026-09-06; active contract annotation: 2026-09-07. The active
+benchmark objective is `rivian_energy_vehicle_cost_v2`, with
+`C = 413.6331536717643 K + 0.151750972762646 D`, and the matching shared reward
+contract is `drl_energy_vehicle_reference_scale_v3`. The method-alignment
+findings are unchanged. Objective-v1/reward-v2 checkpoints, results, and
+measurement reports remain historical artifacts and are not relabelled by this
+annotation.
 
 ## Release decision
 
@@ -84,8 +89,9 @@ contracts. The common task contract uses normalized electricity-plus-vehicle
 cost and charges every structurally incomplete rollout
 `b_N + lambda_u * unserved_fraction` exactly once. The frozen rule
 `b_N = Q_0.99(C_ref / S_N) + 1` is an empirical calibration candidate, not a
-mathematical feasibility-first guarantee. Its exceeding all normalized costs
-in each 500-reference calibration cohort is only an in-sample fact.
+mathematical feasibility-first guarantee. A quantile-derived floor is not an
+upper bound on every feasible cost and need not exceed the largest member of
+its 500-reference calibration cohort.
 
 The independently versioned DRL-TS Stage-1 profile defines, for each resource
 component,
@@ -110,12 +116,12 @@ and terminal guard are documented adaptations, not paper-exact normalization.
 
 The model, PPO path and PBRS formula are inherited from the project code. For
 the Stage-2 adapter, the base reward is the negative common normalized
-electricity-plus-vehicle task cost. PBRS components remain separately logged. If the registered rollout
-horizon is exhausted, the project failure heuristic adds
-
-`-failure_penalty * remaining_customer_fraction`.
-
-This term is training-only and does not affect verifier-based evaluation.
+electricity-plus-vehicle task cost. PBRS components remain separately logged.
+The active terminal task contract gives a separately logged constant completion
+reward on success and charges
+`-(failure_base + unserved_coefficient * remaining_customer_fraction)` on any
+failed terminal transition, including rollout-horizon exhaustion. These terms
+are training-only and do not affect verifier-based evaluation.
 
 ### Edge-DIRECT-H
 

@@ -35,7 +35,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.scripts.calibrate_training_referenc
 def objective() -> ObjectiveConfig:
     return ObjectiveConfig(
         mode="energy_vehicle_cost",
-        profile_id="test_energy_vehicle_cost_v1",
+        profile_id="test_energy_vehicle_cost_v2",
         electricity_price_usd_per_kwh=0.2,
         consumption_kwh_per_km=0.5,
         vehicle_fixed_cost_usd=3.0,
@@ -247,7 +247,7 @@ def test_contract_schema_digest_and_per_scale_terms() -> None:
     )
 
     assert contract["schema"] == "drl_reward_contract_v1"
-    assert contract["contract_id"] == "drl_energy_vehicle_reference_scale_v2"
+    assert contract["contract_id"] == "drl_energy_vehicle_reference_scale_v3"
     assert contract["sha256"] == reward_contract_digest(contract)
     assert contract["scales"]["Cus500"]["objective_scale"] == 250.5
     assert contract["scales"]["Cus1000"]["failure_base"] == pytest.approx(

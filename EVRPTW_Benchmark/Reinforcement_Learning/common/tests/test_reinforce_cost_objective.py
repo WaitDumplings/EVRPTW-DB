@@ -19,7 +19,10 @@ from EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.tests.test_am_model impor
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.env import DRLTSHardConstraintEnv
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.soft_env import DRLTSSoftConstraintEnv
 from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_entrypoints, protocol_trainers
-from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
+from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import (
+    ObjectiveConfig,
+    load_objective,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (
     reward_contract_digest,
 )
@@ -27,9 +30,15 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.stage2_data import make_envs
 
 
 def _objective(cost: bool = True) -> ObjectiveConfig:
+    if cost:
+        return load_objective(
+            REPO_ROOT
+            / "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+            "rivian_energy_vehicle_cost_v2.json"
+        )
     return ObjectiveConfig(
-        mode="energy_vehicle_cost" if cost else "distance",
-        profile_id="rivian_energy_vehicle_cost_v1" if cost else "distance_v1",
+        mode="distance",
+        profile_id="distance_v1",
     )
 
 

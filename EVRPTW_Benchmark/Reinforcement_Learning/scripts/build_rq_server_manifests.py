@@ -64,6 +64,7 @@ SERVERS = {
 SPECIAL_WARM_START_COMMIT = "aa114d06995cdd35429bcc793bee4cff14590eb5"
 SPECIAL_WARM_START_SERVERS = {"2080ti_4_2", "2080ti_3_1"}
 SPECIAL_WARM_START_MANIFEST = "jobs_warm_start_aa114d0.jsonl"
+SPECIAL_WARM_START_OBJECTIVE_PROFILE_ID = "rivian_energy_vehicle_cost_v1"
 
 TRAIN_INDEX = {
     "Cus50": "generation_plan/compatibility_cus50/train/view_index.parquet",
@@ -674,7 +675,10 @@ def build_a6000_terran_formal_queue(
     runtime = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     authorized = set(runtime.get("authorized_job_ids", ()))
     actual = {str(row["job_id"]) for row in rows}
-    if not actual.issubset(authorized):
+    if (
+        bool(runtime.get("formal_launch_allowed"))
+        and not actual.issubset(authorized)
+    ):
         raise ValueError(
             "dedicated TERRAN queue contains job IDs outside authorized_job_ids: "
             f"queue={sorted(actual)}, authorized={sorted(authorized)}"
@@ -723,7 +727,10 @@ def build_a6000_terran_cus1000_replacement_queue(
     ):
         raise ValueError("replacement validation horizon violates the 3/2 contract")
     runtime = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
-    if payload["job_id"] not in set(runtime.get("authorized_job_ids", ())):
+    if (
+        bool(runtime.get("formal_launch_allowed"))
+        and payload["job_id"] not in set(runtime.get("authorized_job_ids", ()))
+    ):
         raise ValueError("replacement job is outside authorized_job_ids")
     payload.update(
         global_slot=int(profile["global_slot"]),
@@ -743,6 +750,13 @@ def main() -> None:
     formal_launch_allowed = bool(runtime_config["formal_launch_allowed"])
     launch_policy = str(runtime_config["launch_policy"])
     authorized_job_ids = set(runtime_config["authorized_job_ids"])
+    objective_profile_id = str(
+        json.loads(
+            (
+                ROOT.parents[1] / runtime_config["objective_config_path"]
+            ).read_text(encoding="utf-8")
+        )["objective"]["profile_id"]
+    )
     queues = build()
     for server, rows in queues.items():
         destination = args.output_root / server
@@ -751,7 +765,13 @@ def main() -> None:
             "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
             encoding="utf-8",
         )
-        if server in SPECIAL_WARM_START_SERVERS:
+        # This manifest is historical evidence tied to objective v1. Once the
+        # active objective migrates, leave any checked-in copy byte-for-byte
+        # untouched rather than silently relabelling aa114d0 checkpoints.
+        if (
+            server in SPECIAL_WARM_START_SERVERS
+            and objective_profile_id == SPECIAL_WARM_START_OBJECTIVE_PROFILE_ID
+        ):
             warm_rows = []
             for row in rows:
                 payload = dict(row)
@@ -870,9 +890,16 @@ def main() -> None:
         "gpu_count": 2,
         "pilot_jobs": 0,
         "formal_jobs": 1,
-        "formal_launch_allowed": formal_launch_allowed,
+        "formal_launch_allowed": formal_launch_allowed
+        and {str(row["job_id"]) for row in terran_replacement}.issubset(
+            authorized_job_ids
+        ),
         "launch_policy": launch_policy,
-        "authorized_formal_job_ids": [str(terran_replacement[0]["job_id"])],
+        "authorized_formal_job_ids": sorted(
+            authorized_job_ids.intersection(
+                str(row["job_id"]) for row in terran_replacement
+            )
+        ),
         "slot_gpu_map": {
             str(replacement_profile["global_slot"]): int(
                 replacement_profile["local_gpu"]

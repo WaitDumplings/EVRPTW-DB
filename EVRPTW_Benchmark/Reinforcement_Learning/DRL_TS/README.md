@@ -35,7 +35,7 @@ physical semantics.
 ## Formal reward contracts
 
 Formal economic-track runs keep two independently versioned layers. The shared
-[`drl_energy_vehicle_reference_scale_v2`](../configs/drl_reward_contract_energy_vehicle_v2.json)
+[`drl_energy_vehicle_reference_scale_v3`](../configs/drl_reward_contract_energy_vehicle_v3.json)
 task contract supplies normalized electricity-plus-vehicle cost and the
 terminal incomplete-rollout term. The DRL-TS method profile supplies only the
 Stage-1 capacity, time-window, and energy auxiliary:
@@ -101,5 +101,6 @@ python -m EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.eval \
 The paper compares greedy decoding and the best of 1,280 sampled solutions.
 Use `--decode-type sampling --candidates 1280` when that registered protocol
 and memory budget are intended. Candidate selection prefers completed rollouts
-and then minimizes distance. Exported routes are independently replayed before
-their directed-road distance is accepted.
+and then minimizes the active objective (verified v2 economic cost in formal
+economic-track runs). Exported routes are independently replayed before their
+directed-road distance, dispatch count, and objective value are accepted.

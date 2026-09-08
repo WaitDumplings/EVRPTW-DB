@@ -15,7 +15,10 @@ from evrptw_core.schema import EVRPTWInstance
 
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.env import DRLTSHardConstraintEnv
 from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.soft_env import DRLTSSoftConstraintEnv
-from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
+from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import (
+    ObjectiveConfig,
+    load_objective,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
     EVRPTWVectorEnv,
     EVRPTWVectorEnvFast,
@@ -65,8 +68,10 @@ def economic_instance() -> EVRPTWInstance:
 
 
 def cost_objective() -> ObjectiveConfig:
-    return ObjectiveConfig(
-        mode="energy_vehicle_cost", profile_id="rivian_energy_vehicle_cost_v1"
+    return load_objective(
+        REPO_ROOT
+        / "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+        "rivian_energy_vehicle_cost_v2.json"
     )
 
 

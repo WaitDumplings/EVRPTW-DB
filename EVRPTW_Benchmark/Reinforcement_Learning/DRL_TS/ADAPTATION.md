@@ -82,7 +82,9 @@ The adapter preserves the three violation semantics and the two-stage
 strategy, but separates the shared task contract from the DRL-TS-only soft
 auxiliary. New formal runs replace the objective-facing distance term with the
 common electricity-plus-vehicle cost in
-[`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md). For the
+[`COST_OBJECTIVE_CONTRACT_V2.md`](../COST_OBJECTIVE_CONTRACT_V2.md). The active
+objective is `C = 413.6331536717643 K + 0.151750972762646 D`, with `D` in km
+and one dispatch fee for every valid depot-to-nondepot departure. For the
 positive minimization cost used by DRL-TS, the shared task part is
 
 ```text
@@ -90,13 +92,12 @@ L_task = C / S_N + I[incomplete] * (b_N + lambda_u * unserved_fraction)
 ```
 
 `S_N`, `b_N`, and `lambda_u` come from the frozen per-scale
-[`drl_energy_vehicle_reference_scale_v2`](../configs/drl_reward_contract_energy_vehicle_v2.json)
+[`drl_energy_vehicle_reference_scale_v3`](../configs/drl_reward_contract_energy_vehicle_v3.json)
 contract and are shared with the other formal DRL methods. The rule
 `b_N = Q_0.99(C_ref / S_N) + 1` is a frozen empirical calibration candidate,
-not a mathematical feasibility-first guarantee. Although each frozen value is
-larger than the maximum normalized cost in its 500-member calibration sample,
-that is only an in-sample fact and is not an upper bound on every feasible
-solution.
+not a mathematical feasibility-first guarantee or an upper bound on every
+feasible solution. In particular, a quantile-based floor need not exceed the
+largest member of its 500-view calibration cohort.
 
 The method-specific Stage-1 profile is independently frozen in
 [`drl_ts_soft_auxiliary_v1.json`](../configs/drl_ts_soft_auxiliary_v1.json).

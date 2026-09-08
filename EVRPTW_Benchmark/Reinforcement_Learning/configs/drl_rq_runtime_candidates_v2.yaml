@@ -1,40 +1,22 @@
 schema: drl_rq_runtime_candidates_v2
-status: reward_contract_v2_formal_2080_authorized
+status: reward_contract_v3_pending_formal_authorization
 protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart
-formal_launch_allowed: true
-launch_policy: reward_contract_v2_formal_user_authorized
-authorized_job_ids:
-  - full__G__Full-support__am_evrptw__Cus50__seed1234
-  - full__G__Full-support__evrptw_rl__Cus50__seed1234
-  - full__G__Full-support__drl_ts__Cus50__seed1234
-  - full__G__Full-support__terran__Cus50__seed1234
-  - full__G__Coverage-10%-support__terran__Cus100__seed1234
-  - full__E__Full-support__am_evrptw__Cus100__seed1234
-  - full__E__Full-support__evrptw_rl__Cus100__seed1234
-  - full__E__Full-support__drl_ts__Cus100__seed1234
-  - full__G__Full-support__am_evrptw__Cus100__seed1234
-  - full__G__Full-support__evrptw_rl__Cus100__seed1234
-  - full__G__Full-support__drl_ts__Cus100__seed1234
-  - full__G__Full-support__terran__Cus100__seed1234
-  - full__E__Full-support__terran__Cus100__seed1234
-  - full__G__Random-10%-support__am_evrptw__Cus100__seed1234
-  - full__G__Random-10%-support__terran__Cus100__seed1234
-  - full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234
-  - full__G__Full-support__terran__Cus500__seed1234
-  - full__G__Full-support__terran__Cus1000__seed1234
+formal_launch_allowed: false
+launch_policy: reward_contract_v3_pending_formal_authorization
+authorized_job_ids: []
 formal_launch_gates:
-  G1: PILOT_WAIVED_BY_USER
-  G2: IMPLEMENTED_UNIT_TESTED
-  G3: PILOT_WAIVED_BY_USER
-  G4: PILOT_WAIVED_BY_USER
-  G5: PILOT_WAIVED_BY_USER
-  G6: PILOT_WAIVED_BY_USER
-  G7: IMPLEMENTED_UNIT_TESTED
-  G8: IMPLEMENTED_UNIT_TESTED
-objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
-reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json
-reward_contract_revision: drl_energy_vehicle_reference_scale_v2
+  G1: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+  G2: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+  G3: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+  G4: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+  G5: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+  G6: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+  G7: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+  G8: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json
+reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v3.json
+reward_contract_revision: drl_energy_vehicle_reference_scale_v3
 training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
 training_stream_registry_sha256: 2ae41f6da136d07aa5d66b392f73935cf67b1590925434b8de8aa7b47152f1fe
 # This contract has independent training-only reference calibrations for all
@@ -76,7 +58,7 @@ training_trajectory_count_by_method:
 training_trajectory_count_by_method_scale: {}
 
 warm_start:
-  source_commit: 481176332c1e683f52b28777d3423d036f5c010f
+  source_commit: ""
   checkpoint_name: best.ckpt
   scope: exact_job_only
   missing_exact_job: fresh

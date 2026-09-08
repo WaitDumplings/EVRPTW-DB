@@ -1,39 +1,21 @@
 protocol_id: drl_rq_protocol_frozen_v1
-status: reward_contract_v2_formal_2080_authorized
-formal_launch_allowed: true
-launch_mode: direct_full_after_user_authorization
-launch_policy: reward_contract_v2_formal_user_authorized
-authorized_job_ids:
-  - full__G__Full-support__am_evrptw__Cus50__seed1234
-  - full__G__Full-support__evrptw_rl__Cus50__seed1234
-  - full__G__Full-support__drl_ts__Cus50__seed1234
-  - full__G__Full-support__terran__Cus50__seed1234
-  - full__G__Coverage-10%-support__terran__Cus100__seed1234
-  - full__E__Full-support__am_evrptw__Cus100__seed1234
-  - full__E__Full-support__evrptw_rl__Cus100__seed1234
-  - full__E__Full-support__drl_ts__Cus100__seed1234
-  - full__G__Full-support__am_evrptw__Cus100__seed1234
-  - full__G__Full-support__evrptw_rl__Cus100__seed1234
-  - full__G__Full-support__drl_ts__Cus100__seed1234
-  - full__G__Full-support__terran__Cus100__seed1234
-  - full__E__Full-support__terran__Cus100__seed1234
-  - full__G__Random-10%-support__am_evrptw__Cus100__seed1234
-  - full__G__Random-10%-support__terran__Cus100__seed1234
-  - full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234
-  - full__G__Full-support__terran__Cus500__seed1234
-  - full__G__Full-support__terran__Cus1000__seed1234
+status: reward_contract_v3_pending_formal_authorization
+formal_launch_allowed: false
+launch_mode: blocked_pending_new_objective_authorization
+launch_policy: reward_contract_v3_pending_formal_authorization
+authorized_job_ids: []
 runtime_budget_id: drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart
 supersedes_as_formal_candidate: drl_experiment_protocol_v1
 historical_evidence_relabelled: false
-objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
-objective_revision: rivian_energy_vehicle_cost_v1
-reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json
-reward_contract_revision: drl_energy_vehicle_reference_scale_v2
+objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json
+objective_revision: rivian_energy_vehicle_cost_v2
+reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v3.json
+reward_contract_revision: drl_energy_vehicle_reference_scale_v3
 training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
 training_stream_registry_sha256: 2ae41f6da136d07aa5d66b392f73935cf67b1590925434b8de8aa7b47152f1fe
-# All four intended training scales now have independent training-only reward
-# calibrations. This authorization enables the 16 measured 2080 Ti jobs while
-# retaining the two previously authorized TERRAN large-scale jobs.
+# All four intended training scales have independent training-only reward
+# calibrations for objective v2. Formal jobs remain blocked until this new
+# objective/reward pair receives an explicit, versioned authorization.
 reward_contract_calibrated_scales: [Cus50, Cus100, Cus500, Cus1000]
 reward_contract_launch_enabled_scales: [Cus50, Cus100, Cus500, Cus1000]
 reward_contract_blocked_scales: []
@@ -208,7 +190,7 @@ training_trajectories_per_instance:
 training_trajectories_per_instance_by_method_scale: {}
 
 warm_start:
-  source_commit: 481176332c1e683f52b28777d3423d036f5c010f
+  source_commit: ""
   checkpoint_name: best.ckpt
   scope: exact_job_only
   missing_exact_job: fresh
@@ -229,25 +211,25 @@ euclidean:
 formal_launch_gates:
   G1:
     requirement: explicit_customer_exposure_budget_for_every_method_and_scale
-    status: PILOT_WAIVED_BY_USER
+    status: PENDING_NEW_OBJECTIVE_AUTHORIZATION
   G2:
     requirement: deterministic_method_specific_stratified_shuffle_cycle_id_stream
-    status: IMPLEMENTED_UNIT_TESTED
+    status: PENDING_NEW_OBJECTIVE_AUTHORIZATION
   G3:
     requirement: exposure_and_gpu_hour_checkpoints
-    status: PILOT_WAIVED_BY_USER
+    status: PENDING_NEW_OBJECTIVE_AUTHORIZATION
   G4:
     requirement: calibrated_method_specific_logical_batch_for_every_scale
-    status: PILOT_WAIVED_BY_USER
+    status: PENDING_NEW_OBJECTIVE_AUTHORIZATION
   G5:
     requirement: per_method_physical_microbatch_and_oom_policy
-    status: PILOT_WAIVED_BY_USER
+    status: PENDING_NEW_OBJECTIVE_AUTHORIZATION
   G6:
     requirement: cross_hardware_same_config_runtime_and_memory_pilot
-    status: PILOT_WAIVED_BY_USER
+    status: PENDING_NEW_OBJECTIVE_AUTHORIZATION
   G7:
     requirement: euclidean_distance_time_energy_generation_manifest
-    status: IMPLEMENTED_UNIT_TESTED
+    status: PENDING_NEW_OBJECTIVE_AUTHORIZATION
   G8:
     requirement: parent_family_clustered_paired_bootstrap_aggregation
-    status: IMPLEMENTED_UNIT_TESTED
+    status: PENDING_NEW_OBJECTIVE_AUTHORIZATION

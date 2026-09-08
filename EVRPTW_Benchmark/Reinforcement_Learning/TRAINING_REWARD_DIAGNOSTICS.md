@@ -28,12 +28,14 @@ training-pool calibration metadata, and the resulting objective denominator
 `reward_objective_scale`. For the economic track:
 
 ```text
-C = distance_unit_cost * distance_km + vehicle_unit_cost * vehicles_started
+C = 0.151750972762646 * distance_km
+    + 413.6331536717643 * vehicles_started
 S_N = median(C_ref) on the frozen, verified training-reference cohort
 L_task = C / S_N + I[incomplete] * (b_N + lambda_u * unserved_fraction)
 ```
 
-The frozen `drl_energy_vehicle_reference_scale_v2` contract supplies one
+The frozen `drl_energy_vehicle_reference_scale_v3` contract, calibrated for
+`rivian_energy_vehicle_cost_v2`, supplies one
 `S_N`, `b_N`, and `lambda_u` per calibrated scale. The same values are used by
 all four methods and conditions at that scale; distance and vehicle count in
 each reference cost come from the same independently replayed route set. No
@@ -55,10 +57,10 @@ first terminal transition, and never PBRS-annealed. `terminal_success_bonus`,
 constant success term does not change the ordering among feasible solutions.
 
 The floor rule `b_N = Q_0.99(C_ref / S_N) + 1` is an empirical calibration
-candidate, not a mathematical feasibility-first guarantee. The frozen floors
-are above the maximum normalized cost in each 500-reference calibration cohort,
-but that is only an in-sample fact. Diagnostics must not report it as a global
-upper bound on feasible solution cost.
+candidate, not a mathematical feasibility-first guarantee. A quantile-based
+floor need not exceed the largest member of its 500-reference calibration
+cohort. Diagnostics must not report it as a global upper bound on feasible
+solution cost.
 
 ## What the observations mean
 

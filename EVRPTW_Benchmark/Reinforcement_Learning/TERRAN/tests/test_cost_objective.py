@@ -32,7 +32,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.pbrs import PotentialRewardC
 
 def _objective() -> ObjectiveConfig:
     return resolve_objective(
-        "EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json"
+        "EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json"
     )
 
 
@@ -133,10 +133,17 @@ def test_cost_pbrs_keeps_every_departure_fee_and_undiscounted_returns(
         # This legacy diagnostic stays normalized km, not a renamed USD value.
         "distance": -distance / (env.unwrapped.reward_distance_scale_km if normalize else 1.0),
     }.items():
-        assert sum(float(row[key][0]) for row in components) == pytest.approx(expected, abs=1e-5)
+        # Reward components are emitted as float32.  With the v2 fixed-vehicle
+        # charge (~414 USD), summing the per-step values can accumulate just
+        # over 1e-5 USD of rounding error even though the objective is exact.
+        assert sum(float(row[key][0]) for row in components) == pytest.approx(expected, abs=2e-5)
     returns = terran_rollout.compute_returns(torch.stack(rewards), torch.stack(dones), gamma=1.0)
     # The two strict potentials telescope to the fixed initial-state offset.
-    assert returns[0, 0].item() == pytest.approx(-objective.value(distance, vehicles) / scale + pbrs_scale, abs=1e-5)
+    # Returns are float32 too; at ~829 USD one ULP is about 6e-5 USD.
+    assert returns[0, 0].item() == pytest.approx(
+        -objective.value(distance, vehicles) / scale + pbrs_scale,
+        abs=1e-4,
+    )
     _, reward, _, _, final_info = env.step(np.asarray([0]))
     assert reward.tolist() == [0.0]
     assert final_info["reward_components"]["vehicle_cost"].tolist() == [0.0]
@@ -334,7 +341,7 @@ def test_resume_rejects_mutable_or_inconsistent_checkpoint_objective(malformed: 
     }
     payload = {"config": deepcopy(cfg)}
     if malformed == "mutable-path":
-        payload["config"]["objective"] = "EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json"
+        payload["config"]["objective"] = "EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json"
     else:
         payload["objective_config"] = _objective().to_dict()
         payload["config"]["objective"]["vehicle_fixed_cost_usd"] *= 2
@@ -373,9 +380,9 @@ def test_formal_yaml_resolves_shared_cost_profile_and_gamma_one() -> None:
     assert isinstance(cfg["objective"], str)
     assert resolve_objective(cfg["objective"]).to_dict() == _objective().to_dict()
     assert cfg["training"]["gamma"] == 1.0
-    assert cfg["training"]["reward_contract_id"] == "drl_energy_vehicle_reference_scale_v2"
+    assert cfg["training"]["reward_contract_id"] == "drl_energy_vehicle_reference_scale_v3"
     assert cfg["reward_contract"].endswith(
-        "configs/drl_reward_contract_energy_vehicle_v2.json"
+        "configs/drl_reward_contract_energy_vehicle_v3.json"
     )
 
 

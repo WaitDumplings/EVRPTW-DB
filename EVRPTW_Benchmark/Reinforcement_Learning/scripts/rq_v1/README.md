@@ -24,15 +24,15 @@ the same v15 job and executable commit.
 
 ### All-method electricity + vehicle-cost restart
 
-All four methods now use `rivian_energy_vehicle_cost_v1`:
-`cost_USD = 0.1341 * (100 / 257) * distance_km + 33.56 * vehicles_started`.
+All four methods now use `rivian_energy_vehicle_cost_v2`:
+`cost_USD = 0.151750972762646 * distance_km + 413.6331536717643 * vehicles_started`.
 Fixed vehicle cost is charged once on a valid departure from the depot.
 Validation candidates and checkpoints are selected feasible-first, then by
 minimum total cost; raw distance and both cost components remain separate.
-See [`COST_OBJECTIVE_CONTRACT_V1.md`](../../COST_OBJECTIVE_CONTRACT_V1.md)
+See [`COST_OBJECTIVE_CONTRACT_V2.md`](../../COST_OBJECTIVE_CONTRACT_V2.md)
 for parameters, accounting, normalization and historical-comparison boundaries.
 The shared task-reward contract is
-`drl_energy_vehicle_reference_scale_v2`; TERRAN additionally uses `gamma=1.0`
+`drl_energy_vehicle_reference_scale_v3`; TERRAN additionally uses `gamma=1.0`
 in both returns and PBRS. The other methods retain their native auxiliary
 shaping and training-stage schedules. Architectures, data and budgets are unchanged.
 All four trainers use AdamW with explicit decoupled `weight_decay=0.01`;
@@ -52,6 +52,10 @@ for Cus50, Cus100, Cus500 and Cus1000. Cus50 uses the compatibility training
 view index; the other scales use the core training view index. Each scale uses
 its own deterministic 500-view, 10-city, weekday/weekend-stratified reference
 cohort; denominators are never copied across scales.
+
+Objective v1, reward-contract v2, and their run outputs remain immutable
+historical artifacts. They must not be resumed or relabelled as v2/v3 runs;
+routes may only be rescored as separately identified derived results.
 
 On each RTX 2080 Ti server, start its complete authorized queue in a new output root; exact available checkpoints are used only through the frozen weights-only warm-start contract:
 

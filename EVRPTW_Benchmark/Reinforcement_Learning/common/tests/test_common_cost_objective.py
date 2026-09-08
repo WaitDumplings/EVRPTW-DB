@@ -22,6 +22,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.evaluation import (
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import (
     ObjectiveConfig,
+    load_objective,
     objective_from_checkpoint,
     resolve_objective,
     route_dispatch_count,
@@ -29,6 +30,15 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import (
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
     validation_key,
     verified_validation,
+)
+
+
+V2_OBJECTIVE_PATH = (
+    REPO_ROOT
+    / "EVRPTW_Benchmark"
+    / "Reinforcement_Learning"
+    / "configs"
+    / "rivian_energy_vehicle_cost_v2.json"
 )
 
 
@@ -87,6 +97,24 @@ def test_versioned_cost_scalar_array_tensor_units_and_gradients():
         fields["electricity_cost_usd"] + fields["vehicle_cost_usd"]
     )
     assert fields["objective_value"] == fields["objective_cost_usd"]
+
+
+def test_v2_profile_loads_exact_vehicle_and_requested_distance_cost_formula():
+    objective = load_objective(V2_OBJECTIVE_PATH)
+    expected_distance_unit_cost = 0.151750972762646
+    expected_vehicle_unit_cost = 413.6331536717643
+
+    assert objective.profile_id == "rivian_energy_vehicle_cost_v2"
+    assert objective.unit == "USD"
+    assert objective.distance_unit_cost == pytest.approx(
+        expected_distance_unit_cost, rel=1e-15, abs=0.0
+    )
+    assert objective.vehicle_unit_cost == expected_vehicle_unit_cost
+
+    distance = np.asarray([0.0, 1.0, 1234.5], dtype=np.float64)
+    vehicles = np.asarray([0, 1, 7], dtype=np.int64)
+    expected = expected_vehicle_unit_cost * vehicles + expected_distance_unit_cost * distance
+    np.testing.assert_allclose(objective.value(distance, vehicles), expected, rtol=1e-15, atol=0.0)
 
 
 @pytest.mark.parametrize("field,value", [

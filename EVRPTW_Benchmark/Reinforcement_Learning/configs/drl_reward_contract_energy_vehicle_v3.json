@@ -1,0 +1,199 @@
+{
+  "calibration": {
+    "aggregation": {
+      "failure_base": "linear_quantile_0.99(C/objective_scale)+1",
+      "objective_scale": "median(C)",
+      "quantile_method": "linear",
+      "unserved_coefficient": 1.0
+    },
+    "artifacts": {
+      "cohort_file": "cohort.json",
+      "cohort_file_sha256": "078daebe785626c61fbbc9d5b0efb5e61338263376467dc798d04405012da594",
+      "per_view_file": "per_view.jsonl",
+      "per_view_file_sha256": "d8f255a69de18ef0c0403c3194d47cf90366799116e7bad6c9c2248b433ca217"
+    },
+    "cohort": {
+      "city_count": 10,
+      "day_quota_per_city": {
+        "weekday": 36,
+        "weekend": 14
+      },
+      "day_types": [
+        "weekday",
+        "weekend"
+      ],
+      "hash_scheme": "blake2b_training_reference_view_rank_v1",
+      "scales": [
+        "Cus50",
+        "Cus100",
+        "Cus500",
+        "Cus1000"
+      ],
+      "schema": "drl_training_reference_cohort_v1",
+      "seed": 20260904,
+      "selected_day_mix": {
+        "weekday": 0.72,
+        "weekend": 0.28
+      },
+      "selection_unit": "view",
+      "source_day_mix": {
+        "weekday": 0.714,
+        "weekend": 0.286
+      },
+      "views_per_city": 50,
+      "views_per_scale": 500,
+      "weighting": "approximately_proportional_city_day_stratified_72_28"
+    },
+    "constructor": {
+      "base_algorithm_profile_id": "alns_stage2_scalable_v2",
+      "initial_construction_strategy": "singleton_best_fit_v1",
+      "profile_id": "alns_singleton_best_fit_deterministic_reference_v1",
+      "singleton_source_required": "stage2_certificate_replayed",
+      "stochastic_search_iterations": 0,
+      "termination_basis": "candidate_limits_only",
+      "wall_clock_cutoff_enabled": false
+    },
+    "objective_config_sha256": "ffd4c155e42b1c5b52dc10ceb7d176c647905ab9b0a7839a5fbda5a062887850",
+    "representation": "G",
+    "scale_statistics": {
+      "Cus100": {
+        "failure_base": 4.913082471598237,
+        "normalized_objective_q99_linear": 3.9130824715982375,
+        "objective_cost_usd": {
+          "max": 2139.1548837572204,
+          "median": 432.7147451224062,
+          "min": 417.9473113083106,
+          "q99_linear": 1693.2484843405866
+        },
+        "objective_distance_km": {
+          "max": 592.1171641945839,
+          "median": 124.07055629324168,
+          "min": 28.429192630574107
+        },
+        "sample_count": 500,
+        "vehicles_started": {
+          "max": 5,
+          "median": 1.0,
+          "min": 1
+        }
+      },
+      "Cus1000": {
+        "failure_base": 3.0482759351224384,
+        "normalized_objective_q99_linear": 2.0482759351224384,
+        "objective_cost_usd": {
+          "max": 19490.46561648956,
+          "median": 8116.152780908988,
+          "min": 2564.0778740099004,
+          "q99_linear": 16624.120426912934
+        },
+        "objective_distance_km": {
+          "max": 3903.1861737668514,
+          "median": 1594.3148606009781,
+          "min": 431.3658717414364
+        },
+        "sample_count": 500,
+        "vehicles_started": {
+          "max": 46,
+          "median": 19.0,
+          "min": 6
+        }
+      },
+      "Cus50": {
+        "failure_base": 3.0392953581806426,
+        "normalized_objective_q99_linear": 2.0392953581806426,
+        "objective_cost_usd": {
+          "max": 1311.6881213258207,
+          "median": 427.5975425080555,
+          "min": 416.98067438713656,
+          "q99_linear": 871.9976836061273
+        },
+        "objective_distance_km": {
+          "max": 466.47912050783634,
+          "median": 92.02174181863666,
+          "min": 22.059303175657988
+        },
+        "sample_count": 500,
+        "vehicles_started": {
+          "max": 3,
+          "median": 1.0,
+          "min": 1
+        }
+      },
+      "Cus500": {
+        "failure_base": 3.21013867342889,
+        "normalized_objective_q99_linear": 2.21013867342889,
+        "objective_cost_usd": {
+          "max": 12647.709347640937,
+          "median": 4238.927542618743,
+          "min": 893.0145709826547,
+          "q99_linear": 9368.617695804573
+        },
+        "objective_distance_km": {
+          "max": 2133.0524451471865,
+          "median": 790.5437416778877,
+          "min": 278.3550338759087
+        },
+        "sample_count": 500,
+        "vehicles_started": {
+          "max": 30,
+          "median": 10.0,
+          "min": 2
+        }
+      }
+    },
+    "schema": "drl_training_reference_calibration_v1",
+    "source_split": "train",
+    "source_track": "train",
+    "source_view_index_hash_scheme": "sha256_canonical_training_index_set_v1",
+    "source_view_index_sha256": "cdd6748d34131c33f1d6e83f420ded4ffebd51fd477415084898ce6352c6dc57",
+    "source_view_indexes": [
+      {
+        "relative_path": "generation_plan/compatibility_cus50/train/view_index.parquet",
+        "sha256": "4ceb0aad91f38799116a2936f1f40b760b93335d6ad9cea340024625ca0e252e"
+      },
+      {
+        "relative_path": "generation_plan/core/train/view_index.parquet",
+        "sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56"
+      }
+    ],
+    "verification": {
+      "D_and_K_source": "same_verified_routes",
+      "K_definition": "depot_to_nondepot_dispatch_count",
+      "canonical_replay_profile_id": "full_charge_derated_strict_route_v3",
+      "objective_verifier_profile_id": "gurobi_stage2_route_validator_v1",
+      "require_both_pass": true
+    }
+  },
+  "contract_id": "drl_energy_vehicle_reference_scale_v3",
+  "objective": {
+    "consumption_kwh_per_km": 0.38910505836575876,
+    "electricity_price_usd_per_kwh": 0.39,
+    "mode": "energy_vehicle_cost",
+    "profile_id": "rivian_energy_vehicle_cost_v2",
+    "vehicle_fixed_cost_usd": 413.6331536717643
+  },
+  "scales": {
+    "Cus100": {
+      "failure_base": 4.913082471598237,
+      "objective_scale": 432.7147451224062,
+      "unserved_coefficient": 1.0
+    },
+    "Cus1000": {
+      "failure_base": 3.0482759351224384,
+      "objective_scale": 8116.152780908988,
+      "unserved_coefficient": 1.0
+    },
+    "Cus50": {
+      "failure_base": 3.0392953581806426,
+      "objective_scale": 427.5975425080555,
+      "unserved_coefficient": 1.0
+    },
+    "Cus500": {
+      "failure_base": 3.21013867342889,
+      "objective_scale": 4238.927542618743,
+      "unserved_coefficient": 1.0
+    }
+  },
+  "schema": "drl_reward_contract_v1",
+  "sha256": "21105b1bcd92ffe4574611cc33c3949e7b7239b0b5ee13ad884efe0e65d73465"
+}

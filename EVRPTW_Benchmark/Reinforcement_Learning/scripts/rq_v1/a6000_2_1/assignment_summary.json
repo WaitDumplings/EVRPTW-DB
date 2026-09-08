@@ -1,13 +1,10 @@
 {
-  "authorized_formal_job_ids": [
-    "full__G__Full-support__terran__Cus1000__seed1234",
-    "full__G__Full-support__terran__Cus500__seed1234"
-  ],
+  "authorized_formal_job_ids": [],
   "formal_jobs": 8,
   "formal_launch_allowed": false,
   "gpu_count": 2,
   "hardware": "a6000",
-  "launch_policy": "reward_contract_v2_formal_user_authorized",
+  "launch_policy": "reward_contract_v3_pending_formal_authorization",
   "pilot_jobs": 0,
   "schema": "drl_rq_server_assignment_v1",
   "server": "a6000_2_1"

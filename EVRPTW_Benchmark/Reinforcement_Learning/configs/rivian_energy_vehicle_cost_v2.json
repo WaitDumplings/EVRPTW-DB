@@ -1,0 +1,26 @@
+{
+  "schema": "evrptw_objective_profile_v1",
+  "objective": {
+    "mode": "energy_vehicle_cost",
+    "profile_id": "rivian_energy_vehicle_cost_v2",
+    "electricity_price_usd_per_kwh": 0.39,
+    "consumption_kwh_per_km": 0.38910505836575876,
+    "vehicle_fixed_cost_usd": 413.6331536717643
+  },
+  "accounting": {
+    "formula": "electricity_price_usd_per_kwh * consumption_kwh_per_km * distance_km + vehicle_fixed_cost_usd * vehicles_started",
+    "distance_unit_cost_usd_per_km": 0.151750972762646,
+    "fixed_fee_rule": "Once on each valid depot-to-nondepot departure; one trip per vehicle",
+    "electricity_rule": "Uniform distance-based energy-cost accounting, including initial battery energy and final depot-return travel; no additional charge-session energy bill",
+    "excluded_costs": ["Any cost component not represented by the two frozen coefficients"],
+    "note": "Versioned objective migration with study-defined frozen coefficients. The distance coefficient is 0.39 * (100 / 257) USD/km; its displayed decimal is rounded to 0.151750972762646 USD/km."
+  },
+  "provenance": {
+    "cost_contract": {
+      "description": "Frozen study objective: C = 413.6331536717643 * vehicles_started + 0.151750972762646 * distance_km"
+    },
+    "consumption": {
+      "description": "Frozen benchmark Rivian reference: 100 kWh / 257 km, linear distance-consumption model"
+    }
+  }
+}

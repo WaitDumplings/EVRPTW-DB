@@ -1,7 +1,7 @@
 run_name: TERRAN
 dataset_name: EVRPTW-DB-Stage2
-objective: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v1.json
-reward_contract: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v2.json
+objective: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json
+reward_contract: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v3.json
 
 data:
   stage2_dataset_path: null
@@ -46,7 +46,7 @@ training:
   # Finite routing episodes use undiscounted returns: late distance costs and
   # completion feedback have the same weight as early ones. PBRS shares gamma.
   gamma: 1.0
-  reward_contract_id: drl_energy_vehicle_reference_scale_v2
+  reward_contract_id: drl_energy_vehicle_reference_scale_v3
   clip_coef: 0.2
   vf_coef: 0.5
   ent_coef: 0.01

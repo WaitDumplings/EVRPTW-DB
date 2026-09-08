@@ -14,14 +14,16 @@ all reported routes through the shared verifier. See
 ## Active Stage-2 return and cache contract
 
 Formal Stage-2 runs use `training.gamma=1.0` and
-`reward_contract_id=terran_undiscounted_energy_vehicle_pbrs_v1`. Returns are finite-episode
+`reward_contract_id=drl_energy_vehicle_reference_scale_v3`. Returns are finite-episode
 reward sums; the PBRS wrapper uses the same discount. A registered rollout-budget
 failure is a terminal outcome, not a collection slice to bootstrap. Terminal
 potentials are zero for both completion and failure. Auxiliary terminal bonuses
 and penalties remain separate from strict potential shaping. The shared
-`rivian_energy_vehicle_cost_v1` profile defines both cost coefficients and the
+`rivian_energy_vehicle_cost_v2` profile defines both cost coefficients and the
 departure-fee rule. Benchmark selection uses verified feasibility followed by
-total cost. See the [cost objective contract](../COST_OBJECTIVE_CONTRACT_V1.md).
+total cost, with
+`C = 413.6331536717643 K + 0.151750972762646 D` for distance `D` in km.
+See the [cost objective contract](../COST_OBJECTIVE_CONTRACT_V2.md).
 
 Static encoder outputs are cached during collection only while parameters stay
 fixed. PPO recomputes a differentiable encoding for every minibatch/time chunk;
@@ -29,9 +31,11 @@ it never reuses collection embeddings or embeddings from before an optimizer
 update. Static input tensors and frozen behavior-policy log-probabilities may
 be retained. Encoder dropout is zero in the current implementation.
 
-Start this revision from scratch. Checkpoints with a different objective,
-coefficient, gamma or reward contract cannot be resumed, and a fresh launch
-refuses old training history.
+Start this revision from scratch. In particular, v1-objective checkpoints are
+not v2 checkpoints: checkpoints with a different objective, coefficient,
+gamma or reward contract cannot be resumed or implicitly relabelled, and a
+fresh launch refuses old training history. A weights-only migration is valid
+only when a separately versioned protocol explicitly authorizes and records it.
 Server output directories already include the Git commit, so pulling the new
 commit and using `full.sh` separates the new run without rebuilding shared ID
 streams. See the [server restart instructions](../scripts/rq_v1/README.md).

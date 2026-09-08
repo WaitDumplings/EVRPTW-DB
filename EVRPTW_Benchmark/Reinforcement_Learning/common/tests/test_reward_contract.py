@@ -26,7 +26,10 @@ from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.soft_env import (
 from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
     EVRPTWVectorEnvFast,
 )
-from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import ObjectiveConfig
+from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import (
+    ObjectiveConfig,
+    load_objective,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.common.method_auxiliary import (
     load_method_auxiliary_profile,
 )
@@ -41,16 +44,17 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_entrypoints
 
 
 def _objective() -> ObjectiveConfig:
-    return ObjectiveConfig(
-        mode="energy_vehicle_cost",
-        profile_id="rivian_energy_vehicle_cost_v1",
+    return load_objective(
+        REPO_ROOT
+        / "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+        "rivian_energy_vehicle_cost_v2.json"
     )
 
 
 def _payload() -> dict:
     payload = {
         "schema": "drl_reward_contract_v1",
-        "contract_id": "test_reference_scale_v2",
+        "contract_id": "test_reference_scale_v3",
         "objective": _objective().to_dict(),
         "scales": {
             "Cus2": {
@@ -156,7 +160,7 @@ def test_frozen_all_scale_failure_floor_follows_q99_plus_one() -> None:
     contract = load_reward_contract(
         REPO_ROOT
         / "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
-        "drl_reward_contract_energy_vehicle_v2.json"
+        "drl_reward_contract_energy_vehicle_v3.json"
     )
     statistics = contract.snapshot["calibration"]["scale_statistics"]
     for scale in ("Cus50", "Cus100", "Cus500", "Cus1000"):

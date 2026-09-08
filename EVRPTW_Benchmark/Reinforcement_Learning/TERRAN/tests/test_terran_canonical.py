@@ -1070,10 +1070,10 @@ def test_stage2_terran_config_uses_cus1000_reward_calibration() -> None:
     assert cfg["training"]["gamma"] == 1.0
     assert (
         cfg["training"]["reward_contract_id"]
-        == "drl_energy_vehicle_reference_scale_v2"
+        == "drl_energy_vehicle_reference_scale_v3"
     )
     assert str(cfg["reward_contract"]).endswith(
-        "configs/drl_reward_contract_energy_vehicle_v2.json"
+        "configs/drl_reward_contract_energy_vehicle_v3.json"
     )
     cfg["data"].update(stage2_scale="Cus1000", num_customers=1000)
     terran_trainer._configure_reward_contract(cfg)
