@@ -208,8 +208,11 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/status.sh --
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/<server>/resume.sh --seed 1234
 ```
 
-Once the explicit gate is open, `full.sh` prepares deterministic method-specific
-training streams if necessary and launches the formal per-GPU queues through
+Once the explicit gate is open, the three RTX 2080 Ti wrappers select their
+checked-in `jobs_preverified.jsonl` projection and create a small local marker
+from frozen registry metadata. They do not rehash Parquet stream content or the
+source index. Other launch profiles prepare deterministic method-specific
+training streams when required. All queues launch through
 `nohup`/`setsid`. While the gate is closed it fails before spawning a trainer.
 `status.sh` is read-only.
 `resume.sh` resumes only jobs with complete resume evidence. Launcher provenance

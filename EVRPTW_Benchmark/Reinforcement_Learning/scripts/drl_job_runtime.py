@@ -817,13 +817,12 @@ def validate_training_stream_contracts(
         declared_hash_validation = job.get("file_hash_validation_performed")
         if reuse_preverified:
             if (
-                job.get("method") != "terran"
-                or declared_mode != STREAM_INTEGRITY_MODE_PREVERIFIED
+                declared_mode != STREAM_INTEGRITY_MODE_PREVERIFIED
                 or declared_hash_validation is not False
             ):
                 raise RuntimeError(
-                    "--reuse-preverified-training-streams requires a TERRAN "
-                    "manifest explicitly frozen for no-rehash reuse"
+                    "--reuse-preverified-training-streams requires a manifest "
+                    "explicitly frozen for no-rehash reuse"
                 )
         elif (
             declared_mode == STREAM_INTEGRITY_MODE_PREVERIFIED

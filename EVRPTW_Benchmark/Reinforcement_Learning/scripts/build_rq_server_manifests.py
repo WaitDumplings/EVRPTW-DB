@@ -66,6 +66,8 @@ SERVERS = {
 SPECIAL_WARM_START_COMMIT = "aa114d06995cdd35429bcc793bee4cff14590eb5"
 SPECIAL_WARM_START_SERVERS = {"2080ti_4_2", "2080ti_3_1"}
 SPECIAL_WARM_START_MANIFEST = "jobs_warm_start_aa114d0.jsonl"
+PREVERIFIED_NO_REHASH_SERVERS = {"2080ti_4_1", "2080ti_4_2", "2080ti_3_1"}
+PREVERIFIED_NO_REHASH_MANIFEST = "jobs_preverified.jsonl"
 SPECIAL_WARM_START_OBJECTIVE_PROFILE_ID = "rivian_energy_vehicle_cost_v1"
 
 TRAIN_INDEX = {
@@ -816,6 +818,22 @@ def main() -> None:
             "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
             encoding="utf-8",
         )
+        if server in PREVERIFIED_NO_REHASH_SERVERS:
+            preverified_rows = []
+            for row in rows:
+                payload = dict(row)
+                payload["stream_integrity_mode"] = (
+                    STREAM_INTEGRITY_MODE_PREVERIFIED
+                )
+                payload["file_hash_validation_performed"] = False
+                preverified_rows.append(payload)
+            (destination / PREVERIFIED_NO_REHASH_MANIFEST).write_text(
+                "".join(
+                    json.dumps(row, sort_keys=True) + "\n"
+                    for row in preverified_rows
+                ),
+                encoding="utf-8",
+            )
         # This manifest is historical evidence tied to objective v1. Once the
         # active objective migrates, leave any checked-in copy byte-for-byte
         # untouched rather than silently relabelling aa114d0 checkpoints.
