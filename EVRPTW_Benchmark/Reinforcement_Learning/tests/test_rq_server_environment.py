@@ -85,6 +85,7 @@ def test_terran_wrappers_pin_the_dedicated_manifest_and_method_filter() -> None:
         assert 'DRL_MANIFEST="$SERVER_SCRIPT_DIR/terran_jobs.jsonl"' in source
         assert 'DRL_SCALES="Cus500,Cus1000"' in source
         assert f" {mode} --methods terran" in source
+        assert "--reuse-preverified-training-streams" in source
 
 
 def test_terran_cus1000_replacement_wrappers_pin_namespace_and_gpu1() -> None:

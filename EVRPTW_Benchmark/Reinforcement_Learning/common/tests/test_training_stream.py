@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+
+from EVRPTW_Benchmark.Reinforcement_Learning.common import training_stream as training_stream_module
 
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
     atomic_write_stream,
     build_training_stream,
     load_training_stream_contract,
     read_stream_view_ids,
+    training_stream_contract_from_args,
 )
 
 
@@ -90,6 +94,47 @@ def test_atomic_stream_round_trip_and_slice(tmp_path) -> None:
     assert contract["sample_count"] == 12
     assert contract["stream_content_sha256"] == manifest["stream_content_sha256"]
     assert contract["manifest_sha256"] == manifest["manifest_sha256"]
+
+
+def test_preverified_contract_reuses_exact_snapshot_without_loading_artifact(
+    monkeypatch,
+) -> None:
+    snapshot = {
+        "schema": "drl_training_stream_contract_v1",
+        "sha256": "a" * 64,
+        "sample_count": 8,
+        "scale": "Cus100",
+        "seed": 1234,
+    }
+    args = SimpleNamespace(
+        protocol_id="drl_rq_protocol_frozen_v1",
+        training_stream_path="unused.parquet",
+        training_stream_contract_sha256=snapshot["sha256"],
+        training_stream_contract_snapshot_json=json.dumps(snapshot),
+        reuse_preverified_training_streams=True,
+    )
+    monkeypatch.setattr(
+        training_stream_module,
+        "load_training_stream_contract",
+        lambda *_args, **_kwargs: pytest.fail(
+            "preverified reuse must not load or hash the stream artifact"
+        ),
+    )
+
+    assert training_stream_contract_from_args(args, required=True) == snapshot
+    assert args.training_stream_contract_snapshot == snapshot
+    assert args.stream_integrity_mode == "reuse_preverified_snapshot_no_rehash"
+
+
+def test_preverified_contract_fails_closed_without_exact_snapshot() -> None:
+    args = SimpleNamespace(
+        training_stream_path="unused.parquet",
+        training_stream_contract_sha256="a" * 64,
+        training_stream_contract_snapshot_json=None,
+        reuse_preverified_training_streams=True,
+    )
+    with pytest.raises(ValueError, match="exact manifest contract snapshot"):
+        training_stream_contract_from_args(args, required=True)
 
 
 def test_stream_contract_rejects_manifest_and_content_tampering(tmp_path) -> None:

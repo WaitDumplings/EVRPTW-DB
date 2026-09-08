@@ -27,6 +27,10 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (
     load_reward_contract,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
+    STREAM_CONTRACT_SCHEMA,
+    STREAM_CONTENT_DIGEST_SCHEME,
+    STREAM_INTEGRITY_MODE_PREVERIFIED,
+    STREAM_SCHEMA,
     file_sha256,
     load_training_stream_contract,
 )
@@ -41,7 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TERRAN_CONFIG = ROOT / "TERRAN" / "configs" / "stage2_cus100_terran.yaml"
 RUNTIME_CONFIG = ROOT / "configs" / "drl_rq_runtime_candidates_v2.yaml"
 FROZEN_PROTOCOL_CONFIG = ROOT / "configs" / "drl_rq_protocol_frozen_v1.yaml"
-AUTHORIZED_LAUNCH_POLICY = "reward_contract_v2_formal_user_authorized"
+AUTHORIZED_LAUNCH_POLICY = "reward_contract_v3_formal_user_authorized"
 METHODS = {"am_evrptw", "evrptw_rl", "drl_ts", "terran"}
 LAUNCHER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 REQUIRED_ENV = (
@@ -697,10 +701,109 @@ def validate_method_auxiliary_contracts(jobs: list[dict[str, Any]]) -> None:
             )
 
 
+def _resolve_nonempty_repo_file(repo: Path, raw_path: Any, label: str) -> Path:
+    candidate = (repo / str(raw_path)).resolve()
+    resolved_repo = repo.resolve()
+    if candidate != resolved_repo and resolved_repo not in candidate.parents:
+        raise RuntimeError(f"{label} must remain inside the repository")
+    if not candidate.is_file() or candidate.stat().st_size <= 0:
+        raise FileNotFoundError(f"{label} is missing or empty: {candidate}")
+    return candidate
+
+
+def _is_digest_literal(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _validate_preverified_stream_snapshot(
+    *,
+    job: Mapping[str, Any],
+    repo: Path,
+    stream_path: Path,
+    snapshot: Mapping[str, Any],
+    expected_sha: str,
+) -> dict[str, Any]:
+    """Validate small frozen metadata while deliberately not hashing data files."""
+
+    required = {
+        "schema",
+        "stream_schema",
+        "content_digest_scheme",
+        "stream_content_sha256",
+        "manifest_sha256",
+        "sample_count",
+        "scale",
+        "seed",
+        "source_index_sha256",
+        "allowed_family_ids_sha256",
+        "sha256",
+    }
+    if required.difference(snapshot):
+        raise RuntimeError("preverified training-stream snapshot is incomplete")
+    if (
+        snapshot.get("schema") != STREAM_CONTRACT_SCHEMA
+        or snapshot.get("stream_schema") != STREAM_SCHEMA
+        or snapshot.get("content_digest_scheme") != STREAM_CONTENT_DIGEST_SCHEME
+        or snapshot.get("sha256") != expected_sha
+        or not _is_digest_literal(expected_sha)
+        or not _is_digest_literal(snapshot.get("stream_content_sha256"))
+        or not _is_digest_literal(snapshot.get("manifest_sha256"))
+        or not _is_digest_literal(snapshot.get("source_index_sha256"))
+    ):
+        raise RuntimeError("preverified training-stream snapshot metadata mismatch")
+    allowed_digest = snapshot.get("allowed_family_ids_sha256")
+    if allowed_digest is not None and not _is_digest_literal(allowed_digest):
+        raise RuntimeError("preverified training-stream support digest is invalid")
+    try:
+        sample_count = int(snapshot["sample_count"])
+        stream_seed = int(snapshot["seed"])
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            "preverified training-stream size/seed metadata is invalid"
+        ) from error
+    if sample_count <= 0:
+        raise RuntimeError("preverified training-stream sample count must be positive")
+    if snapshot.get("scale") != str(job.get("scale")):
+        raise RuntimeError("preverified training-stream scale mismatch")
+    if stream_seed != int(job.get("seed", -1)):
+        raise RuntimeError("preverified training-stream seed mismatch")
+
+    manifest_path = stream_path.with_suffix(
+        stream_path.suffix + ".manifest.json"
+    )
+    _resolve_nonempty_repo_file(repo, manifest_path, "training-stream manifest")
+    try:
+        stream_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("cannot read preverified training-stream manifest") from error
+    if not isinstance(stream_manifest, Mapping):
+        raise RuntimeError("preverified training-stream manifest must contain an object")
+    literal_fields = {
+        "schema": snapshot["stream_schema"],
+        "content_digest_scheme": snapshot["content_digest_scheme"],
+        "stream_content_sha256": snapshot["stream_content_sha256"],
+        "manifest_sha256": snapshot["manifest_sha256"],
+        "sample_count": sample_count,
+        "scale": snapshot["scale"],
+        "seed": stream_seed,
+        "source_index_sha256": snapshot["source_index_sha256"],
+        "allowed_family_ids_sha256": allowed_digest,
+        "file_hash_validation_performed": True,
+    }
+    if any(stream_manifest.get(key) != value for key, value in literal_fields.items()):
+        raise RuntimeError(
+            "training-stream manifest literal metadata does not match its "
+            "preverified snapshot"
+        )
+    return dict(snapshot)
+
+
 def validate_training_stream_contracts(
     jobs: list[dict[str, Any]],
     repo: Path,
     dataset: Path,
+    *,
+    reuse_preverified: bool = False,
 ) -> None:
     """Bind every formal job to one exact, training-only ordered ID stream."""
 
@@ -710,6 +813,25 @@ def validate_training_stream_contracts(
     for job in jobs:
         if job.get("kind") != "train":
             continue
+        declared_mode = job.get("stream_integrity_mode")
+        declared_hash_validation = job.get("file_hash_validation_performed")
+        if reuse_preverified:
+            if (
+                job.get("method") != "terran"
+                or declared_mode != STREAM_INTEGRITY_MODE_PREVERIFIED
+                or declared_hash_validation is not False
+            ):
+                raise RuntimeError(
+                    "--reuse-preverified-training-streams requires a TERRAN "
+                    "manifest explicitly frozen for no-rehash reuse"
+                )
+        elif (
+            declared_mode == STREAM_INTEGRITY_MODE_PREVERIFIED
+            or declared_hash_validation is False
+        ):
+            raise RuntimeError(
+                "this manifest requires --reuse-preverified-training-streams"
+            )
         relative_path = job.get("training_stream_path")
         expected_sha = job.get("training_stream_contract_sha256")
         expected_snapshot = job.get("training_stream_contract_snapshot")
@@ -717,7 +839,19 @@ def validate_training_stream_contracts(
             raise RuntimeError(
                 f"formal job {job.get('job_id')} is missing its frozen training-stream contract"
             )
-        actual = load_training_stream_contract(repo / str(relative_path))
+        if reuse_preverified:
+            stream_path = _resolve_nonempty_repo_file(
+                repo, relative_path, "training stream"
+            )
+            actual = _validate_preverified_stream_snapshot(
+                job=job,
+                repo=repo,
+                stream_path=stream_path,
+                snapshot=expected_snapshot,
+                expected_sha=str(expected_sha),
+            )
+        else:
+            actual = load_training_stream_contract(repo / str(relative_path))
         if actual != expected_snapshot or actual["sha256"] != expected_sha:
             raise RuntimeError(
                 f"training-stream contract mismatch for {job.get('job_id')}"
@@ -736,22 +870,26 @@ def validate_training_stream_contracts(
                 raise RuntimeError("cannot read training-stream registry") from error
             if not isinstance(registry, Mapping):
                 raise RuntimeError("training-stream registry must contain an object")
-            registry_canonical = {
-                key: value for key, value in registry.items() if key != "sha256"
-            }
-            registry_sha = hashlib.sha256(
-                json.dumps(
-                    registry_canonical,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                ).encode("utf-8")
-            ).hexdigest()
             if (
                 registry.get("schema") != "drl_training_stream_registry_v1"
                 or registry.get("source_scope")
                 != "training_split_and_track_only"
-                or registry.get("sha256") != registry_sha
+                or (
+                    not reuse_preverified
+                    and registry.get("sha256")
+                    != hashlib.sha256(
+                        json.dumps(
+                            {
+                                key: value
+                                for key, value in registry.items()
+                                if key != "sha256"
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ).encode("utf-8")
+                    ).hexdigest()
+                )
             ):
                 raise RuntimeError("training-stream registry contract mismatch")
             verified_registries[registry_path] = registry
@@ -784,24 +922,37 @@ def validate_training_stream_contracts(
                 raise RuntimeError("cannot read artifact preparation marker") from error
             if not isinstance(marker, Mapping):
                 raise RuntimeError("artifact preparation marker must contain an object")
-            canonical = {
-                key: value
-                for key, value in marker.items()
-                if key not in {"marker_sha256", "dataset_root"}
-            }
-            marker_sha = hashlib.sha256(
-                json.dumps(
-                    canonical,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                ).encode("utf-8")
-            ).hexdigest()
             if (
                 marker.get("schema") != "drl_rq_artifact_preparation_v2"
                 or marker.get("status") != "passed"
-                or marker.get("file_hash_validation_performed") is not True
-                or marker.get("marker_sha256") != marker_sha
+                or (
+                    reuse_preverified
+                    and (
+                        marker.get("file_hash_validation_performed") is not False
+                        or marker.get("stream_integrity_mode")
+                        != STREAM_INTEGRITY_MODE_PREVERIFIED
+                    )
+                )
+                or (
+                    not reuse_preverified
+                    and marker.get("file_hash_validation_performed") is not True
+                )
+                or (
+                    not reuse_preverified
+                    and marker.get("marker_sha256")
+                    != hashlib.sha256(
+                        json.dumps(
+                            {
+                                key: value
+                                for key, value in marker.items()
+                                if key not in {"marker_sha256", "dataset_root"}
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ).encode("utf-8")
+                    ).hexdigest()
+                )
                 or Path(str(marker.get("dataset_root", ""))).resolve()
                 != dataset.resolve()
             ):
@@ -834,12 +985,23 @@ def validate_training_stream_contracts(
             raise RuntimeError(
                 f"training-stream scope/budget mismatch for {job.get('job_id')}"
             )
+        customer_count = int(str(job.get("scale", "")).removeprefix("Cus"))
+        if int(job.get("customer_exposure_budget", -1)) != (
+            expected_count * customer_count
+        ):
+            raise RuntimeError(
+                f"training-stream customer-exposure budget mismatch for "
+                f"{job.get('job_id')}"
+            )
         source_index = dataset / str(job.get("train_index", ""))
         if not source_index.is_file():
             raise FileNotFoundError(
                 f"training source index is missing for {job.get('job_id')}: {source_index}"
             )
-        if file_sha256(source_index) != actual["source_index_sha256"]:
+        if (
+            not reuse_preverified
+            and file_sha256(source_index) != actual["source_index_sha256"]
+        ):
             raise RuntimeError(
                 f"training source index SHA256 mismatch for {job.get('job_id')}"
             )
@@ -868,13 +1030,30 @@ def validate_completed_training_stream_contract(
     context: dict[str, Any],
     training_result: Mapping[str, Any],
     checkpoint: Path,
+    *,
+    reuse_preverified: bool = False,
 ) -> None:
     relative_path = job.get("training_stream_path")
     if relative_path is None:
         return
-    actual = load_training_stream_contract(context["repo"] / str(relative_path))
     expected_snapshot = job.get("training_stream_contract_snapshot")
     expected_sha = job.get("training_stream_contract_sha256")
+    if reuse_preverified:
+        if (
+            job.get("stream_integrity_mode")
+            != STREAM_INTEGRITY_MODE_PREVERIFIED
+            or job.get("file_hash_validation_performed") is not False
+            or not isinstance(expected_snapshot, Mapping)
+        ):
+            raise RuntimeError(
+                "completed no-rehash validation requires an explicitly "
+                "preverified manifest"
+            )
+        actual = dict(expected_snapshot)
+    else:
+        actual = load_training_stream_contract(
+            context["repo"] / str(relative_path)
+        )
     if actual != expected_snapshot or actual["sha256"] != expected_sha:
         raise RuntimeError("completed run training-stream artifact/manifest mismatch")
     if (
@@ -895,6 +1074,7 @@ def validate_completed_training_stream_contract(
             raise RuntimeError("selected TERRAN checkpoint is missing protocol provenance")
         checkpoint_snapshot = protocol.get("training_stream_contract_snapshot")
         checkpoint_sha = protocol.get("training_stream_contract_sha256")
+        checkpoint_integrity_mode = protocol.get("stream_integrity_mode")
     else:
         checkpoint_snapshot = payload.get("training_stream_contract")
         saved_args = payload.get("args", {}) or {}
@@ -903,8 +1083,17 @@ def validate_completed_training_stream_contract(
         if checkpoint_snapshot != saved_args.get("training_stream_contract_snapshot"):
             raise RuntimeError("selected checkpoint training-stream snapshots disagree")
         checkpoint_sha = saved_args.get("training_stream_contract_sha256")
+        checkpoint_integrity_mode = saved_args.get("stream_integrity_mode")
     if checkpoint_snapshot != actual or checkpoint_sha != actual["sha256"]:
         raise RuntimeError("selected checkpoint training-stream contract mismatch")
+    if reuse_preverified and (
+        training_result.get("stream_integrity_mode")
+        != STREAM_INTEGRITY_MODE_PREVERIFIED
+        or checkpoint_integrity_mode != STREAM_INTEGRITY_MODE_PREVERIFIED
+    ):
+        raise RuntimeError(
+            "completed training did not preserve the no-rehash stream integrity mode"
+        )
 
 
 def expected_resolved_training_signature(
@@ -1446,7 +1635,14 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
             jobs,
             require_open=not args.dry_run,
         )
-    validate_training_stream_contracts(jobs, repo, dataset)
+    validate_training_stream_contracts(
+        jobs,
+        repo,
+        dataset,
+        reuse_preverified=bool(
+            getattr(args, "reuse_preverified_training_streams", False)
+        ),
+    )
     active_python_env = os.environ.get("CONDA_DEFAULT_ENV") or Path(sys.prefix).name
     output.mkdir(parents=True, exist_ok=True)
     probe = output / f".write_probe_{os.getpid()}"
@@ -1500,6 +1696,14 @@ def preflight(args: argparse.Namespace, jobs: list[dict[str, Any]]) -> dict[str,
         "python_executable": sys.executable,
         "python_prefix": sys.prefix,
         "gpu_names": gpu_names,
+        "reuse_preverified_training_streams": bool(
+            getattr(args, "reuse_preverified_training_streams", False)
+        ),
+        "stream_integrity_mode": (
+            STREAM_INTEGRITY_MODE_PREVERIFIED
+            if getattr(args, "reuse_preverified_training_streams", False)
+            else "runtime_content_rehash"
+        ),
         "launcher_id": validate_launcher_id(args.launcher_id),
         "slot_gpu_map": {
             str(slot): local_gpu
@@ -1745,6 +1949,31 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
                     str(job["training_stream_contract_sha256"]),
                 ]
             )
+        if context.get("reuse_preverified_training_streams", False):
+            snapshot = job.get("training_stream_contract_snapshot")
+            if (
+                job.get("method") != "terran"
+                or job.get("stream_integrity_mode")
+                != STREAM_INTEGRITY_MODE_PREVERIFIED
+                or job.get("file_hash_validation_performed") is not False
+                or not isinstance(snapshot, Mapping)
+            ):
+                raise RuntimeError(
+                    "no-rehash stream reuse is restricted to an explicitly "
+                    "preverified TERRAN manifest"
+                )
+            command.extend(
+                [
+                    "--reuse-preverified-training-streams",
+                    "--training-stream-contract-snapshot-json",
+                    json.dumps(
+                        dict(snapshot),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
+                ]
+            )
         command.extend(
             [
                 "--customer-exposure-budget",
@@ -1856,6 +2085,10 @@ def job_complete(
     """Revalidate trainer-owned evidence every time a job is considered done."""
 
     try:
+        reuse_preverified = bool(
+            context
+            and context.get("reuse_preverified_training_streams", False)
+        )
         result_path = out / "job_result.json"
         if not result_path.is_file():
             return False
@@ -1875,6 +2108,13 @@ def job_complete(
             if any(provenance.get(key) != value for key, value in contract.items()):
                 return False
             if training_contract(provenance.get("job", {})) != contract:
+                return False
+            if reuse_preverified and (
+                payload.get("stream_integrity_mode")
+                != STREAM_INTEGRITY_MODE_PREVERIFIED
+                or provenance.get("stream_integrity_mode")
+                != STREAM_INTEGRITY_MODE_PREVERIFIED
+            ):
                 return False
         if job["kind"] == "train":
             if not all(path.is_file() for path in required_training_artifacts(job, out)):
@@ -1897,7 +2137,11 @@ def job_complete(
                 job, validation_context, training_result, selected
             )
             validate_completed_training_stream_contract(
-                job, validation_context, training_result, selected
+                job,
+                validation_context,
+                training_result,
+                selected,
+                reuse_preverified=reuse_preverified,
             )
             validate_completed_training_signature(
                 job, validation_context, training_result, selected
@@ -1982,6 +2226,9 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         "launcher_id": context.get("launcher_id", "default"),
         "logical_slot": int(job["global_slot"]),
         "local_gpu": int(local_gpu),
+        "stream_integrity_mode": context.get(
+            "stream_integrity_mode", "runtime_content_rehash"
+        ),
         **training_contract(job),
         "started_at": time.time(),
     }
@@ -2067,6 +2314,9 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
                 context,
                 training_result,
                 out / "checkpoint_selected.pt",
+                reuse_preverified=bool(
+                    context.get("reuse_preverified_training_streams", False)
+                ),
             )
         except Exception as error:
             training_stream_validation_error = str(error)
@@ -2094,6 +2344,9 @@ def run_job(job: dict[str, Any], context: dict[str, Any], local_gpu: int, resume
         "launcher_id": context.get("launcher_id", "default"),
         "logical_slot": int(job["global_slot"]),
         "local_gpu": int(local_gpu),
+        "stream_integrity_mode": context.get(
+            "stream_integrity_mode", "runtime_content_rehash"
+        ),
         "status": "passed" if passed else "failed",
         "returncode": returncode,
         "training_outcome": training_result.get("status"),
@@ -2191,6 +2444,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seeds", default="1234")
     parser.add_argument("--scales", default="Cus50,Cus100,Cus500,Cus1000")
     parser.add_argument("--methods", default=None, help="Optional comma-separated method filter.")
+    parser.add_argument(
+        "--reuse-preverified-training-streams",
+        action="store_true",
+        help=(
+            "Trust only manifest-declared, previously verified TERRAN stream "
+            "snapshots and skip large stream/source-index content rehashing."
+        ),
+    )
     parser.add_argument("--skip-gpu-preflight", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()

@@ -1,24 +1,26 @@
 schema: drl_rq_runtime_candidates_v2
-status: reward_contract_v3_pending_formal_authorization
+status: reward_contract_v3_formal_terran_authorized
 protocol_id: drl_rq_protocol_frozen_v1
 runtime_budget_id: drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart
-formal_launch_allowed: false
-launch_policy: reward_contract_v3_pending_formal_authorization
-authorized_job_ids: []
+formal_launch_allowed: true
+launch_policy: reward_contract_v3_formal_user_authorized
+authorized_job_ids:
+  - full__G__Full-support__terran__Cus500__seed1234
+  - full__G__Full-support__terran__Cus1000__seed1234
 formal_launch_gates:
-  G1: PENDING_NEW_OBJECTIVE_AUTHORIZATION
-  G2: PENDING_NEW_OBJECTIVE_AUTHORIZATION
-  G3: PENDING_NEW_OBJECTIVE_AUTHORIZATION
-  G4: PENDING_NEW_OBJECTIVE_AUTHORIZATION
-  G5: PENDING_NEW_OBJECTIVE_AUTHORIZATION
-  G6: PENDING_NEW_OBJECTIVE_AUTHORIZATION
-  G7: PENDING_NEW_OBJECTIVE_AUTHORIZATION
-  G8: PENDING_NEW_OBJECTIVE_AUTHORIZATION
+  G1: PILOT_WAIVED_BY_USER
+  G2: IMPLEMENTED_UNIT_TESTED
+  G3: PILOT_WAIVED_BY_USER
+  G4: PILOT_WAIVED_BY_USER
+  G5: PILOT_WAIVED_BY_USER
+  G6: PILOT_WAIVED_BY_USER
+  G7: IMPLEMENTED_UNIT_TESTED
+  G8: IMPLEMENTED_UNIT_TESTED
 objective_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json
 reward_contract_config_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v3.json
 reward_contract_revision: drl_energy_vehicle_reference_scale_v3
 training_stream_registry_path: EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_training_stream_registry_v1.json
-training_stream_registry_sha256: 2ae41f6da136d07aa5d66b392f73935cf67b1590925434b8de8aa7b47152f1fe
+training_stream_registry_sha256: 5f0dc6454d9d32ed11be629f3c49c5e0ed96742aad3003663fadbf8c7659310b
 # This contract has independent training-only reference calibrations for all
 # four training scales. The queue builder rejects any enabled scale outside it.
 reward_contract_calibrated_scales: [Cus50, Cus100, Cus500, Cus1000]
@@ -42,9 +44,9 @@ training_optimizer:
 # by the canonical verifier; selection is feasible-first, then minimum total cost.
 evaluation:
   validation_decode_type: sampling
-  validation_candidate_count: 50
+  validation_candidate_count: 100
   test_decode_type: sampling
-  test_candidate_count: 50
+  test_candidate_count: 100
   selection: verifier_feasible_then_min_total_cost_usd
 
 training_trajectory_count_by_method:
@@ -63,14 +65,11 @@ warm_start:
   scope: exact_job_only
   missing_exact_job: fresh
 
-# The earlier RTX 6000 Ada calibration used TERRAN Cus500 batch=64 with
-# n_traj=100. Under this n_traj=50 profile those conservative large-scale
-# batches are retained until the Ada host performs the same train+validation
-# calibration. TERRAN Cus1000 produces two base-environment groups per epoch.
-# The final TERRAN-only replacement contract uses a 1,400-step train horizon,
-# its derived 2,100-step validation horizon, a 720-step PPO chunk, and an
-# explicit completion reward.  These method/scale overrides must not change
-# the Cus1000 horizons of the other three DRL methods.
+# The final A6000 TERRAN profile preserves 6,400 parallel trajectories for
+# Cus500 as batch=128 x n_traj=50. Cus1000 uses the previously sustained
+# batch=4 x n_traj=50 profile with a 1,250-step train horizon, its derived
+# 1,875-step validation horizon, a 624-step PPO chunk, and an explicit
+# completion reward. These overrides do not change the other DRL methods.
 training_overrides_by_method_scale:
   terran:
     Cus50:
@@ -82,10 +81,10 @@ training_overrides_by_method_scale:
       ppo_step_chunk_size: 36
       terran_terminal_success_bonus: 0.0
     Cus1000:
-      training_rollout_steps: 1400
-      validation_rollout_steps: 2100
+      training_rollout_steps: 1250
+      validation_rollout_steps: 1875
       num_minibatches: 1
-      ppo_step_chunk_size: 720
+      ppo_step_chunk_size: 624
       terran_terminal_success_bonus: 1.0
 
 seeds: [1234]
@@ -131,19 +130,19 @@ candidate_logical_batch_by_method_scale:
   am_evrptw: {Cus50: 2304, Cus100: 800, Cus500: 64, Cus1000: 2}
   evrptw_rl: {Cus50: 336, Cus100: 96, Cus500: 64, Cus1000: 2}
   drl_ts: {Cus50: 144, Cus100: 40, Cus500: 64, Cus1000: 2}
-  terran: {Cus50: 480, Cus100: 280, Cus500: 64, Cus1000: 2}
+  terran: {Cus50: 480, Cus100: 280, Cus500: 128, Cus1000: 4}
 candidate_customer_exposure_budget_by_method_scale:
   am_evrptw: {Cus50: 1152000000, Cus100: 800000000, Cus500: 320000000, Cus1000: 20000000}
   evrptw_rl: {Cus50: 168000000, Cus100: 96000000, Cus500: 320000000, Cus1000: 20000000}
   drl_ts: {Cus50: 72000000, Cus100: 40000000, Cus500: 320000000, Cus1000: 20000000}
-  terran: {Cus50: 240000000, Cus100: 280000000, Cus500: 320000000, Cus1000: 20000000}
+  terran: {Cus50: 240000000, Cus100: 280000000, Cus500: 640000000, Cus1000: 40000000}
 # Ada caps are restricted to exact divisors of the frozen logical batch. The
 # user-authorized workflow launches the formal queues directly without pilots.
 physical_batch_caps:
   am_evrptw: {Cus50: 2304, Cus100: 800, Cus500: 8, Cus1000: 2}
   evrptw_rl: {Cus50: 336, Cus100: 96, Cus500: 16, Cus1000: 2}
   drl_ts: {Cus50: 144, Cus100: 40, Cus500: 8, Cus1000: 2}
-  terran: {Cus50: 480, Cus100: 280, Cus500: 64, Cus1000: 2}
+  terran: {Cus50: 480, Cus100: 280, Cus500: 128, Cus1000: 4}
 
 formal_candidate:
   selection_validation_views:

@@ -27,8 +27,8 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
     runtime = _runtime()
     gate_file = _formal_gate()
 
-    assert protocol["status"] == "reward_contract_v2_formal_2080_authorized"
-    assert runtime["status"] == "reward_contract_v2_formal_2080_authorized"
+    assert protocol["status"] == "reward_contract_v3_formal_terran_authorized"
+    assert runtime["status"] == "reward_contract_v3_formal_terran_authorized"
     assert protocol["formal_launch_allowed"] is True
     assert (
         protocol["formal_launch_allowed"]
@@ -40,22 +40,18 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
         protocol["launch_policy"]
         == runtime["launch_policy"]
         == gate_file["launch_policy"]
-        == "reward_contract_v2_formal_user_authorized"
+        == "reward_contract_v3_formal_user_authorized"
     )
     assert (
         protocol["authorized_job_ids"]
         == runtime["authorized_job_ids"]
         == gate_file["authorized_job_ids"]
     )
-    assert len(gate_file["authorized_job_ids"]) == 18
-    assert set(gate_file["authorized_job_ids"][-2:]) == {
+    assert set(gate_file["authorized_job_ids"]) == {
         "full__G__Full-support__terran__Cus500__seed1234",
         "full__G__Full-support__terran__Cus1000__seed1234",
     }
-    assert all(
-        ("__Cus50__" in job_id or "__Cus100__" in job_id)
-        for job_id in gate_file["authorized_job_ids"][:-2]
-    )
+    assert len(gate_file["authorized_job_ids"]) == 2
     assert (
         protocol["protocol_id"]
         == runtime["protocol_id"]
@@ -140,7 +136,7 @@ def test_rq_training_matrix_and_scientific_boundaries_are_frozen() -> None:
     assert questions["RQ2"]["additional_core_training_runs"] == 4
     assert questions["RQ3"]["additional_core_training_runs"] == 4
     assert protocol["core_training_run_count"] == 24
-    assert protocol["currently_launchable_core_training_run_count"] == 18
+    assert protocol["currently_launchable_core_training_run_count"] == 2
     assert protocol["core_training_run_count"] == sum(
         (
             questions["RQ1"]["main_training_runs"],
@@ -191,13 +187,13 @@ def test_reference_and_integrity_claims_are_conservative() -> None:
     assert protocol["ev_integrity"]["preserves_customer_order"] is True
 
 
-def test_validation_and_test_use_common_best_of_50_sampling_budget() -> None:
+def test_validation_and_test_use_common_best_of_100_sampling_budget() -> None:
     protocol = _protocol()
     runtime = _runtime()
     selection = protocol["model_selection"]
     evaluation = protocol["test_inference"]
     assert selection["validation_decode_type"] == "sampling"
-    assert selection["validation_candidate_count"] == 50
+    assert selection["validation_candidate_count"] == 100
     assert selection["early_stopping"] == "enabled_after_minimum_budget"
     assert selection["minimum_training_epochs"] == 5_000
     assert selection["maximum_training_epochs"] == 10_000
@@ -209,7 +205,7 @@ def test_validation_and_test_use_common_best_of_50_sampling_budget() -> None:
     assert selection["minimum_budget_checkpoint"] == "best_within_5000.ckpt"
     assert selection["extended_checkpoint"] == "best_overall.ckpt"
     assert evaluation["decode_type"] == "sampling"
-    assert evaluation["candidate_count"] == 50
+    assert evaluation["candidate_count"] == 100
     assert selection["minimum_training_epochs"] == min(
         runtime["candidate_minimum_logical_epochs"].values()
     )

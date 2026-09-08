@@ -1100,6 +1100,175 @@ def test_stream_preflight_validates_each_method_specific_exact_snapshot(
         )
 
 
+def test_preverified_terran_stream_path_skips_large_rehashes_but_checks_metadata(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    repository = tmp_path / "repo"
+    dataset = tmp_path / "dataset"
+    stream_relative = Path("artifacts/terran-cus100.parquet")
+    stream_path = repository / stream_relative
+    stream_path.parent.mkdir(parents=True)
+    stream_path.write_bytes(b"preverified-parquet-placeholder")
+    dataset.mkdir()
+    (dataset / "train.parquet").write_bytes(b"source-index-placeholder")
+
+    snapshot = {
+        "schema": "drl_training_stream_contract_v1",
+        "stream_schema": "drl_training_id_stream_v3",
+        "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+        "stream_content_sha256": "a" * 64,
+        "manifest_sha256": "b" * 64,
+        "sample_count": 2,
+        "scale": "Cus100",
+        "seed": 1234,
+        "source_index_sha256": "c" * 64,
+        "allowed_family_ids_sha256": None,
+        "sha256": "d" * 64,
+    }
+    stream_manifest = {
+        "schema": snapshot["stream_schema"],
+        "content_digest_scheme": snapshot["content_digest_scheme"],
+        "stream_content_sha256": snapshot["stream_content_sha256"],
+        "manifest_sha256": snapshot["manifest_sha256"],
+        "sample_count": snapshot["sample_count"],
+        "scale": snapshot["scale"],
+        "seed": snapshot["seed"],
+        "source_index_sha256": snapshot["source_index_sha256"],
+        "allowed_family_ids_sha256": None,
+        "file_hash_validation_performed": True,
+    }
+    stream_path.with_suffix(".parquet.manifest.json").write_text(
+        json.dumps(stream_manifest), encoding="utf-8"
+    )
+    registry_relative = Path("artifacts/registry.json")
+    marker_relative = Path("artifacts/marker.json")
+    registry_sha = "e" * 64
+    marker_sha = "f" * 64
+    registry_key = "G/Full-support/terran/Cus100/seed_1234"
+    (repository / registry_relative).write_text(
+        json.dumps(
+            {
+                "schema": "drl_training_stream_registry_v1",
+                "source_scope": "training_split_and_track_only",
+                "sha256": registry_sha,
+                "artifact_preparation_marker_sha256": marker_sha,
+                "streams": {
+                    registry_key: {
+                        "path": str(stream_relative),
+                        "snapshot": snapshot,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repository / marker_relative).write_text(
+        json.dumps(
+            {
+                "schema": "drl_rq_artifact_preparation_v2",
+                "status": "passed",
+                "file_hash_validation_performed": False,
+                "stream_integrity_mode": "reuse_preverified_snapshot_no_rehash",
+                "marker_sha256": marker_sha,
+                "dataset_root": str(dataset),
+                "training_stream_contracts": [
+                    {
+                        "relative_path": str(stream_relative),
+                        "sha256": snapshot["sha256"],
+                        "snapshot": snapshot,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    job = {
+        **_terran_job(),
+        "representation": "G",
+        "condition": "Full-support",
+        "train_index": "train.parquet",
+        "training_stream_path": str(stream_relative),
+        "training_stream_contract_sha256": snapshot["sha256"],
+        "training_stream_contract_snapshot": snapshot,
+        "training_stream_registry_path": str(registry_relative),
+        "training_stream_registry_sha256": registry_sha,
+        "artifact_preparation_marker_path": str(marker_relative),
+        "artifact_preparation_marker_sha256": marker_sha,
+        "target_environments": 2,
+        "customer_exposure_budget": 200,
+        "stream_integrity_mode": "reuse_preverified_snapshot_no_rehash",
+        "file_hash_validation_performed": False,
+    }
+    monkeypatch.setattr(
+        RUNTIME,
+        "load_training_stream_contract",
+        lambda *_args, **_kwargs: pytest.fail("stream content was rehashed"),
+    )
+    monkeypatch.setattr(
+        RUNTIME,
+        "file_sha256",
+        lambda *_args, **_kwargs: pytest.fail("source index was rehashed"),
+    )
+
+    RUNTIME.validate_training_stream_contracts(
+        [job], repository, dataset, reuse_preverified=True
+    )
+    with pytest.raises(RuntimeError, match="requires --reuse-preverified"):
+        RUNTIME.validate_training_stream_contracts(
+            [job], repository, dataset, reuse_preverified=False
+        )
+
+
+def test_preverified_terran_completion_uses_saved_snapshot_without_rehash(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    snapshot = {
+        "schema": "drl_training_stream_contract_v1",
+        "sha256": "a" * 64,
+    }
+    job = {
+        **_terran_job(),
+        "training_stream_path": "unused.parquet",
+        "training_stream_contract_sha256": snapshot["sha256"],
+        "training_stream_contract_snapshot": snapshot,
+        "stream_integrity_mode": "reuse_preverified_snapshot_no_rehash",
+        "file_hash_validation_performed": False,
+    }
+    training_result = {
+        "training_stream_contract_snapshot": snapshot,
+        "training_stream_contract_sha256": snapshot["sha256"],
+        "stream_integrity_mode": "reuse_preverified_snapshot_no_rehash",
+    }
+    checkpoint = tmp_path / "selected.pt"
+    torch.save(
+        {
+            "config": {
+                "protocol": {
+                    "training_stream_contract_snapshot": snapshot,
+                    "training_stream_contract_sha256": snapshot["sha256"],
+                    "stream_integrity_mode": (
+                        "reuse_preverified_snapshot_no_rehash"
+                    ),
+                }
+            }
+        },
+        checkpoint,
+    )
+    monkeypatch.setattr(
+        RUNTIME,
+        "load_training_stream_contract",
+        lambda *_args, **_kwargs: pytest.fail("completion rehashed stream"),
+    )
+
+    RUNTIME.validate_completed_training_stream_contract(
+        job,
+        {"repo": tmp_path},
+        training_result,
+        checkpoint,
+        reuse_preverified=True,
+    )
+
+
 def test_all_formal_cost_manifests_pass_and_commands_forward_profile(tmp_path):
     for method in sorted(RUNTIME.METHODS):
         job = _cost_job(method)

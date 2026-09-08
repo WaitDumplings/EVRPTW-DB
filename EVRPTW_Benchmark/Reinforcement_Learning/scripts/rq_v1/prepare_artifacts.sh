@@ -130,7 +130,7 @@ declare -A FORMAL_EXPOSURE=(
   [drl_ts:Cus50]=72000000 [drl_ts:Cus100]=40000000
   [drl_ts:Cus500]=320000000 [drl_ts:Cus1000]=20000000
   [terran:Cus50]=240000000 [terran:Cus100]=280000000
-  [terran:Cus500]=320000000 [terran:Cus1000]=20000000
+  [terran:Cus500]=640000000 [terran:Cus1000]=40000000
 )
 IFS=',' read -r -a SEEDS <<< "$SEED_SELECTION"
 for seed in "${SEEDS[@]}"; do

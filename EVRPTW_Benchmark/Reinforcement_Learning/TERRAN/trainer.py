@@ -45,6 +45,7 @@ from ..common.training_protocol import (
 )
 from ..common.training_stream import (
     STREAM_CONTRACT_SCHEMA,
+    STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED,
     training_stream_contract_digest,
 )
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
@@ -1676,6 +1677,17 @@ def make_envs(cfg: dict[str, Any], seed: int):
             training_stream_contract_sha256=(
                 (cfg.get("protocol", {}) or {}).get(
                     "training_stream_contract_sha256"
+                )
+            ),
+            training_stream_contract_snapshot=(
+                (cfg.get("protocol", {}) or {}).get(
+                    "training_stream_contract_snapshot"
+                )
+            ),
+            stream_integrity_mode=str(
+                (cfg.get("protocol", {}) or {}).get(
+                    "stream_integrity_mode",
+                    STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED,
                 )
             ),
             representation=str(data_cfg.get("stage2_training_representation", "G")),

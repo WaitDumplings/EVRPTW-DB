@@ -56,6 +56,22 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
             "Required by the frozen formal protocol."
         ),
     )
+    parser.add_argument(
+        "--reuse-preverified-training-streams",
+        action="store_true",
+        help=(
+            "Reuse the exact training-stream contract snapshot supplied by the "
+            "formal queue without rehashing the large stream or source index. "
+            "The ordered stream is still parsed and checked against the pool."
+        ),
+    )
+    parser.add_argument(
+        "--training-stream-contract-snapshot-json",
+        help=(
+            "Internal formal-launch handoff for the exact registered stream "
+            "contract; accepted only with --reuse-preverified-training-streams."
+        ),
+    )
     parser.add_argument("--customer-exposure-budget", type=int)
     parser.add_argument("--exposure-checkpoints", default="")
     parser.add_argument("--gpu-hour-checkpoints", default="")

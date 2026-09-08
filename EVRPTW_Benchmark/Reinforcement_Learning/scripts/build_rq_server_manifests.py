@@ -19,8 +19,10 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import (
     load_reward_contract,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
+    STREAM_INTEGRITY_MODE_PREVERIFIED,
     load_training_stream_contract,
     training_stream_contract_digest,
+    training_stream_contract_from_preverified_manifest,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
     VALIDATION_ROLLOUT_STEPS_DENOMINATOR,
@@ -146,6 +148,7 @@ def job(
     representation: str, condition: str, hardware: str,
     registry: Mapping[str, Any] | None = None,
     stream_contract_cache: dict[Path, dict[str, Any]] | None = None,
+    reuse_preverified_training_streams: bool = False,
 ) -> dict[str, Any]:
     training_overrides = (
         cfg.get("training_overrides_by_method_scale", {})
@@ -228,7 +231,28 @@ def job(
     ):
         raise ValueError("training-stream registry contains an invalid snapshot")
     artifact_path = ROOT.parents[1] / stream
-    if artifact_path.is_file():
+    artifact_manifest_path = artifact_path.with_suffix(
+        artifact_path.suffix + ".manifest.json"
+    )
+    if reuse_preverified_training_streams:
+        missing = [
+            str(path)
+            for path in (artifact_path, artifact_manifest_path)
+            if not path.is_file()
+        ]
+        if missing:
+            raise ValueError(
+                "preverified training-stream artifact is missing: "
+                + ", ".join(missing)
+            )
+        sidecar_contract = training_stream_contract_from_preverified_manifest(
+            artifact_manifest_path
+        )
+        if sidecar_contract != stream_contract:
+            raise ValueError(
+                "preverified training-stream sidecar disagrees with frozen registry"
+            )
+    elif artifact_path.is_file():
         actual_stream_contract = (
             stream_contract_cache.get(artifact_path)
             if stream_contract_cache is not None
@@ -386,8 +410,12 @@ def job(
             f"{ARTIFACTS}/euclidean/euclidean_calibration_manifest.json"
             if representation == "E" else None
         ),
-        "file_hash_validation_performed": True,
+        "file_hash_validation_performed": bool(
+            cfg.get("file_hash_validation_performed", True)
+        ),
     }
+    if not payload["file_hash_validation_performed"]:
+        payload["stream_integrity_mode"] = STREAM_INTEGRITY_MODE_PREVERIFIED
     objective_path = cfg["objective_config_path"]
     objective = json.loads(
         (ROOT.parents[1] / objective_path).read_text(encoding="utf-8")
@@ -518,7 +546,9 @@ def validate_reward_contract_scope(cfg: dict[str, Any]) -> None:
         )
 
 
-def build() -> dict[str, list[dict[str, Any]]]:
+def build(
+    *, reuse_preverified_training_streams: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
     cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     validate_reward_contract_scope(cfg)
     registry = load_training_stream_registry(cfg)
@@ -566,6 +596,9 @@ def build() -> dict[str, list[dict[str, Any]]]:
                     hardware=hardware,
                     registry=registry,
                     stream_contract_cache=stream_contract_cache,
+                    reuse_preverified_training_streams=(
+                        reuse_preverified_training_streams
+                    ),
                 )
                 for method in METHODS
             )
@@ -582,6 +615,9 @@ def build() -> dict[str, list[dict[str, Any]]]:
                     hardware=cus100_hardware,
                     registry=registry,
                     stream_contract_cache=stream_contract_cache,
+                    reuse_preverified_training_streams=(
+                        reuse_preverified_training_streams
+                    ),
                 )
                 for condition in ("Random-10%-support", "Coverage-10%-support")
                 for method in ("am_evrptw", "terran")
@@ -597,6 +633,9 @@ def build() -> dict[str, list[dict[str, Any]]]:
                     hardware=cus100_hardware,
                     registry=registry,
                     stream_contract_cache=stream_contract_cache,
+                    reuse_preverified_training_streams=(
+                        reuse_preverified_training_streams
+                    ),
                 )
                 for method in METHODS
             )
@@ -745,6 +784,14 @@ def build_a6000_terran_cus1000_replacement_queue(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build four frozen RQ training queues.")
     parser.add_argument("--output-root", type=Path, default=SCRIPT_ROOT)
+    parser.add_argument(
+        "--reuse-preverified-training-streams",
+        action="store_true",
+        help=(
+            "Trust the frozen registry snapshots and require the stream plus "
+            "sidecar paths to exist without re-reading Parquet content"
+        ),
+    )
     args = parser.parse_args()
     runtime_config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     formal_launch_allowed = bool(runtime_config["formal_launch_allowed"])
@@ -757,7 +804,11 @@ def main() -> None:
             ).read_text(encoding="utf-8")
         )["objective"]["profile_id"]
     )
-    queues = build()
+    queues = build(
+        reuse_preverified_training_streams=(
+            args.reuse_preverified_training_streams
+        )
+    )
     for server, rows in queues.items():
         destination = args.output_root / server
         destination.mkdir(parents=True, exist_ok=True)

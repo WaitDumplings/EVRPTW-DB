@@ -1,5 +1,5 @@
 schema: drl_terran_cus1000_replacement_v1
-profile_id: terran_cus1000_reward_replacement_v1
+profile_id: terran_cus1000_final_objective_v2_b4
 job_id: full__G__Full-support__terran__Cus1000__seed1234
 method: terran
 scale: Cus1000
@@ -7,8 +7,8 @@ seed: 1234
 launcher_id: terran_cus1000_replacement_v1
 global_slot: 1
 local_gpu: 1
-training_rollout_steps: 1400
-validation_rollout_steps: 2100
+training_rollout_steps: 1250
+validation_rollout_steps: 1875
 num_minibatches: 1
-ppo_step_chunk_size: 720
+ppo_step_chunk_size: 624
 terran_terminal_success_bonus: 1.0

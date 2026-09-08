@@ -15,6 +15,8 @@ import pandas as pd
 STREAM_SCHEMA = "drl_training_id_stream_v3"
 STREAM_CONTRACT_SCHEMA = "drl_training_stream_contract_v1"
 STREAM_CONTENT_DIGEST_SCHEME = "sha256_length_prefixed_ordered_view_ids_v1"
+STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED = "runtime_content_rehash"
+STREAM_INTEGRITY_MODE_PREVERIFIED = "reuse_preverified_snapshot_no_rehash"
 REQUIRED_INDEX_COLUMNS = {
     "view_id",
     "family_id",
@@ -237,6 +239,55 @@ def _contract_from_verified_manifest(manifest: Mapping[str, Any]) -> dict[str, A
     return payload
 
 
+def training_stream_contract_from_preverified_manifest(
+    path_or_mapping: str | Path | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebuild a contract from its small, previously verified sidecar only.
+
+    This validates the sidecar's self-contained metadata but deliberately does
+    not open the Parquet stream or the source index.  Callers must opt into that
+    trust boundary explicitly and still validate ordered IDs while consuming
+    the stream.
+    """
+
+    if isinstance(path_or_mapping, Mapping):
+        manifest = dict(path_or_mapping)
+    else:
+        source = Path(path_or_mapping)
+        manifest_path = (
+            source
+            if source.name.endswith(".manifest.json")
+            else source.with_suffix(source.suffix + ".manifest.json")
+        )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"cannot read training-stream manifest: {manifest_path}"
+            ) from error
+    if not isinstance(manifest, dict) or manifest.get("schema") != STREAM_SCHEMA:
+        raise ValueError("invalid training-stream manifest schema")
+    required = {
+        "content_digest_scheme",
+        "stream_content_sha256",
+        "manifest_sha256",
+        "source_index_sha256",
+        "sample_count",
+        "scale",
+        "seed",
+    }
+    missing = sorted(required.difference(manifest))
+    if missing:
+        raise ValueError(f"training-stream manifest is missing fields: {missing}")
+    if manifest.get("content_digest_scheme") != STREAM_CONTENT_DIGEST_SCHEME:
+        raise ValueError("unsupported training-stream content digest scheme")
+    if manifest.get("file_hash_validation_performed") is not True:
+        raise ValueError("training-stream manifest did not freeze content hashes")
+    if manifest.get("manifest_sha256") != training_stream_manifest_digest(manifest):
+        raise ValueError("training-stream manifest SHA256 mismatch")
+    return _contract_from_verified_manifest(manifest)
+
+
 def load_training_stream_contract(path: str | Path) -> dict[str, Any]:
     """Load and fully verify a frozen stream and its sibling manifest."""
 
@@ -288,10 +339,67 @@ def training_stream_contract_from_args(
 ) -> dict[str, Any] | None:
     path = getattr(args, "training_stream_path", None)
     expected = getattr(args, "training_stream_contract_sha256", None)
+    reuse_preverified = bool(
+        getattr(args, "reuse_preverified_training_streams", False)
+    )
+    raw_snapshot = getattr(
+        args, "training_stream_contract_snapshot_json", None
+    )
     if path is None:
-        if required or expected is not None:
+        if required or expected is not None or reuse_preverified or raw_snapshot is not None:
             raise ValueError("formal training requires --training-stream-path")
         return None
+    if reuse_preverified:
+        if not required:
+            raise ValueError(
+                "--reuse-preverified-training-streams is restricted to the "
+                "frozen formal protocol"
+            )
+        if not expected:
+            raise ValueError(
+                "preverified stream reuse requires "
+                "--training-stream-contract-sha256"
+            )
+        if raw_snapshot is None:
+            raise ValueError(
+                "preverified stream reuse requires the exact manifest contract "
+                "snapshot"
+            )
+        if isinstance(raw_snapshot, Mapping):
+            contract = dict(raw_snapshot)
+        else:
+            try:
+                decoded = json.loads(str(raw_snapshot))
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    "training-stream contract snapshot is not valid JSON"
+                ) from error
+            if not isinstance(decoded, dict):
+                raise ValueError(
+                    "training-stream contract snapshot must be a JSON object"
+                )
+            contract = decoded
+        if contract.get("schema") != STREAM_CONTRACT_SCHEMA:
+            raise ValueError(
+                "preverified training-stream contract schema is invalid"
+            )
+        if contract.get("sha256") != str(expected):
+            raise ValueError(
+                "preverified training-stream snapshot does not match the "
+                "manifest contract"
+            )
+        setattr(args, "training_stream_contract_snapshot", contract)
+        setattr(
+            args,
+            "stream_integrity_mode",
+            STREAM_INTEGRITY_MODE_PREVERIFIED,
+        )
+        return contract
+    if raw_snapshot is not None:
+        raise ValueError(
+            "a preverified training-stream snapshot may be supplied only with "
+            "--reuse-preverified-training-streams"
+        )
     try:
         contract = load_training_stream_contract(path)
     except ValueError:
@@ -308,6 +416,11 @@ def training_stream_contract_from_args(
         )
     setattr(args, "training_stream_contract_sha256", contract["sha256"])
     setattr(args, "training_stream_contract_snapshot", contract)
+    setattr(
+        args,
+        "stream_integrity_mode",
+        STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED,
+    )
     return contract
 
 
@@ -386,6 +499,8 @@ __all__ = [
     "STREAM_SCHEMA",
     "STREAM_CONTRACT_SCHEMA",
     "STREAM_CONTENT_DIGEST_SCHEME",
+    "STREAM_INTEGRITY_MODE_PREVERIFIED",
+    "STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED",
     "assert_checkpoint_training_stream_contract",
     "atomic_write_stream",
     "build_training_stream",
@@ -396,5 +511,6 @@ __all__ = [
     "stream_content_sha256",
     "training_stream_contract_digest",
     "training_stream_contract_from_args",
+    "training_stream_contract_from_preverified_manifest",
     "training_stream_manifest_digest",
 ]

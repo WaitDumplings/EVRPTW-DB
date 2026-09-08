@@ -122,26 +122,28 @@ logical environments per epoch are now architecture-specific:
 |---|---:|---:|---:|---:|
 | Cus50 | 2,304 | 336 | 144 | 480 |
 | Cus100 | 800 | 96 | 40 | 280 |
-| Cus500 | 64 | 64 | 64 | 64 |
-| Cus1000 | 2 | 2 | 2 | 2 |
+| Cus500 | 64 | 64 | 64 | 128 |
+| Cus1000 | 2 | 2 | 2 | 4 |
 
 The RTX 2080 Ti physical batch equals the logical batch. Large-scale Ada
-physical microbatches remain conservative pending n-traj=50 calibration:
+physical batches are method-specific; the final TERRAN values preserve the
+previously measured total parallel-trajectory counts:
 
 | Scale | AM | EVRPTW-RL | DRL-TS | TERRAN |
 |---|---:|---:|---:|---:|
-| Cus500 | 8 | 16 | 8 | 64 |
-| Cus1000 | 2 | 2 | 2 | 2 |
+| Cus500 | 8 | 16 | 8 | 128 |
+| Cus1000 | 2 | 2 | 2 | 4 |
 
 The 2026-09-04 Cus1000 boundary sweep is recorded in
 [`RTX6000_ADA_CUS1000_MEMORY_CALIBRATION_V2.md`](../../reports/RTX6000_ADA_CUS1000_MEMORY_CALIBRATION_V2.md).
-Larger method-specific batches could not simultaneously satisfy the 40--45 GiB
-target, the common-exposure contract, the even-batch constraint, and the formal
-deadline; batch 2 is therefore intentional rather than an uncalibrated default.
+The final TERRAN profile pairs 50 training trajectories with batch 128 at
+Cus500 and batch 4 at Cus1000. Each keeps 6,400 and 200 parallel trajectories,
+respectively, matching the previously measured memory-heavy configurations;
+the other large-scale methods retain their existing batches.
 
 AM uses 5 training trajectories on every scale; TERRAN uses 50. EVRPTW-RL and
 DRL-TS retain one training trajectory. Validation and test use stochastic
-best-of-50 decoding on 500 fixed validation views. Validation runs every 250 epochs through epoch 5,000, then every 50 epochs.
+best-of-100 decoding on 500 fixed validation views. Validation runs every 250 epochs through epoch 5,000, then every 50 epochs.
 Early stopping is disabled through epoch 5,000; after that, ten consecutive
 non-improving validations stop the run, with a hard cap of 10,000 epochs and an
 earliest stop at epoch 5,500. `best.ckpt`, `checkpoint_selected.pt`, and
@@ -154,13 +156,10 @@ are fixed across all checkpoints; test remains independent and never selects a
 checkpoint. DRL-TS always switches from soft to hard training after epoch 2,500,
 independent of the 10,000-epoch cap.
 
-TERRAN Cus1000 has a manifest-level PPO hyperparameter override of
-`num_minibatches=1` and `ppo_step_chunk_size=720`. Batch 2, 50 training
-trajectories, three PPO epochs, and the registered exposure budget are
-unchanged. With two base environments, the minibatch override reduces Adam
-updates from six to three per logical epoch; the larger step chunk reduces
-loss-evaluation/backward slicing within each minibatch. The override is not
-applied to TERRAN Cus500 or to any other method or scale. Manifests call the
+TERRAN Cus1000 has a manifest-level override of `batch=4`, 50 training
+trajectories, `training_rollout_steps=1250`, `num_minibatches=1`, and
+`ppo_step_chunk_size=624`. Cus500 uses `batch=128`, 50 trajectories, 580
+rollout steps, one minibatch, and a 36-step PPO chunk. Manifests call the
 10,000-epoch outer budget `planned_logical_epochs`; TERRAN's native Adam-step
 count is recorded separately at runtime as `optimizer_steps_total`.
 
@@ -168,14 +167,27 @@ There are 24 formal jobs total. Server counts are 8, 5, 3, and 8 for
 `2080ti_4_1`, `2080ti_4_2`, `2080ti_3_1`, and `a6000_2_1`, respectively.
 The Ada queue contains the eight large-scale jobs, split evenly across its two
 GPUs. Current rollout limits are Cus50=65, Cus100=120, Cus500=580, and
-Cus1000=1200.
+Cus1000=1200, with the explicit TERRAN Cus1000 exception above.
+
+### Final TERRAN profile on A6000
+
+Only the fresh objective-v2 TERRAN Cus500 and Cus1000 jobs are currently
+authorized. They are placed on GPU 0 and GPU 1, respectively. Launch them with
+the preverified-stream reuse flag so startup checks frozen metadata and ordered
+IDs without rehashing the large stream files:
+
+```bash
+EVRPTW_RESTORE_ROOT=../../../evrptw_runtime \
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/terran_full.sh \
+  --seed 1234
+```
 
 ### Cus1000 priority profile on A6000
 
 The generated `a6000_2_1/cus1000_jobs.jsonl` is a scheduling-only projection of
 the same four canonical Cus1000 jobs. It changes no scientific field. GPU 1 runs
-TERRAN; GPU 0 runs DRL-TS, EVRPTW-RL, then AM-EVRPTW sequentially. Launch only
-this profile—not the eight-job `full.sh` queue—when prioritizing Cus1000:
+TERRAN; GPU 0 runs DRL-TS, EVRPTW-RL, then AM-EVRPTW sequentially. This mixed
+profile is currently fail-closed because only the two TERRAN jobs are authorized:
 
 ```bash
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/rq_v1/a6000_2_1/cus1000_full.sh --seed 1234
@@ -199,8 +211,10 @@ training streams if necessary and launches the formal per-GPU queues through
 `nohup`/`setsid`. While the gate is closed it fails before spawning a trainer.
 `status.sh` is read-only.
 `resume.sh` resumes only jobs with complete resume evidence. Launcher provenance
-records the actual Python executable, environment, branch, and commit. The
-scripts do not perform per-file SHA-256 hashing.
+records the actual Python executable, environment, branch, and commit. For the
+final TERRAN profile, `--reuse-preverified-training-streams` skips the artifact
+rescan and reuses the exact frozen stream snapshots. It still checks paths,
+metadata, stream length, contiguous positions, and training-pool membership.
 
 Standalone artifact preparation accepts the same seed:
 
@@ -218,9 +232,9 @@ export EVRPTW_RESTORE_ROOT="../../../evrptw_runtime"
 
 New launches use rollout-local static caches, final-only route export during
 online validation, and compact TERRAN observations. The active v15 profile uses
-method-specific batches and best-of-50 evaluation. Rollout limits remain
-Cus50=65, Cus100=120, Cus500=580 and Cus1000=1200. The TERRAN Cus1000 PPO
-override documented above is the only update-schedule change.
+method-specific batches and best-of-100 evaluation. Common rollout limits remain
+Cus50=65, Cus100=120, Cus500=580 and Cus1000=1200; the final TERRAN Cus1000
+override is 1,250 training steps and 1,875 validation steps.
 
 TERRAN's encoder Dropout modules are retained for checkpoint-key compatibility
 but use `p=0`, so PPO rollout and update log-probabilities are evaluated under

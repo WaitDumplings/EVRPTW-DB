@@ -4,4 +4,4 @@ SERVER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export SERVER_SCRIPT_DIR
 export DRL_MANIFEST="$SERVER_SCRIPT_DIR/terran_jobs.jsonl"
 export DRL_SCALES="Cus500,Cus1000"
-exec bash "$SERVER_SCRIPT_DIR/../start_server.sh" full --methods terran "$@"
+exec bash "$SERVER_SCRIPT_DIR/../start_server.sh" full --methods terran --reuse-preverified-training-streams "$@"

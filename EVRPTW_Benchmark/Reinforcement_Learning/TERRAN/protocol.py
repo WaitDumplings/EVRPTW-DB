@@ -30,6 +30,7 @@ from ..common.objective import resolve_objective
 from ..common.reward_contract import RewardContract
 from ..common.data_pass import DataPassState
 from ..common.training_stream import (
+    STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED,
     read_stream_view_ids,
     training_stream_contract_digest,
     training_stream_contract_from_args,
@@ -774,6 +775,15 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             stream_contract["sha256"] if stream_contract is not None else None
         ),
         "training_stream_contract_snapshot": stream_contract,
+        "stream_integrity_mode": (
+            getattr(
+                args,
+                "stream_integrity_mode",
+                STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED,
+            )
+            if stream_contract is not None
+            else None
+        ),
         "final_validation_limit": int(
             getattr(args, "final_validation_limit", 0) or 0
         ),
@@ -1205,6 +1215,9 @@ def finalize_protocol(args: Any, final_checkpoint: Path, meta: dict[str, Any] | 
             "objective_unit": active_objective.unit,
             **reward_contract_fields,
             **stream_contract_fields,
+            "stream_integrity_mode": getattr(
+                args, "stream_integrity_mode", None
+            ),
             **training_signature_fields,
             # Retain the cross-method field names introduced by the generic
             # weights-only warm-start contract while publishing TERRAN's richer

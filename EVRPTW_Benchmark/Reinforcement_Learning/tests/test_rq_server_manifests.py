@@ -39,6 +39,7 @@ def test_four_server_queues_cover_frozen_24_job_matrix() -> None:
 
 
 def test_method_specific_stream_is_exact_within_job_scope() -> None:
+    runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
     rows = [row for queue in build().values() for row in queue]
     grouped: dict[tuple[str, str, str, str, int], set[tuple[str, str]]] = {}
     for row in rows:
@@ -52,7 +53,13 @@ def test_method_specific_stream_is_exact_within_job_scope() -> None:
         assert snapshot["sample_count"] == row["target_environments"]
         assert snapshot["source_index_sha256"]
         assert f"/{row['method']}/{row['scale']}/" in stream_path
-        assert row["file_hash_validation_performed"] is True
+        assert row["file_hash_validation_performed"] is bool(
+            runtime.get("file_hash_validation_performed", True)
+        )
+        if not row["file_hash_validation_performed"]:
+            assert row["stream_integrity_mode"] == (
+                "reuse_preverified_snapshot_no_rehash"
+            )
         key = (
             row["representation"], row["condition"], row["method"],
             row["scale"], row["seed"],
@@ -91,17 +98,20 @@ def test_checked_in_formal_decision_is_three_way_consistent_and_scoped() -> None
         == runtime["authorized_job_ids"]
         == protocol["authorized_job_ids"]
     )
-    # Migrating the economic objective invalidates the earlier formal
-    # authorization.  Candidate manifests remain materialized for review, but
-    # launch must stay fail-closed until the v2/v3 pair is explicitly approved.
-    assert gate["authorized_job_ids"] == []
-    assert gate["formal_launch_allowed"] is False
+    # The new objective is authorized only for the two fresh large-scale
+    # TERRAN jobs; every other materialized candidate remains fail-closed.
+    assert set(gate["authorized_job_ids"]) == {
+        "full__G__Full-support__terran__Cus500__seed1234",
+        "full__G__Full-support__terran__Cus1000__seed1234",
+    }
+    assert gate["formal_launch_allowed"] is True
     assert (
         gate["launch_policy"]
-        == "reward_contract_v3_pending_formal_authorization"
+        == "reward_contract_v3_formal_user_authorized"
     )
     assert set(decision(gate)[-1].values()) == {
-        "PENDING_NEW_OBJECTIVE_AUTHORIZATION"
+        "PILOT_WAIVED_BY_USER",
+        "IMPLEMENTED_UNIT_TESTED",
     }
     assert set(gate["formal_launch_gates"]) == {
         f"G{index}" for index in range(1, 9)
@@ -306,8 +316,8 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         assert row["minimum_training_epochs"] == 5_000
         assert row["post_minimum_validation_every_epochs"] == 50
         assert row["validation_views"] == 500
-        assert row["validation_candidate_count"] == 50
-        assert row["test_candidate_count"] == 50
+        assert row["validation_candidate_count"] == 100
+        assert row["test_candidate_count"] == 100
         expected_trajectories = {
             "am_evrptw": 5, "evrptw_rl": 1, "drl_ts": 1, "terran": 50,
         }[method]
@@ -326,7 +336,7 @@ def test_scale_rollout_limits_match_current_protocol() -> None:
     assert rows
     for row in rows:
         training_steps, validation_steps = (
-            (1400, 2100)
+            (1250, 1875)
             if row["method"] == "terran" and row["scale"] == "Cus1000"
             else expected[row["scale"]]
         )
@@ -341,8 +351,11 @@ def test_2080ti_candidate_jobs_remain_assigned_but_are_not_authorized() -> None:
     )} == {"2080ti_4_1": 8, "2080ti_4_2": 5, "2080ti_3_1": 3}
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
     authorized = set(runtime["authorized_job_ids"])
-    assert runtime["formal_launch_allowed"] is False
-    assert authorized == set()
+    assert runtime["formal_launch_allowed"] is True
+    assert authorized == {
+        "full__G__Full-support__terran__Cus500__seed1234",
+        "full__G__Full-support__terran__Cus1000__seed1234",
+    }
     for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1"):
         assert {row["job_id"] for row in queues[server]}.isdisjoint(authorized)
         for row in queues[server]:
@@ -442,7 +455,7 @@ def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
         "am_evrptw": {"Cus500": 8, "Cus1000": 2},
         "evrptw_rl": {"Cus500": 16, "Cus1000": 2},
         "drl_ts": {"Cus500": 8, "Cus1000": 2},
-        "terran": {"Cus500": 64, "Cus1000": 2},
+        "terran": {"Cus500": 128, "Cus1000": 4},
     }
     rows = build()["a6000_2_1"]
     assert rows
@@ -464,7 +477,7 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     assert all(row["num_minibatches"] == 1 for row in overridden)
     assert {row["scale"]: row["ppo_step_chunk_size"] for row in overridden} == {
         "Cus500": 36,
-        "Cus1000": 720,
+        "Cus1000": 624,
     }
     assert {row["scale"]: row["terran_terminal_success_bonus"] for row in overridden} == {
         "Cus500": 0.0,
@@ -478,7 +491,7 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     ]
     assert len(priority_terran) == 1
     assert priority_terran[0]["num_minibatches"] == 1
-    assert priority_terran[0]["ppo_step_chunk_size"] == 720
+    assert priority_terran[0]["ppo_step_chunk_size"] == 624
 
     dedicated = {
         row["scale"]: row for row in build_a6000_terran_formal_queue()
@@ -486,7 +499,7 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     assert dedicated["Cus500"]["num_minibatches"] == 1
     assert dedicated["Cus500"]["ppo_step_chunk_size"] == 36
     assert dedicated["Cus1000"]["num_minibatches"] == 1
-    assert dedicated["Cus1000"]["ppo_step_chunk_size"] == 720
+    assert dedicated["Cus1000"]["ppo_step_chunk_size"] == 624
 
 
 def test_a6000_cus1000_priority_queue_uses_approved_two_gpu_order() -> None:
@@ -532,7 +545,7 @@ def test_checked_in_a6000_cus1000_priority_manifest_matches_builder() -> None:
     assert checked_in == build_a6000_cus1000_priority_queue()
 
 
-def test_a6000_terran_candidate_queue_uses_both_gpus_and_is_fail_closed() -> None:
+def test_a6000_terran_candidate_queue_uses_both_gpus_and_is_authorized() -> None:
     canonical = build()["a6000_2_1"]
     rows = build_a6000_terran_formal_queue()
     assert [
@@ -544,9 +557,8 @@ def test_a6000_terran_candidate_queue_uses_both_gpus_and_is_fail_closed() -> Non
     ]
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
     authorized = set(runtime["authorized_job_ids"])
-    assert runtime["formal_launch_allowed"] is False
-    assert authorized == set()
-    assert {row["job_id"] for row in rows}.isdisjoint(authorized)
+    assert runtime["formal_launch_allowed"] is True
+    assert authorized == {row["job_id"] for row in rows}
     assert all(
         row["objective_config"]["profile_id"]
         == "rivian_energy_vehicle_cost_v2"
@@ -608,10 +620,10 @@ def test_a6000_terran_cus1000_replacement_is_one_gpu1_bound_job() -> None:
     assert row["job_id"] == "full__G__Full-support__terran__Cus1000__seed1234"
     assert row["method"] == "terran"
     assert row["scale"] == "Cus1000"
-    assert row["training_rollout_steps"] == 1400
-    assert row["validation_rollout_steps"] == 2100
+    assert row["training_rollout_steps"] == 1250
+    assert row["validation_rollout_steps"] == 1875
     assert row["num_minibatches"] == 1
-    assert row["ppo_step_chunk_size"] == 720
+    assert row["ppo_step_chunk_size"] == 624
     assert row["terran_terminal_success_bonus"] == 1.0
     assert row["global_slot"] == 1
     assert row["queue_position"] == 0

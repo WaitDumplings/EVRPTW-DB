@@ -4,7 +4,7 @@
   "formal_launch_allowed": false,
   "gpu_count": 4,
   "hardware": "2080ti",
-  "launch_policy": "reward_contract_v3_pending_formal_authorization",
+  "launch_policy": "reward_contract_v3_formal_user_authorized",
   "pilot_jobs": 0,
   "schema": "drl_rq_server_assignment_v1",
   "server": "2080ti_4_1"

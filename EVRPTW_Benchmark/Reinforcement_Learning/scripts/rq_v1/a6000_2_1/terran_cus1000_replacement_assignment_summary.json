@@ -1,13 +1,15 @@
 {
-  "authorized_formal_job_ids": [],
+  "authorized_formal_job_ids": [
+    "full__G__Full-support__terran__Cus1000__seed1234"
+  ],
   "formal_jobs": 1,
-  "formal_launch_allowed": false,
+  "formal_launch_allowed": true,
   "gpu_count": 2,
   "hardware": "a6000",
-  "launch_policy": "reward_contract_v3_pending_formal_authorization",
+  "launch_policy": "reward_contract_v3_formal_user_authorized",
   "launcher_id": "terran_cus1000_replacement_v1",
   "pilot_jobs": 0,
-  "profile": "terran_cus1000_reward_replacement_v1",
+  "profile": "terran_cus1000_final_objective_v2_b4",
   "schema": "drl_rq_server_assignment_v1",
   "server": "a6000_2_1",
   "slot_gpu_map": {

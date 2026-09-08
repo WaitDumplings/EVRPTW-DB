@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GENERATOR_ROOT = REPO_ROOT / "EVRPTW_Dataset_Generator"
@@ -16,7 +16,11 @@ from evrptw_core.schema import EVRPTWInstance
 from ..common import Stage2TaskPool
 from ..common.data_pass import seeded_pass_order
 from ..common.training_stream import (
+    STREAM_CONTRACT_SCHEMA,
+    STREAM_INTEGRITY_MODE_PREVERIFIED,
+    STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED,
     load_training_stream_contract,
+    normalize_scale,
     read_stream_view_ids,
 )
 
@@ -37,6 +41,8 @@ class Stage2TERRANPool:
     completed_samples: int = 0
     training_stream_path: str | Path | None = None
     training_stream_contract_sha256: str | None = None
+    training_stream_contract_snapshot: Mapping[str, Any] | None = None
+    stream_integrity_mode: str = STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED
     representation: str = "G"
     euclidean_manifest: str | Path | None = None
 
@@ -53,7 +59,37 @@ class Stage2TERRANPool:
             representation=self.representation,
             euclidean_manifest=self.euclidean_manifest,
         )
-        if self.training_stream_contract_sha256 is not None:
+        if self.stream_integrity_mode not in {
+            STREAM_INTEGRITY_MODE_PREVERIFIED,
+            STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED,
+        }:
+            raise ValueError(
+                f"unsupported TERRAN stream integrity mode: {self.stream_integrity_mode}"
+            )
+        if self.stream_integrity_mode == STREAM_INTEGRITY_MODE_PREVERIFIED:
+            if self.training_stream_path is None:
+                raise ValueError(
+                    "preverified TERRAN training-stream reuse requires a stream path"
+                )
+            snapshot = self.training_stream_contract_snapshot
+            if (
+                not isinstance(snapshot, Mapping)
+                or snapshot.get("schema") != STREAM_CONTRACT_SCHEMA
+                or not self.training_stream_contract_sha256
+                or snapshot.get("sha256")
+                != str(self.training_stream_contract_sha256)
+            ):
+                raise ValueError(
+                    "preverified TERRAN training-stream reuse requires the exact "
+                    "registered contract snapshot"
+                )
+            if normalize_scale(snapshot.get("scale", "")) != normalize_scale(
+                self.scale if self.scale is not None else ""
+            ) or int(snapshot.get("seed", -1)) != int(self.seed):
+                raise ValueError(
+                    "preverified TERRAN training-stream scale/seed mismatch"
+                )
+        elif self.training_stream_contract_sha256 is not None:
             if self.training_stream_path is None:
                 raise ValueError(
                     "TERRAN training-stream contract requires a stream path"
@@ -72,6 +108,15 @@ class Stage2TERRANPool:
             if self.training_stream_path is not None
             else None
         )
+        if (
+            self._stream_view_ids is not None
+            and self.training_stream_contract_snapshot is not None
+            and len(self._stream_view_ids)
+            != int(self.training_stream_contract_snapshot.get("sample_count", -1))
+        ):
+            raise ValueError(
+                "TERRAN training stream length does not match its contract snapshot"
+            )
         self._task_by_view_id = {task.view_id: task for task in self.pool.tasks}
         if self._stream_view_ids is not None:
             missing = sorted(set(self._stream_view_ids).difference(self._task_by_view_id))

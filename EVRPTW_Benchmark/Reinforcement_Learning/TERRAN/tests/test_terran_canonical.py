@@ -85,6 +85,63 @@ def test_terran_pool_revalidates_frozen_stream_before_reading(
     assert calls == ["load", "read"]
 
 
+def test_terran_pool_reuses_preverified_snapshot_but_still_reads_and_checks_ids(
+    monkeypatch,
+) -> None:
+    task = SimpleNamespace(view_id="view-1")
+    monkeypatch.setattr(
+        terran_data_pool,
+        "Stage2TaskPool",
+        lambda **_kwargs: SimpleNamespace(tasks=[task]),
+    )
+    monkeypatch.setattr(
+        terran_data_pool,
+        "load_training_stream_contract",
+        lambda *_args, **_kwargs: pytest.fail(
+            "preverified TERRAN reuse must not rehash the stream"
+        ),
+    )
+    monkeypatch.setattr(
+        terran_data_pool,
+        "read_stream_view_ids",
+        lambda _path: ["view-1"],
+    )
+    snapshot = {
+        "schema": STREAM_CONTRACT_SCHEMA,
+        "sha256": "a" * 64,
+        "sample_count": 1,
+        "scale": "Cus100",
+        "seed": 1234,
+    }
+
+    pool = terran_data_pool.Stage2TERRANPool(
+        dataset_path="unused.parquet",
+        scale="Cus100",
+        seed=1234,
+        training_stream_path="stream.parquet",
+        training_stream_contract_sha256=snapshot["sha256"],
+        training_stream_contract_snapshot=snapshot,
+        stream_integrity_mode="reuse_preverified_snapshot_no_rehash",
+    )
+    assert pool._stream_view_ids == ["view-1"]
+
+    monkeypatch.setattr(
+        terran_data_pool,
+        "read_stream_view_ids",
+        lambda _path: ["outside-pool"],
+    )
+    with pytest.raises(ValueError, match="outside its pool"):
+        terran_data_pool.Stage2TERRANPool(
+            dataset_path="unused.parquet",
+            scale="Cus100",
+            seed=1234,
+            training_stream_path="stream.parquet",
+            training_stream_contract_sha256=snapshot["sha256"],
+            training_stream_contract_snapshot=snapshot,
+            stream_integrity_mode="reuse_preverified_snapshot_no_rehash",
+        )
+
+
 def test_undiscounted_complete_returns_sum_remaining_rewards() -> None:
     rewards = torch.tensor([[[2.0, -1.0]], [[-3.0, -2.0]], [[5.0, -4.0]]])
     dones = torch.zeros_like(rewards, dtype=torch.bool)

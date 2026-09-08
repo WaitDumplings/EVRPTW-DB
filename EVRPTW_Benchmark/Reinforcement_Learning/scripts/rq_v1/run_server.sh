@@ -6,6 +6,7 @@ source "$SCRIPT_DIR/server_env.sh"
 MODE="${1:?usage: run_server.sh full|resume|status}"
 shift
 SEED_SELECTION="${DRL_SEEDS:-1234}"
+REUSE_PREVERIFIED_TRAINING_STREAMS=0
 FORWARD_ARGS=()
 while (( $# )); do
   case "$1" in
@@ -27,6 +28,15 @@ while (( $# )); do
       SEED_SELECTION="${1#--seeds=}"
       shift
       ;;
+    --reuse-preverified-training-streams)
+      (( REUSE_PREVERIFIED_TRAINING_STREAMS == 0 )) || {
+        echo "--reuse-preverified-training-streams may be specified only once" >&2
+        exit 2
+      }
+      REUSE_PREVERIFIED_TRAINING_STREAMS=1
+      FORWARD_ARGS+=("$1")
+      shift
+      ;;
     *)
       FORWARD_ARGS+=("$1")
       shift
@@ -40,7 +50,9 @@ done
 export DRL_SEEDS="$SEED_SELECTION"
 case "$MODE" in
   full|resume)
-    bash "$SCRIPT_DIR/prepare_artifacts.sh"
+    if (( REUSE_PREVERIFIED_TRAINING_STREAMS == 0 )); then
+      bash "$SCRIPT_DIR/prepare_artifacts.sh"
+    fi
     ;;
   status) ;;
   *) echo "invalid mode: $MODE" >&2; exit 2 ;;
