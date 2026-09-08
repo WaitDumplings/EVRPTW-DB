@@ -9,7 +9,7 @@ for track_index in "${!CUS500_TRACK_IDS[@]}"; do
   track_id="${CUS500_TRACK_IDS[${track_index}]}"
   test_index="${DATASET_ROOT}/generation_plan/${CUS500_RELATIVE_INDICES[${track_index}]}"
   require_test_index "${test_index}"
-  base_save_path="${RESULTS_ROOT}/core/${track_id}/VNS_TS_Solver_Cus500_2h"
+  base_save_path="${RESULTS_ROOT}/core/${track_id}/VNS_TS_Solver_Cus500_30m_cost_v2"
   partition_output save_path "${base_save_path}"
   prepare_output "${save_path}"
   print_contract "VNS-TS adaptive-fast" "${track_id}" "${test_index}" "${save_path}"
@@ -21,6 +21,7 @@ for track_index in "${!CUS500_TRACK_IDS[@]}"; do
     --scales "${CUS_SCALE}" \
     --time_limit_s "${TIME_LIMIT_S}" \
     --checkpoints_s "${CHECKPOINTS_S}" \
+  --objective_config "${OBJECTIVE_CONFIG}" \
     --seed "${BASE_SEED}" \
     --num_workers "${WORKERS}" \
     --max_in_flight "${MAX_IN_FLIGHT}" \

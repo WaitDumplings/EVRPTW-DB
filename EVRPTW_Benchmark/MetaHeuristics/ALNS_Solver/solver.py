@@ -148,7 +148,7 @@ class ALNS_Solver:
     Keskin & Catay (2016)-style ALNS refactored for:
       - EVRPTW
       - full recharging only
-      - objective = minimal feasible total distance
+      - objective = versioned distance-plus-vehicle cost
 
     Internal route representation:
       route = [0, ..., 0]
@@ -164,8 +164,19 @@ class ALNS_Solver:
         seed: int = 1234,
         format=None,
         checkpoint: Optional[Dict[str, Any]] = None,
+        distance_unit_cost: float = 1.0,
+        vehicle_fixed_cost: float = 0.0,
     ):
         self.instance = instance
+        self.distance_unit_cost = float(distance_unit_cost)
+        self.vehicle_fixed_cost = float(vehicle_fixed_cost)
+        if (
+            not math.isfinite(self.distance_unit_cost)
+            or self.distance_unit_cost <= 0.0
+            or not math.isfinite(self.vehicle_fixed_cost)
+            or self.vehicle_fixed_cost < 0.0
+        ):
+            raise ValueError("objective coefficients must be finite and nonnegative")
         self.rng = random.Random(seed)
         self.format = format
 
@@ -801,7 +812,11 @@ class ALNS_Solver:
     def objective_value(self, routes: List[List[int]]) -> float:
         if not self.is_solution_feasible(routes):
             return float("inf")
-        return sum(self._route_distance(r) for r in routes)
+        total_distance = sum(self._route_distance(route) for route in routes)
+        return (
+            self.distance_unit_cost * total_distance
+            + self.vehicle_fixed_cost * len(routes)
+        )
 
     def _evaluate_candidate(
         self,
@@ -811,18 +826,21 @@ class ALNS_Solver:
         if not self.is_solution_feasible(candidate):
             return False, self.r4, float("inf")
 
-        # Feasibility was established immediately above.  Summing the route
-        # distances directly preserves objective_value's reduction order while
-        # avoiding a second full solution-feasibility scan.
-        cand_dist = sum(self._route_distance(route) for route in candidate)
+        # Feasibility was established immediately above; evaluate the frozen
+        # benchmark objective without a second full feasibility scan.
+        candidate_distance = sum(self._route_distance(route) for route in candidate)
+        candidate_value = (
+            self.distance_unit_cost * candidate_distance
+            + self.vehicle_fixed_cost * len(candidate)
+        )
 
-        if cand_dist + 1e-9 < self.global_value:
-            return True, self.r1, cand_dist
-        if cand_dist + 1e-9 < current_distance:
-            return True, self.r2, cand_dist
-        if self._accept_sa(cand_dist, current_distance):
-            return True, self.r3, cand_dist
-        return False, self.r4, cand_dist
+        if candidate_value + 1e-9 < self.global_value:
+            return True, self.r1, candidate_value
+        if candidate_value + 1e-9 < current_distance:
+            return True, self.r2, candidate_value
+        if self._accept_sa(candidate_value, current_distance):
+            return True, self.r3, candidate_value
+        return False, self.r4, candidate_value
 
     def _accept_sa(self, new_dist: float, old_dist: float) -> bool:
         if new_dist <= old_dist + 1e-9:

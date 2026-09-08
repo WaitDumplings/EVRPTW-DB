@@ -35,15 +35,15 @@ run_frozen_test() {
   local solver_label
   case "${solver_kind}" in
     Gurobi)
-      solver_dir="Gurobi_Solver_${CUS_SCALE}_cs2_2h"
+      solver_dir="Gurobi_Solver_${CUS_SCALE}_cs2_30m_cost_v2"
       solver_label="Gurobi exact (cs_copies=2, threads=1)"
       ;;
     ALNS)
-      solver_dir="ALNS_Solver_${CUS_SCALE}_2h"
+      solver_dir="ALNS_Solver_${CUS_SCALE}_30m_cost_v2"
       solver_label="ALNS"
       ;;
     VNSTS)
-      solver_dir="VNS_TS_Solver_${CUS_SCALE}_2h"
+      solver_dir="VNS_TS_Solver_${CUS_SCALE}_30m_cost_v2"
       solver_label="VNS-TS adaptive-fast"
       ;;
     *)
@@ -120,6 +120,7 @@ run_frozen_test() {
         --scales "${CUS_SCALE}" \
         --time_limit_s "${TIME_LIMIT_S}" \
         --checkpoints_s "${CHECKPOINTS_S}" \
+        --objective_config "${OBJECTIVE_CONFIG}" \
         --cs_copies 2 \
         --mip_gap 0 \
         --workers "${WORKERS}" \
@@ -139,6 +140,7 @@ run_frozen_test() {
         --scales "${CUS_SCALE}" \
         --time_limit_s "${TIME_LIMIT_S}" \
         --checkpoints_s "${CHECKPOINTS_S}" \
+        --objective_config "${OBJECTIVE_CONFIG}" \
         --seed "${BASE_SEED}" \
         --num_workers "${WORKERS}" \
         --max_in_flight "${MAX_IN_FLIGHT}" \
@@ -156,6 +158,7 @@ run_frozen_test() {
         --scales "${CUS_SCALE}" \
         --time_limit_s "${TIME_LIMIT_S}" \
         --checkpoints_s "${CHECKPOINTS_S}" \
+        --objective_config "${OBJECTIVE_CONFIG}" \
         --seed "${BASE_SEED}" \
         --num_workers "${WORKERS}" \
         --max_in_flight "${MAX_IN_FLIGHT}" \

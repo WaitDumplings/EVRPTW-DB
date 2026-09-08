@@ -8,9 +8,9 @@ This folder contains frozen Test launchers for the Exact, ALNS, and VNS-TS
 baselines. All runs use the same per-instance timing contract:
 
 ```text
-checkpoints: 300, 1800, 3600, 7200 seconds
-             5 min, 30 min, 1 h, 2 h
-time limit:  7200 seconds
+checkpoints: 300, 1800 seconds
+             5 min, 30 min
+time limit:  1800 seconds
 workers:     30 by default
 Gurobi:      cs_copies=2, mip_gap=0, one thread per worker
 ALNS/VNS-TS: seed=2026, one BLAS/OpenMP thread per worker
@@ -155,9 +155,9 @@ a fallback on the generation server.
 
 ## Outputs
 
-Outputs are written below `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_2h`.
+Outputs are written below `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_30m_cost_v2`.
 Each solver writes a summary CSV, a time-trace CSV containing objective and full
-`routes_json` at all four checkpoints, final solution files, and checkpoint
+`routes_json` at both checkpoints, final solution files, and checkpoint
 solution files. Every published route is independently replayed.
 
 All launchers use `--skip_completed`. Re-running the same command safely resumes

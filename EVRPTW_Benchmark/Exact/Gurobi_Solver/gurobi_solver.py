@@ -9,6 +9,7 @@ import numpy as np
 
 from gurobipy import GRB, Model, quicksum
 
+from evrptw_core.objective import ObjectiveConfig
 from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution, merge_route_sequences
 from route_validator import resolve_charging_profile, validate_routes
 
@@ -30,12 +31,24 @@ class GurobiSolverConfig:
     distance_tolerance_abs: float = 1e-6
     distance_tolerance_rel: float = 1e-8
     threads: int | None = None
+    objective_mode: str = "distance"
+    objective_profile_id: str = "distance_v1"
+    electricity_price_usd_per_kwh: float = 0.0
+    consumption_kwh_per_km: float = 0.0
+    vehicle_fixed_cost_usd: float = 0.0
 
     def __post_init__(self) -> None:
         if isinstance(self.cs_copies, bool) or int(self.cs_copies) != self.cs_copies:
             raise ValueError("cs_copies must be an integer")
         if int(self.cs_copies) < 1:
             raise ValueError("cs_copies must be at least 1")
+        ObjectiveConfig(
+            mode=self.objective_mode,
+            profile_id=self.objective_profile_id,
+            electricity_price_usd_per_kwh=self.electricity_price_usd_per_kwh,
+            consumption_kwh_per_km=self.consumption_kwh_per_km,
+            vehicle_fixed_cost_usd=self.vehicle_fixed_cost_usd,
+        )
 
 
 @dataclass(frozen=True)
@@ -67,6 +80,13 @@ class GurobiEVRPTWSolver:
         self.model: Model | None = None
         self.node_map: NodeMap | None = None
         self.x: dict[tuple[int, int], Any] = {}
+        self.objective_config = ObjectiveConfig(
+            mode=self.config.objective_mode,
+            profile_id=self.config.objective_profile_id,
+            electricity_price_usd_per_kwh=self.config.electricity_price_usd_per_kwh,
+            consumption_kwh_per_km=self.config.consumption_kwh_per_km,
+            vehicle_fixed_cost_usd=self.config.vehicle_fixed_cost_usd,
+        )
 
     def solve(self, instance: EVRPTWInstance) -> EVRPTWSolution:
         start = time.perf_counter()
@@ -76,7 +96,7 @@ class GurobiEVRPTWSolver:
         self.x = x
 
         trace = self._new_trace()
-        callback = self._make_callback(trace, node_map, x)
+        callback = self._make_callback(trace, node_map, x, instance)
         model.optimize(callback)
 
         stage1_status = int(model.Status)
@@ -85,12 +105,12 @@ class GurobiEVRPTWSolver:
         if stage1_runtime_s is None:
             stage1_runtime_s = time.perf_counter() - start
         stage1_has_solution = model.SolCount > 0
-        stage1_best_distance = self._safe_model_float(model, "ObjVal") if stage1_has_solution else None
+        stage1_best_objective = self._safe_model_float(model, "ObjVal") if stage1_has_solution else None
         stage1_best_bound = self._safe_model_float(model, "ObjBound")
         stage1_mip_gap = self._safe_model_float(model, "MIPGap") if stage1_has_solution else None
 
-        # Freeze the distance-objective trace before an optional secondary
-        # vehicle-count optimization changes the model objective and solution.
+        # Freeze the primary cost-objective trace before any optional legacy
+        # secondary optimization changes the model objective and solution.
         stage1_routes = self._extract_routes(node_map, x) if stage1_has_solution else []
         stage1_route_distance = (
             self._route_distance_km(stage1_routes, instance)
@@ -105,10 +125,11 @@ class GurobiEVRPTWSolver:
             reached_checkpoint=True,
             solver_status=stage1_status_name,
             objective_distance_km=stage1_route_distance,
+            objective_value=stage1_best_objective,
             best_bound=(
-                stage1_route_distance
+                stage1_best_objective
                 if stage1_status == GRB.OPTIMAL
-                and stage1_route_distance is not None
+                and stage1_best_objective is not None
                 else stage1_best_bound
             ),
             routes=stage1_routes,
@@ -133,9 +154,10 @@ class GurobiEVRPTWSolver:
 
         if (
             self.config.tie_break_vehicle_count
+            and not self.objective_config.is_cost
             and stage1_has_solution
             and stage1_status == GRB.OPTIMAL
-            and stage1_best_distance is not None
+            and stage1_best_objective is not None
         ):
             remaining_time_s = max(
                 0.0,
@@ -146,11 +168,11 @@ class GurobiEVRPTWSolver:
                 distance_tolerance = max(
                     float(self.config.distance_tolerance_abs),
                     float(self.config.distance_tolerance_rel)
-                    * abs(float(stage1_best_distance)),
+                    * abs(float(stage1_route_distance)),
                 )
                 model.addConstr(
                     distance_expr
-                    <= float(stage1_best_distance) + distance_tolerance,
+                    <= float(stage1_route_distance) + distance_tolerance,
                     name="distance_optimal_tolerance",
                 )
                 model.setObjective(vehicle_expr, GRB.MINIMIZE)
@@ -174,6 +196,11 @@ class GurobiEVRPTWSolver:
         has_solution = stage1_has_solution
         routes = stage1_routes
         objective = stage1_route_distance
+        objective_fields = (
+            self.objective_config.fields(objective, len(routes))
+            if objective is not None
+            else {}
+        )
         route_validation = (
             validate_routes(instance, routes) if has_solution else None
         )
@@ -238,7 +265,13 @@ class GurobiEVRPTWSolver:
                 "benchmark_completed": benchmark_completed,
                 "has_incumbent": bool(has_solution),
                 "mip_gap": 0.0 if status == GRB.OPTIMAL and objective is not None else mip_gap,
-                "best_bound": objective if status == GRB.OPTIMAL and objective is not None else best_bound,
+                "best_bound": (
+                    objective_fields.get("objective_value")
+                    if status == GRB.OPTIMAL and objective is not None
+                    else best_bound
+                ),
+                **objective_fields,
+                "objective_config": self.objective_config.to_dict(),
                 "cs_copies": int(self.config.cs_copies),
                 "node_count_with_copies": len(node_map.solver_to_terminal),
                 "checkpoints_s": list(trace["checkpoints_s"]),
@@ -248,7 +281,8 @@ class GurobiEVRPTWSolver:
                 "tie_break_vehicle_count": bool(self.config.tie_break_vehicle_count),
                 "tie_break_applied": bool(tie_break_applied),
                 "tie_break_skipped_no_time": bool(tie_break_skipped_no_time),
-                "stage1_best_distance_km": stage1_best_distance,
+                "stage1_best_distance_km": stage1_route_distance,
+                "stage1_best_objective_value": stage1_best_objective,
                 "stage1_optimization_runtime_s": stage1_runtime_s,
                 "wall_runtime_s": runtime,
                 "stage1_gurobi_status": stage1_status,
@@ -349,7 +383,6 @@ class GurobiEVRPTWSolver:
         }
 
         distance_expr = quicksum(float(distance[i, j]) * x[i, j] for i, j in arcs)
-        model.setObjective(distance_expr, GRB.MINIMIZE)
 
         incoming = {node: [] for node in range(len(solver_to_terminal))}
         outgoing = {node: [] for node in range(len(solver_to_terminal))}
@@ -388,6 +421,11 @@ class GurobiEVRPTWSolver:
             )
 
         vehicle_expr = quicksum(x[a] for a in outgoing[start_depot])
+        model.setObjective(
+            self.objective_config.distance_unit_cost * distance_expr
+            + self.objective_config.vehicle_unit_cost * vehicle_expr,
+            GRB.MINIMIZE,
+        )
         model.addConstr(vehicle_expr == quicksum(x[a] for a in incoming[end_depot]), name="depot_balance")
         model.addConstr(vehicle_expr >= 1, name="at_least_one_route")
         model.addConstr(tau[start_depot] == float(instance.working_start_s), name="start_time")
@@ -538,7 +576,13 @@ class GurobiEVRPTWSolver:
             "incumbent_events": [],
         }
 
-    def _make_callback(self, trace: dict[str, Any], node_map: NodeMap, x: dict[tuple[int, int], Any]):
+    def _make_callback(
+        self,
+        trace: dict[str, Any],
+        node_map: NodeMap,
+        x: dict[tuple[int, int], Any],
+        instance: EVRPTWInstance,
+    ):
         arcs = list(x.keys())
         x_vars = [x[arc] for arc in arcs]
 
@@ -564,12 +608,14 @@ class GurobiEVRPTWSolver:
                 values = model.cbGetSolution(x_vars)
                 arc_values = {arc: float(value) for arc, value in zip(arcs, values)}
                 routes = self._extract_routes_from_arc_values(node_map, arc_values)
+                route_distance = self._route_distance_km(routes, instance)
                 snapshot = self._make_snapshot(
                     checkpoint_s=None,
                     elapsed_s=runtime,
                     reached_checkpoint=True,
                     solver_status="RUNNING",
-                    objective_distance_km=objective,
+                    objective_distance_km=route_distance,
+                    objective_value=objective,
                     best_bound=best_bound,
                     routes=routes,
                     source="incumbent",
@@ -654,7 +700,7 @@ class GurobiEVRPTWSolver:
         )
         if final_snapshot.get("has_incumbent"):
             trace["last_incumbent"] = final_snapshot
-            trace["last_best_obj"] = final_snapshot.get("objective_distance_km")
+            trace["last_best_obj"] = final_snapshot.get("objective_value")
         if final_snapshot.get("best_bound") is not None:
             trace["last_best_bound"] = final_snapshot.get("best_bound")
         self._record_due_checkpoints(
@@ -693,6 +739,7 @@ class GurobiEVRPTWSolver:
                 reached_checkpoint=reached_checkpoint,
                 solver_status=solver_status,
                 objective_distance_km=None,
+                objective_value=None,
                 best_bound=trace.get("last_best_bound"),
                 routes=[],
                 source=(
@@ -711,6 +758,7 @@ class GurobiEVRPTWSolver:
             reached_checkpoint=reached_checkpoint,
             solver_status=solver_status,
             objective_distance_km=incumbent.get("objective_distance_km"),
+            objective_value=incumbent.get("objective_value"),
             best_bound=best_bound,
             routes=incumbent.get("routes", []),
             source="checkpoint_incumbent" if reached_checkpoint else "final_after_early_stop",
@@ -803,6 +851,11 @@ class GurobiEVRPTWSolver:
             snapshot["diagnostic_mip_gap"] = snapshot.get("mip_gap")
             snapshot["has_incumbent"] = False
             snapshot["objective_distance_km"] = None
+            snapshot["objective_value"] = None
+            snapshot["objective_cost_usd"] = None
+            snapshot["electricity_cost_usd"] = None
+            snapshot["vehicle_cost_usd"] = None
+            snapshot["vehicles_started"] = None
             snapshot["mip_gap"] = None
             snapshot["vehicle_count"] = None
             snapshot["routes"] = []
@@ -844,8 +897,31 @@ class GurobiEVRPTWSolver:
         best_bound: float | None,
         routes: list[list[int]],
         source: str,
+        objective_value: float | None = None,
     ) -> dict[str, Any]:
-        gap = self._relative_gap(objective_distance_km, best_bound)
+        if objective_value is None and objective_distance_km is not None:
+            objective_value = float(
+                self.objective_config.value(objective_distance_km, len(routes))
+            )
+        fields = (
+            self.objective_config.fields(objective_distance_km, len(routes))
+            if objective_distance_km is not None and routes
+            else {
+                "objective_mode": self.objective_config.mode,
+                "objective_profile_id": self.objective_config.profile_id,
+                "objective_unit": self.objective_config.unit,
+                "objective_value": objective_value,
+                "objective_cost_usd": None,
+                "electricity_cost_usd": None,
+                "vehicle_cost_usd": None,
+                "vehicles_started": None,
+            }
+        )
+        if objective_value is not None:
+            fields["objective_value"] = float(objective_value)
+            if self.objective_config.is_cost:
+                fields["objective_cost_usd"] = float(objective_value)
+        gap = self._relative_gap(fields.get("objective_value"), best_bound)
         return {
             "checkpoint_s": checkpoint_s,
             "elapsed_s": float(elapsed_s),
@@ -853,6 +929,7 @@ class GurobiEVRPTWSolver:
             "solver_status": solver_status,
             "has_incumbent": bool(routes),
             "objective_distance_km": objective_distance_km,
+            **fields,
             "best_bound": best_bound,
             "mip_gap": gap,
             "vehicle_count": len(routes) if routes else None,

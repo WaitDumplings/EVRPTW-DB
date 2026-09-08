@@ -880,7 +880,7 @@ class FakeALNSSolver:
     constructor_delay_s = 0.03
     solve_budget_s = None
 
-    def __init__(self, instance, seed, format):  # noqa: A002, ARG002
+    def __init__(self, instance, seed, format, **kwargs):  # noqa: A002, ARG002
         time.sleep(type(self).constructor_delay_s)
         self.max_iters = 200
         self.cur_iter = 0

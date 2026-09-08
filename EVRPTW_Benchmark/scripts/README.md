@@ -61,9 +61,12 @@ existing job instead of starting a duplicate. Use `EVRPTW_FOREGROUND=1` only
 for interactive debugging; `EVRPTW_DRY_RUN=1` remains non-executing and
 prints the resolved command directly.
 
-All shells use the frozen contract: checkpoints at 300, 1800, 3600, and 7200
-seconds; a 7200-second limit; 30 workers by default; seed 2026 for ALNS/VNS-TS;
-and `cs_copies=2`, `mip_gap=0`, and one Gurobi thread per worker for Exact.
+All shells use the frozen contract: checkpoints at 300 and 1800 seconds; an
+1800-second limit; 30 workers by default; seed 2026 for ALNS/VNS-TS; and
+`cs_copies=2`, `mip_gap=0`, and one Gurobi thread per worker for Exact. All three solvers optimize the frozen
+`rivian_energy_vehicle_cost_v2` objective:
+`0.151750972762646 × distance_km + 413.6331536717643 × vehicles_started`
+USD.
 
 Dataset arguments stay repository-relative. The launcher changes to the
 repository root before validation and execution, so it is safe to invoke a
@@ -81,8 +84,8 @@ server-specific path cannot leak into a launcher command or result manifest.
 
 ## Unified checkpoint output
 
-All three runners emit the same time-trace CSV columns at 300, 1800, 3600, and
-7200 seconds. Each row contains best-so-far objective, routes, flattened route
+All three runners emit the same time-trace CSV columns at 300 and 1800
+seconds. Each row contains best-so-far objective, routes, flattened route
 sequence, incumbent/status timing, validation status, solver identity, and
 source metadata. Gurobi additionally populates its valid lower bound and MIP
 gap; these two fields are blank for ALNS and VNS-TS because heuristics do not

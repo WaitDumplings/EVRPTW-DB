@@ -14,9 +14,10 @@ readonly TEST_VIEW_COUNT
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${TEST_SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
-readonly CHECKPOINTS_S="300,1800,3600,7200"
-readonly TIME_LIMIT_S="7200"
+readonly CHECKPOINTS_S="300,1800"
+readonly TIME_LIMIT_S="1800"
 readonly BASE_SEED="2026"
+readonly OBJECTIVE_CONFIG="EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json"
 
 WORKERS="${EVRPTW_TEST_WORKERS:-30}"
 if ! [[ "${WORKERS}" =~ ^[1-9][0-9]*$ ]]; then
@@ -91,7 +92,7 @@ if [[ "${DRY_RUN}" == "0" && ! -d "${DATASET_ROOT}" ]]; then
 fi
 readonly DATASET_ROOT
 readonly FAMILY_ROOT="${DATASET_ROOT}/materialized/families"
-results_root_raw="${EVRPTW_TEST_RESULTS_ROOT:-EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_2h}"
+results_root_raw="${EVRPTW_TEST_RESULTS_ROOT:-EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_30m_cost_v2}"
 readonly RESULTS_ROOT="${results_root_raw}"
 
 if [[ "${DRY_RUN}" == "0" ]]; then
@@ -227,6 +228,7 @@ print_contract() {
     "range=[${RANGE_START},${RANGE_END})" \
     "checkpoints_s=${CHECKPOINTS_S}" \
     "time_limit_s=${TIME_LIMIT_S}" \
+    "objective_config=${OBJECTIVE_CONFIG}" \
     "workers=${WORKERS}" \
     "output=${output_path}"
 }

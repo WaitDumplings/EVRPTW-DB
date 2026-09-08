@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Dataset_Generator" / "src"))
 
 from evrptw_core.benchmark_schema import UNIFIED_TIME_TRACE_FIELDNAMES
 from evrptw_core.io import save_solution
+from evrptw_core.objective import ObjectiveConfig, load_objective
 from evrptw_core.schema import EVRPTWSolution, solution_route_sequence
 from evrptw_core.validation import validate_instance_structure
 from gurobi_solver import (
@@ -37,10 +38,13 @@ DEFAULT_EXACT_TIME_LIMIT_S = 7200.0
 SUMMARY_FIELDNAMES = [
     "instance_id", "file", "family_id", "city_slug", "split_id", "track_id",
     "scale_id", "day_type", "status", "status_name", "feasible", "objective_distance_km",
-    "benchmark_status", "benchmark_completed", "has_incumbent",
+    "objective_mode", "objective_profile_id", "objective_unit", "objective_value",
+    "objective_cost_usd", "electricity_cost_usd", "vehicle_cost_usd",
+    "vehicles_started", "benchmark_status", "benchmark_completed", "has_incumbent",
     "vehicle_count", "runtime_s", "first_feasible_time_s", "mip_gap", "best_bound",
     "routes_json", "route_sequence_json", "solution_path", "time_trace_path",
-    "tie_break_applied", "stage1_best_distance_km", "distance_tolerance",
+    "tie_break_applied", "stage1_best_distance_km", "stage1_best_objective_value",
+    "distance_tolerance",
     "travel_time_matrix_source", "energy_matrix_source",
     "travel_time_asymmetry_max_s", "energy_asymmetry_max_kwh",
     "charging_time_model", "charging_power_min_kw", "charging_power_max_kw",
@@ -50,7 +54,7 @@ SUMMARY_FIELDNAMES = [
 ]
 
 TIME_TRACE_FIELDNAMES = list(UNIFIED_TIME_TRACE_FIELDNAMES)
-GUROBI_ALGORITHM_PROFILE_ID = "gurobi_exact_distance_anytime_v1"
+GUROBI_ALGORITHM_PROFILE_ID = "gurobi_exact_energy_vehicle_cost_anytime_v1"
 
 TERMINAL_BENCHMARK_STATUSES = {
     "COMPLETED_OPTIMAL",
@@ -219,6 +223,14 @@ def write_checkpoint_solution(
             "benchmark_status": snapshot.get("benchmark_status"),
             "route_validation": snapshot.get("route_validation"),
             "source": snapshot.get("source"),
+            "objective_mode": snapshot.get("objective_mode"),
+            "objective_profile_id": snapshot.get("objective_profile_id"),
+            "objective_unit": snapshot.get("objective_unit"),
+            "objective_value": snapshot.get("objective_value"),
+            "objective_cost_usd": snapshot.get("objective_cost_usd"),
+            "electricity_cost_usd": snapshot.get("electricity_cost_usd"),
+            "vehicle_cost_usd": snapshot.get("vehicle_cost_usd"),
+            "vehicles_started": snapshot.get("vehicles_started"),
         },
     )
     path = checkpoint_dir / f"{instance_id}_{label}_solution.pkl"
@@ -261,6 +273,14 @@ def append_time_rows(
             "first_feasible_time_s": first_feasible_time_s,
             "incumbent_event_time_s": "",
             "objective_distance_km": snapshot.get("objective_distance_km"),
+            "objective_mode": snapshot.get("objective_mode"),
+            "objective_profile_id": snapshot.get("objective_profile_id"),
+            "objective_unit": snapshot.get("objective_unit"),
+            "objective_value": snapshot.get("objective_value"),
+            "objective_cost_usd": snapshot.get("objective_cost_usd"),
+            "electricity_cost_usd": snapshot.get("electricity_cost_usd"),
+            "vehicle_cost_usd": snapshot.get("vehicle_cost_usd"),
+            "vehicles_started": snapshot.get("vehicles_started"),
             "best_bound": snapshot.get("best_bound"),
             "mip_gap": snapshot.get("mip_gap"),
             "vehicle_count": snapshot.get("vehicle_count"),
@@ -314,6 +334,14 @@ def append_error_time_rows(
             "first_feasible_time_s": "",
             "incumbent_event_time_s": "",
             "objective_distance_km": "",
+            "objective_mode": "",
+            "objective_profile_id": "",
+            "objective_unit": "",
+            "objective_value": "",
+            "objective_cost_usd": "",
+            "electricity_cost_usd": "",
+            "vehicle_cost_usd": "",
+            "vehicles_started": "",
             "best_bound": "",
             "mip_gap": "",
             "vehicle_count": "",
@@ -446,6 +474,14 @@ def solved_summary_row(instance: Any, instance_file: Path, solution: EVRPTWSolut
         "benchmark_completed": solution.metadata.get("benchmark_completed"),
         "has_incumbent": solution.metadata.get("has_incumbent"),
         "objective_distance_km": solution.objective_distance_km,
+        "objective_mode": solution.metadata.get("objective_mode"),
+        "objective_profile_id": solution.metadata.get("objective_profile_id"),
+        "objective_unit": solution.metadata.get("objective_unit"),
+        "objective_value": solution.metadata.get("objective_value"),
+        "objective_cost_usd": solution.metadata.get("objective_cost_usd"),
+        "electricity_cost_usd": solution.metadata.get("electricity_cost_usd"),
+        "vehicle_cost_usd": solution.metadata.get("vehicle_cost_usd"),
+        "vehicles_started": solution.metadata.get("vehicles_started"),
         "vehicle_count": solution.vehicle_count,
         "runtime_s": solution.runtime_s,
         "first_feasible_time_s": solution.metadata.get("first_feasible_time_s"),
@@ -457,6 +493,9 @@ def solved_summary_row(instance: Any, instance_file: Path, solution: EVRPTWSolut
         "time_trace_path": "",
         "tie_break_applied": solution.metadata.get("tie_break_applied"),
         "stage1_best_distance_km": solution.metadata.get("stage1_best_distance_km"),
+        "stage1_best_objective_value": solution.metadata.get(
+            "stage1_best_objective_value"
+        ),
         "distance_tolerance": solution.metadata.get("distance_tolerance"),
         "travel_time_matrix_source": solution.metadata.get("travel_time_matrix_source"),
         "energy_matrix_source": solution.metadata.get("energy_matrix_source"),
@@ -563,8 +602,10 @@ def write_reference_route(
         "scale": info["scale"],
         "instance_id": info["instance_id"],
         "region_id": info["region_id"],
-        "objective": solution.objective_distance_km,
-        "objective_unit": "km",
+        "objective": solution.metadata.get(
+            "objective_value", solution.objective_distance_km
+        ),
+        "objective_unit": solution.metadata.get("objective_unit", "km"),
         "status": str(solution.metadata.get("gurobi_status_name") or "").lower(),
         "is_certified_optimal": solution.metadata.get("gurobi_status_name") == "OPTIMAL",
         "lower_bound": solution.metadata.get("best_bound"),
@@ -621,7 +662,7 @@ def make_reference_row(
         "instance_id": info["instance_id"],
         "region_id": info["region_id"],
         "status": reference_status(summary_row),
-        "objective": summary_row.get("objective_distance_km", ""),
+        "objective": summary_row.get("objective_value", ""),
         "is_certified_optimal": str(is_optimal).lower(),
         "lower_bound": summary_row.get("best_bound", ""),
         "optimality_gap": summary_row.get("mip_gap", ""),
@@ -746,6 +787,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--save_path", required=True, help="Directory for benchmark summaries and route snapshots.")
     parser.add_argument("--time_limit_s", type=float, default=None, help="Max solve time in seconds. Default: 7200.")
+    parser.add_argument(
+        "--objective_config",
+        default="",
+        help="Versioned objective JSON; omitted keeps legacy distance_v1.",
+    )
     parser.add_argument("--mip_gap", type=float, default=0.0)
     parser.add_argument("--cs_copies", type=int, default=2, help="Number of dummy copies per active charging station. Default: 2.")
     parser.add_argument("--output_flag", type=int, default=0)
@@ -768,6 +814,11 @@ def main(argv: list[str] | None = None) -> None:
 
     requested_checkpoints_s = parse_checkpoints(args.checkpoints_s)
     checkpoints_s, time_limit_s = resolve_time_schedule(requested_checkpoints_s, args.time_limit_s)
+    objective_config = (
+        load_objective(args.objective_config)
+        if args.objective_config
+        else ObjectiveConfig()
+    )
     workers = max(1, int(args.workers))
     threads = args.threads if args.threads is not None else (1 if workers > 1 else None)
     scale_filter = parse_scales(args.scales)
@@ -786,7 +837,8 @@ def main(argv: list[str] | None = None) -> None:
     print(
         f"Exact benchmark schedule: time_limit_s={time_limit_s:g}, "
         f"checkpoints_s={list(checkpoints_s)}, cs_copies={args.cs_copies}, "
-        f"workers={workers}, threads_per_worker={threads or 'gurobi-default'}"
+        f"workers={workers}, threads_per_worker={threads or 'gurobi-default'}, "
+        f"objective={objective_config.profile_id}"
     )
 
     dataset_path = Path(args.dataset_path)
@@ -811,6 +863,11 @@ def main(argv: list[str] | None = None) -> None:
         distance_tolerance_abs=args.distance_tolerance_abs,
         distance_tolerance_rel=args.distance_tolerance_rel,
         threads=threads,
+        objective_mode=objective_config.mode,
+        objective_profile_id=objective_config.profile_id,
+        electricity_price_usd_per_kwh=objective_config.electricity_price_usd_per_kwh,
+        consumption_kwh_per_km=objective_config.consumption_kwh_per_km,
+        vehicle_fixed_cost_usd=objective_config.vehicle_fixed_cost_usd,
     )
 
     existing_summary_rows = read_csv_rows(summary_path)
@@ -952,14 +1009,14 @@ def main(argv: list[str] | None = None) -> None:
                 consume_result(result)
                 if args.verbose:
                     row = result["summary_row"]
-                    print(f"[{done_count}/{len(records)}] {result['instance_id']}: {row.get('status_name')} obj={row.get('objective_distance_km')}")
+                    print(f"[{done_count}/{len(records)}] {result['instance_id']}: {row.get('status_name')} obj={row.get('objective_value')} {row.get('objective_unit')}")
     else:
         for done_count, (instance_file, instance) in enumerate(records, start=1):
             result = solve_instance_task(instance, solver_config, str(instance_file), checkpoints_s, args.save_traceback)
             consume_result(result)
             if args.verbose:
                 row = result["summary_row"]
-                print(f"[{done_count}/{len(records)}] {result['instance_id']}: {row.get('status_name')} obj={row.get('objective_distance_km')}")
+                print(f"[{done_count}/{len(records)}] {result['instance_id']}: {row.get('status_name')} obj={row.get('objective_value')} {row.get('objective_unit')}")
 
     if reference_root is not None:
         print(f"Saved reference solutions under: {reference_root / reference_split}")

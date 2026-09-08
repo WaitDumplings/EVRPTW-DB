@@ -52,8 +52,19 @@ class VNSTSolver:
         position_neighbor_limit=4,
         exchange_neighbor_limit=6,
         station_candidate_limit=5,
+        distance_unit_cost=1.0,
+        vehicle_fixed_cost=0.0,
     ):
         self.instance = instance
+        self.distance_unit_cost = float(distance_unit_cost)
+        self.vehicle_fixed_cost = float(vehicle_fixed_cost)
+        if (
+            not math.isfinite(self.distance_unit_cost)
+            or self.distance_unit_cost <= 0.0
+            or not math.isfinite(self.vehicle_fixed_cost)
+            or self.vehicle_fixed_cost < 0.0
+        ):
+            raise ValueError("objective coefficients must be finite and nonnegative")
         self.show_progress = bool(show_progress)
         self.search_mode = str(search_mode)
         self.move_candidate_limit = int(move_candidate_limit)
@@ -619,7 +630,11 @@ class VNSTSolver:
             p_div_penalty = (self.lambda_div * total_distance * penalty_sum *
                              math.sqrt(float(num_customers * num_vehicles)) / denom)
 
-        return total_distance + total_penalty + p_div_penalty
+        return (
+            self.distance_unit_cost
+            * (total_distance + total_penalty + p_div_penalty)
+            + self.vehicle_fixed_cost * len(S)
+        )
 
     # -------------------------
     # SA acceptance
@@ -1148,7 +1163,7 @@ class VNSTSolver:
             best_move_info = None
             best_move_cost = float("inf")
 
-            # Track best feasible (distance-only objective) candidate
+            # Track best feasible cost-objective candidate
             best_feas_cost = float("inf")
 
             # -------------------------
@@ -1181,7 +1196,7 @@ class VNSTSolver:
                                 best_move = ("two_opt", i, j, split1, split2, old_i_nodes, old_j_nodes)
                                 best_move_info = info
 
-                            # evaluate feasible distance-only
+                            # evaluate feasible cost objective
                             c_feas = self.generalized_cost(current_solution, penalty_value=False, p_div_value=False, allow_infeasible=False)
                             if c_feas < best_feas_cost:
                                 best_feas_cost = c_feas
@@ -1408,7 +1423,7 @@ class VNSTSolver:
             self.update_diversification_history(current_solution)
 
             # Track best_solution (you can choose either:
-            #   - best feasible distance-only move's outcome, or
+            #   - best feasible cost-objective move's outcome, or
             #   - best feasible encountered current_solution
             # Here: update using current_solution feasibility.
             cur_val = self.generalized_cost(current_solution, penalty_value=False, p_div_value=False, allow_infeasible=False)

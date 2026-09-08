@@ -57,6 +57,24 @@ def snapshot_rows(
             "objective_distance_km": (
                 "" if snapshot["objective_distance_km"] is None else snapshot["objective_distance_km"]
             ),
+            "objective_mode": snapshot.get("objective_mode", "distance"),
+            "objective_profile_id": snapshot.get("objective_profile_id", "distance_v1"),
+            "objective_unit": snapshot.get("objective_unit", "km"),
+            "objective_value": (
+                "" if snapshot.get("objective_value") is None else snapshot["objective_value"]
+            ),
+            "objective_cost_usd": (
+                "" if snapshot.get("objective_cost_usd") is None else snapshot["objective_cost_usd"]
+            ),
+            "electricity_cost_usd": (
+                "" if snapshot.get("electricity_cost_usd") is None else snapshot["electricity_cost_usd"]
+            ),
+            "vehicle_cost_usd": (
+                "" if snapshot.get("vehicle_cost_usd") is None else snapshot["vehicle_cost_usd"]
+            ),
+            "vehicles_started": (
+                "" if snapshot.get("vehicles_started") is None else snapshot["vehicles_started"]
+            ),
             "best_bound": "",
             "mip_gap": "",
             "vehicle_count": "" if snapshot["vehicle_count"] is None else snapshot["vehicle_count"],
@@ -117,6 +135,14 @@ def error_snapshot_rows(
             "first_feasible_time_s": "",
             "incumbent_event_time_s": "",
             "objective_distance_km": "",
+            "objective_mode": "",
+            "objective_profile_id": "",
+            "objective_unit": "",
+            "objective_value": "",
+            "objective_cost_usd": "",
+            "electricity_cost_usd": "",
+            "vehicle_cost_usd": "",
+            "vehicles_started": "",
             "best_bound": "",
             "mip_gap": "",
             "vehicle_count": "",
@@ -170,6 +196,14 @@ def save_result_artifacts(
             metadata={
                 "checkpoint_s": snapshot["checkpoint_s"],
                 "reached_checkpoint": snapshot["reached_checkpoint"],
+                "objective_mode": snapshot.get("objective_mode", "distance"),
+                "objective_profile_id": snapshot.get("objective_profile_id", "distance_v1"),
+                "objective_unit": snapshot.get("objective_unit", "km"),
+                "objective_value": snapshot.get("objective_value"),
+                "objective_cost_usd": snapshot.get("objective_cost_usd"),
+                "electricity_cost_usd": snapshot.get("electricity_cost_usd"),
+                "vehicle_cost_usd": snapshot.get("vehicle_cost_usd"),
+                "vehicles_started": snapshot.get("vehicles_started"),
                 "incumbent_event_time_s": snapshot["incumbent_event_time_s"],
                 "source": snapshot["source"],
                 "benchmark_status": snapshot["benchmark_status"],

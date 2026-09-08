@@ -907,28 +907,47 @@ class IncumbentEventRecorder:
             "route_sequence": list(event["route_sequence"]),
         }
 
-    def observe(self, elapsed_s: float, objective: float, routes: list[list[int]]) -> None:
+    def observe(
+        self,
+        elapsed_s: float,
+        objective: float,
+        routes: list[list[int]],
+        *,
+        objective_distance_km: float | None = None,
+        objective_fields: dict[str, Any] | None = None,
+    ) -> None:
         elapsed = float(elapsed_s)
         value = float(objective)
+        distance = value if objective_distance_km is None else float(objective_distance_km)
         clean_routes = [list(map(int, route)) for route in routes]
         if elapsed < 0.0 or elapsed > self.time_limit_s:
             return
-        if not math.isfinite(value) or not clean_routes:
+        if not math.isfinite(value) or not math.isfinite(distance) or not clean_routes:
             return
         # Seal checkpoints strictly before this event using the previous
-        # incumbent. Keeping only five sealed snapshots plus the current best
-        # avoids retaining every large Cus1000/Cus2000 improvement route.
+        # incumbent. Keeping only the frozen snapshots plus the current best
+        # avoids retaining every large-instance improvement route.
         for checkpoint in self.checkpoints_s:
             if checkpoint < elapsed and checkpoint not in self._sealed_events:
                 self._sealed_events[checkpoint] = self._copy_event(self._best_event)
         if (
             self._best_event is not None
-            and value >= float(self._best_event["objective_distance_km"])
+            and value >= float(self._best_event["objective_value"])
         ):
             return
+        fields = dict(objective_fields or {})
+        fields.setdefault("objective_mode", "distance")
+        fields.setdefault("objective_profile_id", "distance_v1")
+        fields.setdefault("objective_unit", "km")
+        fields.setdefault("objective_value", value)
+        fields.setdefault("objective_cost_usd", None)
+        fields.setdefault("electricity_cost_usd", None)
+        fields.setdefault("vehicle_cost_usd", None)
+        fields.setdefault("vehicles_started", len(clean_routes))
         self._best_event = {
             "event_time_s": elapsed,
-            "objective_distance_km": value,
+            "objective_distance_km": distance,
+            **fields,
             "routes": clean_routes,
             "route_sequence": merge_route_sequences(clean_routes),
             "vehicle_count": len(clean_routes),
@@ -1002,6 +1021,14 @@ class IncumbentEventRecorder:
                     "benchmark_status": benchmark_status,
                     "has_incumbent": has_incumbent,
                     "objective_distance_km": None if event is None else event["objective_distance_km"],
+                    "objective_mode": "" if event is None else event["objective_mode"],
+                    "objective_profile_id": "" if event is None else event["objective_profile_id"],
+                    "objective_unit": "" if event is None else event["objective_unit"],
+                    "objective_value": None if event is None else event["objective_value"],
+                    "objective_cost_usd": None if event is None else event["objective_cost_usd"],
+                    "electricity_cost_usd": None if event is None else event["electricity_cost_usd"],
+                    "vehicle_cost_usd": None if event is None else event["vehicle_cost_usd"],
+                    "vehicles_started": None if event is None else event["vehicles_started"],
                     "vehicle_count": None if event is None else event["vehicle_count"],
                     "routes": [] if event is None else [list(route) for route in event["routes"]],
                     "route_sequence": [] if event is None else list(event["route_sequence"]),
