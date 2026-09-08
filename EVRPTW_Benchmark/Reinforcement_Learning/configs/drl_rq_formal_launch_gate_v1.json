@@ -9,8 +9,8 @@
   ],
   "authorized_terran_training_profile_by_scale": {
     "Cus500": {
-      "physical_batch_size": 112,
-      "effective_batch_size": 112,
+      "physical_batch_size": 74,
+      "effective_batch_size": 74,
       "training_trajectory_count": 50
     },
     "Cus1000": {
@@ -29,6 +29,6 @@
     "G7": "IMPLEMENTED_UNIT_TESTED",
     "G8": "IMPLEMENTED_UNIT_TESTED"
   },
-  "note": "The user explicitly authorized only the fresh TERRAN Cus500 and Cus1000 jobs under objective v2 and reward contract v3. Final memory correction: Cus500 uses batch 112 x n_traj 50 with 1,120,000 training environments and 560,000,000 customer exposures after batch 128 exceeded the usable memory boundary; Cus1000 remains batch 4 x n_traj 50. The other 22 formal candidates remain fail-closed.",
+  "note": "The user explicitly authorized only the fresh TERRAN Cus500 and Cus1000 jobs under objective v2 and reward contract v3. Final measured memory correction: Cus500 uses batch 74 x n_traj 50 with 740,000 training environments and 370,000,000 customer exposures after batch 128 and batch 112 exceeded the 40--42 GiB target; Cus1000 remains batch 4 x n_traj 50. Training validation uses 500 fixed instances every 100 epochs with patience 5 after epoch 5000; final test keeps its independent best-of-100 budget. The other 22 formal candidates remain fail-closed.",
   "file_hash_validation_performed": false
 }

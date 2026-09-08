@@ -122,7 +122,7 @@ logical environments per epoch are now architecture-specific:
 |---|---:|---:|---:|---:|
 | Cus50 | 2,304 | 336 | 144 | 480 |
 | Cus100 | 800 | 96 | 40 | 280 |
-| Cus500 | 64 | 64 | 64 | 112 |
+| Cus500 | 64 | 64 | 64 | 74 |
 | Cus1000 | 2 | 2 | 2 | 4 |
 
 The RTX 2080 Ti physical batch equals the logical batch. Large-scale Ada
@@ -130,24 +130,25 @@ physical batches are method-specific; the final TERRAN values are:
 
 | Scale | AM | EVRPTW-RL | DRL-TS | TERRAN |
 |---|---:|---:|---:|---:|
-| Cus500 | 8 | 16 | 8 | 112 |
+| Cus500 | 8 | 16 | 8 | 74 |
 | Cus1000 | 2 | 2 | 2 | 4 |
 
 The 2026-09-04 Cus1000 boundary sweep is recorded in
 [`RTX6000_ADA_CUS1000_MEMORY_CALIBRATION_V2.md`](../../reports/RTX6000_ADA_CUS1000_MEMORY_CALIBRATION_V2.md).
-The final TERRAN profile pairs 50 training trajectories with batch 112 at
-Cus500 and batch 4 at Cus1000. This gives 5,600 and 200 parallel trajectories,
-respectively. Cus500 uses a 1,120,000-instance training stream and a
-560,000,000-customer exposure budget. This conservative batch correction was
-chosen after `batch=128` exceeded the usable memory boundary. The other
-large-scale methods retain their existing profiles.
+The final TERRAN profile pairs 50 training trajectories with batch 74 at
+Cus500 and batch 4 at Cus1000. This gives 3,700 and 200 parallel trajectories,
+respectively. Cus500 uses a 740,000-instance training stream and a
+370,000,000-customer exposure budget. The batch was selected from measured
+`batch=128` (47,372 MiB) and `batch=112` (45,760 MiB) points to target about
+41,932 MiB. The other large-scale methods retain their existing profiles.
 
 AM uses 5 training trajectories on every scale; TERRAN uses 50. EVRPTW-RL and
-DRL-TS retain one training trajectory. Validation and test use stochastic
-best-of-100 decoding on 500 fixed validation views. Validation runs every 250 epochs through epoch 5,000, then every 50 epochs.
-Early stopping is disabled through epoch 5,000; after that, ten consecutive
-non-improving validations stop the run, with a hard cap of 10,000 epochs and an
-earliest stop at epoch 5,500. `best.ckpt`, `checkpoint_selected.pt`, and
+DRL-TS retain one training trajectory. Training validation uses stochastic
+best-of-100 decoding on 500 fixed validation views every 100 epochs. Early stopping is disabled through
+epoch 5,000; after that, five consecutive non-improving validations stop the
+run, with a hard cap of 10,000 epochs and an earliest stop at epoch 5,500.
+Final test remains independent and keeps its full best-of-100 evaluation
+budget. `best.ckpt`, `checkpoint_selected.pt`, and
 `validation_summary.json` are the formal aliases for `best_overall.ckpt` and
 `validation_summary_overall.json`: they identify the best state across the
 complete run, including optional tail training. `best_within_5000.ckpt` and
@@ -159,7 +160,7 @@ independent of the 10,000-epoch cap.
 
 TERRAN Cus1000 has a manifest-level override of `batch=4`, 50 training
 trajectories, `training_rollout_steps=1250`, `num_minibatches=1`, and
-`ppo_step_chunk_size=624`. Cus500 uses `batch=112`, 50 trajectories, 580
+`ppo_step_chunk_size=624`. Cus500 uses `batch=74`, 50 trajectories, 580
 rollout steps, one minibatch, and a 36-step PPO chunk. Manifests call the
 10,000-epoch outer budget `planned_logical_epochs`; TERRAN's native Adam-step
 count is recorded separately at runtime as `optimizer_steps_total`.

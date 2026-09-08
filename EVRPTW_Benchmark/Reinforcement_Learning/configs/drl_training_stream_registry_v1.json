@@ -1,9 +1,9 @@
 {
-  "artifact_preparation_marker_sha256": "ed1c55da0aede743eca3d724adbca29542065f5a27ec2be8882548b1064074f5",
+  "artifact_preparation_marker_sha256": "87246b8c69679d3cd582c06734e0775f16cc029fc20badfbc5f5e7e01ac6b8e4",
   "registry_id": "drl_rq_formal_training_streams_v2_method_specific",
   "runtime_budget_id": "drl_rq_runtime_budget_v15_ntraj50_maxbatch_warmstart",
   "schema": "drl_training_stream_registry_v1",
-  "sha256": "81f3366acc12cc34898bcd09613cb54903fcf5fb5191c83d87f91f3f84a4c2ba",
+  "sha256": "3cc81d4beb90c849f78bf8820d77edb1b1bb4a3a3192f6237f2a717b44b1a041",
   "source_scope": "training_split_and_track_only",
   "streams": {
     "E/Full-support/am_evrptw/Cus100/seed_1234": {
@@ -347,14 +347,14 @@
       "snapshot": {
         "allowed_family_ids_sha256": null,
         "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
-        "manifest_sha256": "c68d1637220481892e97dfcb6f5785cb57739ec07abd059d66af3f1bb2dfa053",
-        "sample_count": 1120000,
+        "manifest_sha256": "7dcd3e356adae2e0067d6ee2f751cff5b4b042b86bc76ba86b66b73d19986824",
+        "sample_count": 740000,
         "scale": "Cus500",
         "schema": "drl_training_stream_contract_v1",
         "seed": 1234,
-        "sha256": "3c8c4901baa8cf1962eccfcee4b9f75e11f607c2bc050c4cd659ae21257631de",
+        "sha256": "53d1818a4edaaca35199300d8287292171cd4ec1f69145182fd265d46138b1ca",
         "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
-        "stream_content_sha256": "edcb2d7123d7e6575046177e3d850b4b2858757b0ceec6a0bd4925aef76d00e4",
+        "stream_content_sha256": "5c221bebee8efbaf90c33bf77a0d2a1dca7ea47149ee17b5a4e3a7597f298620",
         "stream_schema": "drl_training_id_stream_v3"
       }
     },

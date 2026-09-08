@@ -58,8 +58,8 @@ def test_formal_launch_metadata_and_all_eight_gates_match_active_gate_file() -> 
         == gate_file["authorized_terran_training_profile_by_scale"]
         == {
             "Cus500": {
-                "physical_batch_size": 112,
-                "effective_batch_size": 112,
+                "physical_batch_size": 74,
+                "effective_batch_size": 74,
                 "training_trajectory_count": 50,
             },
             "Cus1000": {
@@ -217,9 +217,10 @@ def test_validation_and_test_use_common_best_of_100_sampling_budget() -> None:
     assert selection["early_stopping"] == "enabled_after_minimum_budget"
     assert selection["minimum_training_epochs"] == 5_000
     assert selection["maximum_training_epochs"] == 10_000
-    assert selection["validation_every_epochs_through_minimum"] == 250
-    assert selection["validation_every_epochs_after_minimum"] == 50
-    assert selection["early_stop_patience_validation_checks"] == 10
+    assert selection["validation_views"] == 500
+    assert selection["validation_every_epochs_through_minimum"] == 100
+    assert selection["validation_every_epochs_after_minimum"] == 100
+    assert selection["early_stop_patience_validation_checks"] == 5
     assert selection["earliest_possible_early_stop_epoch"] == 5_500
     assert selection["primary_checkpoint"] == "best_overall.ckpt"
     assert selection["minimum_budget_checkpoint"] == "best_within_5000.ckpt"

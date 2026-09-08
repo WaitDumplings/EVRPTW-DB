@@ -317,10 +317,10 @@ def test_full_train_budget_has_exact_epoch_environment_and_exposure_semantics() 
         assert row["target_environments"] == total_environments
         assert row["customer_exposure_budget"] == exposures
         assert row["physical_batch_size"] <= batch
-        assert row["validation_every_epochs"] == 250
-        assert row["validation_checkpoints"] == 120
+        assert row["validation_every_epochs"] == 100
+        assert row["validation_checkpoints"] == 100
         assert row["minimum_training_epochs"] == 5_000
-        assert row["post_minimum_validation_every_epochs"] == 50
+        assert row["post_minimum_validation_every_epochs"] == 100
         assert row["validation_views"] == 500
         assert row["validation_candidate_count"] == 100
         assert row["test_candidate_count"] == 100
@@ -461,7 +461,7 @@ def test_a6000_jobs_use_calibrated_even_physical_batches() -> None:
         "am_evrptw": {"Cus500": 8, "Cus1000": 2},
         "evrptw_rl": {"Cus500": 16, "Cus1000": 2},
         "drl_ts": {"Cus500": 8, "Cus1000": 2},
-        "terran": {"Cus500": 112, "Cus1000": 4},
+        "terran": {"Cus500": 74, "Cus1000": 4},
     }
     rows = build()["a6000_2_1"]
     assert rows
@@ -505,17 +505,17 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
     }
     assert dedicated["Cus500"]["num_minibatches"] == 1
     assert dedicated["Cus500"]["ppo_step_chunk_size"] == 36
-    assert dedicated["Cus500"]["physical_batch_size"] == 112
-    assert dedicated["Cus500"]["effective_batch_size"] == 112
+    assert dedicated["Cus500"]["physical_batch_size"] == 74
+    assert dedicated["Cus500"]["effective_batch_size"] == 74
     assert dedicated["Cus500"]["training_trajectory_count"] == 50
-    assert dedicated["Cus500"]["target_environments"] == 1_120_000
-    assert dedicated["Cus500"]["minimum_target_environments"] == 560_000
-    assert dedicated["Cus500"]["customer_exposure_budget"] == 560_000_000
-    assert dedicated["Cus500"]["minimum_customer_exposure_budget"] == 280_000_000
+    assert dedicated["Cus500"]["target_environments"] == 740_000
+    assert dedicated["Cus500"]["minimum_target_environments"] == 370_000
+    assert dedicated["Cus500"]["customer_exposure_budget"] == 370_000_000
+    assert dedicated["Cus500"]["minimum_customer_exposure_budget"] == 185_000_000
     assert dedicated["Cus500"]["exposure_checkpoints"] == [
-        140_000_000,
-        280_000_000,
-        560_000_000,
+        92_500_000,
+        185_000_000,
+        370_000_000,
     ]
     assert dedicated["Cus1000"]["num_minibatches"] == 1
     assert dedicated["Cus1000"]["ppo_step_chunk_size"] == 624
