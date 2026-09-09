@@ -39,6 +39,7 @@ case "$SCALE" in
     ;;
 esac
 BATCH_SIZE="${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
+CUSTOMER_COUNT="${SCALE#Cus}"
 
 if (( EPOCHS < MINIMUM_EPOCHS )); then
   echo "EPOCHS must be at least MINIMUM_EPOCHS" >&2
@@ -55,6 +56,8 @@ fi
 PRE_MINIMUM_CHECKPOINTS=$(((MINIMUM_EPOCHS + VALIDATION_EVERY_EPOCHS - 1) / VALIDATION_EVERY_EPOCHS))
 POST_MINIMUM_CHECKPOINTS=$(((EPOCHS - MINIMUM_EPOCHS + VALIDATION_EVERY_EPOCHS - 1) / VALIDATION_EVERY_EPOCHS))
 VALIDATION_CHECKPOINTS=$((PRE_MINIMUM_CHECKPOINTS + POST_MINIMUM_CHECKPOINTS))
+TRAINING_SAMPLE_COUNT=$((EPOCHS * BATCH_SIZE))
+CUSTOMER_EXPOSURE_BUDGET=$((TRAINING_SAMPLE_COUNT * CUSTOMER_COUNT))
 
 TRAIN_INDEX="$DATASET_ROOT/generation_plan/$PLAN/train/view_index.parquet"
 VAL_INDEX="$DATASET_ROOT/generation_plan/$PLAN/val/view_index.parquet"
@@ -62,6 +65,18 @@ FAMILY_ROOT="$DATASET_ROOT/materialized/families"
 for required in "$TRAIN_INDEX" "$VAL_INDEX" "$FAMILY_ROOT"; do
   [[ -e "$required" ]] || { echo "Missing required dataset path: $required" >&2; exit 1; }
 done
+
+STREAM_DIR="$REPO_ROOT/EVRPTW_Benchmark/results/RRNCO_EV_single_seed_long_v1/artifacts/streams/${EPOCHS}e_b${BATCH_SIZE}"
+TRAINING_STREAM="$STREAM_DIR/$SCALE/seed_${SEED}.parquet"
+if [[ ! -e "$TRAINING_STREAM" ]]; then
+  python -m \
+    EVRPTW_Benchmark.Reinforcement_Learning.RRNCO_EVRPTW.prepare_exploratory_stream \
+    --index "$TRAIN_INDEX" \
+    --scale "$SCALE" \
+    --seed "$SEED" \
+    --sample-count "$TRAINING_SAMPLE_COUNT" \
+    --output "$TRAINING_STREAM"
+fi
 
 EXECUTABLE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/EVRPTW_Benchmark/results/RRNCO_EV_single_seed_long_v1/$SCALE/seed_${SEED}/${EXECUTABLE_COMMIT}}"
@@ -79,6 +94,8 @@ CUDA_VISIBLE_DEVICES="$GPU" python -m \
   --scale "$SCALE" --split-ids train --track-ids train \
   --seed "$SEED" --device cuda \
   --training-epochs "$EPOCHS" \
+  --training-stream-path "$TRAINING_STREAM" \
+  --customer-exposure-budget "$CUSTOMER_EXPOSURE_BUDGET" \
   --minimum-training-epochs "$MINIMUM_EPOCHS" \
   --early-stop-start-epoch "$MINIMUM_EPOCHS" \
   --early-stop-patience-validations "$EARLY_STOP_PATIENCE" \
