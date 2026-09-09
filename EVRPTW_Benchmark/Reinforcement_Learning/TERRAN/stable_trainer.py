@@ -30,6 +30,8 @@ from .models.attention_model_wrapper import STATIC_OBSERVATION_KEYS, STABLE_DYNA
 from .rollout import collect_rollout
 
 SCHEMA = "terran_stable_cost_v1"
+BATCH_RESUME_FIELDS = ("num_envs_per_gpu", "effective_batch_size",
+                       "logical_microbatches_per_epoch", "ppo_step_chunk_size")
 
 
 @dataclass
@@ -128,17 +130,64 @@ def resolve_stable_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("stable training requires a dedicated output_dir")
     if training.get("resume_checkpoint") and training.get("actor_warm_start"):
         raise ValueError("resume and actor warm start are mutually exclusive")
+    if not isinstance(training.get("allow_batch_resize_resume", False), bool):
+        raise ValueError("training.allow_batch_resize_resume must be boolean")
+    if training.get("allow_batch_resize_resume") and not training.get("resume_checkpoint"):
+        raise ValueError("allow_batch_resize_resume requires a resume checkpoint")
     return cfg
 
 
 def config_signature(cfg: dict[str, Any]) -> str:
     """Exclude locations/schedules that do not alter the next training update."""
     payload = {k: deepcopy(cfg.get(k, {})) for k in ("objective", "model", "training", "stable_cost", "env", "data")}
-    for key in ("resume_checkpoint", "actor_warm_start", "checkpoint_interval", "debug"):
+    for key in ("resume_checkpoint", "actor_warm_start", "checkpoint_interval", "debug",
+                "allow_batch_resize_resume"):
         payload["training"].pop(key, None)
     payload["data"].pop("stage2_completed_samples", None)
     payload["data"].pop("stage2_completed_data_passes", None)
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def validate_resume_checkpoint(payload: dict, cfg: dict, *, seed: int,
+                               source: str | Path) -> dict[str, Any]:
+    """Validate stored provenance before considering the explicit batch exception.
+
+    Hash the checkpoint's saved configuration directly: re-resolving it first
+    could hide a stale or altered configuration. Data sampler cursors are
+    intentionally excluded by config_signature and restored from StableState.
+    """
+    original = payload.get("config")
+    original_signature = payload.get("training_signature")
+    if (payload.get("schema") != SCHEMA or not isinstance(original, dict)
+            or config_signature(original) != original_signature):
+        raise ValueError("stable checkpoint original configuration signature is invalid")
+    if payload.get("seed") != seed:
+        raise ValueError("stable checkpoint seed mismatch")
+    signature = config_signature(cfg)
+    changed = {key: {"old": original["training"].get(key), "new": cfg["training"].get(key)}
+               for key in BATCH_RESUME_FIELDS
+               if original["training"].get(key) != cfg["training"].get(key)}
+    allowed = bool(cfg["training"].get("allow_batch_resize_resume", False))
+    if original_signature != signature:
+        if not allowed:
+            raise ValueError("stable checkpoint/config training signature mismatch; "
+                             "batch changes require explicit allow_batch_resize_resume")
+        comparable_old, comparable_new = deepcopy(original), deepcopy(cfg)
+        for comparable in (comparable_old, comparable_new):
+            for key in BATCH_RESUME_FIELDS:
+                comparable["training"].pop(key, None)
+        if config_signature(comparable_old) != config_signature(comparable_new):
+            raise ValueError("batch resize resume permits only changes to "
+                             + ", ".join(BATCH_RESUME_FIELDS))
+    return {"source_checkpoint": str(Path(source).resolve()),
+            "source_epoch": payload["stable_state"]["epoch"],
+            "source_sample_count": payload["stable_state"]["sample_count"],
+            "source_training_signature": original_signature,
+            "training_signature": signature, "allow_batch_resize_resume": allowed,
+            "changed_batch_fields": changed,
+            "old_batch_geometry": {key: original["training"].get(key) for key in BATCH_RESUME_FIELDS},
+            "new_batch_geometry": {key: cfg["training"].get(key) for key in BATCH_RESUME_FIELDS},
+            "optimizer_reset": False}
 
 
 def load_actor_weights(agent: Agent, checkpoint: str | Path) -> dict[str, Any]:
@@ -432,12 +481,10 @@ def train_stable_cost(config: dict[str, Any], seed: int, device=None) -> Path:
     vehicle_unit = max(resolve_objective(cfg["objective"]).vehicle_unit_cost, 1.0)
     state = StableState(lambda_usd=settings["dual_initial"] * vehicle_unit)
     initialization = None
+    resume = None
     if resume_path:
         payload = torch.load(resume_path, map_location="cpu", weights_only=False)
-        if payload.get("schema") != SCHEMA or payload.get("training_signature") != signature:
-            raise ValueError("stable checkpoint/config training signature mismatch")
-        if payload["seed"] != seed:
-            raise ValueError("stable checkpoint seed mismatch")
+        resume = validate_resume_checkpoint(payload, cfg, seed=seed, source=resume_path)
         agent.load_state_dict(payload["model_state_dict"])
         actor_optimizer.load_state_dict(payload["optimizer_state_dict"])
         critic_optimizer.load_state_dict(payload["critic_optimizer_state_dict"])
@@ -450,7 +497,8 @@ def train_stable_cost(config: dict[str, Any], seed: int, device=None) -> Path:
     (output / "resolved_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
     atomic_json(output / "training_contract.json", {"schema": SCHEMA, "training_signature": signature,
         "seed": seed, "objective": cfg["objective"], "reward_unit": "USD", "gamma": 1.0,
-        "initialization": initialization, "sample_mode": "seeded_shuffle_cycle_without_replacement",
+        "initialization": initialization, "resume": resume,
+        "sample_mode": "seeded_shuffle_cycle_without_replacement",
         "effective_instances": training["num_envs_per_gpu"] * training["logical_microbatches_per_epoch"],
         "policy_time_unit": training["rollout_steps"], "critic_weighting": "trajectory_mean",
         "popart_optimizer_state": "reset_output_layer_moments_on_stats_update"})
@@ -465,7 +513,7 @@ def train_stable_cost(config: dict[str, Any], seed: int, device=None) -> Path:
             "epoch": state.epoch, "seed": seed, "config": cfg,
             "model_state_dict": agent.state_dict(), "optimizer_state_dict": actor_optimizer.state_dict(),
             "critic_optimizer_state_dict": critic_optimizer.state_dict(), "stable_state": asdict(state),
-            "initialization": initialization})
+            "initialization": initialization, "resume": resume})
 
     try:
         for epoch in range(state.epoch + 1, training["epochs"] + 1):
@@ -475,10 +523,12 @@ def train_stable_cost(config: dict[str, Any], seed: int, device=None) -> Path:
             agent.train()
             records = []
             set_seed(seed + epoch * 100_000)
+            collect_start = time.perf_counter()
             for microbatch in range(training["logical_microbatches_per_epoch"]):
                 batch = collect_rollout(agent, envs, rollout_steps=training["rollout_steps"],
                     decode_mode="sample", device=device, seed=seed + epoch * 100_000 + microbatch,
-                    cache_static_embeddings=True, reward_discount_factor=1.0, storage_device="cpu")
+                    cache_static_embeddings=True, reward_discount_factor=1.0, storage_device="cpu",
+                    collect_reward_diagnostics=False)
                 if batch.cost_returns is None or batch.old_failure_values is None:
                     raise RuntimeError("stable rollout fields missing")
                 records.append(batch)
@@ -489,12 +539,15 @@ def train_stable_cost(config: dict[str, Any], seed: int, device=None) -> Path:
                 if epoch == 1 and (microbatch == 0 or (microbatch + 1) % 8 == 0):
                     print(f"[StableTERRAN] collecting epoch={epoch} microbatch={microbatch+1}/"
                           f"{training['logical_microbatches_per_epoch']}", flush=True)
+            collect_wall_s = time.perf_counter() - collect_start
             failure_rate = float(torch.cat([batch.terminal_failure.flatten() for batch in records]).float().mean())
             unserved = float(torch.cat([batch.unserved_fraction.flatten() for batch in records]).mean())
             phase_used, lambda_used = state.phase, state.lambda_usd
             atomic_json(progress_path, {"status": "running", "pid": os.getpid(), "epoch": epoch,
                                         "stage": "update", "phase": state.phase})
+            update_start = time.perf_counter()
             metrics = optimize_rollouts(agent, actor_optimizer, critic_optimizer, records, cfg, state)
+            update_wall_s = time.perf_counter() - update_start
             state.epoch = epoch
             state.sample_count = int(pool.sample_count)
             if hasattr(pool, "drain_sampled_view_ids"):
@@ -502,7 +555,8 @@ def train_stable_cost(config: dict[str, Any], seed: int, device=None) -> Path:
                 append_jsonl(output / "sampled_view_ids.jsonl", {"epoch": epoch,
                     "start_cursor": state.sample_count - len(sampled_ids),
                     "end_cursor": state.sample_count, "view_ids": sampled_ids})
-            state.transitions += sum(int(batch.valid.sum()) for batch in records)
+            valid_transitions = sum(int(batch.valid.sum()) for batch in records)
+            state.transitions += valid_transitions
             popart_std = float(agent.critic.popart.std)
             update_dual(state, failure_rate, cfg, popart_std)
             if state.phase == "feasibility":
@@ -510,14 +564,23 @@ def train_stable_cost(config: dict[str, Any], seed: int, device=None) -> Path:
                 if state.success_streak >= settings["warmup_min_epochs"]:
                     state.phase = "cost"
             cost_means = [float(batch.cost_returns[0].mean()) for batch in records]
+            effective_instances = sum(batch.actions.shape[1] for batch in records)
+            epoch_wall_s = time.perf_counter() - epoch_start
+            rollout_timings: dict[str, float] = {}
+            for record in records:
+                for key, value in record.timings.items():
+                    rollout_timings[key] = rollout_timings.get(key, 0.0) + float(value)
             row = {"schema": SCHEMA, "epoch": epoch, "phase": phase_used, "next_phase": state.phase,
                    "failure_rate": failure_rate, "success_rate": 1-failure_rate, "unserved_fraction": unserved,
                    "cost_accrued_mean_usd": float(np.mean(cost_means)), "lambda_usd": lambda_used,
                    "lambda_next_usd": state.lambda_usd, "popart_std_usd": popart_std,
-                   "effective_instances": sum(batch.actions.shape[1] for batch in records),
+                   "effective_instances": effective_instances,
                    "n_traj": training["n_traj"], "samples_seen": state.sample_count,
-                   "transitions": state.transitions, "epoch_wall_s": time.perf_counter()-epoch_start,
-                   "wall_s": time.perf_counter()-started, **metrics}
+                   "transitions": state.transitions, "epoch_wall_s": epoch_wall_s,
+                   "collect_wall_s": collect_wall_s, "update_wall_s": update_wall_s,
+                   "instances_per_s": effective_instances / max(epoch_wall_s, 1e-9),
+                   "valid_transitions_per_s": valid_transitions / max(epoch_wall_s, 1e-9),
+                   "wall_s": time.perf_counter()-started, **rollout_timings, **metrics}
             if str(device).startswith("cuda"):
                 row.update(cuda_peak_allocated_mb=torch.cuda.max_memory_allocated(device) / 2**20,
                            cuda_peak_reserved_mb=torch.cuda.max_memory_reserved(device) / 2**20)

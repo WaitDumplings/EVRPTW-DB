@@ -31,8 +31,8 @@ model:
 training:
   algorithm: stable_cost_v1
   epochs: 10000
-  num_envs_per_gpu: 32
-  effective_batch_size: 128
+  num_envs_per_gpu: 64
+  effective_batch_size: 256
   logical_microbatches_per_epoch: 4
   n_traj: 16
   rollout_steps: 1900

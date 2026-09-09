@@ -24,3 +24,20 @@
 正式配置保持有效 batch 128，分别累积 2 和 4 个物理 batch；所有 rollout 收集完成后才更新策略。每个 epoch 原子保存最新 checkpoint，验证仍使用独立 verifier。原运行日志不覆盖，原 best/latest checkpoint 另存初始化快照；新实验记录 actor 来源和对应 hash。
 
 正式新实验与旧 `drl_rq_protocol_frozen_v1` 的 reward、实例曝光量和更新几何不同，需作为独立方法版本比较。
+
+## 扩大 batch 与恢复验证
+
+用户反馈 GPU 利用率偏低后，将 Cus500/Cus1000 的物理 batch 分别提高到 128/64，有效独立实例 batch 都提高到 256。每实例轨迹数仍为 16，PPO chunk 仍为 16。关闭 stable trainer 不使用的旧 reward 分项汇总；固定种子测试确认动作、reward、return 和终止语义保持一致。
+
+每个规模先完成一个物理 batch 的真实数据采样与 PPO 更新，再用于正式多 microbatch 配置。下表时间为单物理 batch 试跑，不能直接当作有效 batch 256 的正式 epoch 时间。
+
+| 规模 | 新物理 batch | 正式累积次数 | 正式有效 batch | GPU allocated 峰值 GiB | GPU reserved 峰值 GiB | 试跑更新后 KL | 单物理 batch 试跑秒数 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Cus500 | 128 | 2 | 256 | 17.49 | 22.29 | 0.019313 | 73.1 |
+| Cus1000 | 64 | 4 | 256 | 27.40 | 35.17 | 0.000145 | 138.5 |
+
+两组试跑均成功完成，轨迹完成率均为 1.0，无 OOM、非有限 loss 或梯度。nvidia-smi 的短时更新阶段采样平均利用率分别约 88%（24 个样本）与 91%（11 个样本）；这不是整个 epoch 的平均利用率，也不用于声称固定的加速比例。采样仍涉及 CPU 环境推进和每步设备同步。
+
+全套 TERRAN 测试更新为 **261 passed**。新增测试覆盖显式 batch 恢复白名单、原 checkpoint 签名完整性、拒绝其他训练设置变化、真实 trainer 恢复后的模型/两个 Adam/PopArt/StableState 精确一致，以及恢复到已保存的采样游标。
+
+原运行在完整 checkpoint 后迁移：Cus500 epoch 3（cost 阶段，384 个实例），Cus1000 epoch 1（feasibility 阶段，128 个实例）。快照位于 results/TERRAN_stable_cost_v1/batch_resize_20260909；新配置通过原 resolved_config 与 --allow-batch-resize-resume 生成，保留已有 optimizer 学习率及所有训练状态。原输出目录保留。

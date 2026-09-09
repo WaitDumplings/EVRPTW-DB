@@ -162,6 +162,13 @@ def resolve_config(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
         checkpoint = getattr(args, option, None)
         if checkpoint:
             training[field] = str(Path(checkpoint).expanduser().resolve(strict=True))
+    if getattr(args, "resume", None) and not getattr(args, "warm_start_checkpoint", None):
+        training.pop("actor_warm_start", None)
+    if getattr(args, "warm_start_checkpoint", None) and not getattr(args, "resume", None):
+        training.pop("resume_checkpoint", None)
+    training["allow_batch_resize_resume"] = bool(getattr(args, "allow_batch_resize_resume", False))
+    if training["allow_batch_resize_resume"] and not training.get("resume_checkpoint"):
+        raise ValueError("--allow-batch-resize-resume requires --resume")
     if not isinstance(cfg["objective"], dict):
         objective = Path(cfg["objective"])
         if not objective.is_absolute():
@@ -169,6 +176,14 @@ def resolve_config(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
         cfg["objective"] = json.loads(objective.read_text())
     cfg["output_dir"] = str(Path(args.output_dir).expanduser().resolve())
     cfg["seed"] = int(args.seed)
+    resume = None
+    if training.get("resume_checkpoint"):
+        import torch
+        from .stable_trainer import resolve_stable_config, validate_resume_checkpoint
+
+        payload = torch.load(training["resume_checkpoint"], map_location="cpu", weights_only=False)
+        resume = validate_resume_checkpoint(payload, resolve_stable_config(cfg), seed=int(args.seed),
+                                            source=training["resume_checkpoint"])
     metadata = {"schema": "terran_stable_launch_v1", "algorithm": ALGORITHM,
                 "created_at_utc": datetime.now(timezone.utc).isoformat(), "git_commit": _git_commit(),
                 "profile_path": str(profile), "profile_sha256": _sha256(profile),
@@ -180,6 +195,8 @@ def resolve_config(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
                              "seed": int(args.seed), "uses_old_registered_stream": False,
                              "sampled_ids_artifact": "sampled_view_ids.jsonl"},
                 "resolved_config": cfg}
+    if resume is not None:
+        metadata["resume"] = resume
     for field in ["actor_warm_start", "resume_checkpoint"]:
         if training.get(field):
             source = Path(training[field])
@@ -285,6 +302,8 @@ def main() -> None:
         checkpoint = sub.add_mutually_exclusive_group()
         checkpoint.add_argument("--warm-start-checkpoint")
         checkpoint.add_argument("--resume", help="resume stable-cost state into a new run directory")
+        sub.add_argument("--allow-batch-resize-resume", action="store_true",
+                         help="allow only physical/effective batch, microbatch count and replay chunk changes on resume")
         for name in ["epochs", "physical-batch-size", "effective-batch-size", "n-traj", "rollout-steps", "ppo-step-chunk-size"]:
             sub.add_argument(f"--{name}", type=int)
         if command in {"run", "launch"}:
@@ -306,6 +325,8 @@ def main() -> None:
         ignored = [name for name in ["config", "dataset_root", "output_dir", "epochs", "physical_batch_size",
                                      "effective_batch_size", "n_traj", "rollout_steps", "ppo_step_chunk_size",
                                      "warm_start_checkpoint", "resume"] if getattr(args, name, None) is not None]
+        if args.allow_batch_resize_resume:
+            ignored.append("allow_batch_resize_resume")
         if ignored:
             parser.error(f"--resolved-config cannot be combined with configuration overrides: {', '.join(ignored)}")
         config_path = config_path.expanduser().resolve(strict=True)

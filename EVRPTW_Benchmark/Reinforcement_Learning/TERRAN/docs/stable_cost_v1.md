@@ -21,8 +21,8 @@ Actor 更新后还会在完整逻辑 batch 上检查经验 KL；超过阈值时�
 | Profile | 训练 views | 验证 views | 充电站 | 物理 batch | 累积次数 | 有效 batch | 每实例轨迹 | PPO chunk | Actor LR | Train/val 步数上限 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | `cus100.yaml` | 50,000 | 500 | 20 | 64 | 2 | 128 | 16 | 32 | 1e-4 | 200 |
-| `cus500.yaml` | 10,000 | 500 | 50 | 64 | 2 | 128 | 16 | 16 | 5e-5 | 950 |
-| `cus1000.yaml` | 5,000 | 500 | 50 | 32 | 4 | 128 | 16 | 16 | 3e-5 | 1900 |
+| `cus500.yaml` | 10,000 | 500 | 50 | 128 | 2 | 256 | 16 | 16 | 5e-5 | 950 |
+| `cus1000.yaml` | 5,000 | 500 | 50 | 64 | 4 | 256 | 16 | 16 | 3e-5 | 1900 |
 
 Profiles 位于 `../configs/stable_cost_v1/`。共用参数包括 critic LR `1e-4`、每逻辑 batch 两轮 PPO、10000 epochs、每个 epoch 原子保存最新 checkpoint、每 100 epochs 验证 500 个实例，每实例采样 100 个候选。不同规模的 batch、chunk、学习率和时间预算是数值计算设置；经济目标系数相同。显存上限仍须在目标机器上实测。
 
@@ -75,7 +75,23 @@ Cus1000 使用 `--scale Cus1000`、另一个输出目录和目标 GPU。也可�
   --resume /path/to/previous-run/checkpoint_latest.pt
 ```
 
-Resume 恢复 actor、critic、两套优化器、PopArt、乘子、训练阶段和样本游标。`--resume` 与 `--warm-start-checkpoint` 互斥。当前恢复严格核对训练签名和 seed，包括总 epochs、batch、chunk、时间预算及训练数据索引；如原实验使用自定义参数，恢复时必须保留。修改训练设置应创建新实验，不能标成原实验的严格恢复。
+Resume 恢复 actor、critic、两套优化器、PopArt、乘子、训练阶段和样本游标。`--resume` 与 `--warm-start-checkpoint` 互斥。默认严格核对训练签名和 seed，包括总 epochs、batch、chunk、时间预算及训练数据索引；如原实验使用自定义参数或较早版本的 profile，恢复时应通过 `--config` 传入原实验的 `resolved_config.yaml`。
+
+显式添加 `--allow-batch-resize-resume` 可在保留完整训练状态的同时调整物理 batch、有效 batch、累积次数和 replay chunk。例如将早期 Cus500 的物理/有效 batch 从 64/128 扩到 128/256：
+
+```bash
+python -m EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.stable_cli launch \
+  --scale Cus500 --config /path/to/previous-run/resolved_config.yaml \
+  --resume /path/to/previous-run/checkpoint_latest.pt \
+  --allow-batch-resize-resume --physical-batch-size 128 --effective-batch-size 256 \
+  --output-dir /path/to/new/larger-batch-run --gpu 0
+```
+
+该选项先校验 checkpoint 保存配置的原始签名，再核对除四个 batch/chunk 字段外的所有训练签名字段；不允许借此修改 `n_traj`、学习率、目标、时间预算或训练数据。新目录的 provenance、contract 和 checkpoint 记录来源、原/新 batch 与签名，不能将其当作原 batch 下完全相同的随机训练序列。已经自适应降低的 optimizer 学习率会原样恢复。
+
+新版训练关闭未使用的旧 reward 分项 CPU 汇总，原始成本与失败指标仍照常记录；旧训练默认保留这些诊断。每轮记录采样耗时、更新耗时、实例与有效 transition 吞吐量，以区分 CPU 采样瓶颈和 GPU 更新负载。增大累积次数只增加逻辑 batch；增大物理 batch 才增加单次前向/反向的 GPU 工作量。
+
+吞吐量统计覆盖当轮训练，不含随后 checkpoint 和 validation；rollout 分项时间是主机墙钟统计，不能作为 GPU kernel profiler 读数。
 
 ## 工程参考与比较范围
 

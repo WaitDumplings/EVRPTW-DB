@@ -440,7 +440,14 @@ def collect_rollout(
     reward_discount_factor: float = 1.0,
     base_reward_stats: BoundedBaseRewardStats | None = None,
     storage_device: str | torch.device | None = None,
+    collect_reward_diagnostics: bool = True,
 ) -> RolloutBatch:
+    """Collect transitions; optional reward diagnostics never affect training.
+
+    Disabling diagnostics skips the legacy per-component CPU aggregation and
+    returns an empty ``reward_diagnostics`` mapping. An explicitly supplied
+    ``base_reward_stats`` accumulator is still updated.
+    """
     if int(rollout_steps) <= 0:
         raise ValueError("rollout_steps must be positive")
     stable_mode = getattr(agent, "critic_mode", "legacy") == "stable_cost_v1"
@@ -495,17 +502,19 @@ def collect_rollout(
         "pbrs_total",
         "shaping_total",
     )
-    reward_diagnostics = {
-        "active_count": 0.0,
-        "customer_action_count": 0.0,
-        "noncustomer_action_count": 0.0,
-    }
-    for key in reward_component_keys:
-        reward_diagnostics[f"{key}_sum"] = 0.0
-        reward_diagnostics[f"{key}_discounted_sum"] = 0.0
-        reward_diagnostics[f"{key}_abs_sum"] = 0.0
-        reward_diagnostics[f"{key}_customer_action_sum"] = 0.0
-        reward_diagnostics[f"{key}_noncustomer_action_sum"] = 0.0
+    reward_diagnostics = {}
+    if collect_reward_diagnostics:
+        reward_diagnostics = {
+            "active_count": 0.0,
+            "customer_action_count": 0.0,
+            "noncustomer_action_count": 0.0,
+        }
+        for key in reward_component_keys:
+            reward_diagnostics[f"{key}_sum"] = 0.0
+            reward_diagnostics[f"{key}_discounted_sum"] = 0.0
+            reward_diagnostics[f"{key}_abs_sum"] = 0.0
+            reward_diagnostics[f"{key}_customer_action_sum"] = 0.0
+            reward_diagnostics[f"{key}_noncustomer_action_sum"] = 0.0
 
     for step_index in range(int(rollout_steps)):
         valid = ~done
@@ -562,96 +571,109 @@ def collect_rollout(
         next_observations, reward_np, step_done, infos = step_envs(envs, action_np)
         env_step_time_s += time.perf_counter() - env_start
 
-        # Aggregate reward components while the pre-step active mask is still
-        # available.  Keeping only float64 sums adds negligible memory and makes
-        # scale failures observable in every formal epoch.
-        for env_index, (env, info) in enumerate(zip(envs, infos)):
-            active = np.asarray(valid[env_index], dtype=bool)
-            active_count = int(active.sum())
-            if active_count == 0:
-                continue
-            components = info.get("reward_components")
-            if components is None:
-                base = np.asarray(reward_np[env_index], dtype=np.float64)
-                arrays = {
-                    "base": base,
-                    "distance": base,
-                    "objective": base,
-                    "electricity_cost": np.zeros_like(base),
-                    "vehicle_cost": np.zeros_like(base),
-                    "base_non_objective": np.zeros_like(base),
-                    "base_non_distance": np.zeros_like(base),
-                    "pbrs_customer": np.zeros_like(base),
-                    "pbrs_repair_distance": np.zeros_like(base),
-                    "pbrs_feasible_ratio": np.zeros_like(base),
-                    "terminal_heuristic": np.zeros_like(base),
-                    "terminal_task_total": np.zeros_like(base),
-                    "terminal_success_bonus": np.zeros_like(base),
-                    "terminal_failure_base": np.zeros_like(base),
-                    "terminal_unserved": np.zeros_like(base),
-                    "shaped": base,
-                }
-                previous = previous_infos[env_index]
-                if "objective_value" in info and "objective_value" in previous:
-                    normalized = bool(getattr(env.unwrapped, "normalize_reward", False))
-                    scale = float(env.unwrapped.reward_objective_scale) if normalized else 1.0
-                    distance_scale = float(env.unwrapped.reward_distance_scale_km) if normalized else 1.0
-                    arrays["objective"] = -(np.asarray(info["objective_value"]) - np.asarray(previous["objective_value"])) / scale
-                    arrays["distance"] = -(np.asarray(info["objective_distance_km"]) - np.asarray(previous["objective_distance_km"])) / distance_scale
-                    arrays["base_non_objective"] = base - arrays["objective"]
-                    arrays["base_non_distance"] = arrays["base_non_objective"]
-                    for key in ("electricity_cost", "vehicle_cost"):
-                        if info.get(f"{key}_usd") is not None:
-                            arrays[key] = -(np.asarray(info[f"{key}_usd"]) - np.asarray(previous[f"{key}_usd"])) / scale
-            else:
-                arrays = {
-                    key: np.asarray(components.get(key, np.zeros_like(reward_np[env_index])), dtype=np.float64)
-                    for key in reward_component_keys
-                    if key not in {"pbrs_total", "shaping_total"}
-                }
-            arrays["pbrs_total"] = (
-                arrays["pbrs_customer"]
-                + arrays["pbrs_repair_distance"]
-                + arrays["pbrs_feasible_ratio"]
-            )
-            # ``terminal_task_total`` is part of the canonical task, not
-            # auxiliary shaping.  Keep this long-standing diagnostic field but
-            # narrow its semantics to PBRS plus the legacy heuristic only.
-            arrays["shaping_total"] = (
-                arrays["pbrs_total"] + arrays["terminal_heuristic"]
-            )
-            if base_reward_stats is not None:
-                base_reward_stats.update(arrays["base"], active)
-            num_customers = int(getattr(env.unwrapped, "num_customers", 0))
-            customer_action = (
-                active
-                & (action_np[env_index] >= 1)
-                & (action_np[env_index] <= num_customers)
-            )
-            noncustomer_action = active & ~customer_action
-            reward_diagnostics["active_count"] += active_count
-            reward_diagnostics["customer_action_count"] += int(
-                customer_action.sum()
-            )
-            reward_diagnostics["noncustomer_action_count"] += int(
-                noncustomer_action.sum()
-            )
-            for key, array in arrays.items():
-                active_values = array[active]
-                reward_diagnostics[f"{key}_sum"] += float(active_values.sum())
-                reward_diagnostics[f"{key}_discounted_sum"] += float(
-                    (float(reward_discount_factor) ** step_index)
-                    * active_values.sum()
+        if collect_reward_diagnostics:
+            # Aggregate reward components while the pre-step active mask is still
+            # available.  Keeping only float64 sums adds negligible memory and makes
+            # scale failures observable in every formal epoch.
+            for env_index, (env, info) in enumerate(zip(envs, infos)):
+                active = np.asarray(valid[env_index], dtype=bool)
+                active_count = int(active.sum())
+                if active_count == 0:
+                    continue
+                components = info.get("reward_components")
+                if components is None:
+                    base = np.asarray(reward_np[env_index], dtype=np.float64)
+                    arrays = {
+                        "base": base,
+                        "distance": base,
+                        "objective": base,
+                        "electricity_cost": np.zeros_like(base),
+                        "vehicle_cost": np.zeros_like(base),
+                        "base_non_objective": np.zeros_like(base),
+                        "base_non_distance": np.zeros_like(base),
+                        "pbrs_customer": np.zeros_like(base),
+                        "pbrs_repair_distance": np.zeros_like(base),
+                        "pbrs_feasible_ratio": np.zeros_like(base),
+                        "terminal_heuristic": np.zeros_like(base),
+                        "terminal_task_total": np.zeros_like(base),
+                        "terminal_success_bonus": np.zeros_like(base),
+                        "terminal_failure_base": np.zeros_like(base),
+                        "terminal_unserved": np.zeros_like(base),
+                        "shaped": base,
+                    }
+                    previous = previous_infos[env_index]
+                    if "objective_value" in info and "objective_value" in previous:
+                        normalized = bool(getattr(env.unwrapped, "normalize_reward", False))
+                        scale = float(env.unwrapped.reward_objective_scale) if normalized else 1.0
+                        distance_scale = float(env.unwrapped.reward_distance_scale_km) if normalized else 1.0
+                        arrays["objective"] = -(np.asarray(info["objective_value"]) - np.asarray(previous["objective_value"])) / scale
+                        arrays["distance"] = -(np.asarray(info["objective_distance_km"]) - np.asarray(previous["objective_distance_km"])) / distance_scale
+                        arrays["base_non_objective"] = base - arrays["objective"]
+                        arrays["base_non_distance"] = arrays["base_non_objective"]
+                        for key in ("electricity_cost", "vehicle_cost"):
+                            if info.get(f"{key}_usd") is not None:
+                                arrays[key] = -(np.asarray(info[f"{key}_usd"]) - np.asarray(previous[f"{key}_usd"])) / scale
+                else:
+                    arrays = {
+                        key: np.asarray(components.get(key, np.zeros_like(reward_np[env_index])), dtype=np.float64)
+                        for key in reward_component_keys
+                        if key not in {"pbrs_total", "shaping_total"}
+                    }
+                arrays["pbrs_total"] = (
+                    arrays["pbrs_customer"]
+                    + arrays["pbrs_repair_distance"]
+                    + arrays["pbrs_feasible_ratio"]
                 )
-                reward_diagnostics[f"{key}_abs_sum"] += float(
-                    np.abs(active_values).sum()
+                # ``terminal_task_total`` is part of the canonical task, not
+                # auxiliary shaping.  Keep this long-standing diagnostic field but
+                # narrow its semantics to PBRS plus the legacy heuristic only.
+                arrays["shaping_total"] = (
+                    arrays["pbrs_total"] + arrays["terminal_heuristic"]
                 )
-                reward_diagnostics[f"{key}_customer_action_sum"] += float(
-                    array[customer_action].sum()
+                if base_reward_stats is not None:
+                    base_reward_stats.update(arrays["base"], active)
+                num_customers = int(getattr(env.unwrapped, "num_customers", 0))
+                customer_action = (
+                    active
+                    & (action_np[env_index] >= 1)
+                    & (action_np[env_index] <= num_customers)
                 )
-                reward_diagnostics[f"{key}_noncustomer_action_sum"] += float(
-                    array[noncustomer_action].sum()
+                noncustomer_action = active & ~customer_action
+                reward_diagnostics["active_count"] += active_count
+                reward_diagnostics["customer_action_count"] += int(
+                    customer_action.sum()
                 )
+                reward_diagnostics["noncustomer_action_count"] += int(
+                    noncustomer_action.sum()
+                )
+                for key, array in arrays.items():
+                    active_values = array[active]
+                    reward_diagnostics[f"{key}_sum"] += float(active_values.sum())
+                    reward_diagnostics[f"{key}_discounted_sum"] += float(
+                        (float(reward_discount_factor) ** step_index)
+                        * active_values.sum()
+                    )
+                    reward_diagnostics[f"{key}_abs_sum"] += float(
+                        np.abs(active_values).sum()
+                    )
+                    reward_diagnostics[f"{key}_customer_action_sum"] += float(
+                        array[customer_action].sum()
+                    )
+                    reward_diagnostics[f"{key}_noncustomer_action_sum"] += float(
+                        array[noncustomer_action].sum()
+                    )
+
+        elif base_reward_stats is not None:
+            # A caller may disable diagnostics while still using the separate
+            # bounded base-reward accumulator. Preserve that contract cheaply.
+            for env_index, info in enumerate(infos):
+                active = valid[env_index]
+                if not active.any():
+                    continue
+                components = info.get("reward_components")
+                base = (reward_np[env_index] if components is None else
+                        components.get("base", np.zeros_like(reward_np[env_index])))
+                base_reward_stats.update(np.asarray(base, dtype=np.float64), active)
 
         obs_steps.append(obs_batch)
         actions_steps.append(actions.detach().to(storage_device))

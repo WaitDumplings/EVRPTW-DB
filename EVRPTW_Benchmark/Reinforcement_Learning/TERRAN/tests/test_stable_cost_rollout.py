@@ -10,7 +10,10 @@ from EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.tests.test_am_model impor
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import resolve_objective
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.env_factory import make_terran_env
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.pbrs import PotentialRewardConfig
-from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import collect_rollout
+from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import (
+    BoundedBaseRewardStats,
+    collect_rollout,
+)
 
 
 def _env(**kwargs):
@@ -186,3 +189,43 @@ def test_actual_stable_agent_replays_compact_cpu_rollout_without_value_drift():
             torch.testing.assert_close(logprob, batch.old_logprobs[step])
             torch.testing.assert_close(outputs["cost_value"], batch.old_cost_values[step])
             torch.testing.assert_close(outputs["failure_logits"], batch.old_failure_logits[step])
+
+
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize("with_base_stats", [False, True])
+def test_disabling_reward_diagnostics_preserves_seeded_rollout(fast, with_base_stats):
+    from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.models import Agent
+
+    torch.manual_seed(81)
+    agent = Agent(embedding_dim=32, n_encode_layers=1, critic_mode="stable_cost_v1", device="cpu")
+    agent.eval()
+    batches, accumulators = [], []
+    for enabled in (True, False):
+        torch.manual_seed(919)
+        env = _env(n_traj=2, rollout_horizon_steps=5, use_fast_env=fast)
+        stats = BoundedBaseRewardStats() if with_base_stats else None
+        try:
+            batches.append(collect_rollout(
+                agent, [env], 5, "sample", "cpu", seed=919,
+                storage_device="cpu", collect_reward_diagnostics=enabled,
+                base_reward_stats=stats,
+            ))
+            accumulators.append(stats)
+        finally:
+            env.close()
+    enabled, disabled = batches
+    assert enabled.reward_diagnostics["active_count"] > 0
+    assert disabled.reward_diagnostics == {}
+    for name, expected in vars(enabled).items():
+        if isinstance(expected, torch.Tensor):
+            torch.testing.assert_close(getattr(disabled, name), expected, rtol=0, atol=0)
+    assert len(enabled.observations) == len(disabled.observations)
+    for expected, actual in zip(enabled.observations, disabled.observations):
+        assert actual.keys() == expected.keys()
+        for key in expected:
+            np.testing.assert_array_equal(actual[key], expected[key])
+    for key in ("objective_value", "success", "served_customers", "failure_terminal", "failure_reason"):
+        np.testing.assert_array_equal(disabled.final_infos[0][key], enabled.final_infos[0][key])
+    if with_base_stats:
+        assert accumulators[0].count > 0
+        assert accumulators[0].summary() == accumulators[1].summary()

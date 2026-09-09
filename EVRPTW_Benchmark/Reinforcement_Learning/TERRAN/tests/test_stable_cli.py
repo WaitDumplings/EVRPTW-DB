@@ -36,7 +36,7 @@ def test_prepare_uses_real_scale_and_independent_sampling(tmp_path, customers, m
     cfg = yaml.safe_load(path.read_text())
     provenance = json.loads((path.parent / "provenance.json").read_text())
     assert cfg["training"]["logical_microbatches_per_epoch"] == microbatches
-    assert cfg["training"]["effective_batch_size"] == 128
+    assert cfg["training"]["effective_batch_size"] == (128 if customers == 100 else 256)
     assert cfg["data"]["num_charging_stations"] == (20 if customers == 100 else 50)
     assert cfg["stable_cost"]["popart_min_std"] == 1.0
     assert cfg["data"]["training_index_sha256"] == provenance["train_index"]["sha256"]
@@ -51,6 +51,50 @@ def test_invalid_batch_is_rejected_before_creating_output(tmp_path):
     args = _arguments(tmp_path)
     args.effective_batch_size = 129
     with pytest.raises(ValueError, match="integer multiple"):
+        stable_cli.prepare(args)
+    assert not Path(args.output_dir).exists()
+
+
+def test_batch_resume_prepare_checks_signature_and_records_explicit_exception(tmp_path):
+    from dataclasses import asdict
+    import torch
+    from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.stable_trainer import (
+        SCHEMA, StableState, config_signature, resolve_stable_config,
+    )
+
+    args = _arguments(tmp_path)
+    cfg, _ = stable_cli.resolve_config(args)
+    cfg = resolve_stable_config(cfg)
+    # A resolved config from an actor-warmstarted run must become a full resume.
+    cfg["training"]["actor_warm_start"] = str(tmp_path / "old-actor.ckpt")
+    cfg["data"]["stage2_completed_samples"] = 31
+    source_config = tmp_path / "old-resolved.yaml"
+    source_config.write_text(yaml.safe_dump(cfg))
+    source_checkpoint = tmp_path / "checkpoint.pt"
+    torch.save({"schema": SCHEMA, "seed": 1234, "config": cfg,
+                "training_signature": config_signature(cfg),
+                "stable_state": asdict(StableState(epoch=1, sample_count=128))}, source_checkpoint)
+    args.config, args.resume = str(source_config), str(source_checkpoint)
+    args.physical_batch_size = cfg["training"]["num_envs_per_gpu"] * 2
+    args.effective_batch_size = cfg["training"]["effective_batch_size"] * 2
+    with pytest.raises(ValueError, match="explicit allow_batch_resize_resume"):
+        stable_cli.prepare(args)
+    assert not Path(args.output_dir).exists()
+    args.allow_batch_resize_resume = True
+    path = stable_cli.prepare(args)
+    resumed = yaml.safe_load(path.read_text())
+    assert resumed["training"]["allow_batch_resize_resume"] is True
+    assert "actor_warm_start" not in resumed["training"]
+    provenance = json.loads((path.parent / "provenance.json").read_text())
+    assert provenance["resume"]["source_checkpoint"] == str(source_checkpoint)
+    assert provenance["resume"]["source_sample_count"] == 128
+    assert provenance["resume"]["new_batch_geometry"]["effective_batch_size"] == args.effective_batch_size
+
+
+def test_batch_resize_flag_without_resume_rejected_before_output(tmp_path):
+    args = _arguments(tmp_path)
+    args.allow_batch_resize_resume = True
+    with pytest.raises(ValueError, match="requires --resume"):
         stable_cli.prepare(args)
     assert not Path(args.output_dir).exists()
 

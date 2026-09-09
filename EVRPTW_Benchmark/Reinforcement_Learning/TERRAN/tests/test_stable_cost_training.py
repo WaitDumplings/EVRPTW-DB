@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict, fields, replace
 from types import SimpleNamespace
+import json
 
 import pytest
 import torch
@@ -26,6 +27,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.stable_trainer import (
     resolve_stable_config,
     rollout_policy_kl,
     trajectory_state_weights,
+    validate_resume_checkpoint,
 )
 
 
@@ -303,6 +305,127 @@ def test_checkpoint_restores_both_adam_optimizers_popart_and_next_update(tmp_pat
     for key, value in agent.state_dict().items():
         torch.testing.assert_close(value, restored.state_dict()[key], rtol=0, atol=0, msg=key)
     assert resumed_state == state
+
+
+def _resume_payload(cfg):
+    return {"schema": SCHEMA, "training_signature": config_signature(cfg),
+            "config": deepcopy(cfg), "seed": 1234,
+            "stable_state": asdict(StableState(epoch=2, sample_count=113))}
+
+
+def _resized_config(cfg):
+    resized = deepcopy(cfg)
+    resized["training"].update(num_envs_per_gpu=4, effective_batch_size=12,
+                                logical_microbatches_per_epoch=3, ppo_step_chunk_size=1,
+                                resume_checkpoint="/tmp/source.ckpt")
+    return resized
+
+
+def test_resume_batch_change_is_strict_by_default_and_requires_explicit_flag():
+    cfg = _cfg()
+    payload = _resume_payload(cfg)
+    resized = _resized_config(cfg)
+    with pytest.raises(ValueError, match="explicit allow_batch_resize_resume"):
+        validate_resume_checkpoint(payload, resized, seed=1234, source="/tmp/source.ckpt")
+    resized["training"]["allow_batch_resize_resume"] = True
+    metadata = validate_resume_checkpoint(payload, resized, seed=1234, source="/tmp/source.ckpt")
+    assert set(metadata["changed_batch_fields"]) == set(stable_trainer.BATCH_RESUME_FIELDS)
+    assert metadata["old_batch_geometry"]["effective_batch_size"] == 2
+    assert metadata["new_batch_geometry"]["effective_batch_size"] == 12
+    assert metadata["source_sample_count"] == 113
+    assert metadata["optimizer_reset"] is False
+
+
+@pytest.mark.parametrize("section,key,value", [
+    ("training", "n_traj", 16), ("training", "learning_rate", 0.01),
+    ("training", "critic_learning_rate", 0.01), ("training", "ppo_update_epochs", 3),
+    ("training", "rollout_steps", 100), ("training", "epochs", 3),
+    ("model", "embedding_dim", 32), ("stable_cost", "target_kl", 0.01),
+    ("env", "normalize_reward", True), ("objective", "vehicle_unit_cost", 9999),
+    ("data", "stage2_scale", "Cus1000"),
+])
+def test_batch_resume_flag_never_bypasses_other_training_changes(section, key, value):
+    cfg = _cfg()
+    resized = _resized_config(cfg)
+    resized["training"]["allow_batch_resize_resume"] = True
+    resized[section][key] = value
+    with pytest.raises(ValueError, match="permits only changes"):
+        validate_resume_checkpoint(_resume_payload(cfg), resized, seed=1234, source="source.ckpt")
+
+
+def test_resume_validates_checkpoint_original_signature_before_batch_exception():
+    cfg = _cfg()
+    payload = _resume_payload(cfg)
+    resized = _resized_config(cfg)
+    resized["training"]["allow_batch_resize_resume"] = True
+    # Even tampering with an allowed field must fail original provenance checks.
+    payload["config"]["training"]["ppo_step_chunk_size"] = 3
+    with pytest.raises(ValueError, match="original configuration signature is invalid"):
+        validate_resume_checkpoint(payload, resized, seed=1234, source="source.ckpt")
+
+
+def test_batch_resume_requires_checkpoint_and_preserves_seed_validation():
+    cfg = _cfg()
+    cfg["training"]["allow_batch_resize_resume"] = True
+    with pytest.raises(ValueError, match="requires a resume checkpoint"):
+        resolve_stable_config(cfg)
+    cfg["training"]["resume_checkpoint"] = "source.ckpt"
+    with pytest.raises(ValueError, match="seed mismatch"):
+        validate_resume_checkpoint(_resume_payload(cfg), cfg, seed=17, source="source.ckpt")
+
+
+def test_batch_resize_training_resume_preserves_all_state_and_sampler_cursor(tmp_path, monkeypatch):
+    from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import trainer
+
+    agent, cfg = _agent(), _cfg()
+    optimizers = _optimizers(agent)
+    state = StableState(phase="cost", lambda_usd=200, epoch=2, sample_count=113,
+                        success_streak=3, transitions=591, best_feasible_rate=1.0, best_cost=321)
+    optimize_rollouts(agent, *optimizers, [_batch(agent)], cfg, state)
+    # Deliberately distinguish the old pool creation cursor from current progress.
+    cfg["data"]["stage2_completed_samples"] = 17
+    payload = {**_resume_payload(cfg), "stable_state": asdict(state),
+               "model_state_dict": agent.state_dict(),
+               "optimizer_state_dict": optimizers[0].state_dict(),
+               "critic_optimizer_state_dict": optimizers[1].state_dict(),
+               "initialization": {"path": "legacy-actor.ckpt", "optimizer_reset": True}}
+    source = tmp_path / "source.ckpt"
+    _atomic_checkpoint(source, payload)
+    resized = _resized_config(cfg)
+    resized["training"].update(allow_batch_resize_resume=True, resume_checkpoint=str(source))
+    resized["output_dir"] = str(tmp_path / "resumed")
+    observed = {}
+
+    def make_empty_envs(actual_cfg, seed):
+        observed.update(cfg=deepcopy(actual_cfg), seed=seed)
+        return [], SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(trainer, "make_envs", make_empty_envs)
+    # An already completed schedule takes the real restore/save path, with no
+    # gradient update that could obscure whether any state was reset.
+    latest = stable_trainer.train_stable_cost(resized, seed=1234, device="cpu")
+    restored = torch.load(latest, weights_only=False)
+    assert restored["stable_state"] == asdict(state)
+    assert observed["cfg"]["data"]["stage2_completed_samples"] == 113
+    assert observed["seed"] == 1234
+    assert restored["initialization"] == payload["initialization"]
+    for name, value in agent.state_dict().items():
+        torch.testing.assert_close(restored["model_state_dict"][name], value, rtol=0, atol=0)
+    for optimizer, field in zip(optimizers, ["optimizer_state_dict", "critic_optimizer_state_dict"]):
+        comparison = deepcopy(optimizer)
+        comparison.load_state_dict(restored[field])
+        _assert_optimizer_state_equal(comparison, optimizer.state_dict())
+    contract = json.loads((latest.parent / "training_contract.json").read_text())
+    assert restored["resume"] == contract["resume"]
+    assert restored["resume"]["source_checkpoint"] == str(source)
+    assert restored["resume"]["source_sample_count"] == 113
+    assert restored["resume"]["new_batch_geometry"]["effective_batch_size"] == 12
+    assert restored["training_signature"] == config_signature(restored["config"])
+    # Saved cursor rewriting and the one-time exception flag do not break a
+    # subsequent normal, strict resume of the new batch geometry.
+    strict = deepcopy(restored["config"])
+    strict["training"].pop("allow_batch_resize_resume")
+    assert not validate_resume_checkpoint(restored, strict, seed=1234, source=latest)["changed_batch_fields"]
 
 
 def _assert_optimizer_state_equal(actual, expected, *, expected_lr=None):
