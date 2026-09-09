@@ -1,0 +1,116 @@
+{
+  "schema": "rrnco_ev_v2_resource_correctness_gate_v1",
+  "date": "2026-09-09",
+  "device": "NVIDIA GeForce RTX 2080 Ti 11 GiB",
+  "torch_version": "2.5.1+cu121",
+  "test_count": 13,
+  "legacy_compatibility": "HEAD/default initial parameters, state-dict keys, row/col embeddings and decoder logits matched exactly at rtol=atol=0",
+  "same_shape_legacy_checkpoint_comparison": {
+    "scale": "Cus100",
+    "split": "train",
+    "physical_batch_size": 6,
+    "trajectories_per_instance": 5,
+    "nodes": 121,
+    "training_rollout_steps": 120,
+    "reward_distance_scale_km": 20.0,
+    "initialization": "untrained seed 1234",
+    "measurement": "one rollout and backward, without optimizer step",
+    "variants": [
+      {
+        "variant": "legacy",
+        "batch": 6,
+        "trajectories": 5,
+        "nodes": 121,
+        "seconds": 1.3822587979957461,
+        "peak_allocated_mib": 8057.0224609375,
+        "peak_reserved_mib": 8500.0,
+        "finite_gradients": true,
+        "relation_grad_norm": 0.004959487821906805,
+        "complete_count": 0,
+        "trajectory_count": 30
+      },
+      {
+        "variant": "chunked_legacy",
+        "batch": 6,
+        "trajectories": 5,
+        "nodes": 121,
+        "seconds": 1.1563559190835804,
+        "peak_allocated_mib": 342.12548828125,
+        "peak_reserved_mib": 574.0,
+        "finite_gradients": true,
+        "relation_grad_norm": 0.004959477111697197,
+        "complete_count": 0,
+        "trajectory_count": 30
+      }
+    ],
+    "interpretation": "Measures legacy relation-encoder activation reduction and gradient equivalence; neither variant completed any trajectory; not a cost or steady-state throughput comparison."
+  },
+  "joint_softmax_cus50_full_training_gate": {
+    "scale": "Cus50",
+    "seed": 1234,
+    "physical_batch_size": 128,
+    "effective_batch_size": 128,
+    "trajectories_per_instance": 5,
+    "graph_mode": "full",
+    "aft_mode": "stable",
+    "stable_aft_implementation": "chunked_joint_logits_softmax_with_checkpoint",
+    "distance_sampling": "nearest",
+    "relation_temperature": 5.0,
+    "relation_chunk_size": 32,
+    "checkpoint_bias": true,
+    "reinforce_baseline": "paper",
+    "learning_rate": 0.0001,
+    "weight_decay": 0.01,
+    "training_split": "train",
+    "validation_split": "val",
+    "training": {
+      "status": "passed",
+      "completed_training_epochs": 3,
+      "optimizer_steps": 3,
+      "instances_seen": 384,
+      "customer_exposures": 19200,
+      "peak_gpu_memory_bytes": 3187914240,
+      "wall_time_s": 19.778504475951195,
+      "training_rollout_steps": 65,
+      "validation_candidates": 100,
+      "reward_distance_scale_km": 47.20135021209717,
+      "objective_mode": "energy_vehicle_cost",
+      "reward_contract_id": "drl_energy_vehicle_reference_scale_v3",
+      "reward_contract_sha256": "21105b1bcd92ffe4574611cc33c3949e7b7239b0b5ee13ad884efe0e65d73465"
+    },
+    "rollouts": {
+      "trajectory_count": 1920,
+      "mean_trajectory_steps": 64.2734375,
+      "trajectory_steps_max": 65,
+      "mean_environment_feasible_rate": 0.11197916666666667,
+      "rollout_budget_exhausted_rate": 0.8880208333333334
+    },
+    "validation": {
+      "instances": 10,
+      "complete_and_feasible": 9,
+      "complete_and_feasible_rate": 0.9,
+      "mean_verified_objective": 985.8194440380695,
+      "mean_verified_distance_km": 439.1053110746046,
+      "mean_verified_vehicle_count": 2.2222222222222223,
+      "candidate_count": 100,
+      "validation_seed": 910001234,
+      "validation_wall_time_s": 1.8977944169891998,
+      "verifier_summary_passed": false
+    },
+    "validation_environment_verifier_disagreements": 0,
+    "validation_objective_denominator": 9,
+    "limitations": [
+      "Three optimizer updates test execution and memory, not convergence.",
+      "Validation used 10 instances, not the long-run 500-instance cohort.",
+      "The gate used paper baseline; leave_one_out is not covered by this resource result.",
+      "Cus100 batch32 has not yet been measured with the final joint-softmax implementation."
+    ]
+  },
+  "excluded_intermediate_measurements": {
+    "variants": [
+      "split_exp_stable_full",
+      "split_exp_stable_node_only"
+    ],
+    "reason": "Taken before replacing separately factored exponentials with final joint-logit softmax; their memory and timing are not measurements of the final stable implementation."
+  }
+}

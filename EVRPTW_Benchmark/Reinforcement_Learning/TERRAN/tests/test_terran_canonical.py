@@ -142,6 +142,33 @@ def test_terran_pool_reuses_preverified_snapshot_but_still_reads_and_checks_ids(
         )
 
 
+@pytest.mark.parametrize("mode", [None, "", "None", "unchecked"])
+def test_make_envs_defaults_only_absent_stream_integrity_mode(monkeypatch, mode):
+    class Pool:
+        tasks = [SimpleNamespace(view_id="one")]
+
+        def __len__(self):
+            return 1
+
+    monkeypatch.setattr(terran_data_pool, "Stage2TaskPool", lambda **_kwargs: Pool())
+    monkeypatch.setattr(terran_trainer, "_configure_reward_contract", lambda *_args: None)
+    monkeypatch.setattr(terran_trainer, "_configure_dataset_reward_scale", lambda *_args: None)
+    monkeypatch.setattr(terran_trainer, "build_pbrs_config", lambda *_args: None)
+    monkeypatch.setattr(terran_trainer, "make_terran_env", lambda **_kwargs: object())
+    config = {
+        "data": {"stage2_dataset_path": "unused.parquet", "stage2_scale": "Cus50"},
+        "training": {"num_envs_per_gpu": 1, "rollout_steps": 65},
+        "protocol": {"stream_integrity_mode": mode},
+    }
+    if mode is None:
+        envs, pool = terran_trainer.make_envs(config, seed=1234)
+        assert len(envs) == 1
+        assert pool.stream_integrity_mode == "runtime_content_rehash"
+    else:
+        with pytest.raises(ValueError, match="unsupported TERRAN stream integrity mode"):
+            terran_trainer.make_envs(config, seed=1234)
+
+
 def test_undiscounted_complete_returns_sum_remaining_rewards() -> None:
     rewards = torch.tensor([[[2.0, -1.0]], [[-3.0, -2.0]], [[5.0, -4.0]]])
     dones = torch.zeros_like(rewards, dtype=torch.bool)

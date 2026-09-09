@@ -1,23 +1,24 @@
-# 2080ti_3_1 DRL queue
+# 2080ti_3_1 current benchmark queue
 
-Hardware: 3 × RTX 2080 Ti
+Hardware: 3 × RTX 2080 Ti. The queue has 3 formal jobs.
 
-Assigned checkpoint jobs: 12 total;
-pilot=2,
-full=10.
+| GPU slot | Queue order | Method | Scale | Representation | Support |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 0 | am_evrptw | Cus100 | G | Random-10%-support |
+| 1 | 0 | terran | Cus100 | G | Random-10%-support |
+| 2 | 0 | am_evrptw | Cus100 | G | Coverage-10%-support |
 
-From the repository root, activate any Python environment containing the project's required dependencies and run:
+Activate the project Python environment and run from the repository root:
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_3_1/pilot.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_3_1/full.sh
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_3_1/status.sh
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/2080ti_3_1/logs.sh
 ```
 
-`pilot.sh`, `full.sh`, and `resume.sh` detach with nohup.
-`run.sh MODE` is the foreground/debug entrypoint. Environment paths may be
-overridden before launch; committed defaults are repository-relative.
+`full.sh` and `resume.sh` detach with nohup; existing launchers and GPU processes
+are checked by the common runtime. The preverified stream mode and all frozen
+stream checksums remain active. A changed TERRAN profile has its own recorded
+path/hash and cannot silently resume an incompatible checkpoint.
 
-These four bundles intentionally contain no T1/T2/T3, best-of-100, or Cus2000
-test jobs. Collect their `checkpoint_selected.pt`, validation, training result,
-and provenance artifacts on the future central test server.
+The four commands `full.sh`, `resume.sh`, `status.sh`, `logs.sh` forward to [the current RQ bundle](../rq_v1/2080ti_3_1/README.md). The remaining pilot/start/run scripts and jobs.jsonl are retained historical protocol entry points. See [profile notes](../../configs/2080ti/README.md).

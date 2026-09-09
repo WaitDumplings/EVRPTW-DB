@@ -306,6 +306,16 @@ def _append_reinforce_diagnostics(
     append_jsonl(output / "reward_diagnostics.jsonl", row)
 
 
+def same_instance_leave_one_out(actor_cost: torch.Tensor) -> torch.Tensor:
+    """Cost baseline from other independent trajectories of the same instance."""
+    if actor_cost.ndim != 2 or actor_cost.shape[1] < 2:
+        raise ValueError(
+            "leave_one_out requires a [batch, trajectories] cost tensor with at least 2 trajectories"
+        )
+    detached = actor_cost.detach()
+    return (detached.sum(dim=1, keepdim=True) - detached) / (detached.shape[1] - 1)
+
+
 def paper_ema_baseline_due(method: str, optimizer_steps: int, args: Any) -> bool:
     """Return whether the method uses EMA warmup.
 
@@ -702,6 +712,14 @@ def train_reinforce_data_passes(
     never need to traverse the full training index. The legacy complete-pass
     mode remains available for old explicit CLI invocations.
     """
+    reinforce_baseline = getattr(args, "reinforce_baseline", "paper")
+    if reinforce_baseline not in {"paper", "leave_one_out"}:
+        raise ValueError(f"unsupported REINFORCE baseline: {reinforce_baseline}")
+    use_leave_one_out = reinforce_baseline == "leave_one_out"
+    if use_leave_one_out and method != "RRNCO-EV":
+        raise ValueError("leave_one_out is an explicit RRNCO-EV experiment only")
+    if use_leave_one_out and int(getattr(args, "samples_per_instance", 2)) < 2:
+        raise ValueError("leave_one_out requires at least 2 trajectories per instance")
     validation_decode_type, validation_candidates = require_validation_decoding(args)
     objective_config = prepare_training_objective(args)
     validation_seed = int(
@@ -883,8 +901,8 @@ def train_reinforce_data_passes(
     early_stopped = False
     early_stop_epoch: int | None = None
     terminal_logical_epoch = completed_logical_epochs
-    baseline_probe_size = max(
-        0, int(getattr(args, "baseline_eval_size", 64))
+    baseline_probe_size = (
+        0 if use_leave_one_out else max(0, int(getattr(args, "baseline_eval_size", 64)))
     )
     baseline_probe_instances = list(
         pool.first(limit=min(baseline_probe_size, len(pool)))
@@ -1006,20 +1024,27 @@ def train_reinforce_data_passes(
                     torch.cuda.manual_seed_all(rollout_seed)
                 actor = make_actor(instances, group_soft, rollout_seed)
                 actor_cost = training_cost(actor)
-                use_ema = paper_ema_baseline_due(method, optimizer_steps, args)
-                if use_ema:
-                    observed = float(actor_cost.mean().detach().cpu())
-                    ema_cost = (
-                        observed
-                        if ema_cost is None
-                        else args.ema_decay * ema_cost
-                        + (1.0 - args.ema_decay) * observed
-                    )
-                    baseline_cost = torch.full_like(actor_cost, float(ema_cost))
+                if use_leave_one_out:
+                    baseline_cost = same_instance_leave_one_out(actor_cost)
+                    if actor.log_likelihood.shape != actor_cost.shape:
+                        raise ValueError("leave_one_out cost and log_likelihood shapes must match")
+                    baseline_kind = "same_instance_leave_one_out"
                 else:
-                    with torch.no_grad():
-                        baseline_result = make_baseline(baseline, instances, group_soft, rollout_seed)
-                    baseline_cost = training_cost(baseline_result)
+                    use_ema = paper_ema_baseline_due(method, optimizer_steps, args)
+                    if use_ema:
+                        observed = float(actor_cost.mean().detach().cpu())
+                        ema_cost = (
+                            observed
+                            if ema_cost is None
+                            else args.ema_decay * ema_cost
+                            + (1.0 - args.ema_decay) * observed
+                        )
+                        baseline_cost = torch.full_like(actor_cost, float(ema_cost))
+                    else:
+                        with torch.no_grad():
+                            baseline_result = make_baseline(baseline, instances, group_soft, rollout_seed)
+                        baseline_cost = training_cost(baseline_result)
+                    baseline_kind = "paper_ema" if use_ema else "greedy_rollout"
                 advantage = (actor_cost - baseline_cost).detach()
                 loss = (advantage * actor.log_likelihood).mean()
                 (loss * (len(instances) / max(group_size, 1))).backward()
@@ -1074,7 +1099,7 @@ def train_reinforce_data_passes(
                 output=output, method=method, args=args, objective_config=objective_config,
                 session=diagnostic_session, data_pass=data_pass, logical_epoch=logical_epoch,
                 optimizer_steps=optimizer_steps, soft=group_soft,
-                baseline_kind="paper_ema" if use_ema else "greedy_rollout",
+                baseline_kind=baseline_kind,
                 distributions=diagnostic_distributions, components=diagnostic_components,
                 scales=diagnostic_scales, pre_clip_norm=pre_clip_norm,
             )
@@ -1662,6 +1687,7 @@ def train_reinforce_data_passes(
         "training_stream_contract_snapshot": getattr(
             args, "training_stream_contract_snapshot", None
         ),
+        "stream_integrity_mode": getattr(args, "stream_integrity_mode", None),
         "resolved_training_signature_sha256": getattr(
             args, "resolved_training_signature_sha256", None
         ),
@@ -1673,6 +1699,7 @@ def train_reinforce_data_passes(
         "optimizer_steps": int(optimizer_steps),
         "baseline_eval_count": baseline_eval_count,
         "baseline_update_count": baseline_update_count,
+        "reinforce_baseline": reinforce_baseline,
         "environment_transitions": int(environment_transitions_total),
         "saved_exposure_checkpoints": sorted(saved_exposure),
         "saved_gpu_hour_checkpoints": sorted(saved_gpu_hours),

@@ -56,3 +56,25 @@ Upstream: <https://github.com/ai4co/real-routing-nco>
 The local source consulted for the adaptation was commit
 `823d510dadf4dd711730ec4fbf337c356a0de6ae`. The upstream MIT license is
 included under `third_party/real_routing_nco/LICENSE`.
+
+## Explicit v2 optimization experiment
+
+`run_optimized_long_training.sh` opts into joint-logit stable AFT, deterministic
+nearest outgoing/incoming distance summaries, actual relation temperature 5,
+chunked/checkpointed relation computation, and a leave-one-out same-instance
+REINFORCE baseline. The original model defaults and original long launcher keep
+their legacy semantics. `GRAPH_MODE=full` and `GRAPH_MODE=node_only` use the same
+backbone, objective, hard environment masks and hashed ordered training stream;
+the ablation removes explicit road inputs from ANE, encoder and decoder together.
+
+The new launcher defaults to 10000 maximum / 5000 minimum logical epochs,
+500 validation instances with 100 candidates every 100 epochs before the minimum
+and every 250 afterwards. Physical/effective batch defaults are Cus50 128/128
+and Cus100 32/32; the latter still requires a final-implementation hardware gate.
+`DRY_RUN=1` prints the planned command, and `PREPARE_ONLY=1` freezes and verifies
+the stream and writes run provenance without training.
+
+See the [v2 implementation and resource report](../reports/RRNCO_EV_V2_OPTIMIZATION_20260909_ZH.md)
+for precise ablation boundaries, the limited CaliRoute inspiration, measured
+memory, numerical tests, and command examples. These implementation and memory
+gates do not establish benchmark superiority.

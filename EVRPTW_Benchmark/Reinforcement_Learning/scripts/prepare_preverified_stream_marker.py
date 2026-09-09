@@ -76,7 +76,7 @@ def main() -> None:
     if registry.get("artifact_preparation_marker_sha256") != next(iter(marker_ids)):
         raise RuntimeError("manifest and registry artifact-marker metadata disagree")
 
-    entries = []
+    entries_by_path: dict[str, dict[str, Any]] = {}
     registered = registry.get("streams", {})
     for row in jobs:
         relative = str(row["training_stream_path"])
@@ -94,13 +94,19 @@ def main() -> None:
         sidecar_path = stream_path.with_suffix(stream_path.suffix + ".manifest.json")
         if not stream_path.is_file() or not sidecar_path.is_file():
             raise RuntimeError(f"preverified stream or sidecar is missing: {stream_path}")
-        entries.append(
-            {
-                "relative_path": relative,
-                "sha256": snapshot["sha256"],
-                "snapshot": snapshot,
-            }
-        )
+        entry = {
+            "relative_path": relative,
+            "sha256": snapshot["sha256"],
+            "snapshot": snapshot,
+        }
+        existing = entries_by_path.get(relative)
+        if existing is not None and existing != entry:
+            raise RuntimeError(
+                f"conflicting preverified contracts for shared stream: {relative}"
+            )
+        # G/E jobs can use one ordered training-ID stream. The marker describes
+        # artifacts, so emit that artifact once while checking every job above.
+        entries_by_path[relative] = entry
 
     marker_path = (repo / next(iter(marker_paths))).resolve()
     if repo not in marker_path.parents:
@@ -114,7 +120,7 @@ def main() -> None:
             "stream_integrity_mode": PREVERIFIED_MODE,
             "marker_sha256": next(iter(marker_ids)),
             "dataset_root": str(dataset),
-            "training_stream_contracts": entries,
+            "training_stream_contracts": list(entries_by_path.values()),
         },
     )
     print(f"Prepared no-rehash marker for {len(jobs)} job(s): {marker_path}")

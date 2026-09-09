@@ -452,7 +452,21 @@ def job(
             method_auxiliary_weights=dict(auxiliary.weights),
         )
     if method == "terran":
-        training = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))["training"]
+        profile = TERRAN_CONFIG
+        if hardware == "2080ti" and scale in {"Cus50", "Cus100"}:
+            profile = ROOT / "configs" / "2080ti" / f"terran_{scale.lower()}.yaml"
+            payload.update(
+                terran_config_path=str(profile.relative_to(ROOT.parents[1])),
+                terran_config_sha256=hashlib.sha256(profile.read_bytes()).hexdigest(),
+            )
+        training = yaml.safe_load(profile.read_text(encoding="utf-8"))["training"]
+        if profile != TERRAN_CONFIG:
+            # Pin replay geometry as well as the full profile. Training-instance
+            # streams and their content/registry hashes are unaffected.
+            payload.update(
+                num_minibatches=int(training["num_minibatches"]),
+                ppo_step_chunk_size=int(training["ppo_step_chunk_size"]),
+            )
         if training["reward_contract_id"] != reward_terms.contract_id:
             raise ValueError("TERRAN config and common reward contract disagree")
         payload.update(

@@ -23,6 +23,7 @@ class _Pool:
     def stream_batches(
         self, _path, physical: int, *, start: int, stop: int,
         logical_batch_size: int | None = None,
+        training_stream_contract_sha256: str | None = None,
     ):
         for offset in range(start, stop, physical):
             yield [object() for _ in range(min(physical, stop - offset))]
@@ -34,8 +35,9 @@ class _ValidationPool:
 
 
 @pytest.mark.parametrize("cost_objective", [False, True])
+@pytest.mark.parametrize("preverified_stream", [False, True])
 def test_fixed_epoch_validation_selects_best_and_records_every_interval(
-    tmp_path, monkeypatch, cost_objective
+    tmp_path, monkeypatch, cost_objective, preverified_stream
 ) -> None:
     validation_calls = []
     objective = ObjectiveConfig(
@@ -132,6 +134,32 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
         max_grad_norm=1.0,
         training_rollout_steps=80,
     )
+    stream_job = None
+    if preverified_stream:
+        from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
+            STREAM_INTEGRITY_MODE_PREVERIFIED,
+            training_stream_contract_digest,
+        )
+
+        snapshot = {
+            "schema": "drl_training_stream_contract_v1",
+            "sample_count": 12,
+            "scale": "Cus50",
+            "seed": args.seed,
+        }
+        snapshot["sha256"] = training_stream_contract_digest(snapshot)
+        args.protocol_id = "drl_rq_protocol_frozen_v1"
+        args.reuse_preverified_training_streams = True
+        args.training_stream_contract_sha256 = snapshot["sha256"]
+        args.training_stream_contract_snapshot_json = json.dumps(snapshot)
+        stream_job = {
+            "method": "drl_ts",
+            "training_stream_path": str(args.training_stream_path),
+            "training_stream_contract_snapshot": snapshot,
+            "training_stream_contract_sha256": snapshot["sha256"],
+            "stream_integrity_mode": STREAM_INTEGRITY_MODE_PREVERIFIED,
+            "file_hash_validation_performed": False,
+        }
     protocol_trainers.train_reinforce_data_passes(
         method="DRL-TS",
         args=args,
@@ -209,6 +237,18 @@ def test_fixed_epoch_validation_selects_best_and_records_every_interval(
     assert final_audit["instances"] == 3
     assert final_audit["selection_logical_epoch"] == 6
     assert final_audit["selection_changed"] is False
+    if stream_job is not None:
+        from EVRPTW_Benchmark.Reinforcement_Learning.scripts.drl_job_runtime import (
+            validate_completed_training_stream_contract,
+        )
+
+        terminal = json.loads((output / "training_result.json").read_text())
+        # Exercise the actual launcher gate with artifacts written by training.
+        # A checkpoint-only assertion missed the original terminal JSON omission.
+        validate_completed_training_stream_contract(
+            stream_job, {"repo": tmp_path}, terminal,
+            output / "checkpoint_selected.pt", reuse_preverified=True,
+        )
 
 
 def test_fixed_epoch_early_stop_waits_until_after_start_epoch(tmp_path, monkeypatch) -> None:

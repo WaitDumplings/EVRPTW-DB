@@ -1,0 +1,42 @@
+{
+  "terran_cus50_gate_v3": {
+    "updates": 2,
+    "peak_gpu_memory_bytes": 10394742784,
+    "wall_time_s": 78.91062707197852,
+    "complete_and_feasible": 10,
+    "validation_instances": 10,
+    "scope": "resource_and_short_integration_gate_not_convergence"
+  },
+  "terran_cus100_gate": {
+    "updates": 2,
+    "peak_gpu_memory_bytes": 10358958592,
+    "wall_time_s": 101.42927914299071,
+    "complete_and_feasible": 10,
+    "validation_instances": 10,
+    "scope": "resource_and_short_integration_gate_not_convergence"
+  },
+  "rrnco_b64_t16_gate": {
+    "updates": 3,
+    "peak_gpu_memory_bytes": 1657543680,
+    "wall_time_s": 18.772182637942024,
+    "complete_and_feasible": 10,
+    "validation_instances": 10,
+    "scope": "resource_and_short_integration_gate_not_convergence"
+  },
+  "rrnco_b256_t16_gate": {
+    "updates": 2,
+    "peak_gpu_memory_bytes": 6278737408,
+    "wall_time_s": 33.5840268000029,
+    "complete_and_feasible": 7,
+    "validation_instances": 10,
+    "scope": "resource_and_short_integration_gate_not_convergence"
+  },
+  "rrnco_cus100_b32_t16_gate": {
+    "updates": 2,
+    "peak_gpu_memory_bytes": 2051420672,
+    "wall_time_s": 13.94220241298899,
+    "complete_and_feasible": 4,
+    "validation_instances": 10,
+    "scope": "resource_and_short_integration_gate_not_convergence"
+  }
+}

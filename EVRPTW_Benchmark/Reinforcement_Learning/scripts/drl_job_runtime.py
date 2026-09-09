@@ -59,6 +59,28 @@ CHILD_LOCK = threading.Lock()
 OVERFLOW_LOCK = threading.Lock()
 
 
+def terran_config_path(
+    job: Mapping[str, Any], repo: Path | str | None = None
+) -> Path:
+    """Resolve a manifest-pinned machine profile without changing stream identity."""
+    relative = job.get("terran_config_path")
+    digest = job.get("terran_config_sha256")
+    if relative is None:
+        if digest is not None:
+            raise ValueError("terran_config_sha256 requires terran_config_path")
+        return TERRAN_CONFIG
+    root = Path(repo or ROOT.parents[1]).resolve()
+    relative_path = Path(str(relative))
+    path = (root / relative_path).resolve()
+    if relative_path.is_absolute() or not path.is_relative_to(root):
+        raise ValueError("terran_config_path must remain relative to the repository")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("a custom TERRAN profile requires terran_config_sha256")
+    if file_sha256(path) != digest:
+        raise RuntimeError(f"TERRAN profile hash mismatch: {relative}")
+    return path
+
+
 def validate_launcher_id(value: str) -> str:
     launcher_id = str(value).strip()
     if not LAUNCHER_ID_PATTERN.fullmatch(launcher_id):
@@ -454,6 +476,7 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
         "early_stop_patience_validations", "early_stop_start_epoch",
         "final_validation_views", "num_minibatches", "ppo_step_chunk_size",
         "terran_terminal_success_bonus",
+        "terran_config_path", "terran_config_sha256",
     }
     for field in (
         "reward_contract_config_path",
@@ -516,6 +539,7 @@ def training_contract(job: dict[str, Any]) -> dict[str, Any]:
         "num_minibatches",
         "ppo_step_chunk_size",
         "terran_terminal_success_bonus",
+        "terran_config_path", "terran_config_sha256",
     ):
         if field in scientific_fields and not formal_scientific:
             continue
@@ -550,15 +574,19 @@ def validate_optimizer_contracts(jobs: list[dict[str, Any]]) -> None:
                 f"manifest/config optimizer contract mismatch for {job['job_id']}; "
                 "regenerate the RQ manifests before launching"
             )
-    terran_training = yaml.safe_load(
-        TERRAN_CONFIG.read_text(encoding="utf-8")
-    )["training"]
-    if (
-        str(terran_training.get("optimizer", "")).lower() != expected_name
-        or float(terran_training.get("weight_decay", -1.0))
-        != expected_weight_decay
-    ):
-        raise RuntimeError("TERRAN config does not match the formal optimizer contract")
+    profiles = {TERRAN_CONFIG}
+    for job in jobs:
+        if job.get("method") == "terran":
+            profiles.add(terran_config_path(job))
+        elif "terran_config_path" in job or "terran_config_sha256" in job:
+            raise ValueError("TERRAN profiles may only be attached to TERRAN jobs")
+    for profile in profiles:
+        training = yaml.safe_load(profile.read_text(encoding="utf-8"))["training"]
+        if (
+            str(training.get("optimizer", "")).lower() != expected_name
+            or float(training.get("weight_decay", -1.0)) != expected_weight_decay
+        ):
+            raise RuntimeError("TERRAN config does not match the formal optimizer contract")
 
 
 def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
@@ -567,16 +595,19 @@ def validate_terran_training_contracts(jobs: list[dict[str, Any]]) -> None:
     ]
     if not terran_jobs:
         return
-    training = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))["training"]
     runtime_config = yaml.safe_load(RUNTIME_CONFIG.read_text(encoding="utf-8"))
     frozen_protocol = yaml.safe_load(
         FROZEN_PROTOCOL_CONFIG.read_text(encoding="utf-8")
     )
-    expected = {
-        "reward_contract_id": training["reward_contract_id"],
-        "training_gamma": float(training["gamma"]),
-    }
     for job in terran_jobs:
+        profile = yaml.safe_load(terran_config_path(job).read_text(encoding="utf-8"))
+        training = profile["training"]
+        if training.get("algorithm") == "stable_cost_v1":
+            raise ValueError("stable_cost_v1 uses a separate protocol, not the frozen full queue")
+        expected = {
+            "reward_contract_id": training["reward_contract_id"],
+            "training_gamma": float(training["gamma"]),
+        }
         if any(job.get(key) != value for key, value in expected.items()):
             raise RuntimeError(
                 f"TERRAN manifest/config reward contract mismatch for {job['job_id']}: "
@@ -1106,7 +1137,7 @@ def expected_resolved_training_signature(
     )
     method_specific = None
     if job.get("method") == "terran":
-        base = yaml.safe_load(TERRAN_CONFIG.read_text(encoding="utf-8"))
+        base = yaml.safe_load(terran_config_path(job, context.get("repo")).read_text(encoding="utf-8"))
         training = base.get("training", {}) or {}
         evaluation = base.get("evaluation", {}) or {}
         epochs = int(job["training_epochs"])
@@ -1784,7 +1815,7 @@ def training_command(job: dict[str, Any], context: dict[str, Any], out: Path, re
             "-m",
             job["train_module"],
             "--config",
-            str(TERRAN_CONFIG),
+            str(terran_config_path(job, context.get("repo"))),
             "--seed",
             str(job["seed"]),
             "--device",

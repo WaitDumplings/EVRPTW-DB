@@ -254,7 +254,9 @@ def test_reward_contract_is_shared_by_every_formal_method(tmp_path, monkeypatch)
     revised = build()
     for server, baseline_rows in baseline.items():
         for before, after in zip(baseline_rows, revised[server], strict=True):
-            if before["method"] != "terran":
+            if before["method"] != "terran" or "terran_config_path" in before:
+                # Explicit machine profiles do not inherit later changes to the
+                # shared large-scale config.
                 assert before == after
             else:
                 assert after["training_gamma"] == 0.999
@@ -408,7 +410,11 @@ def test_aa114d0_special_manifests_remain_bound_to_historical_contract() -> None
                 for key in baseline.keys() | warm.keys()
                 if baseline.get(key) != warm.get(key)
             }
-            assert changed == historical_fields
+            machine_fields = {
+                "terran_config_path", "terran_config_sha256",
+                "num_minibatches", "ppo_step_chunk_size",
+            } if baseline["method"] == "terran" else set()
+            assert changed == historical_fields | machine_fields
 
             # The canonical candidate is intentionally fresh-start under the
             # new objective.  A historical aa114d0 checkpoint must never be
@@ -479,8 +485,13 @@ def test_only_terran_has_scale_calibrated_formal_ppo_overrides() -> None:
         for row in rows
         if "num_minibatches" in row or "ppo_step_chunk_size" in row
     ]
-    assert len(overridden) == 2
+    assert len(overridden) == 7
     assert all(row["method"] == "terran" for row in overridden)
+    small = [row for row in overridden if row["hardware"] == "2080ti"]
+    assert len(small) == 5
+    assert all(row["num_minibatches"] == 4 for row in small)
+    assert all(row["ppo_step_chunk_size"] == 64 for row in small)
+    overridden = [row for row in overridden if row["hardware"] == "a6000"]
     assert all(row["num_minibatches"] == 1 for row in overridden)
     assert {row["scale"]: row["ppo_step_chunk_size"] for row in overridden} == {
         "Cus500": 36,
@@ -736,3 +747,30 @@ def test_artifact_preparation_uses_v15_method_specific_exposure_budgets() -> Non
     assert '--customer-exposures "${FORMAL_EXPOSURE[$method:$scale]}"' in script
     assert 'file_hash_validation_performed": True' in script
     assert '"training_stream_contracts": contracts' in script
+
+
+def test_machine_profiles_are_pinned_when_manifests_are_regenerated() -> None:
+    runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text())
+    for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1"):
+        manifest = SCRIPT_ROOT / server / "jobs_preverified.jsonl"
+        for frozen in map(json.loads, manifest.read_text().splitlines()):
+            row = MANIFESTS.job(
+                runtime, method=frozen["method"], scale=frozen["scale"],
+                seed=frozen["seed"], representation=frozen["representation"],
+                condition=frozen["condition"], hardware="2080ti",
+                reuse_preverified_training_streams=True,
+            )
+            if row["method"] != "terran":
+                assert "terran_config_path" not in row
+                continue
+            path = MANIFESTS.ROOT.parents[1] / row["terran_config_path"]
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == row["terran_config_sha256"]
+            config = yaml.safe_load(path.read_text())
+            assert config["data"]["stage2_scale"] == row["scale"]
+            assert config["training"]["num_envs_per_gpu"] == row["physical_batch_size"]
+            assert config["training"]["vf_coef"] == 0.1
+            assert config["training"]["critic_backbone_grad_scale"] == 0.1
+            assert config["training"]["gamma"] == row["training_gamma"] == 1.0
+            assert config["pbrs"]["terminal_success_bonus"] == 0.0
+            assert config["pbrs"]["customer_progress_budget"] == 0.5
+            assert config["reward_contract"] == row["reward_contract_config_path"]

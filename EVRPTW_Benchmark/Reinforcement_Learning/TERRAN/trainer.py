@@ -1851,6 +1851,14 @@ def make_envs(cfg: dict[str, Any], seed: int):
         or data_cfg.get("fixed_train_path")
     )
     if stage2_dataset_path not in (None, ""):
+        stream_integrity_mode = (cfg.get("protocol", {}) or {}).get(
+            "stream_integrity_mode"
+        )
+        # Exploratory runs have no registered stream and record an explicit
+        # None. Keep that on the normal verification path; reject named modes
+        # other than the two supported values in Stage2TERRANPool.
+        if stream_integrity_mode is None:
+            stream_integrity_mode = STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED
         pool = Stage2TERRANPool(
             dataset_path=_resolve_repo_path(stage2_dataset_path),
             family_root=_resolve_repo_path(data_cfg.get("stage2_family_root")),
@@ -1876,12 +1884,7 @@ def make_envs(cfg: dict[str, Any], seed: int):
                     "training_stream_contract_snapshot"
                 )
             ),
-            stream_integrity_mode=str(
-                (cfg.get("protocol", {}) or {}).get(
-                    "stream_integrity_mode",
-                    STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED,
-                )
-            ),
+            stream_integrity_mode=stream_integrity_mode,
             representation=str(data_cfg.get("stage2_training_representation", "G")),
             euclidean_manifest=_resolve_repo_path(
                 data_cfg.get("stage2_euclidean_manifest")

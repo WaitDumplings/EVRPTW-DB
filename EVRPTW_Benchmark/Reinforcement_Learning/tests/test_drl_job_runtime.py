@@ -425,7 +425,7 @@ def test_job_complete_requires_training_result_and_rechecks_all_validators(
         monkeypatch.setattr(
             RUNTIME,
             attribute,
-            lambda *_args, label=label: calls.append(label),
+            lambda *_args, label=label, **_kwargs: calls.append(label),
         )
 
     expected = [label for _, label in validators]
@@ -466,7 +466,7 @@ def test_job_complete_rejects_checkpoint_corruption_reported_by_contract_validat
         "validate_completed_training_stream_contract",
         "validate_completed_training_signature",
     ):
-        monkeypatch.setattr(RUNTIME, attribute, lambda *_args: None)
+        monkeypatch.setattr(RUNTIME, attribute, lambda *_args, **_kwargs: None)
 
     def reject_corrupt_checkpoint(
         _job_payload, _context_payload, _training_result, checkpoint: Path,
@@ -495,7 +495,7 @@ def test_run_job_never_skips_a_damaged_completed_training_directory(
         "validate_completed_training_stream_contract",
         "validate_completed_training_signature",
     ):
-        monkeypatch.setattr(RUNTIME, validator, lambda *_args: None)
+        monkeypatch.setattr(RUNTIME, validator, lambda *_args, **_kwargs: None)
     if damage == "delete-result":
         (output / "training_result.json").unlink()
     else:
@@ -881,17 +881,22 @@ def _terran_job():
 
 
 def _cost_job(method="am_evrptw"):
-    from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import build
-    return next(dict(job) for jobs in build().values() for job in jobs if job["method"] == method)
+    # Read the checked-in scheduling contract; command/validator tests should
+    # not regenerate every server queue from unrelated local training artifacts.
+    manifest = ROOT / "scripts/rq_v1/2080ti_4_1/jobs.jsonl"
+    row = next(json.loads(line) for line in manifest.read_text().splitlines()
+               if json.loads(line)["method"] == method)
+    # These legacy runtime fixtures use a synthetic repository. Machine profile
+    # routing and hash checks are exercised in test_terran_machine_profile_runtime.
+    row.pop("terran_config_path", None)
+    row.pop("terran_config_sha256", None)
+    return row
 
 
 def _formal_stream_completion_fixture(tmp_path: Path, monkeypatch):
-    from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import build
-
+    manifest = ROOT / "scripts/rq_v1/a6000_2_1/jobs.jsonl"
     job = next(
-        dict(item)
-        for queue in build().values()
-        for item in queue
+        item for item in map(json.loads, manifest.read_text().splitlines())
         if item["method"] == "am_evrptw" and item["scale"] == "Cus1000"
     )
     repository = ROOT.parents[1]
@@ -950,7 +955,7 @@ def _formal_stream_completion_fixture(tmp_path: Path, monkeypatch):
         "validate_completed_method_auxiliary_contract",
         "validate_completed_training_signature",
     ):
-        monkeypatch.setattr(RUNTIME, validator, lambda *_args: None)
+        monkeypatch.setattr(RUNTIME, validator, lambda *_args, **_kwargs: None)
     return job, output, context, copied_stream, training_result, checkpoint_payload
 
 
@@ -1013,14 +1018,16 @@ def test_formal_completion_revalidates_stream_result_checkpoint_and_provenance(
 def test_stream_preflight_validates_each_method_specific_exact_snapshot(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    from EVRPTW_Benchmark.Reinforcement_Learning.scripts.build_rq_server_manifests import build
-
+    manifest = ROOT / "scripts/rq_v1/2080ti_4_2/jobs.jsonl"
     jobs = [
-        dict(item)
-        for queue in build().values()
-        for item in queue
-        if item["scale"] == "Cus1000"
+        item for item in map(json.loads, manifest.read_text().splitlines())
+        if item["scale"] == "Cus100" and item["representation"] == "G"
     ]
+    # This test specifically exercises full content revalidation on copied
+    # streams, independently of the launcher no-rehash mode.
+    for job in jobs:
+        job.pop("stream_integrity_mode", None)
+        job["file_hash_validation_performed"] = True
     assert {job["method"] for job in jobs} == RUNTIME.METHODS
     assert len({job["training_stream_path"] for job in jobs}) == 4
     repository = tmp_path / "repo"
@@ -1047,6 +1054,32 @@ def test_stream_preflight_validates_each_method_specific_exact_snapshot(
         (source_repository / marker_relative).read_text(encoding="utf-8")
     )
     marker["dataset_root"] = str(dataset)
+    marker["training_stream_contracts"] = [
+        {"relative_path": job["training_stream_path"],
+         "sha256": job["training_stream_contract_sha256"],
+         "snapshot": job["training_stream_contract_snapshot"]}
+        for job in jobs
+    ]
+    # The host marker may describe no-rehash launch reuse. This isolated test
+    # requests full file validation, so give its copied marker/registry a new,
+    # self-consistent identity without editing host artifacts.
+    marker["file_hash_validation_performed"] = True
+    marker.pop("stream_integrity_mode", None)
+    marker["marker_sha256"] = RUNTIME.hashlib.sha256(json.dumps(
+        {key: value for key, value in marker.items()
+         if key not in {"marker_sha256", "dataset_root"}},
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+    registry = json.loads(copied_registry.read_text())
+    registry["artifact_preparation_marker_sha256"] = marker["marker_sha256"]
+    registry["sha256"] = RUNTIME.hashlib.sha256(json.dumps(
+        {key: value for key, value in registry.items() if key != "sha256"},
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+    copied_registry.write_text(json.dumps(registry))
+    for job in jobs:
+        job["artifact_preparation_marker_sha256"] = marker["marker_sha256"]
+        job["training_stream_registry_sha256"] = registry["sha256"]
     copied_marker = repository / marker_relative
     copied_marker.parent.mkdir(parents=True, exist_ok=True)
     copied_marker.write_text(json.dumps(marker), encoding="utf-8")
@@ -1379,22 +1412,22 @@ def test_all_methods_completion_is_bound_to_exact_cost_profile(
     monkeypatch.setattr(
         RUNTIME,
         "validate_completed_method_auxiliary_contract",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         RUNTIME,
         "validate_completed_training_stream_contract",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         RUNTIME,
         "validate_completed_training_signature",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         RUNTIME,
         "validate_training_result_outcome",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
     assert RUNTIME.run_job(job, context, 0, False, False)
     assert checked == [method]

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec bash "$SCRIPT_DIR/start.sh" resume "$@"
+# Use the current registered-stream queue and its machine-specific profiles.
+exec bash "$SCRIPT_DIR/../rq_v1/2080ti_4_1/resume.sh" "$@"

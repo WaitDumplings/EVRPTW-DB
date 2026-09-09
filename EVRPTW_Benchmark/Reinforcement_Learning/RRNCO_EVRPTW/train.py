@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import random
 from pathlib import Path
 
@@ -42,6 +43,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline-warmup-epochs", type=int, default=1)
     parser.add_argument("--steps-per-epoch", type=int, default=2500)
     parser.add_argument("--ema-decay", type=float, default=0.8)
+    parser.add_argument(
+        "--reinforce-baseline", choices=("paper", "leave_one_out"), default="paper",
+        help="Use the AM-compatible baseline or an action-independent other-trajectory mean.",
+    )
     parser.add_argument("--learning-rate", type=float, default=4e-4)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--embedding-dim", type=int, default=128)
@@ -50,6 +55,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feedforward-hidden", type=int, default=512)
     parser.add_argument("--distance-sample-size", type=int, default=25)
     parser.add_argument("--tanh-clipping", type=float, default=10.0)
+    parser.add_argument(
+        "--graph-mode", choices=("full", "distance", "distance_time", "node_only"),
+        default="full", help="Road inputs across embedding, encoder and decoder; hard masks are unchanged.",
+    )
+    parser.add_argument("--aft-mode", choices=("legacy", "stable"), default="legacy")
+    parser.add_argument("--distance-sampling", choices=("random", "nearest"), default="random")
+    parser.add_argument("--relation-chunk-size", type=int, default=0)
+    parser.add_argument("--checkpoint-bias", action="store_true")
+    parser.add_argument("--relation-temperature", type=float, default=math.exp(5.0))
     parser.add_argument("--incomplete-penalty", type=float, default=100.0)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument(
@@ -83,21 +97,35 @@ def main() -> None:
         feedforward_hidden=args.feedforward_hidden,
         distance_sample_size=args.distance_sample_size,
         tanh_clipping=args.tanh_clipping,
+        graph_mode=args.graph_mode,
+        aft_mode=args.aft_mode,
+        distance_sampling=args.distance_sampling,
+        relation_chunk_size=args.relation_chunk_size,
+        checkpoint_bias=args.checkpoint_bias,
+        relation_temperature=args.relation_temperature,
     ).to(args.device)
     args.resolved_training_method_fields = {
-        "architecture": "rrnco_ev_v1",
+        "architecture": "rrnco_ev_v1" if args.aft_mode == "legacy" else "rrnco_ev_stable_aft_v2",
+        "graph_mode": args.graph_mode,
+        "reinforce_baseline": args.reinforce_baseline,
+        "aft_mode": args.aft_mode,
+        "distance_sampling": args.distance_sampling,
+        "relation_chunk_size": args.relation_chunk_size,
+        "checkpoint_bias": args.checkpoint_bias,
+        "relation_temperature": args.relation_temperature,
         "upstream_architecture": "ai4co/real-routing-nco",
         "embedding_dim": args.embedding_dim,
         "encoder_layers": args.n_encode_layers,
         "heads": args.n_heads,
         "feedforward_hidden": args.feedforward_hidden,
         "distance_sample_size": args.distance_sample_size,
-        "relation_channels": [
-            "directed_distance",
-            "directed_time",
-            "directed_energy",
-            "angle",
-        ],
+        "relation_channels": {
+            "full": ["directed_distance", "directed_time", "directed_energy", "angle"],
+            "distance_time": ["directed_distance", "directed_time", "angle"],
+            "distance": ["directed_distance", "angle"],
+            "node_only": [],
+        }[args.graph_mode],
+        "ablation_contract": "road_inputs_masked_in_ane_encoder_and_decoder_v1",
         "constraint_source": "canonical_shared_environment_action_mask",
     }
     optimizer = build_adamw_optimizer(

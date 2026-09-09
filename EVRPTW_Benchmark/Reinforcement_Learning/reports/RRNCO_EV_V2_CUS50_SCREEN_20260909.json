@@ -1,0 +1,435 @@
+{
+  "schema": "rrnco_paired_validation_audit_v1",
+  "interpretation": "Validation comparisons are exploratory. Graph causality requires matched trained ablations and held-out evaluation.",
+  "runs": [
+    {
+      "name": "graph",
+      "path": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/2080ti_update_20260909/graph_screen/Cus50_full_stable_nearest_leave_one_out_seed1234/validation_summary.json",
+      "metadata": {
+        "objective_config": {
+          "consumption_kwh_per_km": 0.38910505836575876,
+          "electricity_price_usd_per_kwh": 0.39,
+          "mode": "energy_vehicle_cost",
+          "profile_id": "rivian_energy_vehicle_cost_v2",
+          "vehicle_fixed_cost_usd": 413.6331536717643
+        },
+        "candidate_count": 100,
+        "validation_rollout_steps": 98,
+        "validation_seed": 910001234,
+        "decode_type": "sampling",
+        "scale": "Cus50",
+        "split": "validation",
+        "seed": 1234,
+        "training_rollout_steps": 65,
+        "effective_batch_size": 24,
+        "training_trajectory_count": 5,
+        "customer_exposures": 360000,
+        "optimizer_steps": 300,
+        "reward_contract_sha256": "21105b1bcd92ffe4574611cc33c3949e7b7239b0b5ee13ad884efe0e65d73465",
+        "training_stream_contract_sha256": null,
+        "graph_mode": "full",
+        "architecture": "rrnco_ev_stable_aft_v2",
+        "method_specific": {
+          "ablation_contract": "road_inputs_masked_in_ane_encoder_and_decoder_v1",
+          "aft_mode": "stable",
+          "architecture": "rrnco_ev_stable_aft_v2",
+          "checkpoint_bias": true,
+          "constraint_source": "canonical_shared_environment_action_mask",
+          "distance_sample_size": 25,
+          "distance_sampling": "nearest",
+          "embedding_dim": 128,
+          "encoder_layers": 6,
+          "feedforward_hidden": 512,
+          "graph_mode": "full",
+          "heads": 8,
+          "reinforce_baseline": "leave_one_out",
+          "relation_channels": [
+            "directed_distance",
+            "directed_time",
+            "directed_energy",
+            "angle"
+          ],
+          "relation_chunk_size": 32,
+          "relation_temperature": 5.0,
+          "upstream_architecture": "ai4co/real-routing-nco"
+        },
+        "selected_epoch": 300,
+        "training_status": "passed",
+        "completed_training_epochs": 300,
+        "wall_time_s": 450.3941408339888
+      },
+      "instances": 500,
+      "complete_and_feasible": 500,
+      "mean_verified_cost_usd": 442.3199384983626,
+      "row_count": 500,
+      "view_ids_sha256": "8c057954fd19f18b218e2ab1511a8b9232fe9e74e3f2ff3d99e14a4d173526f7"
+    },
+    {
+      "name": "node_only",
+      "path": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/2080ti_update_20260909/graph_screen/Cus50_node_only_stable_nearest_leave_one_out_seed1234/validation_summary.json",
+      "metadata": {
+        "objective_config": {
+          "consumption_kwh_per_km": 0.38910505836575876,
+          "electricity_price_usd_per_kwh": 0.39,
+          "mode": "energy_vehicle_cost",
+          "profile_id": "rivian_energy_vehicle_cost_v2",
+          "vehicle_fixed_cost_usd": 413.6331536717643
+        },
+        "candidate_count": 100,
+        "validation_rollout_steps": 98,
+        "validation_seed": 910001234,
+        "decode_type": "sampling",
+        "scale": "Cus50",
+        "split": "validation",
+        "seed": 1234,
+        "training_rollout_steps": 65,
+        "effective_batch_size": 24,
+        "training_trajectory_count": 5,
+        "customer_exposures": 360000,
+        "optimizer_steps": 300,
+        "reward_contract_sha256": "21105b1bcd92ffe4574611cc33c3949e7b7239b0b5ee13ad884efe0e65d73465",
+        "training_stream_contract_sha256": null,
+        "graph_mode": "node_only",
+        "architecture": "rrnco_ev_stable_aft_v2",
+        "method_specific": {
+          "ablation_contract": "road_inputs_masked_in_ane_encoder_and_decoder_v1",
+          "aft_mode": "stable",
+          "architecture": "rrnco_ev_stable_aft_v2",
+          "checkpoint_bias": true,
+          "constraint_source": "canonical_shared_environment_action_mask",
+          "distance_sample_size": 25,
+          "distance_sampling": "nearest",
+          "embedding_dim": 128,
+          "encoder_layers": 6,
+          "feedforward_hidden": 512,
+          "graph_mode": "node_only",
+          "heads": 8,
+          "reinforce_baseline": "leave_one_out",
+          "relation_channels": [],
+          "relation_chunk_size": 32,
+          "relation_temperature": 5.0,
+          "upstream_architecture": "ai4co/real-routing-nco"
+        },
+        "selected_epoch": 300,
+        "training_status": "passed",
+        "completed_training_epochs": 300,
+        "wall_time_s": 386.4940589540638
+      },
+      "instances": 500,
+      "complete_and_feasible": 500,
+      "mean_verified_cost_usd": 456.25233179129896,
+      "row_count": 500,
+      "view_ids_sha256": "8c057954fd19f18b218e2ab1511a8b9232fe9e74e3f2ff3d99e14a4d173526f7"
+    },
+    {
+      "name": "legacy",
+      "path": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/2080ti_update_20260909/graph_screen/Cus50_full_legacy_random_paper_seed1234/validation_summary.json",
+      "metadata": {
+        "objective_config": {
+          "consumption_kwh_per_km": 0.38910505836575876,
+          "electricity_price_usd_per_kwh": 0.39,
+          "mode": "energy_vehicle_cost",
+          "profile_id": "rivian_energy_vehicle_cost_v2",
+          "vehicle_fixed_cost_usd": 413.6331536717643
+        },
+        "candidate_count": 100,
+        "validation_rollout_steps": 98,
+        "validation_seed": 910001234,
+        "decode_type": "sampling",
+        "scale": "Cus50",
+        "split": "validation",
+        "seed": 1234,
+        "training_rollout_steps": 65,
+        "effective_batch_size": 24,
+        "training_trajectory_count": 5,
+        "customer_exposures": 360000,
+        "optimizer_steps": 300,
+        "reward_contract_sha256": "21105b1bcd92ffe4574611cc33c3949e7b7239b0b5ee13ad884efe0e65d73465",
+        "training_stream_contract_sha256": null,
+        "graph_mode": "full",
+        "architecture": "rrnco_ev_v1",
+        "method_specific": {
+          "ablation_contract": "road_inputs_masked_in_ane_encoder_and_decoder_v1",
+          "aft_mode": "legacy",
+          "architecture": "rrnco_ev_v1",
+          "checkpoint_bias": true,
+          "constraint_source": "canonical_shared_environment_action_mask",
+          "distance_sample_size": 25,
+          "distance_sampling": "random",
+          "embedding_dim": 128,
+          "encoder_layers": 6,
+          "feedforward_hidden": 512,
+          "graph_mode": "full",
+          "heads": 8,
+          "reinforce_baseline": "paper",
+          "relation_channels": [
+            "directed_distance",
+            "directed_time",
+            "directed_energy",
+            "angle"
+          ],
+          "relation_chunk_size": 32,
+          "relation_temperature": 148.4131591025766,
+          "upstream_architecture": "ai4co/real-routing-nco"
+        },
+        "selected_epoch": 300,
+        "training_status": "passed",
+        "completed_training_epochs": 300,
+        "wall_time_s": 384.7777828469407
+      },
+      "instances": 500,
+      "complete_and_feasible": 500,
+      "mean_verified_cost_usd": 451.605396641397,
+      "row_count": 500,
+      "view_ids_sha256": "8c057954fd19f18b218e2ab1511a8b9232fe9e74e3f2ff3d99e14a4d173526f7"
+    },
+    {
+      "name": "drl_ts",
+      "path": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/DRL_rq_v1/G/Full-support/drl_ts/Cus50/seed_1234/9c2173a83d12cc253e9e667112b81234c11f6937/validation_summary.json",
+      "metadata": {
+        "objective_config": {
+          "consumption_kwh_per_km": 0.38910505836575876,
+          "electricity_price_usd_per_kwh": 0.39,
+          "mode": "energy_vehicle_cost",
+          "profile_id": "rivian_energy_vehicle_cost_v2",
+          "vehicle_fixed_cost_usd": 413.6331536717643
+        },
+        "candidate_count": 100,
+        "validation_rollout_steps": 98,
+        "validation_seed": 910001234,
+        "decode_type": "sampling",
+        "scale": "Cus50",
+        "split": "validation",
+        "seed": 1234,
+        "training_rollout_steps": 65,
+        "effective_batch_size": 144,
+        "training_trajectory_count": 1,
+        "customer_exposures": 39600000,
+        "optimizer_steps": 5500,
+        "reward_contract_sha256": "21105b1bcd92ffe4574611cc33c3949e7b7239b0b5ee13ad884efe0e65d73465",
+        "training_stream_contract_sha256": "2cb1882d0d1926fa449d1223c38616d9d2dab125ff3d539863c230e1ea1aaa00",
+        "graph_mode": null,
+        "architecture": null,
+        "method_specific": null,
+        "selected_epoch": 1300,
+        "training_status": "early_stopped",
+        "completed_training_epochs": 5500,
+        "wall_time_s": 32415.94905228197
+      },
+      "instances": 500,
+      "complete_and_feasible": 500,
+      "mean_verified_cost_usd": 433.656522258906,
+      "row_count": 500,
+      "view_ids_sha256": "8c057954fd19f18b218e2ab1511a8b9232fe9e74e3f2ff3d99e14a4d173526f7"
+    },
+    {
+      "name": "am",
+      "path": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/DRL_rq_v1/G/Full-support/am_evrptw/Cus50/seed_1234/9c2173a83d12cc253e9e667112b81234c11f6937/validation_summary.json",
+      "metadata": {
+        "objective_config": {
+          "consumption_kwh_per_km": 0.38910505836575876,
+          "electricity_price_usd_per_kwh": 0.39,
+          "mode": "energy_vehicle_cost",
+          "profile_id": "rivian_energy_vehicle_cost_v2",
+          "vehicle_fixed_cost_usd": 413.6331536717643
+        },
+        "candidate_count": 100,
+        "validation_rollout_steps": 98,
+        "validation_seed": 910001234,
+        "decode_type": "sampling",
+        "scale": "Cus50",
+        "split": "validation",
+        "seed": 1234,
+        "training_rollout_steps": 65,
+        "effective_batch_size": 2304,
+        "training_trajectory_count": 5,
+        "customer_exposures": null,
+        "optimizer_steps": null,
+        "reward_contract_sha256": "21105b1bcd92ffe4574611cc33c3949e7b7239b0b5ee13ad884efe0e65d73465",
+        "training_stream_contract_sha256": "c42a933bc6d241259386500685cddaaabee64657924f967125ddbc0ceb8b244c",
+        "graph_mode": null,
+        "architecture": null,
+        "method_specific": null,
+        "selected_epoch": 2000,
+        "training_status": "unfinished_or_unrecorded",
+        "completed_training_epochs": null,
+        "wall_time_s": null
+      },
+      "instances": 500,
+      "complete_and_feasible": 500,
+      "mean_verified_cost_usd": 435.84907683014427,
+      "row_count": 500,
+      "view_ids_sha256": "8c057954fd19f18b218e2ab1511a8b9232fe9e74e3f2ff3d99e14a4d173526f7"
+    }
+  ],
+  "comparisons": [
+    {
+      "candidate": "graph",
+      "baseline": "node_only",
+      "evaluation_audit": {
+        "differences": {},
+        "missing": []
+      },
+      "training_audit": {
+        "differences": {},
+        "missing": [
+          "training_stream_contract_sha256"
+        ]
+      },
+      "same_complete_cohort": true,
+      "shared_view_count": 500,
+      "candidate_only_views": 0,
+      "baseline_only_views": 0,
+      "jointly_feasible_count": 500,
+      "full_cohort_comparison_verified": true,
+      "paired_cost": {
+        "scope": "full_cohort",
+        "candidate_mean": 442.3199384983626,
+        "baseline_mean": 456.25233179129884,
+        "candidate_minus_baseline": -13.93239329293624,
+        "candidate_reduction_percent": 3.053659635718698,
+        "wins": 469,
+        "ties": 0,
+        "losses": 31
+      },
+      "same_vehicle_distance": {
+        "count": 491,
+        "candidate_mean_km": 166.2288213373843,
+        "baseline_mean_km": 219.149614600882
+      },
+      "causal_graph_claim_supported": false
+    },
+    {
+      "candidate": "graph",
+      "baseline": "legacy",
+      "evaluation_audit": {
+        "differences": {},
+        "missing": []
+      },
+      "training_audit": {
+        "differences": {},
+        "missing": [
+          "training_stream_contract_sha256"
+        ]
+      },
+      "same_complete_cohort": true,
+      "shared_view_count": 500,
+      "candidate_only_views": 0,
+      "baseline_only_views": 0,
+      "jointly_feasible_count": 500,
+      "full_cohort_comparison_verified": true,
+      "paired_cost": {
+        "scope": "full_cohort",
+        "candidate_mean": 442.3199384983626,
+        "baseline_mean": 451.6053966413971,
+        "candidate_minus_baseline": -9.285458143034475,
+        "candidate_reduction_percent": 2.0560999075942643,
+        "wins": 436,
+        "ties": 0,
+        "losses": 64
+      },
+      "same_vehicle_distance": {
+        "count": 494,
+        "candidate_mean_km": 166.58552206224132,
+        "baseline_mean_km": 194.31979735622838
+      },
+      "causal_graph_claim_supported": false
+    },
+    {
+      "candidate": "graph",
+      "baseline": "drl_ts",
+      "evaluation_audit": {
+        "differences": {},
+        "missing": []
+      },
+      "training_audit": {
+        "differences": {
+          "effective_batch_size": {
+            "graph": 24,
+            "drl_ts": 144
+          },
+          "training_trajectory_count": {
+            "graph": 5,
+            "drl_ts": 1
+          },
+          "customer_exposures": {
+            "graph": 360000,
+            "drl_ts": 39600000
+          },
+          "optimizer_steps": {
+            "graph": 300,
+            "drl_ts": 5500
+          }
+        },
+        "missing": [
+          "training_stream_contract_sha256"
+        ]
+      },
+      "same_complete_cohort": true,
+      "shared_view_count": 500,
+      "candidate_only_views": 0,
+      "baseline_only_views": 0,
+      "jointly_feasible_count": 500,
+      "full_cohort_comparison_verified": true,
+      "paired_cost": {
+        "scope": "full_cohort",
+        "candidate_mean": 442.3199384983626,
+        "baseline_mean": 433.656522258906,
+        "candidate_minus_baseline": 8.66341623945658,
+        "candidate_reduction_percent": -1.997759930907775,
+        "wins": 0,
+        "ties": 0,
+        "losses": 500
+      },
+      "same_vehicle_distance": {
+        "count": 496,
+        "candidate_mean_km": 166.13702294805967,
+        "baseline_mean_km": 131.24860539889684
+      },
+      "causal_graph_claim_supported": false
+    },
+    {
+      "candidate": "graph",
+      "baseline": "am",
+      "evaluation_audit": {
+        "differences": {},
+        "missing": []
+      },
+      "training_audit": {
+        "differences": {
+          "effective_batch_size": {
+            "graph": 24,
+            "am": 2304
+          }
+        },
+        "missing": [
+          "customer_exposures",
+          "optimizer_steps",
+          "training_stream_contract_sha256"
+        ]
+      },
+      "same_complete_cohort": true,
+      "shared_view_count": 500,
+      "candidate_only_views": 0,
+      "baseline_only_views": 0,
+      "jointly_feasible_count": 500,
+      "full_cohort_comparison_verified": true,
+      "paired_cost": {
+        "scope": "full_cohort",
+        "candidate_mean": 442.3199384983626,
+        "baseline_mean": 435.8490768301442,
+        "candidate_minus_baseline": 6.47086166821839,
+        "candidate_reduction_percent": -1.4846565043294024,
+        "wins": 12,
+        "ties": 0,
+        "losses": 488
+      },
+      "same_vehicle_distance": {
+        "count": 498,
+        "candidate_mean_km": 166.65309430955233,
+        "baseline_mean_km": 135.1504761828035
+      },
+      "causal_graph_claim_supported": false
+    }
+  ]
+}

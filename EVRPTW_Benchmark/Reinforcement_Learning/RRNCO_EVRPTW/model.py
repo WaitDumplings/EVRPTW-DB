@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 
 def _tensor(value: Any, device: torch.device) -> torch.Tensor:
@@ -45,10 +46,15 @@ class ContextualGate(nn.Module):
 class DirectedDistanceExpert(nn.Module):
     """Separate sampled outgoing/incoming road-distance summaries (RRNCO ANE)."""
 
-    def __init__(self, embedding_dim: int, sample_size: int = 25) -> None:
+    def __init__(
+        self, embedding_dim: int, sample_size: int = 25, sampling: str = "random"
+    ) -> None:
         super().__init__()
         if sample_size <= 0:
             raise ValueError("sample_size must be positive")
+        if sampling not in {"random", "nearest"}:
+            raise ValueError("distance_sampling must be random or nearest")
+        self.sampling = sampling
         self.sample_size = int(sample_size)
         self.row = nn.Linear(self.sample_size, embedding_dim)
         self.col = nn.Linear(self.sample_size, embedding_dim)
@@ -69,20 +75,38 @@ class DirectedDistanceExpert(nn.Module):
         return sampled.reshape(batch, nodes, self.sample_size)
 
     def forward(self, distance: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        indices = self._indices(distance)
-        outgoing = distance.gather(2, indices).sort(dim=-1).values
-        incoming = distance.transpose(1, 2).gather(2, indices).sort(dim=-1).values
+        if self.sampling == "nearest":
+            # Deterministic, direction-specific summaries. Pad only when a small
+            # graph has fewer than k neighbours; never include its zero diagonal.
+            nodes = distance.shape[-1]
+            if nodes < 2:
+                raise ValueError("distance expert requires at least two nodes")
+            diagonal = torch.eye(nodes, dtype=torch.bool, device=distance.device)
+            outgoing = distance.masked_fill(diagonal, torch.inf).sort(-1).values
+            incoming = distance.transpose(1, 2).masked_fill(diagonal, torch.inf).sort(-1).values
+            count = min(self.sample_size, nodes - 1)
+            outgoing, incoming = outgoing[..., :count], incoming[..., :count]
+            if count < self.sample_size:
+                padding = self.sample_size - count
+                outgoing = torch.cat((outgoing, outgoing[..., -1:].expand(*outgoing.shape[:-1], padding)), -1)
+                incoming = torch.cat((incoming, incoming[..., -1:].expand(*incoming.shape[:-1], padding)), -1)
+        else:
+            indices = self._indices(distance)
+            outgoing = distance.gather(2, indices).sort(dim=-1).values
+            incoming = distance.transpose(1, 2).gather(2, indices).sort(dim=-1).values
         return self.row(outgoing), self.col(incoming)
 
 
 class RRNCOInitialEmbedding(nn.Module):
     """Adaptive node embedding with EVRPTW attributes and directed road relations."""
 
-    def __init__(self, embedding_dim: int, sample_size: int) -> None:
+    def __init__(
+        self, embedding_dim: int, sample_size: int, sampling: str = "random"
+    ) -> None:
         super().__init__()
         self.coordinate_depot = nn.Linear(2, embedding_dim)
         self.coordinate_terminal = nn.Linear(3, embedding_dim)
-        self.distance_expert = DirectedDistanceExpert(embedding_dim, sample_size)
+        self.distance_expert = DirectedDistanceExpert(embedding_dim, sample_size, sampling)
         self.row_gate = ContextualGate(embedding_dim)
         self.col_gate = ContextualGate(embedding_dim)
         self.attributes = nn.Linear(10, embedding_dim)
@@ -118,8 +142,13 @@ class RRNCOInitialEmbedding(nn.Module):
 class RelationBiasFusion(nn.Module):
     """RRNCO neural adaptive bias extended from D/T/angle to D/T/E/angle."""
 
-    def __init__(self, embedding_dim: int) -> None:
+    def __init__(
+        self, embedding_dim: int, chunk_size: int = 0,
+        checkpoint_bias: bool = False, temperature: float = math.exp(5.0),
+    ) -> None:
         super().__init__()
+        self.chunk_size = int(chunk_size)
+        self.checkpoint_bias = bool(checkpoint_bias)
         def expert() -> nn.Sequential:
             return nn.Sequential(
                 nn.Linear(1, embedding_dim),
@@ -136,7 +165,7 @@ class RelationBiasFusion(nn.Module):
             nn.SiLU(),
             nn.Linear(embedding_dim, 4),
         )
-        self.temperature = nn.Parameter(torch.tensor(5.0))
+        self.temperature = nn.Parameter(torch.tensor(math.log(temperature)))
         self.output = nn.Linear(embedding_dim, 1)
 
     def forward(
@@ -146,8 +175,25 @@ class RelationBiasFusion(nn.Module):
         duration: torch.Tensor,
         energy: torch.Tensor,
     ) -> torch.Tensor:
-        delta = coordinates[:, :, None, :] - coordinates[:, None, :, :]
-        angle = torch.atan2(delta[..., 1], delta[..., 0]) / math.pi
+        nodes = distance.shape[1]
+        chunk_size = self.chunk_size or nodes
+        chunks = []
+        for start in range(0, nodes, chunk_size):
+            stop = min(start + chunk_size, nodes)
+            delta = coordinates[:, start:stop, None, :] - coordinates[:, None, :, :]
+            angle = torch.atan2(delta[..., 1], delta[..., 0]) / math.pi
+            inputs = (distance[:, start:stop], duration[:, start:stop],
+                      energy[:, start:stop], angle)
+            if self.checkpoint_bias and self.training and torch.is_grad_enabled():
+                chunks.append(checkpoint(self._fuse, *inputs, use_reentrant=False))
+            else:
+                chunks.append(self._fuse(*inputs))
+        return torch.cat(chunks, dim=1)
+
+    def _fuse(
+        self, distance: torch.Tensor, duration: torch.Tensor,
+        energy: torch.Tensor, angle: torch.Tensor,
+    ) -> torch.Tensor:
         channels = (
             self.distance(distance[..., None]),
             self.duration(duration[..., None]),
@@ -164,8 +210,14 @@ class RelationBiasFusion(nn.Module):
 class AFTFull(nn.Module):
     """Attention-free token mixing used by the released RRNCO implementation."""
 
-    def __init__(self, embedding_dim: int) -> None:
+    def __init__(
+        self, embedding_dim: int, mode: str = "legacy", *,
+        chunk_size: int = 32, checkpoint_mixing: bool = False,
+    ) -> None:
         super().__init__()
+        self.mode = mode
+        self.chunk_size = int(chunk_size) or 32
+        self.checkpoint_mixing = bool(checkpoint_mixing)
         self.query = nn.Linear(embedding_dim, embedding_dim)
         self.key = nn.Linear(embedding_dim, embedding_dim)
         self.value = nn.Linear(embedding_dim, embedding_dim)
@@ -175,25 +227,57 @@ class AFTFull(nn.Module):
         self, row: torch.Tensor, col: torch.Tensor, adaptive_bias: torch.Tensor
     ) -> torch.Tensor:
         query = torch.sigmoid(self.query(row))
-        key = torch.softmax(self.key(col), dim=1)
+        key = self.key(col)
         value = self.value(col)
-        # Preserve the public implementation's softmax-then-exp semantics.
-        relation = torch.exp(torch.softmax(adaptive_bias, dim=-1))
-        exp_key = torch.exp(key)
+        if self.mode == "legacy":
+            # Default retains the released implementation/checkpoint semantics.
+            relation = torch.exp(torch.softmax(adaptive_bias, dim=-1))
+            exp_key = torch.exp(torch.softmax(key, dim=1))
+        else:
+            # Normalize the joint (bias_ij + key_jd) logits. Factoring two
+            # separately stabilized exponentials can still underflow when key
+            # and relation strongly prefer different nodes. Query-row chunks
+            # and recomputation bound the otherwise B*N*N*E working set.
+            chunks = []
+            for start in range(0, row.shape[1], self.chunk_size):
+                inputs = (adaptive_bias[:, start : start + self.chunk_size], key, value)
+                if self.checkpoint_mixing and self.training and torch.is_grad_enabled():
+                    chunks.append(checkpoint(self._stable_mix, *inputs, use_reentrant=False))
+                else:
+                    chunks.append(self._stable_mix(*inputs))
+            return self.project(query * torch.cat(chunks, dim=1))
         numerator = torch.bmm(relation, exp_key * value)
         denominator = torch.bmm(relation, exp_key).clamp_min(1e-12)
         return self.project(query * (numerator / denominator))
 
+    @staticmethod
+    def _stable_mix(
+        bias: torch.Tensor, key: torch.Tensor, value: torch.Tensor,
+    ) -> torch.Tensor:
+        weights = torch.softmax(bias[..., None] + key[:, None], dim=2)
+        return (weights * value[:, None]).sum(dim=2)
+
 
 class RRNCOBlock(nn.Module):
-    def __init__(self, embedding_dim: int, feedforward_hidden: int) -> None:
+    def __init__(
+        self, embedding_dim: int, feedforward_hidden: int, *,
+        graph_mode: str = "full", aft_mode: str = "legacy",
+        relation_chunk_size: int = 0, checkpoint_bias: bool = False,
+        relation_temperature: float = math.exp(5.0),
+    ) -> None:
         super().__init__()
+        self.graph_mode = graph_mode
         self.row_norm = SequenceInstanceNorm(embedding_dim)
         self.col_norm = SequenceInstanceNorm(embedding_dim)
         self.mix_norm = SequenceInstanceNorm(embedding_dim)
         self.feed_forward_norm = SequenceInstanceNorm(embedding_dim)
-        self.bias = RelationBiasFusion(embedding_dim)
-        self.aft = AFTFull(embedding_dim)
+        self.bias = RelationBiasFusion(
+            embedding_dim, relation_chunk_size, checkpoint_bias, relation_temperature
+        )
+        self.aft = AFTFull(
+            embedding_dim, aft_mode, chunk_size=relation_chunk_size,
+            checkpoint_mixing=checkpoint_bias,
+        )
         self.combine = nn.Linear(embedding_dim, embedding_dim)
         self.feed_forward = nn.Sequential(
             nn.Linear(embedding_dim, feedforward_hidden),
@@ -212,7 +296,10 @@ class RRNCOBlock(nn.Module):
     ) -> torch.Tensor:
         normalized_row = self.row_norm(row)
         normalized_col = self.col_norm(col)
-        bias = self.bias(coordinates, distance, duration, energy)
+        bias = (
+            torch.zeros_like(distance) if self.graph_mode == "node_only"
+            else self.bias(coordinates, distance, duration, energy)
+        )
         residual = self.mix_norm(row + self.combine(
             self.aft(normalized_row, normalized_col, bias)
         ))
@@ -220,10 +307,12 @@ class RRNCOBlock(nn.Module):
 
 
 class RRNCOLayer(nn.Module):
-    def __init__(self, embedding_dim: int, feedforward_hidden: int) -> None:
+    def __init__(
+        self, embedding_dim: int, feedforward_hidden: int, **kwargs: Any
+    ) -> None:
         super().__init__()
-        self.row = RRNCOBlock(embedding_dim, feedforward_hidden)
-        self.col = RRNCOBlock(embedding_dim, feedforward_hidden)
+        self.row = RRNCOBlock(embedding_dim, feedforward_hidden, **kwargs)
+        self.col = RRNCOBlock(embedding_dim, feedforward_hidden, **kwargs)
 
     def forward(
         self,
@@ -271,19 +360,40 @@ class RRNCOEVPolicy(nn.Module):
         feedforward_hidden: int = 512,
         distance_sample_size: int = 25,
         tanh_clipping: float = 10.0,
+        graph_mode: str = "full",
+        aft_mode: str = "legacy",
+        distance_sampling: str = "random",
+        relation_chunk_size: int = 0,
+        checkpoint_bias: bool = False,
+        relation_temperature: float = math.exp(5.0),
     ) -> None:
         super().__init__()
         if embedding_dim % n_heads:
             raise ValueError("embedding_dim must be divisible by n_heads")
         if n_encode_layers <= 0:
             raise ValueError("n_encode_layers must be positive")
+        if graph_mode not in {"full", "distance", "distance_time", "node_only"}:
+            raise ValueError("unsupported graph_mode")
+        if aft_mode not in {"legacy", "stable"}:
+            raise ValueError("aft_mode must be legacy or stable")
+        if relation_chunk_size < 0:
+            raise ValueError("relation_chunk_size must be nonnegative")
+        if not math.isfinite(relation_temperature) or relation_temperature <= 0:
+            raise ValueError("relation_temperature must be finite and positive")
+        self.graph_mode = graph_mode
         self.embedding_dim = int(embedding_dim)
         self.n_heads = int(n_heads)
         self.head_dim = self.embedding_dim // self.n_heads
         self.tanh_clipping = float(tanh_clipping)
-        self.initial = RRNCOInitialEmbedding(embedding_dim, distance_sample_size)
+        self.initial = RRNCOInitialEmbedding(
+            embedding_dim, distance_sample_size, distance_sampling
+        )
         self.encoder = nn.ModuleList(
-            RRNCOLayer(embedding_dim, feedforward_hidden)
+            RRNCOLayer(
+                embedding_dim, feedforward_hidden, graph_mode=graph_mode,
+                aft_mode=aft_mode, relation_chunk_size=relation_chunk_size,
+                checkpoint_bias=checkpoint_bias, relation_temperature=relation_temperature,
+            )
             for _ in range(int(n_encode_layers))
         )
         self.step_context = nn.Linear(embedding_dim + 3, embedding_dim, bias=False)
@@ -328,6 +438,14 @@ class RRNCOEVPolicy(nn.Module):
             for value in (distance_tensor, duration_tensor, energy_tensor)
         ):
             raise ValueError("RRNCO-EV requires finite D/T/E matrices")
+        # Ablate every explicit road-matrix path, including ANE and the decoder.
+        # The shared environment still enforces exactly the same hard mask.
+        if self.graph_mode == "node_only":
+            distance_tensor = torch.zeros_like(distance_tensor)
+        if self.graph_mode in {"node_only", "distance"}:
+            duration_tensor = torch.zeros_like(duration_tensor)
+        if self.graph_mode != "full":
+            energy_tensor = torch.zeros_like(energy_tensor)
         row, col = self.initial(node_features, coordinates, distance_tensor)
         for layer in self.encoder:
             row, col = layer(
