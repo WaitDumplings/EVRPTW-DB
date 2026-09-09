@@ -1366,9 +1366,23 @@ def validate_fresh_training_output(cfg: dict[str, Any]) -> None:
 
 
 def masked_mean(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    mask_f = mask.float()
-    denom = torch.clamp(mask_f.sum(), min=1.0)
-    return (value * mask_f).sum() / denom
+    mask_bool = mask.bool()
+    denom = torch.clamp(mask_bool.sum(), min=1).to(dtype=value.dtype)
+    return torch.where(mask_bool, value, torch.zeros_like(value)).sum() / denom
+
+
+def _valid_transition_count(
+    batch,
+    env_indices: Sequence[int] | np.ndarray,
+    step_start: int = 0,
+    step_end: int | None = None,
+) -> int:
+    """Count active transitions in one PPO env/time slice."""
+    if step_end is None:
+        step_end = int(batch.valid.size(0))
+    return int(
+        batch.valid[int(step_start) : int(step_end), env_indices].sum().item()
+    )
 
 
 def set_seed(seed: int) -> None:
@@ -2276,9 +2290,10 @@ def evaluate_policy_loss(
 
     cached_state = agent.backbone.encode(model_observation(first_obs))
 
-    policy_losses = []
-    value_losses = []
-    entropy_losses = []
+    policy_terms = []
+    value_terms = []
+    entropy_terms = []
+    valid_masks = []
     for step in range(step_start, step_end):
         obs = batch.observations[step]
         obs_mb = model_observation(obs)
@@ -2295,12 +2310,20 @@ def evaluate_policy_loss(
         unclipped = ratio * adv
         clipped = torch.clamp(ratio, 1.0 - clip_coef, 1.0 + clip_coef) * adv
         valid = batch.valid[step, env_indices]
-        policy_losses.append(-masked_mean(torch.minimum(unclipped, clipped), valid))
-        value_losses.append(masked_mean(F.mse_loss(value, returns[step, env_indices], reduction="none"), valid))
-        entropy_losses.append(masked_mean(entropy, valid))
-    policy_loss = torch.stack(policy_losses).mean()
-    value_loss = torch.stack(value_losses).mean()
-    entropy_loss = torch.stack(entropy_losses).mean()
+        policy_terms.append(-torch.minimum(unclipped, clipped))
+        value_terms.append(
+            F.mse_loss(
+                value,
+                returns[step, env_indices],
+                reduction="none",
+            )
+        )
+        entropy_terms.append(entropy)
+        valid_masks.append(valid)
+    active = torch.stack(valid_masks)
+    policy_loss = masked_mean(torch.stack(policy_terms), active)
+    value_loss = masked_mean(torch.stack(value_terms), active)
+    entropy_loss = masked_mean(torch.stack(entropy_terms), active)
     total = policy_loss + vf_coef * value_loss - ent_coef * entropy_loss
     return total, policy_loss.detach(), value_loss.detach(), entropy_loss.detach()
 
@@ -3008,7 +3031,18 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         group_policy = 0.0
                         group_value = 0.0
                         group_entropy = 0.0
-                        group_size = float(len(accum_group))
+                        group_transition_count = sum(
+                            _valid_transition_count(
+                                batch,
+                                env_indices,
+                                step_end=total_steps,
+                            )
+                            for env_indices in accum_group
+                        )
+                        if group_transition_count <= 0:
+                            raise RuntimeError(
+                                "PPO optimizer group contains no valid transitions"
+                            )
                         for env_indices in accum_group:
                             weighted_policy = 0.0
                             weighted_value = 0.0
@@ -3017,9 +3051,18 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                                 step_end = min(
                                     step_start + chunk_size, total_steps
                                 )
-                                chunk_weight = float(
-                                    step_end - step_start
-                                ) / max(float(total_steps), 1.0)
+                                chunk_transition_count = _valid_transition_count(
+                                    batch,
+                                    env_indices,
+                                    step_start,
+                                    step_end,
+                                )
+                                if chunk_transition_count <= 0:
+                                    continue
+                                chunk_weight = (
+                                    float(chunk_transition_count)
+                                    / float(group_transition_count)
+                                )
                                 loss, policy_loss, value_loss, entropy = (
                                     evaluate_policy_loss(
                                         agent,
@@ -3033,15 +3076,15 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                                         step_end=step_end,
                                     )
                                 )
-                                (loss * chunk_weight / group_size).backward()
+                                (loss * chunk_weight).backward()
                                 weighted_policy += (
                                     policy_loss.item() * chunk_weight
                                 )
                                 weighted_value += value_loss.item() * chunk_weight
                                 weighted_entropy += entropy.item() * chunk_weight
-                            group_policy += weighted_policy / group_size
-                            group_value += weighted_value / group_size
-                            group_entropy += weighted_entropy / group_size
+                            group_policy += weighted_policy
+                            group_value += weighted_value
+                            group_entropy += weighted_entropy
                         preclip_norm = torch.nn.utils.clip_grad_norm_(
                             agent.parameters(),
                             float(train_cfg.get("max_grad_norm", 1.0)),
@@ -3054,9 +3097,17 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         )
             else:
                 # Multiple physical rollout buffers form one effective batch.
-                # PPO gradients are weighted by their base-instance share and
+                # PPO gradients are weighted by their active-transition share and
                 # accumulated before each optimizer step, keeping GPU residency
                 # at the registered physical batch size.
+                effective_transition_count = sum(
+                    int(batch.valid.sum().item())
+                    for batch, _, _ in rollout_records
+                )
+                if effective_transition_count <= 0:
+                    raise RuntimeError(
+                        "PPO effective batch contains no valid transitions"
+                    )
                 for _ in range(ppo_epochs):
                     optimizer.zero_grad(set_to_none=True)
                     group_policy = 0.0
@@ -3084,19 +3135,20 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         )
                         chunk_size = max(1, min(chunk_size, total_steps))
                         for env_indices in split_indices:
-                            instance_weight = (
-                                float(len(env_indices))
-                                / float(effective_instances)
-                            )
                             for step_start in range(
                                 0, total_steps, chunk_size
                             ):
                                 step_end = min(
                                     step_start + chunk_size, total_steps
                                 )
-                                chunk_weight = float(
-                                    step_end - step_start
-                                ) / max(float(total_steps), 1.0)
+                                chunk_transition_count = _valid_transition_count(
+                                    batch,
+                                    env_indices,
+                                    step_start,
+                                    step_end,
+                                )
+                                if chunk_transition_count <= 0:
+                                    continue
                                 loss, policy_loss, value_loss, entropy = (
                                     evaluate_policy_loss(
                                         agent,
@@ -3110,7 +3162,10 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                                         step_end=step_end,
                                     )
                                 )
-                                weight = instance_weight * chunk_weight
+                                weight = (
+                                    float(chunk_transition_count)
+                                    / float(effective_transition_count)
+                                )
                                 (loss * weight).backward()
                                 group_policy += policy_loss.item() * weight
                                 group_value += value_loss.item() * weight

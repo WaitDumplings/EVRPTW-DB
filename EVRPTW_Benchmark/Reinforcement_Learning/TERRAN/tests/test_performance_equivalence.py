@@ -35,6 +35,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import (
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.trainer import (
     _slice_obs_by_env,
+    _valid_transition_count,
     evaluate_policy_loss,
     masked_mean,
 )
@@ -129,10 +130,10 @@ def test_training_encoder_cache_preserves_rollout_and_storage():
     assert not np.shares_memory(compact.observations[0]["action_mask"], compact.observations[1]["action_mask"])
 
 
-def _legacy_policy_loss(agent, batch, returns, advantages, indices, start, end):
-    """Pre-optimization PPO loss, intentionally retaining full observation slices."""
+def _reference_policy_loss(agent, batch, returns, advantages, indices, start, end):
+    """Direct active-transition PPO mean with full observation slices."""
     state = agent.backbone.encode(_slice_obs_by_env(batch.observations[0], indices))
-    policies, values, entropies = [], [], []
+    policies, values, entropies, valid_masks = [], [], [], []
     for step in range(start, end):
         obs = _slice_obs_by_env(batch.observations[step], indices)
         _, logprob, entropy, value, _ = agent.get_action_and_value_cached(
@@ -141,10 +142,27 @@ def _legacy_policy_loss(agent, batch, returns, advantages, indices, start, end):
         ratio = torch.exp(logprob - batch.old_logprobs[step, indices])
         advantage = advantages[step, indices]
         valid = batch.valid[step, indices]
-        policies.append(-masked_mean(torch.minimum(ratio * advantage, torch.clamp(ratio, 0.8, 1.2) * advantage), valid))
-        values.append(masked_mean(F.mse_loss(value.squeeze(-1), returns[step, indices], reduction="none"), valid))
-        entropies.append(masked_mean(entropy, valid))
-    return torch.stack(policies).mean() + 0.5 * torch.stack(values).mean() - 0.01 * torch.stack(entropies).mean()
+        policies.append(
+            -torch.minimum(
+                ratio * advantage,
+                torch.clamp(ratio, 0.8, 1.2) * advantage,
+            )
+        )
+        values.append(
+            F.mse_loss(
+                value.squeeze(-1),
+                returns[step, indices],
+                reduction="none",
+            )
+        )
+        entropies.append(entropy)
+        valid_masks.append(valid)
+    active = torch.stack(valid_masks)
+    return (
+        torch.stack(policies).masked_select(active).mean()
+        + 0.5 * torch.stack(values).masked_select(active).mean()
+        - 0.01 * torch.stack(entropies).masked_select(active).mean()
+    )
 
 
 @pytest.mark.parametrize("step_start", [0, 1])
@@ -156,7 +174,7 @@ def test_ppo_compact_transport_preserves_loss_and_gradients(step_start):
     indices = np.asarray([1, 0])
     step_end = min(len(batch.observations), step_start + 2)
     torch.manual_seed(31)
-    reference = _legacy_policy_loss(agent, batch, returns, advantages, indices, step_start, step_end)
+    reference = _reference_policy_loss(agent, batch, returns, advantages, indices, step_start, step_end)
     reference.backward()
     reference_rng = torch.get_rng_state().clone()
     reference_gradients = [None if p.grad is None else p.grad.clone() for p in agent.parameters()]
@@ -171,6 +189,114 @@ def test_ppo_compact_transport_preserves_loss_and_gradients(step_start):
             assert parameter.grad is None
         else:
             torch.testing.assert_close(parameter.grad, expected, rtol=0, atol=0)
+
+
+def test_ppo_loss_uses_global_active_transition_population():
+    agent = _agent(training=True)
+    batch = collect_rollout(agent, _envs(), 8, "sample", "cpu", seed=35)
+    indices = np.arange(batch.actions.size(1), dtype=np.int64)
+    batch.valid.zero_()
+    batch.valid[0, indices] = True
+    batch.valid[1, 0, 0] = True
+
+    returns = torch.zeros_like(batch.values)
+    advantages = torch.full_like(batch.values, 1.0e6)
+    advantages[0, indices] = 1.0
+    advantages[1, 0, 0] = 9.0
+    total, policy, *_ = evaluate_policy_loss(
+        agent,
+        batch,
+        returns,
+        advantages,
+        {"training": {"vf_coef": 0.0, "ent_coef": 0.0}},
+        "cpu",
+        env_indices=indices,
+        step_end=2,
+    )
+
+    expected = -(8.0 + 9.0) / 9.0
+    legacy_timestep_mean = -(1.0 + 9.0) / 2.0
+    assert policy.item() == pytest.approx(expected, abs=1e-6)
+    assert total.item() == pytest.approx(expected, abs=1e-6)
+    assert total.item() != pytest.approx(legacy_timestep_mean, abs=1e-3)
+
+
+def test_ppo_valid_weighted_chunks_match_full_loss_and_gradients():
+    agent = _agent(training=True)
+    batch = collect_rollout(agent, _envs(), 8, "sample", "cpu", seed=36)
+    indices = np.arange(batch.actions.size(1), dtype=np.int64)
+    batch.valid.zero_()
+    prefix_lengths = ((8, 6, 4, 2), (7, 5, 3, 1))
+    for env_index, lengths in enumerate(prefix_lengths):
+        for trajectory_index, length in enumerate(lengths):
+            batch.valid[:length, env_index, trajectory_index] = True
+
+    returns = compute_returns(batch.rewards, batch.dones, 1.0)
+    advantages = returns - batch.values
+    full_count = _valid_transition_count(batch, indices)
+    full, full_policy, full_value, full_entropy = evaluate_policy_loss(
+        agent,
+        batch,
+        returns,
+        advantages,
+        {"training": {}},
+        "cpu",
+        env_indices=indices,
+    )
+    full.backward()
+    full_gradients = [
+        None if parameter.grad is None else parameter.grad.clone()
+        for parameter in agent.parameters()
+    ]
+
+    agent.zero_grad(set_to_none=True)
+    chunk_metrics = torch.zeros(4)
+    for step_start in range(0, batch.actions.size(0), 3):
+        step_end = min(step_start + 3, batch.actions.size(0))
+        chunk_count = _valid_transition_count(
+            batch,
+            indices,
+            step_start,
+            step_end,
+        )
+        if chunk_count == 0:
+            continue
+        chunk = evaluate_policy_loss(
+            agent,
+            batch,
+            returns,
+            advantages,
+            {"training": {}},
+            "cpu",
+            env_indices=indices,
+            step_start=step_start,
+            step_end=step_end,
+        )
+        weight = float(chunk_count) / float(full_count)
+        (chunk[0] * weight).backward()
+        chunk_metrics += torch.tensor(
+            [component.item() * weight for component in chunk]
+        )
+
+    expected_metrics = torch.tensor(
+        [
+            full.item(),
+            full_policy.item(),
+            full_value.item(),
+            full_entropy.item(),
+        ]
+    )
+    torch.testing.assert_close(chunk_metrics, expected_metrics, rtol=1e-5, atol=1e-6)
+    for parameter, expected_gradient in zip(agent.parameters(), full_gradients):
+        if expected_gradient is None:
+            assert parameter.grad is None
+        else:
+            torch.testing.assert_close(
+                parameter.grad,
+                expected_gradient,
+                rtol=1e-5,
+                atol=1e-6,
+            )
 
 
 def test_ppo_reencodes_with_gradients_after_each_optimizer_update(monkeypatch):
