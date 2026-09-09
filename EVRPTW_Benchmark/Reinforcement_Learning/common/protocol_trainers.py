@@ -307,12 +307,16 @@ def _append_reinforce_diagnostics(
 
 
 def paper_ema_baseline_due(method: str, optimizer_steps: int, args: Any) -> bool:
-    """Return whether the method is still in its published EMA warmup."""
+    """Return whether the method uses EMA warmup.
+
+    AM follows its publication; RRNCO-EV deliberately matches the AM schedule
+    for the controlled architecture comparison.
+    """
 
     step = int(optimizer_steps)
     if step < 0:
         raise ValueError("optimizer_steps cannot be negative")
-    if method == "AM-EVRPTW":
+    if method in {"AM-EVRPTW", "RRNCO-EV"}:
         warmup_steps = int(args.steps_per_epoch) * int(args.baseline_warmup_epochs)
         return step < warmup_steps
     if method == "EVRPTW-RL":
@@ -326,14 +330,15 @@ def paper_baseline_eval_due(method: str, optimizer_steps: int, args: Any) -> boo
     training_epochs in the benchmark protocol counts optimizer updates, not
     the much larger paper epochs. Consequently the schedule is expressed in
     optimizer steps: AM uses its published 2,500 batches per epoch, while
-    EVRPTW-RL uses its published post-warmup 100-step interval. DRL-TS is not
+    EVRPTW-RL uses its published post-warmup 100-step interval. RRNCO-EV
+    deliberately matches AM for this controlled comparison. DRL-TS is not
     assigned a schedule here because the full manuscript/source is unavailable.
     """
 
     step = int(optimizer_steps)
     if step <= 0:
         return False
-    if method == "AM-EVRPTW":
+    if method in {"AM-EVRPTW", "RRNCO-EV"}:
         interval = int(args.steps_per_epoch)
         return interval > 0 and step % interval == 0
     if method == "EVRPTW-RL":

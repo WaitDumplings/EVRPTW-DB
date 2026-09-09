@@ -120,6 +120,82 @@ def run_am(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     )
 
 
+def run_rrnco_ev(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
+    """Train RRNCO-EV under the same hard EVRPTW protocol as AM-EVRPTW."""
+
+    from ..RRNCO_EVRPTW.rollout import rollout
+
+    training_rollout_steps = require_training_rollout_steps(args)
+    validation_rollout_steps = require_validation_rollout_steps(args)
+    validation_decode_type, validation_candidates = require_validation_decoding(args)
+    reward_distance_scale_km = _training_reward_scale(args, pool)
+    objective_config = objective_from_args(args)
+    reward_contract = reward_contract_from_args(
+        args, objective=objective_config, scale=getattr(args, "scale", None)
+    )
+
+    def solve(
+        active, instances, decode_type, seed, max_steps=None, candidate_count=None,
+    ):
+        n_traj = (
+            int(candidate_count)
+            if candidate_count is not None
+            else (args.samples_per_instance if decode_type == "sampling" else 1)
+        )
+        envs = make_envs(
+            instances,
+            n_traj=n_traj,
+            info_level="light",
+            reward_distance_scale_km=reward_distance_scale_km,
+            reward_objective_scale=(
+                reward_contract.objective_scale if reward_contract else None
+            ),
+            invalid_action_penalty=0.0 if reward_contract else -10.0,
+            objective_config=objective_config,
+        )
+        result = rollout(
+            active,
+            envs,
+            decode_type=decode_type,
+            max_steps=_max_steps(envs) if max_steps is None else int(max_steps),
+            seed=seed,
+            compute_log_likelihood=(
+                candidate_count is None and decode_type == "sampling"
+            ),
+            incomplete_penalty=args.incomplete_penalty,
+            reward_contract=reward_contract,
+        )
+        if candidate_count is not None:
+            _finalize_validation_result(envs, result)
+        return result
+
+    train_reinforce_data_passes(
+        method="RRNCO-EV",
+        args=args,
+        pool=pool,
+        policy=policy,
+        optimizer=optimizer,
+        make_actor=lambda instances, _soft, seed: solve(
+            policy, instances, "sampling", seed, training_rollout_steps
+        ),
+        make_baseline=lambda active, instances, _soft, seed: solve(
+            active, instances, "greedy", seed, training_rollout_steps
+        ),
+        training_cost=lambda result: result.training_cost,
+        objective_distance=lambda result: result.objective_distance_km,
+        feasible=lambda result: result.feasible,
+        validation_solve=lambda active, instance, seed: solve(
+            active,
+            [instance],
+            validation_decode_type,
+            seed,
+            max_steps=validation_rollout_steps,
+            candidate_count=validation_candidates,
+        ).infos[0],
+        legacy_batch_size=args.batch_size,
+    )
+
+
 def run_evrptw_rl(args: Any, pool: Any, policy: Any, optimizer: Any) -> None:
     from ..EVRPTW_RL.rollout import rollout
 
