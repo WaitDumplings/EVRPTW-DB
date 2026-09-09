@@ -152,9 +152,25 @@ def orthogonal_init(layer, gain: float = 1.0):
         nn.init.zeros_(layer.bias)
 
 
+class _ScaleCriticInputGradient(torch.autograd.Function):
+    """Keep value predictions exact while controlling their shared gradient."""
+
+    @staticmethod
+    def forward(ctx, value, scale):
+        ctx.scale = scale
+        return value
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output * ctx.scale, None
+
+
 class Critic(nn.Module):
     def __init__(self, hidden_size: int):
         super().__init__()
+        # Configured by the trainer; not a parameter or a checkpoint tensor.
+        # Legacy checkpoints keep the same architecture and state_dict keys.
+        self.backbone_grad_scale = 1.0
         self.mlp = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.LayerNorm(hidden_size),
@@ -168,7 +184,12 @@ class Critic(nn.Module):
                 orthogonal_init(layer, gain=0.01)
 
     def forward(self, x):
-        return self.mlp(x[1])
+        features = x[1]
+        if self.backbone_grad_scale != 1.0 and torch.is_grad_enabled():
+            features = _ScaleCriticInputGradient.apply(
+                features, self.backbone_grad_scale
+            )
+        return self.mlp(features)
 
 
 class Agent(nn.Module):

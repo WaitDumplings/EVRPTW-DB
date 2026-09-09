@@ -48,7 +48,14 @@ training:
   gamma: 1.0
   reward_contract_id: drl_energy_vehicle_reference_scale_v3
   clip_coef: 0.2
-  vf_coef: 0.5
+  # Shared by all canonical Stage-2 scales. Values/returns/advantages retain
+  # their normalized economic-reward units; only critic loss/gradients change.
+  value_loss_type: smooth_l1
+  value_loss_beta: 1.0
+  value_residual_scale: 1.0
+  vf_coef: 0.1
+  critic_backbone_grad_scale: 0.1
+  critic_gradient_diagnostics_every_epochs: 25
   ent_coef: 0.01
   learning_rate: 0.0001
   optimizer: adamw
