@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Core"))
 sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Dataset_Generator" / "src"))
 sys.path.insert(0, str(META_ROOT))
 
+from evrptw_core.objective import ObjectiveConfig, load_objective
 from evrptw_core.schema import EVRPTWSolution, merge_route_sequences
 from evrptw_core.validation import validate_instance_structure
 
@@ -74,7 +75,10 @@ ALGORITHM_PROFILE_ID = "alns_stage2_scalable_v2"
 SUMMARY_FIELDNAMES = [
     "instance_id", "file", "family_id", "city_slug", "split_id", "track_id", "scale_id",
     "day_type", "status", "benchmark_status", "benchmark_completed", "has_incumbent",
-    "feasible", "objective_distance_km", "vehicle_count", "runtime_s",
+    "feasible", "objective_distance_km", "objective_mode", "objective_profile_id",
+    "objective_unit", "objective_value", "objective_cost_usd",
+    "electricity_cost_usd", "vehicle_cost_usd", "vehicles_started",
+    "vehicle_count", "runtime_s",
     "first_feasible_time_s", "time_limit_s", "terminated_by_time_limit", "timing_scope",
     "seed", "seed_scheme",
     "run_contract_fingerprint", "run_contract_json",
@@ -176,6 +180,7 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
 
         recorder = IncumbentEventRecorder(task["checkpoints_s"], task["time_limit_s"])
         replay_cache = IncumbentReplayCache(instance)
+        objective_config = ObjectiveConfig(**task.get("objective_config", {}))
         solver: ALNS_Solver | None = None
         power_kw = np.asarray([], dtype=np.float32)
         charging_power_factor = 1.0
@@ -195,17 +200,27 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
             if audit["passed"]:
                 # Use the runner's single experiment clock for both events and
                 # finalization; the solver-supplied value is informational.
+                distance_km = float(audit["objective_distance_km"])
+                fields = objective_config.fields(distance_km, len(routes))
                 recorder.observe(
                     time.perf_counter() - start,
-                    float(audit["objective_distance_km"]),
+                    float(fields["objective_value"]),
                     routes,
+                    objective_distance_km=distance_km,
+                    objective_fields=fields,
                 )
 
         def construct_and_run_solver() -> None:
             nonlocal charging_power_factor, power_kw, solver
             power_kw, charging_power_factor, _ = charging_profile(instance)
             adapted = to_alns_tensor_instance(instance)
-            solver = ALNS_Solver(adapted, seed=seed, format="tensor")
+            solver = ALNS_Solver(
+                adapted,
+                seed=seed,
+                format="tensor",
+                distance_unit_cost=objective_config.distance_unit_cost,
+                vehicle_fixed_cost=objective_config.vehicle_unit_cost,
+            )
             if configured_max_iters is not None:
                 solver.max_iters = configured_max_iters
             remaining_s = float(task["time_limit_s"]) - (
@@ -264,14 +279,19 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
             "total_charging_time_s": 0.0,
         }
         routes = [] if best is None else best["routes"]
-        objective = None if best is None else float(best["objective_distance_km"])
+        distance_objective = (
+            None if best is None else float(best["objective_distance_km"])
+        )
+        objective_fields = (
+            {} if best is None else objective_config.fields(distance_objective, len(routes))
+        )
         solution = None
         if best is not None:
             solution = EVRPTWSolution(
                 instance_id=instance.instance_id,
                 solver_name=SOLVER_NAME,
                 routes=routes,
-                objective_distance_km=objective,
+                objective_distance_km=distance_objective,
                 vehicle_count=len(routes),
                 runtime_s=runtime_s,
                 feasible=True,
@@ -281,6 +301,8 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
                     "terminated_by_time_limit": terminated_by_time_limit,
                     "timing_scope": ALGORITHM_TIMING_SCOPE,
                     "checkpoint_snapshots": snapshots,
+                    **objective_fields,
+                    "objective_config": objective_config.to_dict(),
                     "charging_model": "full_charge_linear_derated_v2",
                     "charging_power_derating_factor": charging_power_factor,
                     "benchmark_status": status,
@@ -308,7 +330,25 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
             "benchmark_completed": best is not None,
             "has_incumbent": best is not None,
             "feasible": best is not None,
-            "objective_distance_km": "" if objective is None else objective,
+            "objective_distance_km": (
+                "" if distance_objective is None else distance_objective
+            ),
+            "objective_mode": objective_config.mode,
+            "objective_profile_id": objective_config.profile_id,
+            "objective_unit": objective_config.unit,
+            "objective_value": (
+                "" if best is None else objective_fields["objective_value"]
+            ),
+            "objective_cost_usd": (
+                "" if best is None else objective_fields["objective_cost_usd"]
+            ),
+            "electricity_cost_usd": (
+                "" if best is None else objective_fields["electricity_cost_usd"]
+            ),
+            "vehicle_cost_usd": (
+                "" if best is None else objective_fields["vehicle_cost_usd"]
+            ),
+            "vehicles_started": "" if best is None else len(routes),
             "vehicle_count": "" if best is None else len(routes),
             "runtime_s": runtime_s,
             "first_feasible_time_s": (
@@ -407,6 +447,11 @@ def main() -> None:
     parser.add_argument("--family_root", default=None, help="Optional materialized/families override")
     parser.add_argument("--save_path", required=True)
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument(
+        "--objective_config",
+        default="",
+        help="Versioned objective JSON; omitted keeps legacy distance_v1.",
+    )
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--max_instances", type=int, default=None)
     parser.add_argument("--start_index", type=int, default=0, help="Inclusive filtered index")
@@ -441,6 +486,11 @@ def main() -> None:
 
     checkpoints_s, time_limit_s = resolve_schedule(
         parse_checkpoints(args.checkpoints_s), args.time_limit_s
+    )
+    objective_config = (
+        load_objective(args.objective_config)
+        if args.objective_config
+        else ObjectiveConfig()
     )
     save_path = Path(args.save_path)
     solutions_dir = save_path / "solutions"
@@ -503,6 +553,7 @@ def main() -> None:
                 "delta_iters": args.delta_iters,
                 "verbose": args.verbose,
                 "save_traceback": args.save_traceback,
+                "objective_config": objective_config.to_dict(),
             }
         )
         fingerprint, contract_json = build_run_contract(
@@ -517,6 +568,7 @@ def main() -> None:
                 "delta_iters": args.delta_iters,
                 "certificate_warm_start": "canonical_replayed_if_available",
                 "charging_model": "full_charge_per_station_power",
+                "objective": objective_config.to_dict(),
             },
         )
         task["run_contract_fingerprint"] = fingerprint
@@ -533,7 +585,8 @@ def main() -> None:
         f"ALNS Stage-2 schedule: instances={len(tasks)}, workers={max(1, args.num_workers)}, "
         f"max_in_flight={args.max_in_flight or max(1, args.num_workers) * 2}, "
         f"time_limit_s={time_limit_s:g}, checkpoints_s={list(checkpoints_s)}, "
-        f"seed_scheme={SEED_SCHEME}, shard={args.shard_index}/{args.shard_count}"
+        f"seed_scheme={SEED_SCHEME}, shard={args.shard_index}/{args.shard_count}, "
+        f"objective={objective_config.profile_id}"
     )
     try:
         for result in run_tasks(
@@ -557,7 +610,8 @@ def main() -> None:
             row = result["summary_row"]
             print(
                 f"{row['instance_id']}: status={row['status']} "
-                f"objective={row['objective_distance_km']} runtime_s={row['runtime_s']}"
+                f"objective={row['objective_value']} {row['objective_unit']} "
+                f"distance_km={row['objective_distance_km']} runtime_s={row['runtime_s']}"
             )
 
         store.flush_canonical()

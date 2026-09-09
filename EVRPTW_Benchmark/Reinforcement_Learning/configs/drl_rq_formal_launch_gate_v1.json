@@ -4,6 +4,22 @@
   "formal_launch_allowed": true,
   "launch_policy": "reward_contract_v3_formal_user_authorized",
   "authorized_job_ids": [
+    "full__G__Full-support__am_evrptw__Cus50__seed1234",
+    "full__G__Full-support__evrptw_rl__Cus50__seed1234",
+    "full__G__Full-support__drl_ts__Cus50__seed1234",
+    "full__G__Full-support__terran__Cus50__seed1234",
+    "full__G__Coverage-10%-support__terran__Cus100__seed1234",
+    "full__E__Full-support__am_evrptw__Cus100__seed1234",
+    "full__E__Full-support__evrptw_rl__Cus100__seed1234",
+    "full__E__Full-support__drl_ts__Cus100__seed1234",
+    "full__G__Full-support__am_evrptw__Cus100__seed1234",
+    "full__G__Full-support__evrptw_rl__Cus100__seed1234",
+    "full__G__Full-support__drl_ts__Cus100__seed1234",
+    "full__G__Full-support__terran__Cus100__seed1234",
+    "full__E__Full-support__terran__Cus100__seed1234",
+    "full__G__Random-10%-support__am_evrptw__Cus100__seed1234",
+    "full__G__Random-10%-support__terran__Cus100__seed1234",
+    "full__G__Coverage-10%-support__am_evrptw__Cus100__seed1234",
     "full__G__Full-support__terran__Cus500__seed1234",
     "full__G__Full-support__terran__Cus1000__seed1234"
   ],
@@ -29,6 +45,6 @@
     "G7": "IMPLEMENTED_UNIT_TESTED",
     "G8": "IMPLEMENTED_UNIT_TESTED"
   },
-  "note": "The user explicitly authorized only the fresh TERRAN Cus500 and Cus1000 jobs under objective v2 and reward contract v3. Final measured memory correction: Cus500 uses batch 74 x n_traj 50 with 740,000 training environments and 370,000,000 customer exposures after batch 128 and batch 112 exceeded the 40--42 GiB target; Cus1000 remains batch 4 x n_traj 50. Training validation uses 500 fixed instances every 100 epochs with patience 5 after epoch 5000; final test keeps its independent best-of-100 budget. The other 22 formal candidates remain fail-closed.",
+  "note": "The user explicitly authorized all 16 RTX 2080 Ti Cus50/Cus100 jobs under objective v2 and reward contract v3 on 2026-09-08; the two previously authorized fresh TERRAN Cus500/Cus1000 jobs remain authorized. Other A6000 candidates remain fail-closed. Training validation uses 500 fixed instances every 100 epochs with patience 5 after epoch 5000; final test keeps its independent best-of-100 budget.",
   "file_hash_validation_performed": false
 }

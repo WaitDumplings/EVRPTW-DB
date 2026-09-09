@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/cus50_common.sh"
 
 readonly SOLVER_DIR="${REPO_ROOT}/EVRPTW_Benchmark/MetaHeuristics/ALNS_Solver"
-base_save_path="${RESULTS_ROOT}/${TEST_RESULT_RELATIVE_ROOT}/ALNS_Solver_2h"
+base_save_path="${RESULTS_ROOT}/${TEST_RESULT_RELATIVE_ROOT}/ALNS_Solver_30m_cost_v2"
 partition_output SAVE_PATH "${base_save_path}"
 readonly SAVE_PATH
 
@@ -19,6 +19,7 @@ run_python "${SOLVER_DIR}/run_alns.py" \
   --scales "${CUS_SCALE}" \
   --time_limit_s "${TIME_LIMIT_S}" \
   --checkpoints_s "${CHECKPOINTS_S}" \
+  --objective_config "${OBJECTIVE_CONFIG}" \
   --seed "${BASE_SEED}" \
   --num_workers "${WORKERS}" \
   --max_in_flight "${MAX_IN_FLIGHT}" \

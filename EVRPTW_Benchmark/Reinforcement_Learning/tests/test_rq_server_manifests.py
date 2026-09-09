@@ -98,12 +98,16 @@ def test_checked_in_formal_decision_is_three_way_consistent_and_scoped() -> None
         == runtime["authorized_job_ids"]
         == protocol["authorized_job_ids"]
     )
-    # The new objective is authorized only for the two fresh large-scale
-    # TERRAN jobs; every other materialized candidate remains fail-closed.
-    assert set(gate["authorized_job_ids"]) == {
+    expected_2080 = {
+        row["job_id"]
+        for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1")
+        for row in build()[server]
+    }
+    assert set(gate["authorized_job_ids"]) == expected_2080 | {
         "full__G__Full-support__terran__Cus500__seed1234",
         "full__G__Full-support__terran__Cus1000__seed1234",
     }
+    assert len(gate["authorized_job_ids"]) == 18
     assert gate["formal_launch_allowed"] is True
     assert (
         gate["launch_policy"]
@@ -350,7 +354,7 @@ def test_scale_rollout_limits_match_current_protocol() -> None:
         assert row["validation_rollout_steps"] == validation_steps
 
 
-def test_2080ti_candidate_jobs_remain_assigned_but_are_not_authorized() -> None:
+def test_2080ti_candidate_jobs_are_assigned_and_authorized() -> None:
     queues = build()
     assert {server: len(queues[server]) for server in (
         "2080ti_4_1", "2080ti_4_2", "2080ti_3_1"
@@ -358,12 +362,8 @@ def test_2080ti_candidate_jobs_remain_assigned_but_are_not_authorized() -> None:
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
     authorized = set(runtime["authorized_job_ids"])
     assert runtime["formal_launch_allowed"] is True
-    assert authorized == {
-        "full__G__Full-support__terran__Cus500__seed1234",
-        "full__G__Full-support__terran__Cus1000__seed1234",
-    }
     for server in ("2080ti_4_1", "2080ti_4_2", "2080ti_3_1"):
-        assert {row["job_id"] for row in queues[server]}.isdisjoint(authorized)
+        assert {row["job_id"] for row in queues[server]}.issubset(authorized)
         for row in queues[server]:
             assert row["objective_config"]["profile_id"] == (
                 "rivian_energy_vehicle_cost_v2"
@@ -581,7 +581,7 @@ def test_a6000_terran_candidate_queue_uses_both_gpus_and_is_authorized() -> None
     runtime = yaml.safe_load(MANIFESTS.CONFIG.read_text(encoding="utf-8"))
     authorized = set(runtime["authorized_job_ids"])
     assert runtime["formal_launch_allowed"] is True
-    assert authorized == {row["job_id"] for row in rows}
+    assert {row["job_id"] for row in rows}.issubset(authorized)
     assert all(
         row["objective_config"]["profile_id"]
         == "rivian_energy_vehicle_cost_v2"

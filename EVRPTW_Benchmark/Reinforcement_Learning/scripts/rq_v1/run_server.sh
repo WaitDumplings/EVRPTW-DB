@@ -48,6 +48,13 @@ done
   exit 2
 }
 export DRL_SEEDS="$SEED_SELECTION"
+cd "$EVRPTW_REPO_ROOT"
+if (( REUSE_PREVERIFIED_TRAINING_STREAMS == 1 )); then
+  python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.prepare_preverified_stream_marker \
+    --manifest "$DRL_MANIFEST" \
+    --repo-root "$EVRPTW_REPO_ROOT" \
+    --dataset-root "$EVRPTW_DATASET_ROOT"
+fi
 case "$MODE" in
   full|resume)
     if (( REUSE_PREVERIFIED_TRAINING_STREAMS == 0 )); then
@@ -57,7 +64,6 @@ case "$MODE" in
   status) ;;
   *) echo "invalid mode: $MODE" >&2; exit 2 ;;
 esac
-cd "$EVRPTW_REPO_ROOT"
 exec python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.drl_job_runtime \
   "$MODE" \
   --manifest "$DRL_MANIFEST" \

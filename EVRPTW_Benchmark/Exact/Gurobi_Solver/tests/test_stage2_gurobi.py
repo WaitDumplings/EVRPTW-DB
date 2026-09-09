@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from gurobipy import GurobiError
 
+from evrptw_core.objective import load_objective
 from evrptw_core.schema import EVRPTWInstance
 from gurobi_solver import GurobiEVRPTWSolver, GurobiSolverConfig
 from route_validator import validate_routes
@@ -172,3 +173,48 @@ def test_current_view_index_needs_no_removed_attribute_seed_columns(
     assert tasks[0].view_id == "iv-current"
     assert tasks[0].terminal_count == 61
     assert tasks[0].view_seed == 123456789
+
+
+
+def test_gurobi_cost_v2_objective_matches_replayed_route() -> None:
+    instance = _charging_fixture(power_kw=100.0)
+    objective = load_objective(
+        "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+        "rivian_energy_vehicle_cost_v2.json"
+    )
+    solver = GurobiEVRPTWSolver(
+        GurobiSolverConfig(
+            time_limit_s=30.0,
+            cs_copies=1,
+            output_flag=0,
+            threads=1,
+            checkpoints_s=(30.0,),
+            objective_mode=objective.mode,
+            objective_profile_id=objective.profile_id,
+            electricity_price_usd_per_kwh=objective.electricity_price_usd_per_kwh,
+            consumption_kwh_per_km=objective.consumption_kwh_per_km,
+            vehicle_fixed_cost_usd=objective.vehicle_fixed_cost_usd,
+        )
+    )
+    try:
+        solution = solver.solve(instance)
+    except GurobiError as exc:
+        if "license" in str(exc).lower() or "hostid" in str(exc).lower():
+            pytest.skip(f"Gurobi license unavailable on this host: {exc}")
+        raise
+
+    expected = objective.fields(solution.objective_distance_km, solution.vehicle_count)
+    assert solution.feasible is True
+    assert solution.metadata["objective_profile_id"] == objective.profile_id
+    assert solution.metadata["objective_unit"] == "USD"
+    assert solution.metadata["objective_value"] == pytest.approx(
+        expected["objective_value"]
+    )
+    assert solution.metadata["best_bound"] == pytest.approx(
+        expected["objective_value"]
+    )
+    snapshot = solution.metadata["checkpoint_snapshots"][0]
+    assert snapshot["objective_distance_km"] == pytest.approx(
+        solution.objective_distance_km
+    )
+    assert snapshot["objective_value"] == pytest.approx(expected["objective_value"])
