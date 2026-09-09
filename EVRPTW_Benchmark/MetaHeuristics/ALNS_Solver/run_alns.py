@@ -471,11 +471,11 @@ def main() -> None:
         help="Materialize canonical CSV every N results; 0 writes only at the end",
     )
     parser.add_argument("--scales", default="", help="Optional list such as Cus50,Cus100")
-    parser.add_argument("--time_limit_s", type=float, default=None)
+    parser.add_argument("--time_limit_s", type=float, default=None, help="Max solve time in seconds. Default: 1800.")
     parser.add_argument(
         "--checkpoints_s",
         default="",
-        help="Comma-separated checkpoints. Default follows --time_limit_s; otherwise 60,300,900,3600,7200.",
+        help="Comma-separated checkpoints. Default follows --time_limit_s; otherwise 60,300,900,1800.",
     )
     parser.add_argument("--max_iters", type=int, default=None)
     parser.add_argument("--delta_iters", type=int, default=None, help="Smoke-test iteration budget")

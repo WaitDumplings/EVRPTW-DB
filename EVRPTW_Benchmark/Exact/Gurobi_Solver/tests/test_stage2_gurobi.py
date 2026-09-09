@@ -121,8 +121,7 @@ def test_gurobi_dynamic_charge_time_matches_independent_replay() -> None:
         60.0,
         300.0,
         900.0,
-        3600.0,
-        7200.0,
+        1800.0,
     ]
     assert all(row["routes"] == solution.routes for row in checkpoints)
     assert all(row["objective_distance_km"] == solution.objective_distance_km for row in checkpoints)

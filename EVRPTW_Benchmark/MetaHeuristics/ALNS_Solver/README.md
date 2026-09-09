@@ -7,7 +7,8 @@ solver does not have a separate restored-instance code path.
 
 The solver contract matches Stage 2 and the exact benchmark:
 
-- objective: directed `distance_matrix_km`;
+- objective: the configured cost profile, or directed `distance_matrix_km`
+  when using the compatible `distance_v1` default;
 - travel time: directed `running_time_shortest_matrix_s`;
 - battery use: directed `running_time_path_energy_kwh`;
 - charging: `full_charge_linear_derated_v2`, using each station's own
@@ -27,21 +28,30 @@ Missing or stale certificates fall back to solver-side repair.
 
 ## Cus50 test run
 
-The frozen 5/30/60/120-minute test contract is available as one launcher:
+The default solve budget is 1800 seconds; explicit `--time_limit_s` and
+`--checkpoints_s` values still select custom schedules. The frozen
+1/5/15/30-minute test contract is available as one launcher:
 
 ```bash
 bash EVRPTW_Benchmark/test_scripts/run_alns_cus50_test.sh
 ```
+
+The launcher and the example below select the same
+`rivian_energy_vehicle_cost_v2.json` profile as the DRL benchmarks: electricity
+cost for directed route distance plus a fixed cost per vehicle, reported in
+USD. A direct Python invocation that omits `--objective_config` retains the
+compatible `distance_v1` default.
 
 Equivalent raw runner invocation:
 
 ```bash
 python EVRPTW_Benchmark/MetaHeuristics/ALNS_Solver/run_alns.py \
   --dataset_path EVRPTW_Dataset/Instances_v2/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
-  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/ALNS_Solver_2h \
+  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/ALNS_Solver_30m_cost_v2 \
   --num_workers 30 \
-  --time_limit_s 7200 \
-  --checkpoints_s 300,1800,3600,7200 \
+  --time_limit_s 1800 \
+  --checkpoints_s 60,300,900,1800 \
+  --objective_config EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json \
   --seed 2026 \
   --skip_completed
 ```
@@ -67,15 +77,15 @@ The reported algorithm clock excludes dataset I/O and structural validation.
 It includes schema adaptation (including certificate reconstruction), the
 complete `ALNS_Solver` constructor, and `solve()`; `solve()` receives only the
 remaining allowance. Thus scale-dependent initialization is inside the same
-two-hour budget as search.
+30-minute default budget as search.
 The effective algorithm profile, construction strategy/source/time/route count,
 and full profile JSON are stored in summary and solution metadata.
 
 ## Outputs
 
 - `alns_summary.csv`: final status and final validated incumbent per instance;
-- `alns_time_trace.csv`: objective and full route at 60, 300, 900, 3600, and
-  7200 seconds (or custom checkpoints), with solver/profile/seed/run-contract
+- `alns_time_trace.csv`: objective and full route at 60, 300, 900, and
+  1800 seconds (or custom checkpoints), with solver/profile/seed/run-contract
   identity for standalone cross-server merging;
 - `solutions/<run-contract-fingerprint>/*.pkl`: final canonical solutions;
 - `solutions/checkpoints/<run-contract-fingerprint>/*.pkl`: canonical solution
@@ -88,7 +98,7 @@ to the solver-facing `status` field.
 
 Checkpoint rows are strict: a route discovered after a checkpoint is never
 written into that earlier checkpoint. If the algorithm naturally terminates
-before two hours with a feasible solution, its final best route is copied only
+before its requested time limit with a feasible solution, its final best route is copied only
 forward to later checkpoints. A run with no feasible route by the time limit is
 marked `UNFINISHED_NO_INCUMBENT`.
 

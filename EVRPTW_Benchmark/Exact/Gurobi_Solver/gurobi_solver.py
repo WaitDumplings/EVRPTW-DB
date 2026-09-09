@@ -14,12 +14,12 @@ from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution, merge_route_seque
 from route_validator import resolve_charging_profile, validate_routes
 
 
-STANDARD_BENCHMARK_CHECKPOINTS_S = (60.0, 300.0, 900.0, 3600.0, 7200.0)
+STANDARD_BENCHMARK_CHECKPOINTS_S = (60.0, 300.0, 900.0, 1800.0)
 
 
 @dataclass(frozen=True)
 class GurobiSolverConfig:
-    time_limit_s: float = 7200.0
+    time_limit_s: float = 1800.0
     mip_gap: float = 0.0
     cs_copies: int = 2
     output_flag: int = 0

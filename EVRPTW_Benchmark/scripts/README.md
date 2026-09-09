@@ -61,12 +61,16 @@ existing job instead of starting a duplicate. Use `EVRPTW_FOREGROUND=1` only
 for interactive debugging; `EVRPTW_DRY_RUN=1` remains non-executing and
 prints the resolved command directly.
 
-All shells use the frozen contract: checkpoints at 300 and 1800 seconds; an
-1800-second limit; 30 workers by default; seed 2026 for ALNS/VNS-TS; and
+All shells use the frozen contract: checkpoints at 60, 300, 900, and 1800 seconds
+(1, 5, 15, and 30 minutes); an 1800-second limit; 30 workers by default; seed 2026 for ALNS/VNS-TS; and
 `cs_copies=2`, `mip_gap=0`, and one Gurobi thread per worker for Exact. All three solvers optimize the frozen
 `rivian_energy_vehicle_cost_v2` objective:
 `0.151750972762646 × distance_km + 413.6331536717643 × vehicles_started`
-USD.
+USD. Final evaluation costs match DRL; shaping rewards and heuristic search
+penalties are not added to this value. The same JSON must be passed explicitly
+when invoking a Python solver directly; its legacy default is distance only.
+See [the objective audit](OBJECTIVE_AUDIT_20260909_ZH.md) for the calculation
+paths, route-counting rules, and remaining feasible-set differences.
 
 Dataset arguments stay repository-relative. The launcher changes to the
 repository root before validation and execution, so it is safe to invoke a
@@ -84,9 +88,10 @@ server-specific path cannot leak into a launcher command or result manifest.
 
 ## Unified checkpoint output
 
-All three runners emit the same time-trace CSV columns at 300 and 1800
-seconds. Each row contains best-so-far objective, routes, flattened route
-sequence, incumbent/status timing, validation status, solver identity, and
+All three runners emit the same time-trace CSV columns at 60, 300, 900, and
+1800 seconds. Each instance is solved once for at most 30 minutes, with the
+best available solution recorded at each of these four budgets. Each row
+contains best-so-far objective, routes, flattened route sequence, incumbent/status timing, validation status, solver identity, and
 source metadata. Gurobi additionally populates its valid lower bound and MIP
 gap; these two fields are blank for ALNS and VNS-TS because heuristics do not
 provide certified bounds.
@@ -130,4 +135,9 @@ EVRPTW_DRY_RUN=1          print the command without solving
 ```
 
 Every launcher resumes terminal instances through `--skip_completed`. Output
-directories include solver, scale, test, and shard identity.
+directories include solver, scale, test, and shard identity. The default root
+is `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2`.
+This separates the four-checkpoint runs from older two-checkpoint or two-hour
+results, which cannot supply a missing earlier incumbent. When overriding
+`EVRPTW_TEST_RESULTS_ROOT`, use a fresh directory for this timing contract;
+resume it only with the same checkpoints, objective, and solver settings.

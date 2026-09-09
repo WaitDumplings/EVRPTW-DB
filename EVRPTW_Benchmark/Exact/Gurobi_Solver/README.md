@@ -15,7 +15,7 @@ There is no legacy pickle input fallback.
 
 For every directed terminal arc, the current solver uses:
 
-- `distance_matrix_km` in the minimization objective;
+- `distance_matrix_km` for route distance and the electricity-cost term;
 - `running_time_shortest_matrix_s` for time propagation and time windows; and
 - `running_time_path_energy_kwh` for battery propagation.
 
@@ -98,11 +98,19 @@ Gurobi license; pure checkpoint and route-replay tests still run.
 
 ## Compatibility Cus50 test run
 
-The frozen 5/30/60/120-minute test contract is available as one launcher:
+The default solve budget is 1800 seconds; explicit `--time_limit_s` and
+`--checkpoints_s` values still select custom schedules. The frozen
+1/5/15/30-minute test contract is available as one launcher:
 
 ```bash
 bash EVRPTW_Benchmark/test_scripts/run_gurobi_cus50_test.sh
 ```
+
+The launcher and the example below select the same
+`rivian_energy_vehicle_cost_v2.json` profile as the DRL benchmarks: electricity
+cost for directed route distance plus a fixed cost per vehicle, reported in
+USD. A direct Python invocation that omits `--objective_config` retains the
+compatible `distance_v1` default.
 
 Equivalent raw runner invocation:
 
@@ -115,9 +123,10 @@ EVRPTW_Dataset/Instances_v2/us_11city/generation_plan/compatibility_cus50/test/t
   --family_root \
 EVRPTW_Dataset/Instances_v2/us_11city/materialized/families \
   --save_path \
-EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/Gurobi_Solver \
-  --time_limit_s 7200 \
-  --checkpoints_s 300,1800,3600,7200 \
+EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/Gurobi_Solver_cs2_30m_cost_v2 \
+  --time_limit_s 1800 \
+  --checkpoints_s 60,300,900,1800 \
+  --objective_config EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json \
   --cs_copies 2 \
   --workers 4 \
   --threads 1 \
@@ -129,10 +138,14 @@ Use a small pilot before choosing server concurrency. `--threads 1` is the
 paper-comparison contract. `--workers` controls independent Gurobi processes
 and must respect the server license and memory limits.
 
-The optional vehicle-count tie break is disabled by default so that the full
-budget and every callback remain attached to the published distance objective.
-If explicitly enabled, it is diagnostic only: the published final objective
-and route always remain the frozen primary distance solution.
+The configured objective controls the full budget and callback trace. The
+formal launcher above optimizes electricity-plus-vehicle cost; its final
+objective, bound and gap therefore refer to that USD objective.
+
+The optional vehicle-count tie break applies only to the legacy `distance_v1`
+mode and is disabled by default. If explicitly enabled in that mode, it is
+diagnostic only: the published final objective and route remain the frozen
+primary distance solution. Cost mode skips this secondary solve.
 
 For Stage-2 inputs, `--start_index A --end_index B` selects the half-open stable
 position range `[A,B)` after `--scales` filtering. This matches the ALNS and
@@ -150,20 +163,20 @@ The runner incrementally writes:
 - `solutions/*.pkl`: final `EVRPTWSolution` records; and
 - `solutions/checkpoints/*.pkl`: checkpoint incumbent records.
 
-The default benchmark checkpoints are exactly 60, 300, 900, 3600, and 7200
-seconds (1, 5, 15, 60, and 120 minutes). Each time-trace row contains both
+The default benchmark checkpoints are exactly 60, 300, 900, and 1800
+seconds (1, 5, 15, and 30 minutes). Each time-trace row contains both
 `objective_distance_km` and the corresponding `routes_json`; the same route is
 also persisted under `solutions/checkpoints/`.
 
 Checkpoint values are strictly causal: a route first found after checkpoint
-`t` is never written at `t`. If the distance optimization ends before 120
-minutes, its final best route and objective are forward-filled to every later
+`t` is never written at `t`. If optimization ends before the requested
+time limit, its final best route and objective are forward-filled to every later
 checkpoint with `reached_checkpoint=false` and
 `source=final_after_early_stop`. This includes a proven optimum found early.
 
 `benchmark_status` makes result completeness explicit:
 
-- `COMPLETED_OPTIMAL`: a valid incumbent with proven distance optimality;
+- `COMPLETED_OPTIMAL`: a valid incumbent with proven optimality for the configured objective;
 - `COMPLETED_WITH_INCUMBENT`: a valid time-limited incumbent;
 - `UNFINISHED_NO_INCUMBENT`: the budget ended without any incumbent;
 - `INVALID_INCUMBENT`: Gurobi returned a route that failed independent replay;

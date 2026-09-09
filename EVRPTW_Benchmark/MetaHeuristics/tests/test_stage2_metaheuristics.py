@@ -179,8 +179,8 @@ def test_checkpoint_snapshots_never_backfill_late_incumbent() -> None:
 
 def test_default_schedule_follows_explicit_time_limit() -> None:
     checkpoints, limit = resolve_schedule(parse_checkpoints(""), None)
-    assert checkpoints == (60.0, 300.0, 900.0, 3600.0, 7200.0)
-    assert limit == 7200.0
+    assert checkpoints == (60.0, 300.0, 900.0, 1800.0)
+    assert limit == 1800.0
 
     checkpoints, limit = resolve_schedule(parse_checkpoints(""), 60.0)
     assert checkpoints == (60.0,)
@@ -193,6 +193,13 @@ def test_default_schedule_follows_explicit_time_limit() -> None:
     checkpoints, limit = resolve_schedule(parse_checkpoints("300"), 60.0)
     assert checkpoints == (300.0,)
     assert limit == 300.0
+
+    # An explicit budget or checkpoint may exceed the default 30 minutes.
+    assert resolve_schedule(parse_checkpoints(""), 3600.0) == (
+        (60.0, 300.0, 900.0, 1800.0, 3600.0), 3600.0,
+    )
+    assert resolve_schedule(parse_checkpoints("90,2400"), None) == ((90.0, 2400.0), 2400.0)
+    assert resolve_schedule(parse_checkpoints("90,2400"), 3000.0) == ((90.0, 2400.0), 3000.0)
 
 
 def test_checkpoint_comparison_has_no_post_checkpoint_epsilon() -> None:
@@ -210,9 +217,9 @@ def test_checkpoint_comparison_has_no_post_checkpoint_epsilon() -> None:
 
 
 def test_early_only_checkpoint_is_not_marked_as_terminal_no_incumbent() -> None:
-    recorder = IncumbentEventRecorder((60.0,), 7200.0)
+    recorder = IncumbentEventRecorder((60.0,), 1800.0)
     snapshots = recorder.snapshots(
-        runtime_s=7200.0,
+        runtime_s=1800.0,
         natural_completion=False,
         final_status="UNFINISHED_NO_INCUMBENT",
     )
@@ -220,8 +227,8 @@ def test_early_only_checkpoint_is_not_marked_as_terminal_no_incumbent() -> None:
     assert snapshots[0]["status"] == "RUNNING"
     assert snapshots[0]["benchmark_status"] == "NO_INCUMBENT_YET"
 
-    terminal = IncumbentEventRecorder((60.0, 7200.0), 7200.0).snapshots(
-        runtime_s=7200.0,
+    terminal = IncumbentEventRecorder((60.0, 1800.0), 1800.0).snapshots(
+        runtime_s=1800.0,
         natural_completion=False,
         final_status="UNFINISHED_NO_INCUMBENT",
     )

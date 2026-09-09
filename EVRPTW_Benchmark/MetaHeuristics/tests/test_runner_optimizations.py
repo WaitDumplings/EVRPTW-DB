@@ -336,16 +336,16 @@ def test_run_contract_is_portable_and_excludes_execution_layout() -> None:
 
 
 def test_run_contract_changes_for_pilot_seed_or_solver_parameter() -> None:
-    formal, _ = _run_contract(time_limit_s=7200.0)
+    formal, _ = _run_contract(time_limit_s=1800.0)
     pilot, _ = _run_contract(time_limit_s=30.0)
-    changed_seed, _ = _run_contract(time_limit_s=7200.0, base_seed=2027)
+    changed_seed, _ = _run_contract(time_limit_s=1800.0, base_seed=2027)
     changed_parameter, _ = _run_contract(
-        time_limit_s=7200.0,
+        time_limit_s=1800.0,
         solver_parameter=21,
     )
-    changed_view_seed, _ = _run_contract(time_limit_s=7200.0, view_seed=99)
+    changed_view_seed, _ = _run_contract(time_limit_s=1800.0, view_seed=99)
     changed_data, _ = _run_contract(
-        time_limit_s=7200.0,
+        time_limit_s=1800.0,
         family_id="mf-contract-b",
     )
     assert len(
@@ -583,7 +583,7 @@ def test_journal_rejects_malformed_record_before_later_nonempty_record(
 
 def test_resume_skips_only_identical_terminal_run_contract(tmp_path: Path) -> None:
     pilot_fingerprint, _ = _run_contract(time_limit_s=30.0)
-    formal_fingerprint, _ = _run_contract(time_limit_s=7200.0)
+    formal_fingerprint, _ = _run_contract(time_limit_s=1800.0)
     changed_seed, _ = _run_contract(time_limit_s=30.0, base_seed=2027)
     changed_parameter, _ = _run_contract(
         time_limit_s=30.0,

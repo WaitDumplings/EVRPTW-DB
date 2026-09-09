@@ -18,8 +18,8 @@ from evrptw_stage2.artifacts import load_materialized_view
 from evrptw_stage2.contracts import STAGE2_GENERATION_CONTRACT
 
 
-DEFAULT_CHECKPOINTS_S = (60.0, 300.0, 900.0, 3600.0, 7200.0)
-DEFAULT_TIME_LIMIT_S = 7200.0
+DEFAULT_CHECKPOINTS_S = (60.0, 300.0, 900.0, 1800.0)
+DEFAULT_TIME_LIMIT_S = 1800.0
 SEED_SCHEME = "blake2b_view_id_v1"
 TIME_BUDGET_ITERATION_CEILING = 2_147_483_647
 ALGORITHM_TIMING_SCOPE = "adapter_solver_constructor_and_solve"

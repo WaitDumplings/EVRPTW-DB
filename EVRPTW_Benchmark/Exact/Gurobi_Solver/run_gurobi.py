@@ -33,7 +33,7 @@ from stage2_adapter import (
 )
 
 
-DEFAULT_EXACT_TIME_LIMIT_S = 7200.0
+DEFAULT_EXACT_TIME_LIMIT_S = 1800.0
 
 SUMMARY_FIELDNAMES = [
     "instance_id", "file", "family_id", "city_slug", "split_id", "track_id",
@@ -786,7 +786,7 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument("--save_path", required=True, help="Directory for benchmark summaries and route snapshots.")
-    parser.add_argument("--time_limit_s", type=float, default=None, help="Max solve time in seconds. Default: 7200.")
+    parser.add_argument("--time_limit_s", type=float, default=None, help="Max solve time in seconds. Default: 1800.")
     parser.add_argument(
         "--objective_config",
         default="",
@@ -804,7 +804,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--skip_completed", action="store_true", help="Skip instances already present in gurobi_summary.csv.")
     parser.add_argument("--reference_save_path", default="", help="Optional reference_solutions root for split/Cus*/solutions.csv and routes/*.json.")
     parser.add_argument("--reference_split", default="", help="Reference split name. Defaults to the Stage-2 index split.")
-    parser.add_argument("--checkpoints_s", default="", help="Comma-separated seconds for incumbent snapshots. Default: 60,300,900,3600,7200.")
+    parser.add_argument("--checkpoints_s", default="", help="Comma-separated seconds for incumbent snapshots. Default follows --time_limit_s; otherwise 60,300,900,1800.")
     parser.add_argument("--tie_break_vehicle_count", action=argparse.BooleanOptionalAction, default=False, help="Optional secondary vehicle-count solve after distance optimality. Disabled by default for anytime benchmarking.")
     parser.add_argument("--distance_tolerance_abs", type=float, default=1e-6)
     parser.add_argument("--distance_tolerance_rel", type=float, default=1e-8)

@@ -8,8 +8,8 @@ This folder contains frozen Test launchers for the Exact, ALNS, and VNS-TS
 baselines. All runs use the same per-instance timing contract:
 
 ```text
-checkpoints: 300, 1800 seconds
-             5 min, 30 min
+checkpoints: 60, 300, 900, 1800 seconds
+             1 min, 5 min, 15 min, 30 min
 time limit:  1800 seconds
 workers:     30 by default
 Gurobi:      cs_copies=2, mip_gap=0, one thread per worker
@@ -93,10 +93,10 @@ Run all three solvers sequentially with:
 bash EVRPTW_Benchmark/test_scripts/run_all_cus500_tests.sh
 ```
 
-At 30 workers, the theoretical upper bound is about 100 hours per solver when
-all 1,500 instances consume the full two-hour budget. The combined launcher can
-therefore take about 300 hours on one server. Multi-server partitioning is
-strongly recommended, especially for time-limited Cus500 Gurobi.
+At 30 workers, the solve-budget total is about 25 hours per solver when
+all 1,500 instances consume the full 30-minute budget. The combined launcher
+therefore needs about 75 hours on one server, plus setup and I/O overhead.
+Multi-server partitioning is strongly recommended, especially for time-limited Cus500 Gurobi.
 
 ## 4. Multi-server partitioning
 
@@ -110,7 +110,8 @@ EVRPTW_SHARD_COUNT=10 EVRPTW_SHARD_INDEX=3 \
 
 This assigns the same non-overlapping row range from every 500-view test index
 to all three solvers. With ten servers, each server handles 50 views per test,
-150 views per solver, and at most about ten hours per solver at 30 workers.
+150 views per solver, and about 2.5 hours of solve time per solver at 30 workers
+when all instances use the full budget, plus setup and I/O overhead.
 Shard outputs are isolated under directories such as `shard_3_of_10`, so they
 are safe even on a shared results filesystem.
 
@@ -155,11 +156,14 @@ a fallback on the generation server.
 
 ## Outputs
 
-Outputs are written below `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_30m_cost_v2`.
+Outputs are written below `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2`.
 Each solver writes a summary CSV, a time-trace CSV containing objective and full
-`routes_json` at both checkpoints, final solution files, and checkpoint
+`routes_json` at all four checkpoints, final solution files, and checkpoint
 solution files. Every published route is independently replayed.
 
 All launchers use `--skip_completed`. Re-running the same command safely resumes
-completed output. Do not change the run contract inside an existing output
-directory.
+completed output. The new default root keeps earlier two-checkpoint and
+two-hour runs separate. Custom output roots must also be fresh for this timing
+contract: do not change the checkpoints, objective, or solver settings inside
+an existing output directory. Each instance is solved once for at most
+30 minutes; the four rows record its best available solution at each budget.

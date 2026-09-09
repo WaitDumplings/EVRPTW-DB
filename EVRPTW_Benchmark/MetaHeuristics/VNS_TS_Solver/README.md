@@ -7,7 +7,8 @@ instances materialized directly by Stage 2 therefore use the same runner.
 
 The resource model matches Stage 2 and the exact benchmark:
 
-- objective: directed `distance_matrix_km`;
+- objective: the configured cost profile, or directed `distance_matrix_km`
+  when using the compatible `distance_v1` default;
 - travel time: directed `running_time_shortest_matrix_s`;
 - battery use: directed `running_time_path_energy_kwh`;
 - charging: full recharge with the visited station's individual 11/100 kW (or
@@ -28,21 +29,30 @@ consolidated solution for the remainder of the wall-clock budget.
 
 ## Cus50 test run
 
-The frozen 5/30/60/120-minute test contract is available as one launcher:
+The default solve budget is 1800 seconds; explicit `--time_limit_s` and
+`--checkpoints_s` values still select custom schedules. The frozen
+1/5/15/30-minute test contract is available as one launcher:
 
 ```bash
 bash EVRPTW_Benchmark/test_scripts/run_vnsts_cus50_test.sh
 ```
+
+The launcher and the example below select the same
+`rivian_energy_vehicle_cost_v2.json` profile as the DRL benchmarks: electricity
+cost for directed route distance plus a fixed cost per vehicle, reported in
+USD. A direct Python invocation that omits `--objective_config` retains the
+compatible `distance_v1` default.
 
 Equivalent raw runner invocation:
 
 ```bash
 python EVRPTW_Benchmark/MetaHeuristics/VNS_TS_Solver/run_vns_ts.py \
   --dataset_path EVRPTW_Dataset/Instances_v2/us_11city/generation_plan/compatibility_cus50/test/test1_new_seed_same_cities/view_index.parquet \
-  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/VNS_TS_Solver_2h \
+  --save_path EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/VNS_TS_Solver_30m_cost_v2 \
   --num_workers 30 \
-  --time_limit_s 7200 \
-  --checkpoints_s 300,1800,3600,7200 \
+  --time_limit_s 1800 \
+  --checkpoints_s 60,300,900,1800 \
+  --objective_config EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json \
   --seed 2026 \
   --skip_completed
 ```
@@ -53,7 +63,7 @@ separately.
 
 Search controls include `--eta_feas`, `--eta_dist`, `--tabu_iter`,
 `--predefine_route_number`, and `--search_mode fast|full`. A formal run now
-defaults to wall-clock-driven distance search: omitting `--eta_dist` installs a
+defaults to wall-clock-driven search: omitting `--eta_dist` installs a
 deterministic very large iteration ceiling, leaving the time limit in control.
 An explicit small `--eta_dist` remains available for smoke tests and ablations.
 The default `fast` mode uses the versioned
@@ -73,7 +83,7 @@ launch only for an intentional override.
 The algorithm clock excludes dataset I/O and structural validation. It includes
 schema adaptation, the complete `VNSTSolver` constructor, and `solve()`;
 `solve()` receives only the remaining wall-clock allowance. This puts all
-scale-dependent matrix/neighborhood initialization inside the same two-hour
+scale-dependent matrix/neighborhood initialization inside the same 30-minute default
 budget as search. Summary and solution metadata record the algorithm profile,
 initial strategy/source/time/route count, and effective fast-policy limits.
 

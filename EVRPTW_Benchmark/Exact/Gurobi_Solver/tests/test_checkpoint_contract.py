@@ -42,22 +42,29 @@ def _snapshot(
     )
 
 
-def test_default_schedule_is_the_published_five_checkpoints() -> None:
+def test_default_schedule_is_the_published_four_checkpoints() -> None:
     checkpoints, time_limit_s = resolve_time_schedule(tuple(), None)
 
-    assert checkpoints == STANDARD_BENCHMARK_CHECKPOINTS_S
-    assert time_limit_s == 7200.0
+    assert checkpoints == STANDARD_BENCHMARK_CHECKPOINTS_S == (60.0, 300.0, 900.0, 1800.0)
+    assert time_limit_s == GurobiSolverConfig().time_limit_s == 1800.0
 
 
 def test_exact_uses_unified_time_trace_schema() -> None:
     assert TIME_TRACE_FIELDNAMES == UNIFIED_TIME_TRACE_FIELDNAMES
 
 
-def test_short_explicit_smoke_schedule_does_not_expand_to_two_hours() -> None:
+def test_short_explicit_smoke_schedule_does_not_expand_to_default_budget() -> None:
     checkpoints, time_limit_s = resolve_time_schedule(tuple(), 30.0)
 
     assert checkpoints == (30.0,)
     assert time_limit_s == 30.0
+
+    # Explicit budgets/checkpoints remain configurable beyond the default.
+    assert resolve_time_schedule(tuple(), 3600.0) == (
+        (60.0, 300.0, 900.0, 1800.0, 3600.0), 3600.0,
+    )
+    assert resolve_time_schedule((90.0, 2400.0), None) == ((90.0, 2400.0), 2400.0)
+    assert resolve_time_schedule((90.0, 2400.0), 3000.0) == ((90.0, 2400.0), 3000.0)
 
 
 def test_stage2_range_is_applied_after_scale_filtering() -> None:
@@ -158,7 +165,7 @@ def test_early_optimum_forward_fills_all_later_checkpoints() -> None:
         trace,
         final_benchmark_status="COMPLETED_OPTIMAL",
         final_has_incumbent=True,
-        terminal_budget_s=7200.0,
+        terminal_budget_s=1800.0,
     )
 
     snapshots = trace["checkpoint_snapshots"]
@@ -171,55 +178,55 @@ def test_early_optimum_forward_fills_all_later_checkpoints() -> None:
     assert all(row["source"] == "final_after_early_stop" for row in snapshots)
 
 
-def test_two_hour_run_without_incumbent_is_explicitly_unfinished() -> None:
+def test_thirty_minute_run_without_incumbent_is_explicitly_unfinished() -> None:
     solver = GurobiEVRPTWSolver(
         GurobiSolverConfig(checkpoints_s=STANDARD_BENCHMARK_CHECKPOINTS_S)
     )
     trace = solver._new_trace()
     final = _snapshot(
         solver,
-        elapsed_s=7200.0,
+        elapsed_s=1800.0,
         objective=None,
         routes=[],
         status="TIME_LIMIT",
     )
 
-    solver._finalize_checkpoints(trace, final, 7200.0, "TIME_LIMIT")
+    solver._finalize_checkpoints(trace, final, 1800.0, "TIME_LIMIT")
     solver._annotate_checkpoint_statuses(
         trace,
         final_benchmark_status="UNFINISHED_NO_INCUMBENT",
         final_has_incumbent=False,
-        terminal_budget_s=7200.0,
+        terminal_budget_s=1800.0,
     )
 
     snapshots = trace["checkpoint_snapshots"]
-    assert len(snapshots) == 5
+    assert len(snapshots) == 4
     assert all(row["has_incumbent"] is False for row in snapshots)
     assert all(row["routes"] == [] for row in snapshots)
-    assert snapshots[-1]["checkpoint_s"] == 7200.0
+    assert snapshots[-1]["checkpoint_s"] == 1800.0
     assert snapshots[-1]["benchmark_status"] == "UNFINISHED_NO_INCUMBENT"
 
 
 def test_custom_early_checkpoint_is_not_mislabeled_as_terminal() -> None:
     solver = GurobiEVRPTWSolver(
-        GurobiSolverConfig(checkpoints_s=(60.0,), time_limit_s=7200.0)
+        GurobiSolverConfig(checkpoints_s=(60.0,), time_limit_s=1800.0)
     )
     trace = solver._new_trace()
     final = _snapshot(
         solver,
-        elapsed_s=7200.0,
+        elapsed_s=1800.0,
         objective=None,
         routes=[],
         status="TIME_LIMIT",
     )
 
-    solver._finalize_checkpoints(trace, final, 7200.0, "TIME_LIMIT")
+    solver._finalize_checkpoints(trace, final, 1800.0, "TIME_LIMIT")
     solver._validate_checkpoint_snapshots(object(), trace)
     solver._annotate_checkpoint_statuses(
         trace,
         final_benchmark_status="UNFINISHED_NO_INCUMBENT",
         final_has_incumbent=False,
-        terminal_budget_s=7200.0,
+        terminal_budget_s=1800.0,
     )
 
     assert trace["checkpoint_snapshots"][0]["benchmark_status"] == (
@@ -259,7 +266,7 @@ def test_invalid_checkpoint_route_is_diagnostic_only(monkeypatch: pytest.MonkeyP
         trace,
         final_benchmark_status="INVALID_INCUMBENT",
         final_has_incumbent=True,
-        terminal_budget_s=7200.0,
+        terminal_budget_s=1800.0,
     )
 
     snapshot = trace["checkpoint_snapshots"][0]

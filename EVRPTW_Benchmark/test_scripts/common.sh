@@ -14,7 +14,7 @@ readonly TEST_VIEW_COUNT
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${TEST_SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
-readonly CHECKPOINTS_S="300,1800"
+readonly CHECKPOINTS_S="60,300,900,1800"
 readonly TIME_LIMIT_S="1800"
 readonly BASE_SEED="2026"
 readonly OBJECTIVE_CONFIG="EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json"
@@ -92,7 +92,7 @@ if [[ "${DRY_RUN}" == "0" && ! -d "${DATASET_ROOT}" ]]; then
 fi
 readonly DATASET_ROOT
 readonly FAMILY_ROOT="${DATASET_ROOT}/materialized/families"
-results_root_raw="${EVRPTW_TEST_RESULTS_ROOT:-EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_30m_cost_v2}"
+results_root_raw="${EVRPTW_TEST_RESULTS_ROOT:-EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2}"
 readonly RESULTS_ROOT="${results_root_raw}"
 
 if [[ "${DRY_RUN}" == "0" ]]; then
