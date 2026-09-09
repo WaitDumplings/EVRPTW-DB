@@ -4,12 +4,13 @@ import torch.nn as nn
 from ...nets.attention_model.context import AutoContext
 from ...nets.attention_model.dynamic_embedding import AutoDynamicEmbedding
 from ...nets.attention_model.multi_head_attention import AttentionScore, MultiHeadAttention
+from ...stable_cost_critic import TASK_SCALAR_DIM, remaining_task_summary
 
 
 class Decoder(nn.Module):
     """TERRAN pointer decoder adapted for step-wise Gymnasium rollouts."""
 
-    def __init__(self, embedding_dim, step_context_dim, n_heads, problem, tanh_clipping):
+    def __init__(self, embedding_dim, step_context_dim, n_heads, problem, tanh_clipping, stable_cost=False):
         super().__init__()
         self.project_node_embeddings = nn.Linear(embedding_dim, 3 * embedding_dim, bias=False)
         self.project_fixed_context = nn.Linear(embedding_dim, embedding_dim, bias=False)
@@ -29,6 +30,17 @@ class Decoder(nn.Module):
 
         self.decode_type = None
         self.problem = problem
+        self.stable_cost = bool(stable_cost)
+        if self.stable_cost:
+            self.remaining_context = nn.Sequential(
+                nn.Linear(embedding_dim + TASK_SCALAR_DIM, embedding_dim),
+                nn.SiLU(),
+                nn.Linear(embedding_dim, embedding_dim),
+            )
+            # Loading the matching legacy actor weights initially preserves its
+            # logits exactly. Only this opt-in context learns new task features.
+            nn.init.zeros_(self.remaining_context[-1].weight)
+            nn.init.zeros_(self.remaining_context[-1].bias)
 
     def forward(self, input, embeddings):
         outputs = []
@@ -82,6 +94,9 @@ class Decoder(nn.Module):
         context = self.context(node_embeddings, state)
         step_context = self.project_step_context(context)
         query = graph_context + step_context
+        if self.stable_cost:
+            pooled, task_state = remaining_task_summary(node_embeddings, state)
+            query = query + self.remaining_context(torch.cat((pooled, task_state), dim=-1))
 
         glimpse_key_dynamic, glimpse_val_dynamic, logit_key_dynamic = self.dynamic_embedding(state)
         glimpse_K = glimpse_K + glimpse_key_dynamic

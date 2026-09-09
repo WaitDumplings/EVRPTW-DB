@@ -66,6 +66,8 @@ def main() -> None:
     cfg = checkpoint.get("config", {})
     objective_config = objective_from_checkpoint(checkpoint, args.objective_config)
     model_cfg = cfg.get("model", {})
+    critic_mode = str(model_cfg.get("critic_mode", "legacy"))
+    stable_cfg = cfg.get("stable_cost", {})
     agent = Agent(
         embedding_dim=int(model_cfg.get("embedding_dim", 256)),
         tanh_clipping=float(model_cfg.get("tanh_clipping", 15.0)),
@@ -73,6 +75,9 @@ def main() -> None:
         device=args.device,
         use_graph_token=bool(model_cfg.get("use_graph_token", False)),
         use_dynamic_embedding=bool(model_cfg.get("use_dynamic_embedding", False)),
+        critic_mode=critic_mode,
+        popart_beta=float(stable_cfg.get("popart_beta", 0.01)),
+        popart_min_std=float(stable_cfg.get("popart_min_std", 1.0)),
     ).to(args.device)
     agent.load_state_dict(checkpoint["model_state_dict"])
     agent.eval()
@@ -96,6 +101,10 @@ def main() -> None:
         for batch_start in range(0, len(instances), args.batch_size):
             batch_instances = instances[batch_start : batch_start + args.batch_size]
             def solve_one(instance, candidate_seed):
+                stable_env_cfg = (
+                    {"training_mode": "stable_cost_v1", "rollout_horizon_steps": args.max_steps}
+                    if critic_mode == "stable_cost_v1" else {}
+                )
                 envs = [
                     make_terran_env(
                         instance=instance,
@@ -105,6 +114,7 @@ def main() -> None:
                         matrix_mode="canonical",
                         info_level="full",
                         objective_config=objective_config,
+                        **stable_env_cfg,
                     )
                 ]
                 single_rows = rollout_eval_batch(

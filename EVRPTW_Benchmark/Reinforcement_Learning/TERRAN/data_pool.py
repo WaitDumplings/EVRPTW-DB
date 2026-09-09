@@ -45,8 +45,10 @@ class Stage2TERRANPool:
     stream_integrity_mode: str = STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED
     representation: str = "G"
     euclidean_manifest: str | Path | None = None
+    record_sample_ids: bool = False
 
     def __post_init__(self) -> None:
+        self._sampled_view_ids: list[str] = []
         self.pool = Stage2TaskPool(
             dataset_path=self.dataset_path,
             family_root=self.family_root,
@@ -131,9 +133,14 @@ class Stage2TERRANPool:
                 )
             self._order = None
         else:
-            self.sample_count = int(self.completed_data_passes) * len(self.pool)
+            self.sample_count = (
+                int(self.completed_samples) if self.completed_samples
+                else int(self.completed_data_passes) * len(self.pool)
+            )
+            if self.sample_count < 0:
+                raise ValueError("TERRAN completed sample offset must be non-negative")
             self._order = seeded_pass_order(
-                len(self.pool), self.seed, int(self.completed_data_passes) + 1
+                len(self.pool), self.seed, self.sample_count // len(self.pool) + 1
             )
         self.region_pool_status = f"stage2_frozen:{Path(self.dataset_path)}"
 
@@ -143,6 +150,8 @@ class Stage2TERRANPool:
                 raise RuntimeError("TERRAN exhausted the registered training ID stream")
             view_id = self._stream_view_ids[self.sample_count]
             self.sample_count += 1
+            if self.record_sample_ids:
+                self._sampled_view_ids.append(str(view_id))
             return self.pool.instance(self._task_by_view_id[view_id])
         offset = self.sample_count % len(self.pool)
         if self.sample_count and offset == 0:
@@ -150,7 +159,13 @@ class Stage2TERRANPool:
             self._order = seeded_pass_order(len(self.pool), self.seed, data_pass)
         task = self.pool.tasks[int(self._order[offset])]
         self.sample_count += 1
+        if self.record_sample_ids:
+            self._sampled_view_ids.append(str(task.view_id))
         return self.pool.instance(task)
+
+    def drain_sampled_view_ids(self) -> list[str]:
+        values, self._sampled_view_ids = self._sampled_view_ids, []
+        return values
 
     @property
     def reward_scale_metadata(self) -> dict[str, int | float | str]:

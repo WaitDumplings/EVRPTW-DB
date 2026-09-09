@@ -1,0 +1,95 @@
+# Opt-in stable economic-cost training; resolved dataset paths are set by stable_cli.
+run_name: TERRAN-stable-cost-v1
+dataset_name: EVRPTW-DB-Stage2
+objective: EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json
+data:
+  stage2_dataset_path: null
+  stage2_family_root: null
+  stage2_scale: Cus500
+  stage2_split_ids: train
+  stage2_track_ids: train
+  stage2_city_slugs: null
+  stage2_cache_size: 8
+  stage2_training_representation: G
+  num_customers: 500
+  num_charging_stations: 50
+env:
+  use_fast_env: true
+  use_jit_mask: true
+  normalize_reward: false
+  reward_distance_scale_mode: single_customer_repair_median
+  invalid_action_penalty: 0.0
+  charging_mode: station_power_full
+  matrix_mode: canonical
+model:
+  embedding_dim: 256
+  tanh_clipping: 15.0
+  n_encode_layers: 3
+  use_graph_token: false
+  use_dynamic_embedding: false
+  critic_mode: stable_cost_v1
+training:
+  algorithm: stable_cost_v1
+  epochs: 10000
+  num_envs_per_gpu: 128
+  effective_batch_size: 256
+  logical_microbatches_per_epoch: 2
+  n_traj: 16
+  rollout_steps: 950
+  cache_rollout_encoder: true
+  ppo_step_chunk_size: 16
+  ppo_update_epochs: 2
+  num_minibatches: 1
+  gradient_accumulation_steps: 1
+  gamma: 1.0
+  clip_coef: 0.2
+  ent_coef: 0.01
+  learning_rate: 0.00005
+  critic_learning_rate: 0.0001
+  optimizer: adamw
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  checkpoint_interval: 1
+  debug: false
+  profile_timing: false
+stable_cost:
+  popart_beta: 0.01
+  popart_min_std: 1.0
+  failure_target: 0.01
+  dual_lr: 0.05
+  dual_initial: 1.0
+  dual_max: 1000.0
+  warmup_success_rate: 0.8
+  warmup_min_epochs: 3
+  warmup_max_epochs: 200
+  actor_scale_floor: 1.0
+  target_kl: 0.02
+  critic_grad_norm: 1.0
+  log_interval: 1
+pbrs:
+  use_customer_pbrs: false
+  use_repair_distance_pbrs: false
+  use_feasible_ratio_pbrs: false
+  use_terminal_heuristic: false
+  use_terminal_task_penalty: false
+  terminal_success_bonus: 0.0
+  success_bonus: 0.0
+  failure_base: 0.0
+  unserved_coefficient: 0.0
+  annealing:
+    enabled: false
+evaluation:
+  eval_interval: 100
+  eval_path: null
+  eval_family_root: null
+  eval_scale: Cus500
+  eval_split_ids: val
+  eval_track_ids: validation
+  eval_n_traj: 100
+  eval_decode_mode: sample
+  eval_max_steps: 950
+  eval_limit: 500
+  eval_batch_size: 1
+  eval_info_level: full
+  eval_save_routes: true
+  eval_require_independent_verifier: true

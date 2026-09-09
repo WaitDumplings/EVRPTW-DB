@@ -26,6 +26,11 @@ from .models.attention_model_wrapper import (
 )
 
 
+STABLE_STATE_KEYS = (
+    "customer_unserved", "dispatch_paid", "remaining_step_budget", "episode_step_budget",
+)
+
+
 def stack_observations(observations: Sequence[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
     keys = observations[0].keys()
     return {key: np.stack([obs[key] for obs in observations], axis=0) for key in keys}
@@ -46,9 +51,12 @@ def stack_policy_observations(
             key: np.stack([obs[key] for obs in observations], axis=0)
             for key in STATIC_OBSERVATION_KEYS if key in observations[0]
         }
+    dynamic_keys = DYNAMIC_OBSERVATION_KEYS + (
+        STABLE_STATE_KEYS if "customer_unserved" in observations[0] else ()
+    )
     dynamic = {
         key: np.stack([obs[key] for obs in observations], axis=0)
-        for key in DYNAMIC_OBSERVATION_KEYS if key in observations[0]
+        for key in dynamic_keys if key in observations[0]
     }
     return {**static, **dynamic}, static
 
@@ -124,6 +132,16 @@ class RolloutBatch:
     trajectory_steps: torch.Tensor
     rollout_budget_exhausted: torch.Tensor
     reward_diagnostics: dict[str, float]
+    # stable_cost_v1 only. Time-major labels share rewards.shape; episode
+    # outcomes have shape (num_envs, n_traj). Legacy constructors stay valid.
+    old_cost_values: torch.Tensor | None = None
+    old_failure_values: torch.Tensor | None = None
+    old_failure_logits: torch.Tensor | None = None
+    cost_returns: torch.Tensor | None = None
+    failure_returns: torch.Tensor | None = None
+    unserved_returns: torch.Tensor | None = None
+    terminal_failure: torch.Tensor | None = None
+    unserved_fraction: torch.Tensor | None = None
 
 
 def summarize_rollout_outcomes(
@@ -421,18 +439,41 @@ def collect_rollout(
     cache_static_embeddings: bool = True,
     reward_discount_factor: float = 1.0,
     base_reward_stats: BoundedBaseRewardStats | None = None,
+    storage_device: str | torch.device | None = None,
+    collect_reward_diagnostics: bool = True,
 ) -> RolloutBatch:
+    """Collect transitions; optional reward diagnostics never affect training.
+
+    Disabling diagnostics skips the legacy per-component CPU aggregation and
+    returns an empty ``reward_diagnostics`` mapping. An explicitly supplied
+    ``base_reward_stats`` accumulator is still updated.
+    """
+    if int(rollout_steps) <= 0:
+        raise ValueError("rollout_steps must be positive")
+    stable_mode = getattr(agent, "critic_mode", "legacy") == "stable_cost_v1"
+    stable_envs = [getattr(env.unwrapped, "training_mode", "legacy") == "stable_cost_v1" for env in envs]
+    if any(stable_envs) != stable_mode or (stable_mode and not all(stable_envs)):
+        raise ValueError("stable_cost_v1 actor and rollout environments must agree")
+    if stable_mode and float(reward_discount_factor) != 1.0:
+        raise ValueError("stable_cost_v1 requires gamma=1 for complete Monte Carlo returns")
+    storage_device = device if storage_device is None else storage_device
     total_start = time.perf_counter()
     reset_start = time.perf_counter()
     observations, infos = reset_envs(envs, seed=seed)
     reset_time_s = time.perf_counter() - reset_start
     done = np.zeros((len(envs), envs[0].unwrapped.n_traj), dtype=bool)
+    if stable_mode:
+        # Reset can already reveal an impossible instance. Its depot sentinel
+        # is padding, not a sampled active action; its failure still counts.
+        done = np.stack([env.unwrapped.terminated | env.unwrapped.truncated for env in envs])
     obs_steps: list[dict[str, np.ndarray]] = []
     actions_steps = []
     logprob_steps = []
     reward_steps = []
     done_steps = []
     value_steps = []
+    failure_value_steps = []
+    failure_logit_steps = []
     valid_steps = []
     entropy_steps = []
     model_action_time_s = 0.0
@@ -461,20 +502,31 @@ def collect_rollout(
         "pbrs_total",
         "shaping_total",
     )
-    reward_diagnostics = {
-        "active_count": 0.0,
-        "customer_action_count": 0.0,
-        "noncustomer_action_count": 0.0,
-    }
-    for key in reward_component_keys:
-        reward_diagnostics[f"{key}_sum"] = 0.0
-        reward_diagnostics[f"{key}_discounted_sum"] = 0.0
-        reward_diagnostics[f"{key}_abs_sum"] = 0.0
-        reward_diagnostics[f"{key}_customer_action_sum"] = 0.0
-        reward_diagnostics[f"{key}_noncustomer_action_sum"] = 0.0
+    reward_diagnostics = {}
+    if collect_reward_diagnostics:
+        reward_diagnostics = {
+            "active_count": 0.0,
+            "customer_action_count": 0.0,
+            "noncustomer_action_count": 0.0,
+        }
+        for key in reward_component_keys:
+            reward_diagnostics[f"{key}_sum"] = 0.0
+            reward_diagnostics[f"{key}_discounted_sum"] = 0.0
+            reward_diagnostics[f"{key}_abs_sum"] = 0.0
+            reward_diagnostics[f"{key}_customer_action_sum"] = 0.0
+            reward_diagnostics[f"{key}_noncustomer_action_sum"] = 0.0
 
     for step_index in range(int(rollout_steps)):
         valid = ~done
+        if stable_mode:
+            # The collector's limit may be stricter than the env safety limit.
+            # Store that actual budget in the replay observation as well.
+            observations = [
+                {**obs,
+                 "remaining_step_budget": np.minimum(obs["remaining_step_budget"], int(rollout_steps) - step_index).astype(np.float32),
+                 "episode_step_budget": np.minimum(obs["episode_step_budget"], int(rollout_steps)).astype(np.float32)}
+                for obs in observations
+            ]
         stack_start = time.perf_counter()
         if compact_observations:
             obs_batch, static_obs = stack_policy_observations(observations, static_obs)
@@ -496,13 +548,20 @@ def collect_rollout(
                 # during no-grad rollout collection. PPO recomputes the encoder
                 # with gradients during its update.
                 cached_state = agent.backbone.encode(model_obs)
-            actions, logprob, entropy, value, _ = sample_actions(
-                agent,
-                model_obs,
-                decode_mode=decode_mode,
-                device=device,
-                cached_state=cached_state,
-            )
+            if stable_mode:
+                actions, logprob, entropy, value, _, critic_outputs = agent.get_action_and_value_cached(
+                    model_obs, state=cached_state, decode_mode=decode_mode,
+                    return_critic_outputs=True,
+                )
+                value = critic_outputs["cost_value"]
+                failure_logits = critic_outputs["failure_logits"]
+                failure_value_steps.append(failure_logits.sigmoid().detach().to(storage_device))
+                failure_logit_steps.append(failure_logits.detach().to(storage_device))
+            else:
+                actions, logprob, entropy, value, _ = sample_actions(
+                    agent, model_obs, decode_mode=decode_mode, device=device,
+                    cached_state=cached_state,
+                )
         if profile_timing:
             _sync_cuda(device)
         model_action_time_s += time.perf_counter() - model_start
@@ -512,105 +571,118 @@ def collect_rollout(
         next_observations, reward_np, step_done, infos = step_envs(envs, action_np)
         env_step_time_s += time.perf_counter() - env_start
 
-        # Aggregate reward components while the pre-step active mask is still
-        # available.  Keeping only float64 sums adds negligible memory and makes
-        # scale failures observable in every formal epoch.
-        for env_index, (env, info) in enumerate(zip(envs, infos)):
-            active = np.asarray(valid[env_index], dtype=bool)
-            active_count = int(active.sum())
-            if active_count == 0:
-                continue
-            components = info.get("reward_components")
-            if components is None:
-                base = np.asarray(reward_np[env_index], dtype=np.float64)
-                arrays = {
-                    "base": base,
-                    "distance": base,
-                    "objective": base,
-                    "electricity_cost": np.zeros_like(base),
-                    "vehicle_cost": np.zeros_like(base),
-                    "base_non_objective": np.zeros_like(base),
-                    "base_non_distance": np.zeros_like(base),
-                    "pbrs_customer": np.zeros_like(base),
-                    "pbrs_repair_distance": np.zeros_like(base),
-                    "pbrs_feasible_ratio": np.zeros_like(base),
-                    "terminal_heuristic": np.zeros_like(base),
-                    "terminal_task_total": np.zeros_like(base),
-                    "terminal_success_bonus": np.zeros_like(base),
-                    "terminal_failure_base": np.zeros_like(base),
-                    "terminal_unserved": np.zeros_like(base),
-                    "shaped": base,
-                }
-                previous = previous_infos[env_index]
-                if "objective_value" in info and "objective_value" in previous:
-                    normalized = bool(getattr(env.unwrapped, "normalize_reward", False))
-                    scale = float(env.unwrapped.reward_objective_scale) if normalized else 1.0
-                    distance_scale = float(env.unwrapped.reward_distance_scale_km) if normalized else 1.0
-                    arrays["objective"] = -(np.asarray(info["objective_value"]) - np.asarray(previous["objective_value"])) / scale
-                    arrays["distance"] = -(np.asarray(info["objective_distance_km"]) - np.asarray(previous["objective_distance_km"])) / distance_scale
-                    arrays["base_non_objective"] = base - arrays["objective"]
-                    arrays["base_non_distance"] = arrays["base_non_objective"]
-                    for key in ("electricity_cost", "vehicle_cost"):
-                        if info.get(f"{key}_usd") is not None:
-                            arrays[key] = -(np.asarray(info[f"{key}_usd"]) - np.asarray(previous[f"{key}_usd"])) / scale
-            else:
-                arrays = {
-                    key: np.asarray(components.get(key, np.zeros_like(reward_np[env_index])), dtype=np.float64)
-                    for key in reward_component_keys
-                    if key not in {"pbrs_total", "shaping_total"}
-                }
-            arrays["pbrs_total"] = (
-                arrays["pbrs_customer"]
-                + arrays["pbrs_repair_distance"]
-                + arrays["pbrs_feasible_ratio"]
-            )
-            # ``terminal_task_total`` is part of the canonical task, not
-            # auxiliary shaping.  Keep this long-standing diagnostic field but
-            # narrow its semantics to PBRS plus the legacy heuristic only.
-            arrays["shaping_total"] = (
-                arrays["pbrs_total"] + arrays["terminal_heuristic"]
-            )
-            if base_reward_stats is not None:
-                base_reward_stats.update(arrays["base"], active)
-            num_customers = int(getattr(env.unwrapped, "num_customers", 0))
-            customer_action = (
-                active
-                & (action_np[env_index] >= 1)
-                & (action_np[env_index] <= num_customers)
-            )
-            noncustomer_action = active & ~customer_action
-            reward_diagnostics["active_count"] += active_count
-            reward_diagnostics["customer_action_count"] += int(
-                customer_action.sum()
-            )
-            reward_diagnostics["noncustomer_action_count"] += int(
-                noncustomer_action.sum()
-            )
-            for key, array in arrays.items():
-                active_values = array[active]
-                reward_diagnostics[f"{key}_sum"] += float(active_values.sum())
-                reward_diagnostics[f"{key}_discounted_sum"] += float(
-                    (float(reward_discount_factor) ** step_index)
-                    * active_values.sum()
+        if collect_reward_diagnostics:
+            # Aggregate reward components while the pre-step active mask is still
+            # available.  Keeping only float64 sums adds negligible memory and makes
+            # scale failures observable in every formal epoch.
+            for env_index, (env, info) in enumerate(zip(envs, infos)):
+                active = np.asarray(valid[env_index], dtype=bool)
+                active_count = int(active.sum())
+                if active_count == 0:
+                    continue
+                components = info.get("reward_components")
+                if components is None:
+                    base = np.asarray(reward_np[env_index], dtype=np.float64)
+                    arrays = {
+                        "base": base,
+                        "distance": base,
+                        "objective": base,
+                        "electricity_cost": np.zeros_like(base),
+                        "vehicle_cost": np.zeros_like(base),
+                        "base_non_objective": np.zeros_like(base),
+                        "base_non_distance": np.zeros_like(base),
+                        "pbrs_customer": np.zeros_like(base),
+                        "pbrs_repair_distance": np.zeros_like(base),
+                        "pbrs_feasible_ratio": np.zeros_like(base),
+                        "terminal_heuristic": np.zeros_like(base),
+                        "terminal_task_total": np.zeros_like(base),
+                        "terminal_success_bonus": np.zeros_like(base),
+                        "terminal_failure_base": np.zeros_like(base),
+                        "terminal_unserved": np.zeros_like(base),
+                        "shaped": base,
+                    }
+                    previous = previous_infos[env_index]
+                    if "objective_value" in info and "objective_value" in previous:
+                        normalized = bool(getattr(env.unwrapped, "normalize_reward", False))
+                        scale = float(env.unwrapped.reward_objective_scale) if normalized else 1.0
+                        distance_scale = float(env.unwrapped.reward_distance_scale_km) if normalized else 1.0
+                        arrays["objective"] = -(np.asarray(info["objective_value"]) - np.asarray(previous["objective_value"])) / scale
+                        arrays["distance"] = -(np.asarray(info["objective_distance_km"]) - np.asarray(previous["objective_distance_km"])) / distance_scale
+                        arrays["base_non_objective"] = base - arrays["objective"]
+                        arrays["base_non_distance"] = arrays["base_non_objective"]
+                        for key in ("electricity_cost", "vehicle_cost"):
+                            if info.get(f"{key}_usd") is not None:
+                                arrays[key] = -(np.asarray(info[f"{key}_usd"]) - np.asarray(previous[f"{key}_usd"])) / scale
+                else:
+                    arrays = {
+                        key: np.asarray(components.get(key, np.zeros_like(reward_np[env_index])), dtype=np.float64)
+                        for key in reward_component_keys
+                        if key not in {"pbrs_total", "shaping_total"}
+                    }
+                arrays["pbrs_total"] = (
+                    arrays["pbrs_customer"]
+                    + arrays["pbrs_repair_distance"]
+                    + arrays["pbrs_feasible_ratio"]
                 )
-                reward_diagnostics[f"{key}_abs_sum"] += float(
-                    np.abs(active_values).sum()
+                # ``terminal_task_total`` is part of the canonical task, not
+                # auxiliary shaping.  Keep this long-standing diagnostic field but
+                # narrow its semantics to PBRS plus the legacy heuristic only.
+                arrays["shaping_total"] = (
+                    arrays["pbrs_total"] + arrays["terminal_heuristic"]
                 )
-                reward_diagnostics[f"{key}_customer_action_sum"] += float(
-                    array[customer_action].sum()
+                if base_reward_stats is not None:
+                    base_reward_stats.update(arrays["base"], active)
+                num_customers = int(getattr(env.unwrapped, "num_customers", 0))
+                customer_action = (
+                    active
+                    & (action_np[env_index] >= 1)
+                    & (action_np[env_index] <= num_customers)
                 )
-                reward_diagnostics[f"{key}_noncustomer_action_sum"] += float(
-                    array[noncustomer_action].sum()
+                noncustomer_action = active & ~customer_action
+                reward_diagnostics["active_count"] += active_count
+                reward_diagnostics["customer_action_count"] += int(
+                    customer_action.sum()
                 )
+                reward_diagnostics["noncustomer_action_count"] += int(
+                    noncustomer_action.sum()
+                )
+                for key, array in arrays.items():
+                    active_values = array[active]
+                    reward_diagnostics[f"{key}_sum"] += float(active_values.sum())
+                    reward_diagnostics[f"{key}_discounted_sum"] += float(
+                        (float(reward_discount_factor) ** step_index)
+                        * active_values.sum()
+                    )
+                    reward_diagnostics[f"{key}_abs_sum"] += float(
+                        np.abs(active_values).sum()
+                    )
+                    reward_diagnostics[f"{key}_customer_action_sum"] += float(
+                        array[customer_action].sum()
+                    )
+                    reward_diagnostics[f"{key}_noncustomer_action_sum"] += float(
+                        array[noncustomer_action].sum()
+                    )
+
+        elif base_reward_stats is not None:
+            # A caller may disable diagnostics while still using the separate
+            # bounded base-reward accumulator. Preserve that contract cheaply.
+            for env_index, info in enumerate(infos):
+                active = valid[env_index]
+                if not active.any():
+                    continue
+                components = info.get("reward_components")
+                base = (reward_np[env_index] if components is None else
+                        components.get("base", np.zeros_like(reward_np[env_index])))
+                base_reward_stats.update(np.asarray(base, dtype=np.float64), active)
 
         obs_steps.append(obs_batch)
-        actions_steps.append(actions.detach())
-        logprob_steps.append(logprob.detach())
-        entropy_steps.append(entropy.detach())
-        reward_steps.append(tensor_from_array(reward_np, device).float())
-        done_steps.append(tensor_from_array(step_done, device).bool())
-        value_steps.append(value.detach())
-        valid_steps.append(tensor_from_array(valid, device).bool())
+        actions_steps.append(actions.detach().to(storage_device))
+        logprob_steps.append(logprob.detach().to(storage_device))
+        entropy_steps.append(entropy.detach().to(storage_device))
+        reward_steps.append(tensor_from_array(reward_np, storage_device).float())
+        done_steps.append(tensor_from_array(step_done, storage_device).bool())
+        value_steps.append(value.detach().to(storage_device))
+        valid_steps.append(tensor_from_array(valid, storage_device).bool())
 
         observations = next_observations
         done = done | step_done
@@ -652,19 +724,45 @@ def collect_rollout(
         info["rollout_budget_exhausted"] = rollout_budget_exhausted[
             row_index
         ].copy()
+        if stable_mode:
+            info["failure_terminal"] = np.asarray(info.get("failure_terminal", np.zeros(done.shape[1], dtype=bool))) | ~done[row_index]
+    rewards_tensor = torch.stack(reward_steps, dim=0)
+    dones_tensor = torch.stack(done_steps, dim=0)
+    valid_tensor = torch.stack(valid_steps, dim=0)
+    values_tensor = torch.stack(value_steps, dim=0)
+    stable_fields = {}
+    if stable_mode:
+        # An actual collection limit is a task failure in this contract. There
+        # is no bootstrap into an uncollected continuation.
+        dones_tensor[-1] |= tensor_from_array(~done, storage_device).bool()
+        failures = tensor_from_array(~success, storage_device).bool()
+        unserved = tensor_from_array(
+            np.clip(1.0 - served_customers / np.maximum(customer_count, 1), 0.0, 1.0),
+            storage_device,
+        ).float()
+        stable_fields = dict(
+            old_cost_values=values_tensor,
+            old_failure_values=torch.stack(failure_value_steps, dim=0),
+            old_failure_logits=torch.stack(failure_logit_steps, dim=0),
+            cost_returns=compute_returns(-rewards_tensor, dones_tensor, 1.0) * valid_tensor,
+            failure_returns=failures.float().unsqueeze(0).expand_as(rewards_tensor) * valid_tensor,
+            unserved_returns=unserved.unsqueeze(0).expand_as(rewards_tensor) * valid_tensor,
+            terminal_failure=failures,
+            unserved_fraction=unserved,
+        )
     return RolloutBatch(
         observations=obs_steps,
         actions=torch.stack(actions_steps, dim=0),
         old_logprobs=torch.stack(logprob_steps, dim=0),
-        rewards=torch.stack(reward_steps, dim=0),
-        dones=torch.stack(done_steps, dim=0),
-        values=torch.stack(value_steps, dim=0),
-        valid=torch.stack(valid_steps, dim=0),
+        rewards=rewards_tensor,
+        dones=dones_tensor,
+        values=values_tensor,
+        valid=valid_tensor,
         entropies=torch.stack(entropy_steps, dim=0),
         final_infos=infos,
-        trajectory_steps=torch.stack(valid_steps, dim=0).sum(dim=0),
+        trajectory_steps=valid_tensor.sum(dim=0),
         rollout_budget_exhausted=tensor_from_array(
-            rollout_budget_exhausted, device
+            rollout_budget_exhausted, storage_device
         ).bool(),
         reward_diagnostics=reward_diagnostics,
         timings={
@@ -675,6 +773,7 @@ def collect_rollout(
             "rollout_env_step_time_s": float(env_step_time_s),
             "rollout_interaction_time_s": float(model_action_time_s + env_step_time_s),
         },
+        **stable_fields,
     )
 
 

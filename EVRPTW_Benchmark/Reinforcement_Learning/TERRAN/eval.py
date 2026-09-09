@@ -92,6 +92,8 @@ def main() -> None:
     cfg = checkpoint.get("config", {})
     objective_config = objective_from_checkpoint(checkpoint, args.objective_config)
     model_cfg = cfg.get("model", {})
+    critic_mode = str(model_cfg.get("critic_mode", "legacy"))
+    stable_cfg = cfg.get("stable_cost", {})
     solver_name = args.solver_name or str(cfg.get("run_name", "TERRAN"))
     agent = Agent(
         embedding_dim=int(model_cfg.get("embedding_dim", 256)),
@@ -100,6 +102,9 @@ def main() -> None:
         device=device,
         use_graph_token=bool(model_cfg.get("use_graph_token", False)),
         use_dynamic_embedding=bool(model_cfg.get("use_dynamic_embedding", False)),
+        critic_mode=critic_mode,
+        popart_beta=float(stable_cfg.get("popart_beta", 0.01)),
+        popart_min_std=float(stable_cfg.get("popart_min_std", 1.0)),
     ).to(device)
     agent.load_state_dict(checkpoint["model_state_dict"])
     agent.eval()
@@ -119,6 +124,10 @@ def main() -> None:
         eval_env_cfg = dict(cfg.get("env", {}) or {})
         eval_env_cfg["info_level"] = env_info_level
         eval_env_cfg["objective_config"] = objective_config
+        if critic_mode == "stable_cost_v1":
+            eval_env_cfg["training_mode"] = "stable_cost_v1"
+            # The actor's budget context must reflect this evaluation horizon.
+            eval_env_cfg["rollout_horizon_steps"] = args.max_steps
         envs = [
             make_terran_env(
                 instance=instance,

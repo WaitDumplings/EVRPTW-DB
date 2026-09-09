@@ -18,7 +18,6 @@ from collections import Counter
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -49,6 +48,13 @@ from ..common.training_stream import (
     training_stream_contract_digest,
 )
 from .data_pool import FixedDatasetInstancePool, OnlineInstancePool, Stage2TERRANPool
+from .critic_stability import (
+    CriticGradientAccumulator,
+    PPODiagnosticsAccumulator,
+    resolve_critic_stability_config,
+    should_capture_critic_gradients,
+    value_loss_per_transition,
+)
 from .env_factory import make_terran_env
 from .models import Agent
 from .models.attention_model_wrapper import (
@@ -147,10 +153,140 @@ def _json_safe_diagnostics(value):
 
 
 @torch.no_grad()
+def build_critic_value_diagnostics(
+    rollout_records,
+    critic_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Describe frozen rollout targets/predictions by terminal outcome.
+
+    Predictions are the old values captured during rollout.  Consequently the
+    residual is exactly the pre-normalization advantage ``G - V_old`` and is not
+    affected by later PPO updates or advantage normalization.
+    """
+
+    group_parts: dict[str, dict[str, list[tuple[torch.Tensor, torch.Tensor]]]] = {
+        name: {
+            "target": [],
+            "prediction": [],
+            "residual": [],
+            "raw_squared_residual": [],
+            "configured_loss": [],
+        }
+        for name in (
+            "overall",
+            "success",
+            "rollout_budget_exhausted",
+            "other_terminal",
+        )
+    }
+    trajectory_counts = {name: 0 for name in group_parts}
+    transition_counts = {name: 0 for name in group_parts}
+
+    for batch, returns, _ in rollout_records:
+        active = batch.valid.bool()
+        if active.ndim < 2:
+            raise ValueError("TERRAN rollout valid mask must include time and trajectory")
+        trajectory_shape = active.shape[1:]
+        active_trajectory = active.any(dim=0)
+        success = torch.zeros(
+            trajectory_shape, dtype=torch.bool, device=active.device
+        )
+        final_infos = list(getattr(batch, "final_infos", ()) or ())
+        if active.ndim == 3:
+            for env_index, info in enumerate(final_infos[: trajectory_shape[0]]):
+                raw_success = np.asarray(
+                    info.get("success", ()), dtype=bool
+                ).reshape(-1)
+                count = min(int(trajectory_shape[1]), int(raw_success.size))
+                if count:
+                    success[env_index, :count] = torch.as_tensor(
+                        raw_success[:count], dtype=torch.bool, device=active.device
+                    )
+
+        raw_horizon = getattr(batch, "rollout_budget_exhausted", None)
+        horizon = torch.zeros_like(success)
+        if raw_horizon is not None:
+            candidate = torch.as_tensor(
+                raw_horizon, dtype=torch.bool, device=active.device
+            )
+            if tuple(candidate.shape) != tuple(trajectory_shape):
+                raise ValueError(
+                    "rollout_budget_exhausted shape disagrees with rollout trajectories"
+                )
+            horizon = candidate
+        success &= active_trajectory
+        horizon &= active_trajectory & (~success)
+        other = active_trajectory & (~success) & (~horizon)
+        trajectory_masks = {
+            "overall": active_trajectory,
+            "success": success,
+            "rollout_budget_exhausted": horizon,
+            "other_terminal": other,
+        }
+
+        prediction = batch.values
+        target = returns
+        residual = target - prediction
+        raw_squared_residual = residual.square()
+        configured_loss = value_loss_per_transition(
+            prediction,
+            target,
+            loss_type=str(critic_config["value_loss_type"]),
+            beta=float(critic_config["value_loss_beta"]),
+            residual_scale=float(critic_config["value_residual_scale"]),
+        )
+        values = {
+            "target": target,
+            "prediction": prediction,
+            "residual": residual,
+            "raw_squared_residual": raw_squared_residual,
+            "configured_loss": configured_loss,
+        }
+        for name, trajectory_mask in trajectory_masks.items():
+            mask = active & trajectory_mask.unsqueeze(0)
+            count = int(mask.sum().item())
+            trajectory_counts[name] += int(trajectory_mask.sum().item())
+            transition_counts[name] += count
+            for field, value in values.items():
+                group_parts[name][field].append((value, mask))
+
+    populations: dict[str, Any] = {}
+    for name, parts in group_parts.items():
+        summaries = {
+            field: _summarize_tensor_parts(values)
+            for field, values in parts.items()
+        }
+        populations[name] = {
+            "trajectory_count": trajectory_counts[name],
+            "valid_transition_count": transition_counts[name],
+            "return_target": summaries["target"],
+            "rollout_value_prediction": summaries["prediction"],
+            "value_residual_g_minus_v": summaries["residual"],
+            "raw_squared_value_residual": summaries["raw_squared_residual"],
+            "raw_value_mse": summaries["raw_squared_residual"].get("mean"),
+            "configured_value_loss": summaries["configured_loss"].get("mean"),
+        }
+    return {
+        "population_semantics": (
+            "valid transitions grouped by final trajectory outcome; success takes "
+            "precedence over horizon and groups are disjoint"
+        ),
+        "prediction_semantics": "V_old saved during the same frozen rollout",
+        "residual_semantics": "G - V_old before advantage normalization",
+        "value_units": "normalized_objective_reward_units",
+        "loss_config": dict(critic_config),
+        "populations": populations,
+    }
+
+
+@torch.no_grad()
 def build_epoch_reward_diagnostics(
     *, cfg, epoch, session_id, start_epoch, resume_from, rollout_records,
     raw_advantages, base_reward_stats, reward_components, normalization_records,
     preclip_norms, optimizer_steps_total, pbrs_scale,
+    ppo_diagnostics: Mapping[str, Any] | None = None,
+    critic_value_diagnostics: Mapping[str, Any] | None = None,
+    critic_gradient_diagnostics: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Logging-only view of tensors already consumed by the completed PPO update."""
     distributions = {
@@ -241,7 +377,17 @@ def build_epoch_reward_diagnostics(
             ],
         },
         "component_units": "actual training reward components after configured environment normalization; distance is the separate historical km-scale diagnostic, shaping_total contains only auxiliary PBRS plus the disabled-by-contract legacy heuristic, and terminal_task_total is a separate non-annealed task outcome reward (success bonus plus signed failure terms); these are not raw USD costs",
-        "gradients": {"preclip_global_norm": summarize_values(norm_values), "max_grad_norm": max_grad_norm, "clip_fraction": clip_stats["mean"], "clip_fraction_finite_optimizer_steps": clip_stats["count"], "clip_fraction_definition": "returned_preclip_norm > max_grad_norm on finite norms", "capture": "return value of the existing single clip_grad_norm_ call after all backward accumulation, before optimizer.step"},
+        "ppo": dict(ppo_diagnostics or {}),
+        "critic_value": dict(critic_value_diagnostics or {}),
+        "gradients": {
+            "preclip_global_norm": summarize_values(norm_values),
+            "max_grad_norm": max_grad_norm,
+            "clip_fraction": clip_stats["mean"],
+            "clip_fraction_finite_optimizer_steps": clip_stats["count"],
+            "clip_fraction_definition": "returned_preclip_norm > max_grad_norm on finite norms",
+            "capture": "return value of the existing single clip_grad_norm_ call after all backward accumulation, before optimizer.step",
+            "critic_decomposition": dict(critic_gradient_diagnostics or {}),
+        },
     })
 
 
@@ -395,6 +541,7 @@ def resolved_terran_scientific_fields(
     protocol = cfg.get("protocol", {}) or {}
     if not all(isinstance(section, Mapping) for section in (training, evaluation, protocol)):
         raise ValueError("TERRAN scientific signature requires mapping config sections")
+    critic = resolve_critic_stability_config(training)
 
     epochs = int(training.get("epochs", 1000))
     num_envs = int(training.get("num_envs_per_gpu", 128))
@@ -538,6 +685,12 @@ def resolved_terran_scientific_fields(
             "ent_coef": float(training.get("ent_coef", 0.01)),
             "learning_rate": float(training.get("learning_rate", 1e-4)),
             "max_grad_norm": float(training.get("max_grad_norm", 1.0)),
+            "value_loss_type": critic["value_loss_type"],
+            "value_loss_beta": critic["value_loss_beta"],
+            "value_residual_scale": critic["value_residual_scale"],
+            "critic_backbone_grad_scale": critic[
+                "critic_backbone_grad_scale"
+            ],
             "gamma": training_gamma(dict(cfg)),
         },
         "evaluation": {
@@ -1366,9 +1519,47 @@ def validate_fresh_training_output(cfg: dict[str, Any]) -> None:
 
 
 def masked_mean(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    mask_f = mask.float()
-    denom = torch.clamp(mask_f.sum(), min=1.0)
-    return (value * mask_f).sum() / denom
+    mask_bool = mask.bool()
+    denom = torch.clamp(mask_bool.sum(), min=1).to(dtype=value.dtype)
+    return torch.where(mask_bool, value, torch.zeros_like(value)).sum() / denom
+
+
+def _clip_grad_norm_finite(parameters, max_norm: float) -> torch.Tensor:
+    """Clip once and fail before optimizer.step when gradients are non-finite.
+
+    The fallback keeps compatibility with older PyTorch releases and simple
+    test wrappers that do not yet accept ``error_if_nonfinite``.
+    """
+
+    try:
+        return torch.nn.utils.clip_grad_norm_(
+            parameters,
+            max_norm,
+            error_if_nonfinite=True,
+        )
+    except TypeError as exc:
+        if "error_if_nonfinite" not in str(exc):
+            raise
+        norm = torch.nn.utils.clip_grad_norm_(parameters, max_norm)
+        if not bool(torch.isfinite(norm).item()):
+            raise RuntimeError(
+                "TERRAN PPO gradient norm is non-finite; optimizer step aborted"
+            )
+        return norm
+
+
+def _valid_transition_count(
+    batch,
+    env_indices: Sequence[int] | np.ndarray,
+    step_start: int = 0,
+    step_end: int | None = None,
+) -> int:
+    """Count active transitions in one PPO env/time slice."""
+    if step_end is None:
+        step_end = int(batch.valid.size(0))
+    return int(
+        batch.valid[int(step_start) : int(step_end), env_indices].sum().item()
+    )
 
 
 def set_seed(seed: int) -> None:
@@ -1671,6 +1862,7 @@ def make_envs(cfg: dict[str, Any], seed: int):
             cache_size=int(data_cfg.get("stage2_cache_size", 4)),
             completed_data_passes=int(data_cfg.get("stage2_completed_data_passes", 0)),
             completed_samples=int(data_cfg.get("stage2_completed_samples", 0)),
+            record_sample_ids=bool(data_cfg.get("stage2_record_sample_ids", False)),
             training_stream_path=_resolve_repo_path(
                 data_cfg.get("stage2_training_stream_path")
             ),
@@ -1928,6 +2120,8 @@ def evaluate_fixed_dataset(
     for instances in instance_batches:
         eval_env_cfg = dict(cfg.get("env", {}) or {})
         eval_env_cfg["objective_config"] = objective_config
+        if eval_env_cfg.get("training_mode") == "stable_cost_v1" and configured_max_steps is not None:
+            eval_env_cfg["rollout_horizon_steps"] = int(configured_max_steps)
         if bool(eval_env_cfg.get("use_fast_env", True)):
             eval_env_cfg["info_level"] = (
                 "full"
@@ -2232,11 +2426,14 @@ def evaluate_policy_loss(
     env_indices: Sequence[int] | np.ndarray | None = None,
     step_start: int = 0,
     step_end: int | None = None,
+    ppo_diagnostics: PPODiagnosticsAccumulator | None = None,
+    return_loss_components: bool = False,
 ):
     del device
     clip_coef = float(cfg["training"].get("clip_coef", 0.2))
     vf_coef = float(cfg["training"].get("vf_coef", 0.5))
     ent_coef = float(cfg["training"].get("ent_coef", 0.01))
+    critic_config = resolve_critic_stability_config(cfg["training"])
     if env_indices is None:
         env_indices = np.arange(batch.actions.size(1), dtype=np.int64)
     else:
@@ -2276,9 +2473,11 @@ def evaluate_policy_loss(
 
     cached_state = agent.backbone.encode(model_observation(first_obs))
 
-    policy_losses = []
-    value_losses = []
-    entropy_losses = []
+    policy_terms = []
+    value_terms = []
+    entropy_terms = []
+    log_ratio_terms = []
+    value_residual_terms = []
     for step in range(step_start, step_end):
         obs = batch.observations[step]
         obs_mb = model_observation(obs)
@@ -2290,19 +2489,70 @@ def evaluate_policy_loss(
             state=cached_state,
         )
         value = value.squeeze(-1)
-        ratio = torch.exp(new_logprob - old_logprob)
-        adv = advantages[step, env_indices]
+        valid = batch.valid[step, env_indices].bool()
+
+        # Gather active transitions before applying nonlinear losses.  Masking
+        # an already-computed SmoothL1/MSE tensor is insufficient: a NaN in a
+        # finished padding slot can otherwise produce a NaN backward gradient
+        # through a nominally zero mask multiplier.
+        new_logprob = new_logprob[valid]
+        old_logprob = old_logprob[valid]
+        value = value[valid]
+        entropy = entropy[valid]
+        adv = advantages[step, env_indices][valid]
+        target = returns[step, env_indices][valid]
+        log_ratio = new_logprob - old_logprob
+        ratio = torch.exp(log_ratio)
         unclipped = ratio * adv
         clipped = torch.clamp(ratio, 1.0 - clip_coef, 1.0 + clip_coef) * adv
-        valid = batch.valid[step, env_indices]
-        policy_losses.append(-masked_mean(torch.minimum(unclipped, clipped), valid))
-        value_losses.append(masked_mean(F.mse_loss(value, returns[step, env_indices], reduction="none"), valid))
-        entropy_losses.append(masked_mean(entropy, valid))
-    policy_loss = torch.stack(policy_losses).mean()
-    value_loss = torch.stack(value_losses).mean()
-    entropy_loss = torch.stack(entropy_losses).mean()
+        policy_terms.append(-torch.minimum(unclipped, clipped))
+        value_residual = target - value
+        value_terms.append(
+            value_loss_per_transition(
+                value,
+                target,
+                loss_type=critic_config["value_loss_type"],
+                beta=critic_config["value_loss_beta"],
+                residual_scale=critic_config["value_residual_scale"],
+            )
+        )
+        entropy_terms.append(entropy)
+        log_ratio_terms.append(log_ratio)
+        value_residual_terms.append(value_residual)
+    policy_values = torch.cat(policy_terms)
+    value_values = torch.cat(value_terms)
+    entropy_values = torch.cat(entropy_terms)
+    if not policy_values.numel():
+        raise RuntimeError("PPO loss chunk contains no valid transitions")
+    policy_loss = policy_values.mean()
+    value_loss = value_values.mean()
+    entropy_loss = entropy_values.mean()
+    if ppo_diagnostics is not None:
+        diagnostic_log_ratio = torch.cat(log_ratio_terms)
+        diagnostic_residual = torch.cat(value_residual_terms)
+        ppo_diagnostics.update(
+            log_ratio=diagnostic_log_ratio,
+            value_residual=diagnostic_residual,
+            value_loss=value_values,
+            valid=torch.ones_like(diagnostic_log_ratio, dtype=torch.bool),
+            clip_coef=clip_coef,
+        )
     total = policy_loss + vf_coef * value_loss - ent_coef * entropy_loss
-    return total, policy_loss.detach(), value_loss.detach(), entropy_loss.detach()
+    result = (
+        total,
+        policy_loss.detach(),
+        value_loss.detach(),
+        entropy_loss.detach(),
+    )
+    if not return_loss_components:
+        return result
+    return result + ({
+        "policy_loss": policy_loss,
+        "value_loss": value_loss,
+        "weighted_value_loss": vf_coef * value_loss,
+        "entropy_loss": entropy_loss,
+        "total_loss": total,
+    },)
 
 
 def save_checkpoint(path: Path, agent: Agent, optimizer: torch.optim.Optimizer, cfg: dict[str, Any], epoch: int, seed: int) -> None:
@@ -2351,6 +2601,9 @@ def apply_training_initialization(
 
 def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None, overrides: dict[str, Any] | None = None) -> Path:
     cfg = deep_update(cfg, overrides or {})
+    if cfg.get("training", {}).get("algorithm") == "stable_cost_v1":
+        from .stable_trainer import train_stable_cost
+        return train_stable_cost(cfg, seed=seed, device=device)
     set_seed(seed)
     train_cfg = cfg["training"]
     optimizer_name = str(train_cfg.get("optimizer", "adamw")).lower()
@@ -2363,6 +2616,11 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         raise ValueError("TERRAN weight_decay must be finite and non-negative")
     train_cfg["optimizer"] = optimizer_name
     train_cfg["weight_decay"] = weight_decay
+    critic_config = resolve_critic_stability_config(train_cfg)
+    # Persist resolved defaults in every new checkpoint/config snapshot.  The
+    # four scientific controls below are also part of the fail-closed resume
+    # signature; the diagnostics interval is operational only.
+    train_cfg.update(critic_config)
     gamma = training_gamma(cfg)
     objective_config = resolve_objective(cfg.get("objective"))
     cfg["objective"] = objective_config.to_dict()
@@ -2467,6 +2725,16 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         use_graph_token=bool(model_cfg.get("use_graph_token", False)),
         use_dynamic_embedding=bool(model_cfg.get("use_dynamic_embedding", False)),
     ).to(device)
+    critic_module = getattr(agent, "critic", None)
+    if critic_module is None:
+        if critic_config["critic_backbone_grad_scale"] != 1.0:
+            raise ValueError(
+                "TERRAN critic_backbone_grad_scale requires an Agent.critic module"
+            )
+    else:
+        critic_module.backbone_grad_scale = critic_config[
+            "critic_backbone_grad_scale"
+        ]
     optimizer = build_adamw_optimizer(
         agent.parameters(),
         learning_rate=float(train_cfg.get("learning_rate", 1e-4)),
@@ -2972,6 +3240,15 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
 
             losses = []
             preclip_norms = []
+            ppo_diagnostics = PPODiagnosticsAccumulator()
+            capture_critic_gradients = should_capture_critic_gradients(
+                epoch=epoch,
+                start_epoch=start_epoch,
+                every_epochs=critic_config[
+                    "critic_gradient_diagnostics_every_epochs"
+                ],
+            )
+            critic_gradient_diagnostics: dict[str, Any] = {}
             num_envs = int(rollout_records[0][0].actions.size(1))
             minibatches = min(num_minibatches, num_envs)
             effective_instances = num_envs * logical_microbatches_per_epoch
@@ -3005,10 +3282,26 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         if not accum_group:
                             continue
                         optimizer.zero_grad(set_to_none=True)
+                        gradient_accumulator = (
+                            CriticGradientAccumulator(agent)
+                            if capture_critic_gradients
+                            else None
+                        )
                         group_policy = 0.0
                         group_value = 0.0
                         group_entropy = 0.0
-                        group_size = float(len(accum_group))
+                        group_transition_count = sum(
+                            _valid_transition_count(
+                                batch,
+                                env_indices,
+                                step_end=total_steps,
+                            )
+                            for env_indices in accum_group
+                        )
+                        if group_transition_count <= 0:
+                            raise RuntimeError(
+                                "PPO optimizer group contains no valid transitions"
+                            )
                         for env_indices in accum_group:
                             weighted_policy = 0.0
                             weighted_value = 0.0
@@ -3017,36 +3310,84 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                                 step_end = min(
                                     step_start + chunk_size, total_steps
                                 )
-                                chunk_weight = float(
-                                    step_end - step_start
-                                ) / max(float(total_steps), 1.0)
-                                loss, policy_loss, value_loss, entropy = (
-                                    evaluate_policy_loss(
-                                        agent,
-                                        batch,
-                                        returns,
-                                        advantages.detach(),
-                                        cfg,
-                                        device,
-                                        env_indices=env_indices,
-                                        step_start=step_start,
-                                        step_end=step_end,
-                                    )
+                                chunk_transition_count = _valid_transition_count(
+                                    batch,
+                                    env_indices,
+                                    step_start,
+                                    step_end,
                                 )
-                                (loss * chunk_weight / group_size).backward()
+                                if chunk_transition_count <= 0:
+                                    continue
+                                chunk_weight = (
+                                    float(chunk_transition_count)
+                                    / float(group_transition_count)
+                                )
+                                evaluation = evaluate_policy_loss(
+                                    agent,
+                                    batch,
+                                    returns,
+                                    advantages.detach(),
+                                    cfg,
+                                    device,
+                                    env_indices=env_indices,
+                                    step_start=step_start,
+                                    step_end=step_end,
+                                    ppo_diagnostics=ppo_diagnostics,
+                                    return_loss_components=(
+                                        gradient_accumulator is not None
+                                    ),
+                                )
+                                loss, policy_loss, value_loss, entropy = evaluation[:4]
+                                if gradient_accumulator is not None:
+                                    components = evaluation[4]
+                                    gradient_accumulator.accumulate(
+                                        policy_objective=(
+                                            components["policy_loss"] * chunk_weight
+                                        ),
+                                        weighted_value_objective=(
+                                            components["weighted_value_loss"]
+                                            * chunk_weight
+                                        ),
+                                        transition_count=chunk_transition_count,
+                                    )
+                                (loss * chunk_weight).backward()
                                 weighted_policy += (
                                     policy_loss.item() * chunk_weight
                                 )
                                 weighted_value += value_loss.item() * chunk_weight
                                 weighted_entropy += entropy.item() * chunk_weight
-                            group_policy += weighted_policy / group_size
-                            group_value += weighted_value / group_size
-                            group_entropy += weighted_entropy / group_size
-                        preclip_norm = torch.nn.utils.clip_grad_norm_(
+                            group_policy += weighted_policy
+                            group_value += weighted_value
+                            group_entropy += weighted_entropy
+                        preclip_norm = _clip_grad_norm_finite(
                             agent.parameters(),
                             float(train_cfg.get("max_grad_norm", 1.0)),
                         )
                         preclip_norms.append(preclip_norm.detach())
+                        if gradient_accumulator is not None:
+                            critic_gradient_diagnostics = (
+                                gradient_accumulator.summary()
+                            )
+                            critic_gradient_diagnostics.update(
+                                {
+                                    "logical_epoch": int(epoch),
+                                    "optimizer_update_in_epoch": 1,
+                                    "vf_coef": float(train_cfg.get("vf_coef", 0.5)),
+                                    "value_loss_type": critic_config[
+                                        "value_loss_type"
+                                    ],
+                                    "value_loss_beta": critic_config[
+                                        "value_loss_beta"
+                                    ],
+                                    "value_residual_scale": critic_config[
+                                        "value_residual_scale"
+                                    ],
+                                    "critic_backbone_grad_scale": critic_config[
+                                        "critic_backbone_grad_scale"
+                                    ],
+                                }
+                            )
+                            capture_critic_gradients = False
                         optimizer.step()
                         optimizer_steps_total += 1
                         losses.append(
@@ -3054,11 +3395,24 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         )
             else:
                 # Multiple physical rollout buffers form one effective batch.
-                # PPO gradients are weighted by their base-instance share and
+                # PPO gradients are weighted by their active-transition share and
                 # accumulated before each optimizer step, keeping GPU residency
                 # at the registered physical batch size.
+                effective_transition_count = sum(
+                    int(batch.valid.sum().item())
+                    for batch, _, _ in rollout_records
+                )
+                if effective_transition_count <= 0:
+                    raise RuntimeError(
+                        "PPO effective batch contains no valid transitions"
+                    )
                 for _ in range(ppo_epochs):
                     optimizer.zero_grad(set_to_none=True)
+                    gradient_accumulator = (
+                        CriticGradientAccumulator(agent)
+                        if capture_critic_gradients
+                        else None
+                    )
                     group_policy = 0.0
                     group_value = 0.0
                     group_entropy = 0.0
@@ -3084,42 +3438,79 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                         )
                         chunk_size = max(1, min(chunk_size, total_steps))
                         for env_indices in split_indices:
-                            instance_weight = (
-                                float(len(env_indices))
-                                / float(effective_instances)
-                            )
                             for step_start in range(
                                 0, total_steps, chunk_size
                             ):
                                 step_end = min(
                                     step_start + chunk_size, total_steps
                                 )
-                                chunk_weight = float(
-                                    step_end - step_start
-                                ) / max(float(total_steps), 1.0)
-                                loss, policy_loss, value_loss, entropy = (
-                                    evaluate_policy_loss(
-                                        agent,
-                                        batch,
-                                        returns,
-                                        advantages.detach(),
-                                        cfg,
-                                        device,
-                                        env_indices=env_indices,
-                                        step_start=step_start,
-                                        step_end=step_end,
-                                    )
+                                chunk_transition_count = _valid_transition_count(
+                                    batch,
+                                    env_indices,
+                                    step_start,
+                                    step_end,
                                 )
-                                weight = instance_weight * chunk_weight
+                                if chunk_transition_count <= 0:
+                                    continue
+                                evaluation = evaluate_policy_loss(
+                                    agent,
+                                    batch,
+                                    returns,
+                                    advantages.detach(),
+                                    cfg,
+                                    device,
+                                    env_indices=env_indices,
+                                    step_start=step_start,
+                                    step_end=step_end,
+                                    ppo_diagnostics=ppo_diagnostics,
+                                    return_loss_components=(
+                                        gradient_accumulator is not None
+                                    ),
+                                )
+                                loss, policy_loss, value_loss, entropy = evaluation[:4]
+                                weight = (
+                                    float(chunk_transition_count)
+                                    / float(effective_transition_count)
+                                )
+                                if gradient_accumulator is not None:
+                                    components = evaluation[4]
+                                    gradient_accumulator.accumulate(
+                                        policy_objective=(
+                                            components["policy_loss"] * weight
+                                        ),
+                                        weighted_value_objective=(
+                                            components["weighted_value_loss"]
+                                            * weight
+                                        ),
+                                        transition_count=chunk_transition_count,
+                                    )
                                 (loss * weight).backward()
                                 group_policy += policy_loss.item() * weight
                                 group_value += value_loss.item() * weight
                                 group_entropy += entropy.item() * weight
-                    preclip_norm = torch.nn.utils.clip_grad_norm_(
+                    preclip_norm = _clip_grad_norm_finite(
                         agent.parameters(),
                         float(train_cfg.get("max_grad_norm", 1.0)),
                     )
                     preclip_norms.append(preclip_norm.detach())
+                    if gradient_accumulator is not None:
+                        critic_gradient_diagnostics = gradient_accumulator.summary()
+                        critic_gradient_diagnostics.update(
+                            {
+                                "logical_epoch": int(epoch),
+                                "optimizer_update_in_epoch": 1,
+                                "vf_coef": float(train_cfg.get("vf_coef", 0.5)),
+                                "value_loss_type": critic_config["value_loss_type"],
+                                "value_loss_beta": critic_config["value_loss_beta"],
+                                "value_residual_scale": critic_config[
+                                    "value_residual_scale"
+                                ],
+                                "critic_backbone_grad_scale": critic_config[
+                                    "critic_backbone_grad_scale"
+                                ],
+                            }
+                        )
+                        capture_critic_gradients = False
                     optimizer.step()
                     optimizer_steps_total += 1
                     losses.append((group_policy, group_value, group_entropy))
@@ -3511,6 +3902,19 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
             )
             f.flush()
             diagnostics_start = time.perf_counter()
+            critic_value_diagnostics = build_critic_value_diagnostics(
+                rollout_records,
+                critic_config,
+            )
+            ppo_diagnostic_summary = ppo_diagnostics.summary()
+            ppo_diagnostic_summary["value_loss_config"] = {
+                "value_loss_type": critic_config["value_loss_type"],
+                "value_loss_beta": critic_config["value_loss_beta"],
+                "value_residual_scale": critic_config[
+                    "value_residual_scale"
+                ],
+                "vf_coef": float(train_cfg.get("vf_coef", 0.5)),
+            }
             diagnostic_record = build_epoch_reward_diagnostics(
                 cfg=cfg, epoch=epoch, session_id=diagnostic_session_id,
                 start_epoch=start_epoch, resume_from=resume_checkpoint,
@@ -3518,6 +3922,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
                 base_reward_stats=base_reward_stats, reward_components=reward_diagnostics,
                 normalization_records=normalization_records, preclip_norms=preclip_norms,
                 optimizer_steps_total=optimizer_steps_total, pbrs_scale=pbrs_scale,
+                ppo_diagnostics=ppo_diagnostic_summary,
+                critic_value_diagnostics=critic_value_diagnostics,
+                critic_gradient_diagnostics=critic_gradient_diagnostics,
             )
             diagnostic_record["warm_start"] = protocol_cfg.get("warm_start")
             diagnostic_record["diagnostics_compute_wall_time_s"] = time.perf_counter() - diagnostics_start
