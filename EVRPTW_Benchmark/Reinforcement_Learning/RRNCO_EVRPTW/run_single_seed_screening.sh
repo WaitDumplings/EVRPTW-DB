@@ -10,7 +10,7 @@ SCALE="${SCALE:-Cus100}"
 SEED="${SEED:-1234}"
 GPU="${GPU:-0}"
 EPOCHS="${EPOCHS:-500}"
-BATCH_SIZE="${BATCH_SIZE:-4}"
+BATCH_SIZE="${BATCH_SIZE:-}"
 TRAIN_TRAJECTORIES="${TRAIN_TRAJECTORIES:-5}"
 VALIDATION_LIMIT="${VALIDATION_LIMIT:-500}"
 VALIDATION_CANDIDATES="${VALIDATION_CANDIDATES:-100}"
@@ -22,17 +22,20 @@ case "$SCALE" in
     PLAN="compatibility_cus50"
     TRAIN_MAX_STEPS="${TRAIN_MAX_STEPS:-65}"
     VALIDATION_MAX_STEPS="${VALIDATION_MAX_STEPS:-98}"
+    DEFAULT_BATCH_SIZE=24
     ;;
   Cus100)
     PLAN="core"
     TRAIN_MAX_STEPS="${TRAIN_MAX_STEPS:-120}"
     VALIDATION_MAX_STEPS="${VALIDATION_MAX_STEPS:-180}"
+    DEFAULT_BATCH_SIZE=6
     ;;
   *)
     echo "This frozen screening launcher supports only Cus50 or Cus100: $SCALE" >&2
     exit 2
     ;;
 esac
+BATCH_SIZE="${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
 
 TRAIN_INDEX="$DATASET_ROOT/generation_plan/$PLAN/train/view_index.parquet"
 VAL_INDEX="$DATASET_ROOT/generation_plan/$PLAN/val/view_index.parquet"
@@ -71,7 +74,7 @@ CUDA_VISIBLE_DEVICES="$GPU" python -m \
   --validation-every-epochs 100 \
   --post-minimum-validation-every-epochs 100 \
   --validation-checkpoints $(((EPOCHS + 99) / 100)) \
-  --protocol-id rrnco_ev_single_seed_500_update_screening_v1 \
+  --protocol-id rrnco_ev_single_seed_500_update_screening_v2_calibrated_batch \
   --objective-config "$REPO_ROOT/EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json" \
   --reward-contract "$REPO_ROOT/EVRPTW_Benchmark/Reinforcement_Learning/configs/drl_reward_contract_energy_vehicle_v3.json" \
   --optimizer adamw --learning-rate "$LEARNING_RATE" \
