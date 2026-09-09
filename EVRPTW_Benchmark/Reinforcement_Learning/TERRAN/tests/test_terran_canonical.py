@@ -400,6 +400,10 @@ def test_terran_resolved_training_signature_freezes_method_specific_fields() -> 
         "ent_coef": 0.01,
         "learning_rate": 1e-4,
         "max_grad_norm": 1.0,
+        "value_loss_type": "mse",
+        "value_loss_beta": 1.0,
+        "value_residual_scale": 1.0,
+        "critic_backbone_grad_scale": 1.0,
         "gamma": 1.0,
     }
     assert signature["method_specific"]["evaluation"] == {
@@ -1286,11 +1290,11 @@ def test_terran_effective_batch_two_accumulates_before_optimizer_step(
         pool.sample_count += 1
         collect_calls.append(pool.sample_count)
         return SimpleNamespace(
-            actions=torch.zeros((1, 1), dtype=torch.long),
-            rewards=torch.ones((1, 1)),
-            dones=torch.ones((1, 1), dtype=torch.bool),
-            values=torch.zeros((1, 1)),
-            valid=torch.ones((1, 1), dtype=torch.bool),
+            actions=torch.zeros((1, 1, 1), dtype=torch.long),
+            rewards=torch.ones((1, 1, 1)),
+            dones=torch.ones((1, 1, 1), dtype=torch.bool),
+            values=torch.zeros((1, 1, 1)),
+            valid=torch.ones((1, 1, 1), dtype=torch.bool),
             trajectory_steps=torch.ones((1, 1), dtype=torch.int64),
             rollout_budget_exhausted=torch.zeros((1, 1), dtype=torch.bool),
             final_infos=[
@@ -1374,11 +1378,11 @@ def test_terran_online_selection_publishes_tail_best_as_formal_aliases(
     def fake_collect(_agent, _envs, **_kwargs):
         pool.sample_count += 1
         return SimpleNamespace(
-            actions=torch.zeros((1, 1), dtype=torch.long),
-            rewards=torch.ones((1, 1)),
-            dones=torch.ones((1, 1), dtype=torch.bool),
-            values=torch.zeros((1, 1)),
-            valid=torch.ones((1, 1), dtype=torch.bool),
+            actions=torch.zeros((1, 1, 1), dtype=torch.long),
+            rewards=torch.ones((1, 1, 1)),
+            dones=torch.ones((1, 1, 1), dtype=torch.bool),
+            values=torch.zeros((1, 1, 1)),
+            valid=torch.ones((1, 1, 1), dtype=torch.bool),
             trajectory_steps=torch.ones((1, 1), dtype=torch.int64),
             rollout_budget_exhausted=torch.zeros((1, 1), dtype=torch.bool),
             final_infos=[

@@ -1862,6 +1862,7 @@ def make_envs(cfg: dict[str, Any], seed: int):
             cache_size=int(data_cfg.get("stage2_cache_size", 4)),
             completed_data_passes=int(data_cfg.get("stage2_completed_data_passes", 0)),
             completed_samples=int(data_cfg.get("stage2_completed_samples", 0)),
+            record_sample_ids=bool(data_cfg.get("stage2_record_sample_ids", False)),
             training_stream_path=_resolve_repo_path(
                 data_cfg.get("stage2_training_stream_path")
             ),
@@ -2119,6 +2120,8 @@ def evaluate_fixed_dataset(
     for instances in instance_batches:
         eval_env_cfg = dict(cfg.get("env", {}) or {})
         eval_env_cfg["objective_config"] = objective_config
+        if eval_env_cfg.get("training_mode") == "stable_cost_v1" and configured_max_steps is not None:
+            eval_env_cfg["rollout_horizon_steps"] = int(configured_max_steps)
         if bool(eval_env_cfg.get("use_fast_env", True)):
             eval_env_cfg["info_level"] = (
                 "full"
@@ -2598,6 +2601,9 @@ def apply_training_initialization(
 
 def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None, overrides: dict[str, Any] | None = None) -> Path:
     cfg = deep_update(cfg, overrides or {})
+    if cfg.get("training", {}).get("algorithm") == "stable_cost_v1":
+        from .stable_trainer import train_stable_cost
+        return train_stable_cost(cfg, seed=seed, device=device)
     set_seed(seed)
     train_cfg = cfg["training"]
     optimizer_name = str(train_cfg.get("optimizer", "adamw")).lower()

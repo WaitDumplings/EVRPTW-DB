@@ -26,6 +26,11 @@ from .models.attention_model_wrapper import (
 )
 
 
+STABLE_STATE_KEYS = (
+    "customer_unserved", "dispatch_paid", "remaining_step_budget", "episode_step_budget",
+)
+
+
 def stack_observations(observations: Sequence[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
     keys = observations[0].keys()
     return {key: np.stack([obs[key] for obs in observations], axis=0) for key in keys}
@@ -46,9 +51,12 @@ def stack_policy_observations(
             key: np.stack([obs[key] for obs in observations], axis=0)
             for key in STATIC_OBSERVATION_KEYS if key in observations[0]
         }
+    dynamic_keys = DYNAMIC_OBSERVATION_KEYS + (
+        STABLE_STATE_KEYS if "customer_unserved" in observations[0] else ()
+    )
     dynamic = {
         key: np.stack([obs[key] for obs in observations], axis=0)
-        for key in DYNAMIC_OBSERVATION_KEYS if key in observations[0]
+        for key in dynamic_keys if key in observations[0]
     }
     return {**static, **dynamic}, static
 
@@ -124,6 +132,16 @@ class RolloutBatch:
     trajectory_steps: torch.Tensor
     rollout_budget_exhausted: torch.Tensor
     reward_diagnostics: dict[str, float]
+    # stable_cost_v1 only. Time-major labels share rewards.shape; episode
+    # outcomes have shape (num_envs, n_traj). Legacy constructors stay valid.
+    old_cost_values: torch.Tensor | None = None
+    old_failure_values: torch.Tensor | None = None
+    old_failure_logits: torch.Tensor | None = None
+    cost_returns: torch.Tensor | None = None
+    failure_returns: torch.Tensor | None = None
+    unserved_returns: torch.Tensor | None = None
+    terminal_failure: torch.Tensor | None = None
+    unserved_fraction: torch.Tensor | None = None
 
 
 def summarize_rollout_outcomes(
@@ -421,18 +439,34 @@ def collect_rollout(
     cache_static_embeddings: bool = True,
     reward_discount_factor: float = 1.0,
     base_reward_stats: BoundedBaseRewardStats | None = None,
+    storage_device: str | torch.device | None = None,
 ) -> RolloutBatch:
+    if int(rollout_steps) <= 0:
+        raise ValueError("rollout_steps must be positive")
+    stable_mode = getattr(agent, "critic_mode", "legacy") == "stable_cost_v1"
+    stable_envs = [getattr(env.unwrapped, "training_mode", "legacy") == "stable_cost_v1" for env in envs]
+    if any(stable_envs) != stable_mode or (stable_mode and not all(stable_envs)):
+        raise ValueError("stable_cost_v1 actor and rollout environments must agree")
+    if stable_mode and float(reward_discount_factor) != 1.0:
+        raise ValueError("stable_cost_v1 requires gamma=1 for complete Monte Carlo returns")
+    storage_device = device if storage_device is None else storage_device
     total_start = time.perf_counter()
     reset_start = time.perf_counter()
     observations, infos = reset_envs(envs, seed=seed)
     reset_time_s = time.perf_counter() - reset_start
     done = np.zeros((len(envs), envs[0].unwrapped.n_traj), dtype=bool)
+    if stable_mode:
+        # Reset can already reveal an impossible instance. Its depot sentinel
+        # is padding, not a sampled active action; its failure still counts.
+        done = np.stack([env.unwrapped.terminated | env.unwrapped.truncated for env in envs])
     obs_steps: list[dict[str, np.ndarray]] = []
     actions_steps = []
     logprob_steps = []
     reward_steps = []
     done_steps = []
     value_steps = []
+    failure_value_steps = []
+    failure_logit_steps = []
     valid_steps = []
     entropy_steps = []
     model_action_time_s = 0.0
@@ -475,6 +509,15 @@ def collect_rollout(
 
     for step_index in range(int(rollout_steps)):
         valid = ~done
+        if stable_mode:
+            # The collector's limit may be stricter than the env safety limit.
+            # Store that actual budget in the replay observation as well.
+            observations = [
+                {**obs,
+                 "remaining_step_budget": np.minimum(obs["remaining_step_budget"], int(rollout_steps) - step_index).astype(np.float32),
+                 "episode_step_budget": np.minimum(obs["episode_step_budget"], int(rollout_steps)).astype(np.float32)}
+                for obs in observations
+            ]
         stack_start = time.perf_counter()
         if compact_observations:
             obs_batch, static_obs = stack_policy_observations(observations, static_obs)
@@ -496,13 +539,20 @@ def collect_rollout(
                 # during no-grad rollout collection. PPO recomputes the encoder
                 # with gradients during its update.
                 cached_state = agent.backbone.encode(model_obs)
-            actions, logprob, entropy, value, _ = sample_actions(
-                agent,
-                model_obs,
-                decode_mode=decode_mode,
-                device=device,
-                cached_state=cached_state,
-            )
+            if stable_mode:
+                actions, logprob, entropy, value, _, critic_outputs = agent.get_action_and_value_cached(
+                    model_obs, state=cached_state, decode_mode=decode_mode,
+                    return_critic_outputs=True,
+                )
+                value = critic_outputs["cost_value"]
+                failure_logits = critic_outputs["failure_logits"]
+                failure_value_steps.append(failure_logits.sigmoid().detach().to(storage_device))
+                failure_logit_steps.append(failure_logits.detach().to(storage_device))
+            else:
+                actions, logprob, entropy, value, _ = sample_actions(
+                    agent, model_obs, decode_mode=decode_mode, device=device,
+                    cached_state=cached_state,
+                )
         if profile_timing:
             _sync_cuda(device)
         model_action_time_s += time.perf_counter() - model_start
@@ -604,13 +654,13 @@ def collect_rollout(
                 )
 
         obs_steps.append(obs_batch)
-        actions_steps.append(actions.detach())
-        logprob_steps.append(logprob.detach())
-        entropy_steps.append(entropy.detach())
-        reward_steps.append(tensor_from_array(reward_np, device).float())
-        done_steps.append(tensor_from_array(step_done, device).bool())
-        value_steps.append(value.detach())
-        valid_steps.append(tensor_from_array(valid, device).bool())
+        actions_steps.append(actions.detach().to(storage_device))
+        logprob_steps.append(logprob.detach().to(storage_device))
+        entropy_steps.append(entropy.detach().to(storage_device))
+        reward_steps.append(tensor_from_array(reward_np, storage_device).float())
+        done_steps.append(tensor_from_array(step_done, storage_device).bool())
+        value_steps.append(value.detach().to(storage_device))
+        valid_steps.append(tensor_from_array(valid, storage_device).bool())
 
         observations = next_observations
         done = done | step_done
@@ -652,19 +702,45 @@ def collect_rollout(
         info["rollout_budget_exhausted"] = rollout_budget_exhausted[
             row_index
         ].copy()
+        if stable_mode:
+            info["failure_terminal"] = np.asarray(info.get("failure_terminal", np.zeros(done.shape[1], dtype=bool))) | ~done[row_index]
+    rewards_tensor = torch.stack(reward_steps, dim=0)
+    dones_tensor = torch.stack(done_steps, dim=0)
+    valid_tensor = torch.stack(valid_steps, dim=0)
+    values_tensor = torch.stack(value_steps, dim=0)
+    stable_fields = {}
+    if stable_mode:
+        # An actual collection limit is a task failure in this contract. There
+        # is no bootstrap into an uncollected continuation.
+        dones_tensor[-1] |= tensor_from_array(~done, storage_device).bool()
+        failures = tensor_from_array(~success, storage_device).bool()
+        unserved = tensor_from_array(
+            np.clip(1.0 - served_customers / np.maximum(customer_count, 1), 0.0, 1.0),
+            storage_device,
+        ).float()
+        stable_fields = dict(
+            old_cost_values=values_tensor,
+            old_failure_values=torch.stack(failure_value_steps, dim=0),
+            old_failure_logits=torch.stack(failure_logit_steps, dim=0),
+            cost_returns=compute_returns(-rewards_tensor, dones_tensor, 1.0) * valid_tensor,
+            failure_returns=failures.float().unsqueeze(0).expand_as(rewards_tensor) * valid_tensor,
+            unserved_returns=unserved.unsqueeze(0).expand_as(rewards_tensor) * valid_tensor,
+            terminal_failure=failures,
+            unserved_fraction=unserved,
+        )
     return RolloutBatch(
         observations=obs_steps,
         actions=torch.stack(actions_steps, dim=0),
         old_logprobs=torch.stack(logprob_steps, dim=0),
-        rewards=torch.stack(reward_steps, dim=0),
-        dones=torch.stack(done_steps, dim=0),
-        values=torch.stack(value_steps, dim=0),
-        valid=torch.stack(valid_steps, dim=0),
+        rewards=rewards_tensor,
+        dones=dones_tensor,
+        values=values_tensor,
+        valid=valid_tensor,
         entropies=torch.stack(entropy_steps, dim=0),
         final_infos=infos,
-        trajectory_steps=torch.stack(valid_steps, dim=0).sum(dim=0),
+        trajectory_steps=valid_tensor.sum(dim=0),
         rollout_budget_exhausted=tensor_from_array(
-            rollout_budget_exhausted, device
+            rollout_budget_exhausted, storage_device
         ).bool(),
         reward_diagnostics=reward_diagnostics,
         timings={
@@ -675,6 +751,7 @@ def collect_rollout(
             "rollout_env_step_time_s": float(env_step_time_s),
             "rollout_interaction_time_s": float(model_action_time_s + env_step_time_s),
         },
+        **stable_fields,
     )
 
 

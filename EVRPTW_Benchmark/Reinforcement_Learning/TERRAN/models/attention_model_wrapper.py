@@ -9,6 +9,7 @@ import torch.nn as nn
 from .nets.attention_model.decoder import Decoder
 from .nets.attention_model.embedding import AutoEmbedding
 from .nets.attention_model.encoder import GraphAttentionEncoder
+from .stable_cost_critic import StableCostCritic
 
 
 # Only these fields are consumed by the TERRAN embedding/context adapters.
@@ -22,6 +23,10 @@ DYNAMIC_OBSERVATION_KEYS = (
     "action_mask", "last_node_idx", "current_load", "current_battery", "current_time",
 )
 MODEL_OBSERVATION_KEYS = frozenset(STATIC_OBSERVATION_KEYS + DYNAMIC_OBSERVATION_KEYS)
+STABLE_DYNAMIC_OBSERVATION_KEYS = DYNAMIC_OBSERVATION_KEYS + (
+    "customer_unserved", "dispatch_paid", "remaining_step_budget", "episode_step_budget",
+)
+STABLE_MODEL_OBSERVATION_KEYS = frozenset(STATIC_OBSERVATION_KEYS + STABLE_DYNAMIC_OBSERVATION_KEYS)
 
 
 class Problem:
@@ -54,11 +59,16 @@ def prepare_observation_batch(obs: dict[str, Any]) -> dict[str, Any]:
             "current_battery",
             "remaining_battery",
             "current_time",
+            "dispatch_paid",
+            "remaining_step_budget",
+            "episode_step_budget",
         }:
             out[key] = arr[None, ...] if arr.ndim == 1 else value
         elif key == "time_window":
             out[key] = arr[None, ...] if arr.ndim == 2 else value
         elif key == "action_mask":
+            out[key] = arr[None, ...] if arr.ndim == 2 else value
+        elif key == "customer_unserved":
             out[key] = arr[None, ...] if arr.ndim == 2 else value
         elif key in {
             "visited_customers_ratio",
@@ -97,10 +107,12 @@ class Backbone(nn.Module):
         device: str | torch.device = "cpu",
         use_graph_token: bool = False,
         use_dynamic_embedding: bool = False,
+        stable_cost: bool = False,
     ):
         super().__init__()
         del use_graph_token, use_dynamic_embedding
         self.device = device
+        self.stable_cost = bool(stable_cost)
         self.problem = Problem(problem_name)
         self.embedding = AutoEmbedding(self.problem.NAME, {"embedding_dim": embedding_dim})
         self.encoder = GraphAttentionEncoder(
@@ -114,11 +126,12 @@ class Backbone(nn.Module):
             n_heads,
             self.problem,
             tanh_clipping,
+            stable_cost=self.stable_cost,
         )
 
     def forward(self, obs, use_mask: bool = False):
         obs = prepare_observation_batch(obs)
-        state = stateWrapper(obs, device=self.device, problem=self.problem.NAME)
+        state = stateWrapper(obs, device=self.device, problem=self.problem.NAME, stable_cost=self.stable_cost)
         mask = state.external_mask_to_internal(obs["instance_mask"]) if use_mask and "instance_mask" in obs else None
         embedding = self.embedding(state.states["observations"])
         encoded_inputs, _ = self.encoder(embedding, mask=mask)
@@ -128,7 +141,7 @@ class Backbone(nn.Module):
 
     def encode(self, obs, use_mask: bool = False):
         obs = prepare_observation_batch(obs)
-        state = stateWrapper(obs, device=self.device, problem=self.problem.NAME)
+        state = stateWrapper(obs, device=self.device, problem=self.problem.NAME, stable_cost=self.stable_cost)
         mask = state.external_mask_to_internal(obs["instance_mask"]) if use_mask and "instance_mask" in obs else None
         embedding = self.embedding(state.states["observations"])
         encoded_inputs, _ = self.encoder(embedding, mask=mask)
@@ -136,7 +149,7 @@ class Backbone(nn.Module):
 
     def decode(self, obs, cached_embeddings):
         obs = prepare_observation_batch(obs)
-        state = stateWrapper(obs, device=self.device, problem=self.problem.NAME)
+        state = stateWrapper(obs, device=self.device, problem=self.problem.NAME, stable_cost=self.stable_cost)
         logits, glimpse = self.decoder.advance(cached_embeddings, state)
         return state.logits_to_external(logits), glimpse
 
@@ -202,8 +215,14 @@ class Agent(nn.Module):
         name: str = "evrptw",
         use_graph_token: bool = False,
         use_dynamic_embedding: bool = False,
+        critic_mode: str = "legacy",
+        popart_beta: float = 0.01,
+        popart_min_std: float = 1.0,
     ):
         super().__init__()
+        if critic_mode not in {"legacy", "stable_cost_v1"}:
+            raise ValueError(f"Unknown TERRAN critic_mode: {critic_mode!r}")
+        self.critic_mode = critic_mode
         self.backbone = Backbone(
             embedding_dim=embedding_dim,
             device=device,
@@ -212,8 +231,12 @@ class Agent(nn.Module):
             problem_name=name,
             use_graph_token=use_graph_token,
             use_dynamic_embedding=use_dynamic_embedding,
+            stable_cost=critic_mode == "stable_cost_v1",
         )
-        self.critic = Critic(hidden_size=embedding_dim)
+        self.critic = (
+            StableCostCritic(embedding_dim, popart_beta=popart_beta, popart_min_std=popart_min_std)
+            if critic_mode == "stable_cost_v1" else Critic(hidden_size=embedding_dim)
+        )
         self.actor = Actor()
 
     def forward(self, x, use_mask: bool = False, return_logits: bool = True):
@@ -225,10 +248,15 @@ class Agent(nn.Module):
         return action, logits
 
     def get_value(self, x):
+        if self.critic_mode == "stable_cost_v1":
+            state = self.backbone.encode(x)
+            return self.get_critic_outputs_cached(x, state)["cost_value"].unsqueeze(-1)
         x = self.backbone(x)
         return self.critic(x)
 
     def get_action_and_value(self, x, action=None):
+        if self.critic_mode == "stable_cost_v1":
+            return self.get_action_and_value_cached(x, action=action)[:4]
         x = self.backbone(x)
         logits = self.actor(x)
         probs = torch.distributions.Categorical(logits=logits)
@@ -240,30 +268,50 @@ class Agent(nn.Module):
         return self.get_action_and_value(x, action=action)
 
     def get_value_cached(self, x, state):
+        if self.critic_mode == "stable_cost_v1":
+            return self.get_critic_outputs_cached(x, state)["cost_value"].unsqueeze(-1)
         x = self.backbone.decode(x, state)
         return self.critic(x)
 
-    def get_action_and_value_cached(self, x, action=None, state=None, print_probs: bool = False):
+    def get_critic_outputs_cached(self, x, state):
+        if self.critic_mode != "stable_cost_v1":
+            raise ValueError("get_critic_outputs_cached requires stable_cost_v1")
+        wrapped = stateWrapper(x, device=self.backbone.device, problem=self.backbone.problem.NAME, stable_cost=True)
+        return self.critic(state[0], wrapped)
+
+    def get_action_and_value_cached(
+        self, x, action=None, state=None, print_probs: bool = False,
+        return_critic_outputs: bool = False, decode_mode: str = "sample",
+    ):
         del print_probs
         if state is None:
             state = self.backbone.encode(x)
-        x = self.backbone.decode(x, state)
-        logits = self.actor(x)
+        decoded = self.backbone.decode(x, state)
+        logits = self.actor(decoded)
         probs = torch.distributions.Categorical(logits=logits)
         if action is None:
-            action = probs.sample()
-        value = self.critic((x[0], x[1]))
-        return action, probs.log_prob(action), probs.entropy(), value, state
+            if decode_mode not in {"sample", "greedy"}:
+                raise ValueError(f"Unknown decode_mode={decode_mode!r}")
+            action = probs.sample() if decode_mode == "sample" else logits.argmax(-1)
+        if self.critic_mode == "stable_cost_v1":
+            outputs = self.get_critic_outputs_cached(x, state)
+            value = outputs["cost_value"].unsqueeze(-1)
+        else:
+            value = self.critic(decoded)
+            outputs = None
+        result = (action, probs.log_prob(action), probs.entropy(), value, state)
+        return result + (outputs,) if return_critic_outputs else result
 
 
 class stateWrapper:
-    def __init__(self, states, device, problem: str = "evrptw"):
+    def __init__(self, states, device, problem: str = "evrptw", stable_cost: bool = False):
         self.device = device
         states = prepare_observation_batch(states)
+        observation_keys = STABLE_MODEL_OBSERVATION_KEYS if stable_cost else MODEL_OBSERVATION_KEYS
         self.states = {
             k: _to_tensor(v, device=self.device)
             for k, v in states.items()
-            if problem != "evrptw" or k in MODEL_OBSERVATION_KEYS
+            if problem != "evrptw" or k in observation_keys
         }
         if problem != "evrptw":
             return
