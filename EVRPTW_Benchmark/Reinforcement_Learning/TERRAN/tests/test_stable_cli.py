@@ -159,3 +159,73 @@ def test_launch_prepared_config_preserves_selected_gpu_and_new_run(tmp_path, mon
     with pytest.raises(FileExistsError):
         stable_cli.main()
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("customers,physical,microbatches", [(500, 32, 2), (1000, 8, 8)])
+def test_four_gpu_profiles_keep_global_batch_and_trajectory_count(tmp_path, customers, physical, microbatches):
+    args = _arguments(tmp_path, customers)
+    args.machine_profile = "4x2080ti"
+    args.gpus = (0, 1, 2, 3)
+    path = stable_cli.prepare(args)
+    cfg = yaml.safe_load(path.read_text())
+    t = cfg["training"]
+    assert t["distributed_world_size"] == 4
+    assert t["num_envs_per_gpu"] == physical
+    assert t["logical_microbatches_per_epoch"] == microbatches
+    assert physical * microbatches * 4 == t["effective_batch_size"] == 256
+    assert t["n_traj"] == 16
+    assert cfg["evaluation"]["eval_n_traj"] == 100
+    assert cfg["model"]["critic_mode"] == "stable_cost_v1"
+    metadata = json.loads((path.parent / "provenance.json").read_text())
+    assert metadata["world_size"] == 4
+    assert metadata["gpus"] == [0, 1, 2, 3]
+
+
+def test_distributed_launch_uses_torchrun_and_clears_parent_rank_environment(tmp_path, monkeypatch):
+    args = _arguments(tmp_path)
+    args.world_size = 4
+    args.physical_batch_size = 32
+    path = stable_cli.prepare(args)
+    monkeypatch.setenv("RANK", "7")
+    monkeypatch.setenv("WORLD_SIZE", "8")
+    monkeypatch.setenv("MASTER_PORT", "12345")
+    command, environment = stable_cli.launch_command(path, device="cuda", gpu=None, gpus=(3, 2, 1, 0))
+    assert command[:4] == [sys.executable, "-u", "-m", "torch.distributed.run"]
+    assert "--nproc_per_node=4" in command
+    assert "--standalone" in command
+    assert "--max_restarts=0" in command
+    assert environment["CUDA_VISIBLE_DEVICES"] == "3,2,1,0"
+    assert all(key not in environment for key in ("RANK", "WORLD_SIZE", "MASTER_PORT"))
+    with pytest.raises(ValueError, match="match the prepared world size"):
+        stable_cli.launch_command(path, device="cuda", gpu=None, gpus=(0, 1))
+    with pytest.raises(ValueError, match="selects one worker"):
+        stable_cli.launch_command(path, device="cuda", gpu=0, gpus=None)
+
+
+def test_preparation_rejects_nondivisible_global_batch_and_gpu_count_mismatch(tmp_path):
+    args = _arguments(tmp_path)
+    args.world_size = 3
+    args.physical_batch_size = 32
+    with pytest.raises(ValueError, match="physical batch times world size"):
+        stable_cli.prepare(args)
+    args.gpus = (0, 1, 2, 3)
+    with pytest.raises(ValueError, match="number of --gpus"):
+        stable_cli.prepare(args)
+    assert not Path(args.output_dir).exists()
+
+
+def test_direct_run_rejects_missing_distributed_workers_before_creating_state(tmp_path, monkeypatch):
+    args = _arguments(tmp_path)
+    args.world_size = 4
+    args.physical_batch_size = 32
+    path = stable_cli.prepare(args)
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    with pytest.raises(ValueError, match="requires 4 workers, got 1"):
+        stable_cli.run(path, device="cpu", gpu=None)
+    assert not (path.parent / "run_state.json").exists()
+
+
+@pytest.mark.parametrize("value", ["", "0,", "-1,0", "0,0", "a,b"])
+def test_gpu_list_rejects_invalid_or_duplicate_ids(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        stable_cli.parse_gpus(value)

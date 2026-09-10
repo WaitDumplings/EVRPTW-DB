@@ -123,6 +123,7 @@ class PopArtHead(nn.Module):
         mask: torch.Tensor | None = None,
         optimizer: torch.optim.Optimizer | None = None,
         weights: torch.Tensor | None = None,
+        distributed=None,
     ) -> dict[str, Any]:
         """Update once from a logical batch, including concatenated CPU targets.
 
@@ -130,32 +131,42 @@ class PopArtHead(nn.Module):
         Non-finite padding is allowed only outside ``mask``; active non-finite
         targets fail before any state or parameters are changed.
         """
-        data = targets.detach()
-        if weights is not None and weights.shape != data.shape:
-            raise ValueError("PopArt target and weight shapes must match")
-        weight = torch.ones_like(data, dtype=torch.float64) if weights is None else weights.detach().to(device=data.device, dtype=torch.float64)
-        if mask is not None:
-            if mask.shape != data.shape:
-                raise ValueError("PopArt target and valid mask shapes must match")
-            active = mask.to(device=data.device, dtype=torch.bool)
-            data = data[active]
-            weight = weight[active]
-        data = data.reshape(-1).to(dtype=torch.float64)
-        weight = weight.reshape(-1)
-        count = int(data.numel())
-        if not count:
+        from contextlib import nullcontext
+        # Ranks validate their own data before entering the shared reduction.
+        with distributed.local_phase("PopArt targets") if distributed is not None else nullcontext():
+            data = targets.detach()
+            if weights is not None and weights.shape != data.shape:
+                raise ValueError("PopArt target and weight shapes must match")
+            weight = torch.ones_like(data, dtype=torch.float64) if weights is None else weights.detach().to(device=data.device, dtype=torch.float64)
+            if mask is not None:
+                if mask.shape != data.shape:
+                    raise ValueError("PopArt target and valid mask shapes must match")
+                active = mask.to(device=data.device, dtype=torch.bool)
+                data = data[active]
+                weight = weight[active]
+            data = data.reshape(-1).to(dtype=torch.float64)
+            weight = weight.reshape(-1)
+            count = int(data.numel())
+            if not bool(torch.isfinite(data).all().item()):
+                raise ValueError("PopArt received non-finite active targets")
+            if not bool((torch.isfinite(weight) & (weight >= 0)).all().item()):
+                raise ValueError("PopArt weights must be finite and non-negative")
+            mass = weight.sum()
+            first = (weight * data).sum()
+            second = (weight * data.square()).sum()
+            if not bool(torch.isfinite(mass).item()):
+                raise ValueError("PopArt total weight is non-finite")
+            if not bool(torch.isfinite(second).item()):
+                raise ValueError("PopArt target second moment is non-finite")
+        if distributed is not None and distributed.world_size > 1:
+            count, mass, first, second = distributed.sum_values([count, mass.item(), first.item(), second.item()])
+            count = int(count)
+            mass, first, second = (torch.as_tensor(value, dtype=torch.float64, device=self.mean.device)
+                                   for value in (mass, first, second))
+        if not count or not bool((mass > 0).item()):
             return {"updated": False, "sample_count": int(self.sample_count.item())}
-        if not bool(torch.isfinite(data).all().item()):
-            raise ValueError("PopArt received non-finite active targets")
-        if not bool((torch.isfinite(weight) & (weight >= 0)).all().item()):
-            raise ValueError("PopArt weights must be finite and non-negative")
-        mass = weight.sum()
-        if not bool(torch.isfinite(mass).item()):
-            raise ValueError("PopArt total weight is non-finite")
-        if not bool((mass > 0).item()):
-            return {"updated": False, "sample_count": int(self.sample_count.item())}
-        batch_mean = (weight * data).sum().div(mass).to(self.mean)
-        batch_second = (weight * data.square()).sum().div(mass).to(self.second_moment)
+        batch_mean = first.div(mass).to(self.mean)
+        batch_second = second.div(mass).to(self.second_moment)
         if not bool(torch.isfinite(batch_second).item()):
             raise ValueError("PopArt target second moment is non-finite")
         rate = 1.0 if int(self.update_count.item()) == 0 else self.beta

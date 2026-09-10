@@ -329,7 +329,7 @@ def test_resume_batch_change_is_strict_by_default_and_requires_explicit_flag():
         validate_resume_checkpoint(payload, resized, seed=1234, source="/tmp/source.ckpt")
     resized["training"]["allow_batch_resize_resume"] = True
     metadata = validate_resume_checkpoint(payload, resized, seed=1234, source="/tmp/source.ckpt")
-    assert set(metadata["changed_batch_fields"]) == set(stable_trainer.BATCH_RESUME_FIELDS)
+    assert set(metadata["changed_batch_fields"]) == set(stable_trainer.BATCH_RESUME_FIELDS) - {"distributed_world_size"}
     assert metadata["old_batch_geometry"]["effective_batch_size"] == 2
     assert metadata["new_batch_geometry"]["effective_batch_size"] == 12
     assert metadata["source_sample_count"] == 113

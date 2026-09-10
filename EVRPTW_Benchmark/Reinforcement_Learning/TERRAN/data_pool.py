@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from operator import index as integer_index
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -27,7 +28,14 @@ from ..common.training_stream import (
 
 @dataclass
 class Stage2TERRANPool:
-    """No-regeneration sampler over frozen Stage-2 view records."""
+    """No-regeneration sampler over frozen Stage-2 view records.
+
+    Distributed workers take disjoint physical-batch blocks from the same
+    seeded global sequence. ``completed_samples`` and ``sample_count`` remain
+    global cursors, so checkpoints may change worker count or physical batch
+    without repeating or discarding the remaining sequence. A distributed
+    cursor commits only after this rank has sampled one complete local batch.
+    """
 
     dataset_path: str | Path
     family_root: str | Path | None = None
@@ -46,8 +54,27 @@ class Stage2TERRANPool:
     representation: str = "G"
     euclidean_manifest: str | Path | None = None
     record_sample_ids: bool = False
+    sampling_rank: int = 0
+    sampling_world_size: int = 1
+    sampling_batch_size: int = 1
 
     def __post_init__(self) -> None:
+        for name in ("sampling_rank", "sampling_world_size", "sampling_batch_size"):
+            value = getattr(self, name)
+            try:
+                if isinstance(value, bool):
+                    raise TypeError
+                value = integer_index(value)
+            except TypeError as exc:
+                raise ValueError(f"TERRAN {name} must be an integer") from exc
+            setattr(self, name, value)
+        if self.sampling_world_size <= 0 or self.sampling_batch_size <= 0:
+            raise ValueError("TERRAN sampling world size and batch size must be positive")
+        if not 0 <= self.sampling_rank < self.sampling_world_size:
+            raise ValueError("TERRAN sampling rank must lie within the sampling world")
+        if self.sampling_world_size > 1 and self.training_stream_path is not None:
+            raise ValueError("distributed TERRAN sampling requires the seeded shuffle cycle, "
+                             "not a registered training ID stream")
         self._sampled_view_ids: list[str] = []
         self.pool = Stage2TaskPool(
             dataset_path=self.dataset_path,
@@ -142,6 +169,9 @@ class Stage2TERRANPool:
             self._order = seeded_pass_order(
                 len(self.pool), self.seed, self.sample_count // len(self.pool) + 1
             )
+            self._order_data_pass = self.sample_count // len(self.pool) + 1
+        self._distributed_start = self.sample_count
+        self._local_sample_count = 0
         self.region_pool_status = f"stage2_frozen:{Path(self.dataset_path)}"
 
     def sample(self) -> EVRPTWInstance:
@@ -153,15 +183,39 @@ class Stage2TERRANPool:
             if self.record_sample_ids:
                 self._sampled_view_ids.append(str(view_id))
             return self.pool.instance(self._task_by_view_id[view_id])
-        offset = self.sample_count % len(self.pool)
-        if self.sample_count and offset == 0:
-            data_pass = self.sample_count // len(self.pool) + 1
+        sample_index = self.sample_count
+        if self.sampling_world_size > 1:
+            local_batch, local_offset = divmod(self._local_sample_count, self.sampling_batch_size)
+            sample_index = (self._distributed_start
+                            + (local_batch * self.sampling_world_size + self.sampling_rank)
+                            * self.sampling_batch_size + local_offset)
+        data_pass, offset = divmod(sample_index, len(self.pool))
+        data_pass += 1
+        if data_pass != self._order_data_pass:
             self._order = seeded_pass_order(len(self.pool), self.seed, data_pass)
+            self._order_data_pass = data_pass
         task = self.pool.tasks[int(self._order[offset])]
-        self.sample_count += 1
+        self._local_sample_count += 1
+        if self.sampling_world_size > 1:
+            self.sample_count = (self._distributed_start
+                                 + self._local_sample_count // self.sampling_batch_size
+                                 * self.sampling_batch_size * self.sampling_world_size)
+        else:
+            self.sample_count += 1
         if self.record_sample_ids:
             self._sampled_view_ids.append(str(task.view_id))
         return self.pool.instance(task)
+
+    @property
+    def global_committed_cursor(self) -> int:
+        """Checkpoint cursor after a complete physical batch on every rank.
+
+        The trainer must synchronize workers before persisting this value. A
+        partially consumed local batch cannot be resumed without rank state.
+        """
+        if self.sampling_world_size > 1 and self._local_sample_count % self.sampling_batch_size:
+            raise RuntimeError("cannot commit distributed TERRAN cursor inside a physical batch")
+        return self.sample_count
 
     def drain_sampled_view_ids(self) -> list[str]:
         values, self._sampled_view_ids = self._sampled_view_ids, []

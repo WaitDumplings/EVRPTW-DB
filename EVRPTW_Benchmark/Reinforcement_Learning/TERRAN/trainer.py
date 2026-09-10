@@ -1850,6 +1850,12 @@ def make_envs(cfg: dict[str, Any], seed: int):
         or data_cfg.get("instance_dataset_path")
         or data_cfg.get("fixed_train_path")
     )
+    sampling_world_size = int(data_cfg.get("stage2_sampling_world_size", 1))
+    if max(sampling_world_size, int(train_cfg.get("distributed_world_size", 1))) > 1:
+        if stage2_dataset_path in (None, ""):
+            raise ValueError("distributed TERRAN requires a Stage-2 dataset pool")
+        if int(data_cfg.get("stage2_sampling_batch_size", num_envs)) != num_envs:
+            raise ValueError("distributed TERRAN sampling batch must equal num_envs_per_gpu")
     if stage2_dataset_path not in (None, ""):
         stream_integrity_mode = (cfg.get("protocol", {}) or {}).get(
             "stream_integrity_mode"
@@ -1871,6 +1877,9 @@ def make_envs(cfg: dict[str, Any], seed: int):
             completed_data_passes=int(data_cfg.get("stage2_completed_data_passes", 0)),
             completed_samples=int(data_cfg.get("stage2_completed_samples", 0)),
             record_sample_ids=bool(data_cfg.get("stage2_record_sample_ids", False)),
+            sampling_rank=data_cfg.get("stage2_sampling_rank", 0),
+            sampling_world_size=data_cfg.get("stage2_sampling_world_size", 1),
+            sampling_batch_size=data_cfg.get("stage2_sampling_batch_size", num_envs),
             training_stream_path=_resolve_repo_path(
                 data_cfg.get("stage2_training_stream_path")
             ),

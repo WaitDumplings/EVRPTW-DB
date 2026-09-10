@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
@@ -42,6 +42,16 @@ def parse_scale(value: str) -> str:
     if match is None:
         raise argparse.ArgumentTypeError("scale must be Cus followed by a positive integer, e.g. Cus500")
     return f"Cus{int(match.group(1))}"
+
+
+def parse_gpus(value: str) -> tuple[int, ...]:
+    parts = str(value).split(",")
+    if not parts or any(not part.strip().isdigit() for part in parts):
+        raise argparse.ArgumentTypeError("GPUs must be comma-separated nonnegative IDs, e.g. 0,1,2,3")
+    selected = tuple(int(part.strip()) for part in parts)
+    if len(set(selected)) != len(selected):
+        raise argparse.ArgumentTypeError("GPU IDs must be unique")
+    return selected
 
 
 def _json_write(path: Path, value: Any) -> None:
@@ -97,15 +107,21 @@ def _index_summary(path: Path, customers: int, *, split: str, track: str) -> dic
 def resolve_config(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     scale = parse_scale(args.scale)
     customers = int(scale.removeprefix("Cus"))
-    exact_profile = PROFILE_ROOT / f"cus{customers}.yaml"
+    machine_profile = getattr(args, "machine_profile", None)
+    profile_root = PROFILE_ROOT / machine_profile if machine_profile else PROFILE_ROOT
+    exact_profile = profile_root / f"cus{customers}.yaml"
     fallback_profile = False
     if args.config:
+        if machine_profile:
+            raise ValueError("--config and --machine-profile are mutually exclusive")
         profile = Path(args.config).expanduser().resolve()
     elif exact_profile.is_file():
         profile = exact_profile
     else:
+        if machine_profile:
+            raise ValueError(f"machine profile {machine_profile} has no {scale} configuration")
         bucket = 100 if customers <= 100 else 500 if customers <= 500 else 1000
-        profile = PROFILE_ROOT / f"cus{bucket}.yaml"
+        profile = profile_root / f"cus{bucket}.yaml"
         fallback_profile = True
     cfg = copy.deepcopy(yaml.safe_load(profile.read_text()))
     if cfg.get("training", {}).get("algorithm") != ALGORITHM:
@@ -148,11 +164,28 @@ def resolve_config(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
         if value is not None:
             training[field] = int(value)
     physical = int(training["num_envs_per_gpu"])
+    selected_gpus = getattr(args, "gpus", None)
+    requested_world = getattr(args, "world_size", None)
+    if selected_gpus is not None and args.gpu is not None:
+        raise ValueError("--gpu and --gpus are mutually exclusive")
+    if selected_gpus is not None:
+        if requested_world is not None and int(requested_world) != len(selected_gpus):
+            raise ValueError("--world-size must equal the number of --gpus")
+        world_size = len(selected_gpus)
+    else:
+        world_size = int(requested_world if requested_world is not None else
+                         training.get("distributed_world_size", 1))
+    if world_size < 1:
+        raise ValueError("--world-size must be positive")
+    if args.gpu is not None and world_size != 1:
+        raise ValueError("multi-GPU profiles require --gpus or an inherited visible GPU list")
+    if world_size != 1 or "distributed_world_size" in training:
+        training["distributed_world_size"] = world_size
     effective = int(args.effective_batch_size or training["effective_batch_size"])
-    if physical <= 0 or effective <= 0 or effective % physical:
-        raise ValueError("effective batch must be a positive integer multiple of physical batch")
+    if physical <= 0 or effective <= 0 or effective % (physical * world_size):
+        raise ValueError("effective batch must be a positive integer multiple of physical batch times world size")
     training["effective_batch_size"] = effective
-    training["logical_microbatches_per_epoch"] = effective // physical
+    training["logical_microbatches_per_epoch"] = effective // (physical * world_size)
     for key in ["epochs", "n_traj", "rollout_steps", "ppo_step_chunk_size"]:
         if int(training[key]) <= 0:
             raise ValueError(f"training.{key} must be positive")
@@ -169,6 +202,9 @@ def resolve_config(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
     training["allow_batch_resize_resume"] = bool(getattr(args, "allow_batch_resize_resume", False))
     if training["allow_batch_resize_resume"] and not training.get("resume_checkpoint"):
         raise ValueError("--allow-batch-resize-resume requires --resume")
+    training["allow_dataset_relocation_resume"] = bool(getattr(args, "allow_dataset_relocation_resume", False))
+    if training["allow_dataset_relocation_resume"] and not training.get("resume_checkpoint"):
+        raise ValueError("--allow-dataset-relocation-resume requires --resume")
     if not isinstance(cfg["objective"], dict):
         objective = Path(cfg["objective"])
         if not objective.is_absolute():
@@ -189,6 +225,8 @@ def resolve_config(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
                 "profile_path": str(profile), "profile_sha256": _sha256(profile),
                 "requested_scale": scale, "uses_bucket_profile": fallback_profile,
                 "seed": int(args.seed), "gpu": args.gpu, "python": sys.executable,
+                "gpus": list(selected_gpus) if selected_gpus is not None else None,
+                "world_size": world_size, "machine_profile": machine_profile,
                 "objective": cfg["objective"], "dataset_root": str(root),
                 "train_index": train_index, "validation_index": val_index,
                 "sampling": {"mode": "seeded_shuffle_cycle_without_replacement",
@@ -227,26 +265,114 @@ def run(config_path: Path, *, device: str, gpu: int | None) -> None:
         if expected_hash and _sha256(Path(settings[path_key])) != expected_hash:
             raise ValueError(f"{section} index changed since configuration preparation")
     output = Path(cfg["output_dir"])
+    expected_world = int(cfg["training"].get("distributed_world_size", 1))
+    actual_world = int(os.environ.get("WORLD_SIZE", "1"))
+    if actual_world != expected_world:
+        raise ValueError(f"configuration requires {expected_world} workers, got {actual_world}; "
+                         "use stable_cli launch or torchrun with the matching process count")
+    if gpu is not None and actual_world != 1:
+        raise ValueError("set visible GPUs on the launcher, not independently in torchrun workers")
     if gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
-    with (output / "run.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if (output / "run_state.json").exists():
-            raise FileExistsError("this run has already started; use a fresh output directory")
-        state = {"pid": os.getpid(), "status": "running", "started_at": time.time(),
-                 "config": str(config_path.resolve())}
-        _json_write(output / "run_state.json", state)
-        (output / "train.pid").write_text(f"{os.getpid()}\n")
+    dist = None
+    rank = 0
+    worker_pids = [os.getpid()]
+    if actual_world > 1:
+        import torch
+        import torch.distributed as distributed
+
+        dist = distributed
+        local_rank = int(os.environ["LOCAL_RANK"])
+        if device == "cuda":
+            if local_rank >= torch.cuda.device_count():
+                raise ValueError("not enough visible CUDA devices for the configured worker count")
+            torch.cuda.set_device(local_rank)
+            device = f"cuda:{local_rank}"
+        timeout_s = int(os.environ.get("TERRAN_DISTRIBUTED_TIMEOUT_S", "7200"))
+        if timeout_s <= 0:
+            raise ValueError("TERRAN_DISTRIBUTED_TIMEOUT_S must be positive")
+        dist.init_process_group(backend="nccl" if device.startswith("cuda") else "gloo",
+                                timeout=timedelta(seconds=timeout_s))
+        rank = dist.get_rank()
+        worker_pids = [None] * actual_world
+        dist.all_gather_object(worker_pids, os.getpid())
+    lock = None
+    state = None
+    try:
+        setup_error = None
+        if rank == 0:
+            try:
+                lock = (output / "run.lock").open("a")
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if (output / "run_state.json").exists():
+                    raise FileExistsError("this run has already started; use a fresh output directory")
+                state = {"pid": os.getpid(), "worker_pids": worker_pids,
+                         "world_size": actual_world, "status": "running", "started_at": time.time(),
+                         "config": str(config_path.resolve())}
+                _json_write(output / "run_state.json", state)
+                (output / "train.pid").write_text(f"{os.getpid()}\n")
+            except BaseException as error:
+                if dist is None:
+                    raise
+                setup_error = f"{type(error).__name__}: {error}"
+        if dist is not None:
+            message = [setup_error]
+            dist.broadcast_object_list(message, src=0)
+            if message[0] is not None:
+                raise RuntimeError(f"distributed run setup failed: {message[0]}")
         try:
             from .trainer import train_from_config
 
             result = train_from_config(cfg, seed=int(cfg["seed"]), device=device)
         except BaseException as error:
-            state.update(status="failed", completed_at=time.time(), error=f"{type(error).__name__}: {error}")
-            _json_write(output / "run_state.json", state)
+            if rank == 0:
+                state.update(status="failed", completed_at=time.time(), error=f"{type(error).__name__}: {error}")
+                _json_write(output / "run_state.json", state)
+            else:
+                _json_write(output / f"worker_{rank}_error.json",
+                            {"rank": rank, "pid": os.getpid(), "error": f"{type(error).__name__}: {error}"})
             raise
-        state.update(status="completed", completed_at=time.time(), result=str(result))
-        _json_write(output / "run_state.json", state)
+        if rank == 0:
+            state.update(status="completed", completed_at=time.time(), result=str(result))
+            _json_write(output / "run_state.json", state)
+    finally:
+        if lock is not None:
+            lock.close()
+        if dist is not None and dist.is_initialized():
+            dist.destroy_process_group()
+
+
+def launch_command(config_path: Path, *, device: str, gpu: int | None,
+                   gpus: tuple[int, ...] | None) -> tuple[list[str], dict[str, str]]:
+    cfg = yaml.safe_load(config_path.read_text())
+    world_size = int(cfg["training"].get("distributed_world_size", 1))
+    if world_size < 1:
+        raise ValueError("configured distributed_world_size must be positive")
+    if gpu is not None and (gpus is not None or world_size != 1):
+        raise ValueError("--gpu selects one worker; use --gpus for a multi-GPU run")
+    if gpus is not None and len(gpus) != world_size:
+        raise ValueError("the number of --gpus must match the prepared world size")
+    if device == "cpu" and (gpu is not None or gpus is not None):
+        raise ValueError("GPU selection cannot be used with --device cpu")
+    environment = os.environ.copy()
+    # A detached launcher is a new job, including if invoked from a torchrun shell.
+    for name in ("RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE", "GROUP_RANK",
+                 "ROLE_RANK", "ROLE_WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"):
+        environment.pop(name, None)
+    environment.setdefault("OMP_NUM_THREADS", "1")
+    environment.setdefault("MKL_NUM_THREADS", "1")
+    if gpus is not None:
+        environment["CUDA_VISIBLE_DEVICES"] = ",".join(str(value) for value in gpus)
+    elif gpu is not None:
+        environment["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    environment["PYTHONUNBUFFERED"] = "1"
+    worker = [MODULE, "run", "--resolved-config", str(config_path), "--device", device]
+    if world_size > 1:
+        command = [sys.executable, "-u", "-m", "torch.distributed.run", "--standalone",
+                   "--nnodes=1", f"--nproc_per_node={world_size}", "--max_restarts=0", "--module", *worker]
+    else:
+        command = [sys.executable, "-u", "-m", *worker]
+    return command, environment
 
 
 def _latest_json(path: Path) -> Any:
@@ -272,9 +398,11 @@ def status(output: Path) -> dict[str, Any]:
             result[filename.removesuffix(".json")] = json.loads(path.read_text())
     pid_path = output / "train.pid"
     result["process_matches_run"] = False
-    if pid_path.is_file():
-        pid = int(pid_path.read_text().strip())
+    pid = (int(pid_path.read_text().strip()) if pid_path.is_file() else
+           result.get("launch_process", {}).get("pid"))
+    if pid is not None:
         result["pid"] = pid
+        result["process_role"] = "training_worker" if pid_path.is_file() else "launcher"
         try:
             command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ").decode()
             result["process_matches_run"] = MODULE in command and str(output) in command
@@ -294,16 +422,25 @@ def main() -> None:
         sub = commands.add_parser(command)
         sub.add_argument("--scale", type=parse_scale, default="Cus500")
         sub.add_argument("--config")
+        sub.add_argument("--machine-profile", choices=["4x2080ti"],
+                         help="select a conservative four-GPU profile for Cus500 or Cus1000")
         sub.add_argument("--dataset-root")
         sub.add_argument("--output-dir")
         sub.add_argument("--seed", type=int, default=1234)
-        sub.add_argument("--gpu", type=int)
+        gpu_selection = sub.add_mutually_exclusive_group()
+        gpu_selection.add_argument("--gpu", type=int)
+        gpu_selection.add_argument("--gpus", type=parse_gpus,
+                                   help="visible local GPU IDs, e.g. 0,1,2,3")
+        sub.add_argument("--world-size", type=int,
+                         help="number of synchronous workers; defaults to the selected GPUs/profile")
         sub.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
         checkpoint = sub.add_mutually_exclusive_group()
         checkpoint.add_argument("--warm-start-checkpoint")
         checkpoint.add_argument("--resume", help="resume stable-cost state into a new run directory")
         sub.add_argument("--allow-batch-resize-resume", action="store_true",
-                         help="allow only physical/effective batch, microbatch count and replay chunk changes on resume")
+                         help="allow physical/effective batch, worker count and replay chunk changes on resume")
+        sub.add_argument("--allow-dataset-relocation-resume", action="store_true",
+                         help="allow dataset mount paths to change when the saved index identity matches")
         for name in ["epochs", "physical-batch-size", "effective-batch-size", "n-traj", "rollout-steps", "ppo-step-chunk-size"]:
             sub.add_argument(f"--{name}", type=int)
         if command in {"run", "launch"}:
@@ -324,9 +461,12 @@ def main() -> None:
     else:
         ignored = [name for name in ["config", "dataset_root", "output_dir", "epochs", "physical_batch_size",
                                      "effective_batch_size", "n_traj", "rollout_steps", "ppo_step_chunk_size",
-                                     "warm_start_checkpoint", "resume"] if getattr(args, name, None) is not None]
+                                     "warm_start_checkpoint", "resume", "world_size", "machine_profile"]
+                   if getattr(args, name, None) is not None]
         if args.allow_batch_resize_resume:
             ignored.append("allow_batch_resize_resume")
+        if args.allow_dataset_relocation_resume:
+            ignored.append("allow_dataset_relocation_resume")
         if ignored:
             parser.error(f"--resolved-config cannot be combined with configuration overrides: {', '.join(ignored)}")
         config_path = config_path.expanduser().resolve(strict=True)
@@ -337,22 +477,21 @@ def main() -> None:
     if args.command == "prepare":
         print(json.dumps({"resolved_config": str(config_path), "output_dir": str(output)}))
     elif args.command == "run":
+        if args.gpus is not None:
+            if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+                parser.error("select --gpus on the launcher, not in torchrun workers")
+            os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(value) for value in args.gpus)
         run(config_path, device=args.device, gpu=args.gpu)
     else:
-        command = [sys.executable, "-u", "-m", MODULE, "run", "--resolved-config", str(config_path),
-                   "--device", args.device]
-        environment = os.environ.copy()
-        environment.setdefault("OMP_NUM_THREADS", "1")
-        environment.setdefault("MKL_NUM_THREADS", "1")
-        if args.gpu is not None:
-            environment["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
-        environment["PYTHONUNBUFFERED"] = "1"
+        command, environment = launch_command(config_path, device=args.device, gpu=args.gpu, gpus=args.gpus)
         with (output / "stdout.log").open("x") as stdout, (output / "stderr.log").open("x") as stderr:
             process = subprocess.Popen(command, cwd=REPO_ROOT, env=environment, stdin=subprocess.DEVNULL,
                                        stdout=stdout, stderr=stderr, start_new_session=True)
-        launched = {"pid": process.pid, "command": command, "gpu": args.gpu, "output_dir": str(output)}
+        launched = {"pid": process.pid, "command": command, "gpu": args.gpu,
+                    "gpus": list(args.gpus) if args.gpus is not None else None,
+                    "world_size": int(yaml.safe_load(config_path.read_text())["training"].get("distributed_world_size", 1)),
+                    "output_dir": str(output)}
         _json_write(output / "launch_process.json", launched)
-        (output / "train.pid").write_text(f"{process.pid}\n")
         print(json.dumps(launched))
 
 

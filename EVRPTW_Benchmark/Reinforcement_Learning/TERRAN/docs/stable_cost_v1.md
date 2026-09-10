@@ -1,5 +1,7 @@
 # TERRAN stable_cost_v1 实验
 
+四张 RTX 2080 Ti 共同训练 Cus500/Cus1000 的配置、启动和完整 checkpoint 恢复方法见 [四卡配置说明](stable_cost_4x2080ti.md)。
+
 这是一个显式启用的新训练方案：`training.algorithm: stable_cost_v1` 和 `model.critic_mode: stable_cost_v1` 必须同时选择。它继续使用 TERRAN 构造式策略、Stage-2 实例和独立路线验证器，不启动 ALNS，也不替换其他方法的默认训练流程。
 
 ## 目标与训练口径
@@ -65,7 +67,7 @@ Cus1000 使用 `--scale Cus1000`、另一个输出目录和目标 GPU。也可�
 
 `status` 返回进程是否匹配该 run、当前进度、最新训练和验证指标。`process_matches_run=false` 还可能表示当前进程命名空间无法看到宿主进程，需要结合宿主机状态判断。
 
-输出目录必须是新的，已有运行不能被悄悄覆盖或重复启动。准备好的 `--resolved-config` 不能再混入训练参数覆盖。新配置可通过 `--epochs`、`--physical-batch-size`、`--effective-batch-size`、`--n-traj`、`--rollout-steps`、`--ppo-step-chunk-size` 调整；有效 batch 必须能被物理 batch 整除，`n_traj` 至少为 2。完整配置和来源写入 `provenance.json`，引擎实际配置与签名写入 `resolved_config.yaml` 和 `training_contract.json`。
+输出目录必须是新的，已有运行不能被悄悄覆盖或重复启动。准备好的 `--resolved-config` 不能再混入训练参数覆盖。新配置可通过 `--epochs`、`--physical-batch-size`、`--effective-batch-size`、`--n-traj`、`--rollout-steps`、`--ppo-step-chunk-size` 调整；有效 batch 必须能被每卡物理 batch × GPU 数整除，`n_traj` 至少为 2。完整配置和来源写入 `provenance.json`，引擎实际配置与签名写入 `resolved_config.yaml` 和 `training_contract.json`。
 
 恢复只接受新的 stable-cost checkpoint，并使用新目录：
 
@@ -77,7 +79,7 @@ Cus1000 使用 `--scale Cus1000`、另一个输出目录和目标 GPU。也可�
 
 Resume 恢复 actor、critic、两套优化器、PopArt、乘子、训练阶段和样本游标。`--resume` 与 `--warm-start-checkpoint` 互斥。默认严格核对训练签名和 seed，包括总 epochs、batch、chunk、时间预算及训练数据索引；如原实验使用自定义参数或较早版本的 profile，恢复时应通过 `--config` 传入原实验的 `resolved_config.yaml`。
 
-显式添加 `--allow-batch-resize-resume` 可在保留完整训练状态的同时调整物理 batch、有效 batch、累积次数和 replay chunk。例如将早期 Cus500 的物理/有效 batch 从 64/128 扩到 128/256：
+显式添加 `--allow-batch-resize-resume` 可在保留完整训练状态的同时调整物理 batch、有效 batch、累积次数、GPU 数和 replay chunk。例如将早期 Cus500 的物理/有效 batch 从 64/128 扩到 128/256：
 
 ```bash
 python -m EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.stable_cli launch \
@@ -87,7 +89,7 @@ python -m EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.stable_cli launch \
   --output-dir /path/to/new/larger-batch-run --gpu 0
 ```
 
-该选项先校验 checkpoint 保存配置的原始签名，再核对除四个 batch/chunk 字段外的所有训练签名字段；不允许借此修改 `n_traj`、学习率、目标、时间预算或训练数据。新目录的 provenance、contract 和 checkpoint 记录来源、原/新 batch 与签名，不能将其当作原 batch 下完全相同的随机训练序列。已经自适应降低的 optimizer 学习率会原样恢复。
+该选项先校验 checkpoint 保存配置的原始签名，再核对除五个 batch/chunk/world-size 字段外的所有训练签名字段；不允许借此修改 `n_traj`、学习率、目标、时间预算或训练数据。新目录的 provenance、contract 和 checkpoint 记录来源、原/新 batch 与签名，不能将其当作原 batch 下完全相同的随机训练序列。已经自适应降低的 optimizer 学习率会原样恢复。
 
 新版训练关闭未使用的旧 reward 分项 CPU 汇总，原始成本与失败指标仍照常记录；旧训练默认保留这些诊断。每轮记录采样耗时、更新耗时、实例与有效 transition 吞吐量，以区分 CPU 采样瓶颈和 GPU 更新负载。增大累积次数只增加逻辑 batch；增大物理 batch 才增加单次前向/反向的 GPU 工作量。
 
