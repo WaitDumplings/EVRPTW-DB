@@ -16,9 +16,9 @@
 | 2080ti_4_2 | 1 | TR03 | DRL-TS | synthetic E / synthetic E | 24 |
 | 2080ti_4_2 | 2 | TR18 | EVRPTW-RL | Road / Road | 200 |
 | 2080ti_4_2 | 3 | TR17 | EVRPTW-RL | synthetic E / synthetic E | 200 |
-| 2080ti_3_1 | 0 | TR10 | RRNCO | Road / Road | 50 |
-| 2080ti_3_1 | 1 | TR09 | RRNCO | synthetic E / synthetic E | 50 |
-| 2080ti_3_1 | 2 | — | 预留 | 无正式任务 | — |
+| 2080ti_3_1 | 1 | TR10 | RRNCO | Road / Road | 50 |
+| 2080ti_3_1 | 2 | TR09 | RRNCO | synthetic E / synthetic E | 50 |
+| 2080ti_3_1 | 0 | — | 预留 | 无正式任务 | — |
 
 最终可执行参数以 `cus100_seed1234_jobs.jsonl` 为准；manifest 中 `enabled` 和 `calibration_status` 控制是否通过正式启动检查。上表配置本身不代表训练已启动。
 
@@ -33,7 +33,7 @@
 | 2 | GPU-1bd5dcf4-92cf-fc56-28f8-5b10c52af9e5 |
 | 3 | GPU-90987749-43d4-9e85-7ac5-1ab6e4586554 |
 
-`2080ti_4_2` 和 `2080ti_3_1` 是部署角色名称，其 hostname、UUID、驱动和当前占用未被远程核查。用户在对应机器手动启动时，preflight 会读取真实设备信息并保存。每项训练只绑定一张实际 GPU 的 UUID；不会通过 DDP 自动占用其他卡。每项任务使用 2 个 CPU 线程，设置 OMP/MKL/OPENBLAS/NUMBA 为 2。
+`2080ti_4_2` 和 `2080ti_3_1` 是部署角色名称。用户提供的 3_1 输出确认主机名 npg5、驱动 550.144.03，GPU 0 被 GNOME 远程桌面使用，故 TR10/TR09 改用 GPU 1/2；其它远端信息没有直接连接核查。用户在对应机器手动启动时，preflight 会读取真实设备信息并保存。每项训练只绑定一张实际 GPU 的 UUID；不会通过 DDP 自动占用其他卡。每项任务使用 2 个 CPU 线程，设置 OMP/MKL/OPENBLAS/NUMBA 为 2。
 
 显存目标为单进程实测峰值 9.5–10.3 GiB；显存口径及完整测量见 smoke 报告。相同卡型号不等于相同主机 CPU、I/O 或驱动环境，运行时会另存实际 Python、torch、numpy、pandas、numba、pyarrow 和驱动版本。
 

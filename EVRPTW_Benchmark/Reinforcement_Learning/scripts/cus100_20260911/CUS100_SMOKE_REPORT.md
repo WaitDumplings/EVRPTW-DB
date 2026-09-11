@@ -12,8 +12,8 @@ All ten configurations completed native optimizer updates with finite losses/par
 | TR03 | 2080ti_4_2 / 1 | drl_ts / E | 24 | 10.217 | 10 / 10 | 393 | 159.3 | 21.8–40.7 |
 | TR18 | 2080ti_4_2 / 2 | evrptw_rl / G | 200 | 10.025 | 2 / 2 | 500 | 232.9 | 128.9–236.1 |
 | TR17 | 2080ti_4_2 / 3 | evrptw_rl / E | 200 | 10.025 | 3 / 3 | 352 | 297.4 | 136.5–249.8 |
-| TR10 | 2080ti_3_1 / 0 | rrnco / G | 50 | 9.941 | 2 / 2 | 486 | 205.6 | 18.8–34.2 |
-| TR09 | 2080ti_3_1 / 1 | rrnco / E | 50 | 9.941 | 10 / 10 | 495 | 184.6 | 16.7–30.3 |
+| TR10 | 2080ti_3_1 / 1 | rrnco / G | 50 | 9.941 | 2 / 2 | 486 | 205.6 | 18.8–34.2 |
+| TR09 | 2080ti_3_1 / 2 | rrnco / E | 50 | 9.941 | 10 / 10 | 495 | 184.6 | 16.7–30.3 |
 
 E denotes TERRAN-derived synthetic Euclidean coordinates; G denotes existing Road data. Both sources have 50,000 training instances and 500 distinct validation instances. Seed 1234; train/validation trajectories 30; train/validation cap 240/360. No Cus500, Cus1000 or T1 evaluation is scheduled.
 
@@ -40,3 +40,5 @@ The upstream TERRAN generator has physical-feasibility defects, including invert
 The portable archive includes current actual code, complete E data, both sources' frozen streams and reports. It excludes existing 90.53 GiB Road parent matrices, Git metadata, Conda environment, probe checkpoints and formal outputs. Extract into an existing compatible repository with the Road release and environment installed. Source hash is checked on each host; extra or edited nonignored source files can cause a deliberate drift failure. GPU occupancy checks prevent accidental oversubscription.
 
 Numeric evidence: EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json. Raw probe locations are recorded there. Related CPU regressions cover canonical cost/data/stream contracts, DRL/EVR checkpoint RNG-gradient equivalence and native baseline diagnostics; 146 tests passed; see artifacts/final_cpu_checks.txt for the final result.
+
+The 2080ti_3_1 assignment was subsequently corrected to GPUs 1/2 after identifying remote desktop on GPU 0. Numeric smoke measurements are unchanged; the archived calibration JSON retains the original proposed assignment. The per-run launch_record.json records the actual physical GPU and UUID.

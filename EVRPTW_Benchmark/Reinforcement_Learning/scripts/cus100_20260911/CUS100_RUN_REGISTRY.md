@@ -20,8 +20,8 @@ EVRPTW_Benchmark/results/cus100_20260911/
 | TR03 | EV18 | 2080ti_4_2 / 1 | DRL-TS / synthetic E | `runs/TR03/` | `runs/TR03/stdout.log` / `stderr.log` | `runs/TR03/best.ckpt` | `runs/TR03/launch_record.json` |
 | TR18 | EV78 | 2080ti_4_2 / 2 | EVRPTW-RL / Road | `runs/TR18/` | `runs/TR18/stdout.log` / `stderr.log` | `runs/TR18/best.ckpt` | `runs/TR18/launch_record.json` |
 | TR17 | EV74 | 2080ti_4_2 / 3 | EVRPTW-RL / synthetic E | `runs/TR17/` | `runs/TR17/stdout.log` / `stderr.log` | `runs/TR17/best.ckpt` | `runs/TR17/launch_record.json` |
-| TR10 | EV46 | 2080ti_3_1 / 0 | RRNCO / Road | `runs/TR10/` | `runs/TR10/stdout.log` / `stderr.log` | `runs/TR10/best.ckpt` | `runs/TR10/launch_record.json` |
-| TR09 | EV42 | 2080ti_3_1 / 1 | RRNCO / synthetic E | `runs/TR09/` | `runs/TR09/stdout.log` / `stderr.log` | `runs/TR09/best.ckpt` | `runs/TR09/launch_record.json` |
+| TR10 | EV46 | 2080ti_3_1 / 1 | RRNCO / Road | `runs/TR10/` | `runs/TR10/stdout.log` / `stderr.log` | `runs/TR10/best.ckpt` | `runs/TR10/launch_record.json` |
+| TR09 | EV42 | 2080ti_3_1 / 2 | RRNCO / synthetic E | `runs/TR09/` | `runs/TR09/stdout.log` / `stderr.log` | `runs/TR09/best.ckpt` | `runs/TR09/launch_record.json` |
 
 表中的 `stderr.log` 与同一行 `stdout.log` 位于相同 `runs/TRxx/` 目录。所有测试 EV 编号仅为后续结果归属映射；本启动器不自动运行这十组 T1 测试，也不会在训练阶段读取 T1。
 
@@ -31,7 +31,7 @@ EVRPTW_Benchmark/results/cus100_20260911/
 |---|---|---|---|
 | 2080ti_4_1 | TR02、TR01、TR06、TR05 | `launchers/2080ti_4_1/status.json` | `launchers/2080ti_4_1/preflight.json`、`started.json` |
 | 2080ti_4_2 | TR04、TR03、TR18、TR17 | `launchers/2080ti_4_2/status.json` | `launchers/2080ti_4_2/preflight.json`、`started.json` |
-| 2080ti_3_1 | TR10、TR09；GPU 2 预留 | `launchers/2080ti_3_1/status.json` | `launchers/2080ti_3_1/preflight.json`、`started.json` |
+| 2080ti_3_1 | TR10、TR09；GPU 0 留给远程桌面 | `launchers/2080ti_3_1/status.json` | `launchers/2080ti_3_1/preflight.json`、`started.json` |
 
 本机 `2080ti_4_1` 的真实 hostname 和四张卡 UUID 已核查，详见 `CUS100_SCOPE_AND_PREFLIGHT.md`。另外两台仅配置角色与 GPU 索引；真实 hostname/UUID 由用户在对应服务器启动时自动采集，不将角色名当成已经验证的 SSH hostname。
 

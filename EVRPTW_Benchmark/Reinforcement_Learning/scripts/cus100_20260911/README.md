@@ -12,9 +12,9 @@ This launcher owns only ten fresh training configurations. It does not invoke th
 | 2080ti_4_2 | 1 | TR03 | DRL-TS | TERRAN synthetic Euclidean |
 | 2080ti_4_2 | 2 | TR18 | EVRPTW-RL | Road |
 | 2080ti_4_2 | 3 | TR17 | EVRPTW-RL | TERRAN synthetic Euclidean |
-| 2080ti_3_1 | 0 | TR10 | RRNCO | Road |
-| 2080ti_3_1 | 1 | TR09 | RRNCO | TERRAN synthetic Euclidean |
-| 2080ti_3_1 | 2 | — | Reserved | No scheduled job |
+| 2080ti_3_1 | 1 | TR10 | RRNCO | Road |
+| 2080ti_3_1 | 2 | TR09 | RRNCO | TERRAN synthetic Euclidean |
+| 2080ti_3_1 | 0 | — | Reserved | No scheduled job |
 
 These labels are deployment roles, not asserted SSH hostnames. At startup the launcher records the actual hostname, GPU index and UUID, Python, CPU thread settings, repository commit and input hashes. It binds each trainer using a single GPU UUID. Occupied GPUs and populated output directories stop preflight; existing work is never killed.
 
@@ -106,3 +106,11 @@ python -m EVRPTW_Benchmark.Reinforcement_Learning.scripts.cus100_20260911.calibr
 ```
 
 This produces `reward_contract.json`; point all five E jobs at that same file. The five G jobs retain their Road v3 reward contract. The E scalar is the median complete objective of deterministic, independently verified constructor routes; its failure base is the linear 99th percentile of normalized reference cost plus one. The constructor uses the frozen synthetic single-customer witnesses, explicit current cost coefficients and fixed insertion candidate limits. No random ALNS search is run, and validation/test instances are not loaded for calibration. `--pilot --count 8` only estimates cost/runtime and never writes a formal reward contract. E launch preflight checks that the reward contract is bound to the exact completed synthetic corpus and training index.
+
+## 2080ti_3_1 desktop GPU correction
+
+On this server GNOME remote desktop uses GPU 0 as a C+G process. RRNCO Road now uses GPU 1 and synthetic E uses GPU 2; GPU 0 remains available to the desktop. Existing compute-process occupancy checks still apply to both selected training GPUs. Batch 50, trajectories 30, model code, data, rewards and training streams are unchanged. The measurements in the smoke report remain the original local calibration.
+
+After the original data package has been extracted, update the experiment branch with `git pull --ff-only`, activate `caliroute`, set `CUS100_PYTHON="$CONDA_PREFIX/bin/python"`, and run `2080ti_3_1/full.sh`. Do not extract the old code package again after pulling the correction. The launcher recognizes only the exact approved deployment delta, verifies every changed source record and both job configurations, saves the old deployment metadata, and records the new source identity. Unknown source changes still fail. No dataset regeneration or large archive transfer is needed.
+
+The live 2080ti_4_1 experiment retains its original frozen checkout; this deployment correction was prepared in a separate worktree.

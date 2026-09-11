@@ -1,0 +1,134 @@
+{
+  "base_job_manifest_sha256": "8d1954c3dccd2da20bd3f6ed93bcae0700e13ffca91de0132d276daf2f6c60aa",
+  "base_source_version": "sha256:2ffee534529dbfbe05d7ef8fd2a4742facd5a96e265da929bc863316f3401d44",
+  "changes": [
+    {
+      "after": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_RUN_REGISTRY.md",
+        "sha256": "18d189092ff7edfcaa046d3f8bc97eafa2b33960036f1837885795f16f11a874",
+        "size": 4786
+      },
+      "before": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_RUN_REGISTRY.md",
+        "sha256": "ac9fadcaddcbc25e38b7312658b7538991d7b9d85cf7c92d45b6df444f0aa88a",
+        "size": 4774
+      },
+      "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_RUN_REGISTRY.md"
+    },
+    {
+      "after": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_SCOPE_AND_PREFLIGHT.md",
+        "sha256": "fb209e8d1ea61ca00399439505bbe6052b6d24ed3ca857a04182b80db9c0565b",
+        "size": 8786
+      },
+      "before": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_SCOPE_AND_PREFLIGHT.md",
+        "sha256": "44be875e619c2c2c03c697297f55c73969fbd83ea141ce547a9516cf2e6e48eb",
+        "size": 8668
+      },
+      "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_SCOPE_AND_PREFLIGHT.md"
+    },
+    {
+      "after": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_SMOKE_REPORT.md",
+        "sha256": "cd6b0d2e98c0ef9017ec338fcd8a510ede4b69473c89176794a1b09dad590594",
+        "size": 6749
+      },
+      "before": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_SMOKE_REPORT.md",
+        "sha256": "5c0a1b01915087dc24a5eb8e7bfab5eaa79575df91e6a19112c61254b39dc779",
+        "size": 6453
+      },
+      "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/CUS100_SMOKE_REPORT.md"
+    },
+    {
+      "after": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/README.md",
+        "sha256": "191baf5af441e9908e547d707923a9c027f4c15ef578621b2a7234bbbeb91247",
+        "size": 10307
+      },
+      "before": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/README.md",
+        "sha256": "8b50c6ffd5f8147447d7fcafd0071bcafb2063cbf2815a5cfec5ea51bba255ea",
+        "size": 9143
+      },
+      "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/README.md"
+    },
+    {
+      "after": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/cus100_seed1234_jobs.jsonl",
+        "sha256": "e003493ee38d9f897ea445f07afe4c4a976337a8d10c957b25924acd3a6ae8c0",
+        "size": 48701
+      },
+      "before": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/cus100_seed1234_jobs.jsonl",
+        "sha256": "8d1954c3dccd2da20bd3f6ed93bcae0700e13ffca91de0132d276daf2f6c60aa",
+        "size": 48701
+      },
+      "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/cus100_seed1234_jobs.jsonl"
+    },
+    {
+      "after": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/deployment_upgrade.py",
+        "sha256": "e5758140feafd5dd9ed0e7c7e3bd5a1ed8c590c71afb89bcb64a09a19ba44c15",
+        "size": 12988
+      },
+      "before": null,
+      "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/deployment_upgrade.py"
+    },
+    {
+      "after": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/launch.py",
+        "sha256": "279f7f3b6a27bd6341d8c5a1b99869f034ab4dfd769a956ddd55826fcdf5d246",
+        "size": 20949
+      },
+      "before": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/launch.py",
+        "sha256": "ab24b0a159ff2ebf624f6565bd06c3022d649fefed0f2b88940c7efe36b8a57d",
+        "size": 20616
+      },
+      "path": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/launch.py"
+    },
+    {
+      "after": {
+        "kind": "file",
+        "mode": 420,
+        "path": "EVRPTW_Benchmark/Reinforcement_Learning/tests/test_deployment_upgrade.py",
+        "sha256": "a705733d59f99c9d8ff2a0b35e3d52b3710bf81235e520acdeed4ec825fc8a65",
+        "size": 12092
+      },
+      "before": null,
+      "path": "EVRPTW_Benchmark/Reinforcement_Learning/tests/test_deployment_upgrade.py"
+    }
+  ],
+  "job_manifest": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/cus100_seed1234_jobs.jsonl",
+  "schema": "cus100_gpu12_deployment_upgrade_v1",
+  "target_job_manifest_sha256": "e003493ee38d9f897ea445f07afe4c4a976337a8d10c957b25924acd3a6ae8c0",
+  "upgrade_id": "2080ti_3_1_rrnco_gpu12_v1"
+}

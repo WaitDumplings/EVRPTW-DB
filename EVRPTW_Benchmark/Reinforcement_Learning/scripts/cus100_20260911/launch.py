@@ -32,8 +32,8 @@ ASSIGNMENTS = {
     "TR03": ("2080ti_4_2", 1, "drl_ts", "E"),
     "TR18": ("2080ti_4_2", 2, "evrptw_rl", "G"),
     "TR17": ("2080ti_4_2", 3, "evrptw_rl", "E"),
-    "TR10": ("2080ti_3_1", 0, "rrnco", "G"),
-    "TR09": ("2080ti_3_1", 1, "rrnco", "E"),
+    "TR10": ("2080ti_3_1", 1, "rrnco", "G"),
+    "TR09": ("2080ti_3_1", 2, "rrnco", "E"),
 }
 
 
@@ -238,6 +238,9 @@ def preflight(jobs, manifest, repo=REPO, output_root=None, require_ready=True, v
     deployed = repo / RUN_ROOT / "deployment_manifest.json"
     if deployed.is_file():
         expected_deployment = json.loads(deployed.read_text())
+        if expected_deployment.get("source_version") != source_snapshot["source_version"]:
+            from EVRPTW_Benchmark.Reinforcement_Learning.scripts.cus100_20260911.deployment_upgrade import ensure_compatible_deployment
+            expected_deployment = ensure_compatible_deployment(repo, deployed, manifest, source_snapshot)
         if expected_deployment.get("source_version") != source_snapshot["source_version"]:
             raise RuntimeError("Actual source differs from the transferred deployment snapshot")
         if expected_deployment.get("job_manifest_sha256") != sha256(manifest):
