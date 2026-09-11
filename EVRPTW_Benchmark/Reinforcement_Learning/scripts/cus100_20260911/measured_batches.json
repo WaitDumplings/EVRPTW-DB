@@ -1,0 +1,112 @@
+{
+  "am_evrptw": {
+    "physical_batch_size": 108,
+    "effective_batch_size": 108,
+    "calibration_status": "passed",
+    "calibration_scope": "finite native updates,500-val completion,verified cost identity,and measured memory; not convergence"
+  },
+  "terran": {
+    "physical_batch_size": 384,
+    "effective_batch_size": 384,
+    "calibration_status": "passed",
+    "calibration_scope": "finite native updates,500-val completion,verified cost identity,and measured memory; not convergence"
+  },
+  "drl_ts": {
+    "physical_batch_size": 24,
+    "effective_batch_size": 24,
+    "extra_args": [
+      "--activation-checkpoint-stride",
+      "1",
+      "--batches-per-epoch",
+      "250"
+    ],
+    "calibration_status": "passed",
+    "calibration_scope": "finite native updates,500-val completion,verified cost identity,and measured memory; not convergence"
+  },
+  "rrnco": {
+    "physical_batch_size": 50,
+    "effective_batch_size": 50,
+    "calibration_status": "passed",
+    "calibration_scope": "finite native updates,500-val completion,verified cost identity,and measured memory; not convergence"
+  },
+  "evrptw_rl": {
+    "physical_batch_size": 200,
+    "effective_batch_size": 200,
+    "extra_args": [
+      "--activation-checkpoint-stride",
+      "1"
+    ],
+    "calibration_status": "passed",
+    "calibration_scope": "finite native updates,500-val completion,verified cost identity,and measured memory; not convergence"
+  },
+  "TR02": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/am_evrptw_G_b108_t30_h240_road_fullval",
+    "measured_peak_process_gib": 10.0078125,
+    "measured_validation_feasible_instances": 500
+  },
+  "TR01": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/am_evrptw_E_b108_t30_h240_euclidean_final",
+    "measured_peak_process_gib": 10.0078125,
+    "measured_validation_feasible_instances": 485
+  },
+  "TR06": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/terran_G_b384_t30_h240_road_fullval",
+    "measured_peak_process_gib": 9.943359375,
+    "measured_validation_feasible_instances": 500
+  },
+  "TR05": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/terran_E_b384_t30_h240_euclidean_final",
+    "measured_peak_process_gib": 9.9453125,
+    "measured_validation_feasible_instances": 61
+  },
+  "TR04": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/drl_ts_G_b24_t30_h240_road_final_b24_checkpoint1",
+    "measured_peak_process_gib": 10.142578125,
+    "measured_validation_feasible_instances": 500
+  },
+  "TR03": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/drl_ts_E_b24_t30_h240_synthetic_final_b24_checkpoint1",
+    "measured_peak_process_gib": 10.216796875,
+    "measured_validation_feasible_instances": 393
+  },
+  "TR18": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/evrptw_rl_G_b200_t30_h240_road_fullval_b200",
+    "measured_peak_process_gib": 10.025390625,
+    "measured_validation_feasible_instances": 500
+  },
+  "TR17": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/evrptw_rl_E_b200_t30_h240_synthetic_final_b200_checkpoint1_accelerated_warmup",
+    "measured_peak_process_gib": 10.025390625,
+    "measured_validation_feasible_instances": 352
+  },
+  "TR10": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/rrnco_G_b50_t30_h240_road_fullval_b50",
+    "measured_peak_process_gib": 9.94140625,
+    "measured_validation_feasible_instances": 486
+  },
+  "TR09": {
+    "calibration_status": "passed",
+    "calibration_report_path": "EVRPTW_Benchmark/results/cus100_20260911/artifacts/final_calibration.json",
+    "calibration_probe_path": "EVRPTW_Benchmark/results/cus100_20260911/profiling/rrnco_E_b50_t30_h240_synthetic_final_b50",
+    "measured_peak_process_gib": 9.94140625,
+    "measured_validation_feasible_instances": 495
+  }
+}

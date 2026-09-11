@@ -28,6 +28,11 @@ from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
 from .data_pass import pass_batches
 from .euclidean import euclidean_instance, load_euclidean_manifest
 from .training_stream import load_training_stream_contract, read_stream_view_ids
+from .terran_synthetic import (
+    is_synthetic_index,
+    read_synthetic_tasks,
+    load_synthetic_instance,
+)
 
 
 def _csv_set(value: str | None) -> set[str] | None:
@@ -52,7 +57,14 @@ class Stage2TaskPool:
     euclidean_manifest: str | Path | None = None
 
     def __post_init__(self) -> None:
-        tasks = read_stage2_tasks(self.dataset_path, family_root=self.family_root)
+        self.source_kind = (
+            "terran_synthetic" if is_synthetic_index(self.dataset_path) else "stage2_road"
+        )
+        tasks = (
+            read_synthetic_tasks(self.dataset_path)
+            if self.source_kind == "terran_synthetic"
+            else read_stage2_tasks(self.dataset_path, family_root=self.family_root)
+        )
         expected_scale = None if self.scale is None else normalize_scale(self.scale)
         split_ids = _csv_set(self.split_ids)
         track_ids = _csv_set(self.track_ids)
@@ -70,11 +82,19 @@ class Stage2TaskPool:
         self.representation = str(self.representation).upper()
         if self.representation not in {"E", "G"}:
             raise ValueError("representation must be E or G")
-        if self.representation == "E" and self.euclidean_manifest is None:
+        if self.source_kind == "terran_synthetic" and self.representation != "E":
+            raise ValueError("TERRAN synthetic XY data requires E representation")
+        if self.source_kind == "terran_synthetic" and self.euclidean_manifest is not None:
+            raise ValueError("synthetic XY matrices must not use a Road Euclidean calibration")
+        if (
+            self.source_kind == "stage2_road"
+            and self.representation == "E"
+            and self.euclidean_manifest is None
+        ):
             raise ValueError("E representation requires a Euclidean calibration manifest")
         self._euclidean = (
             load_euclidean_manifest(self.euclidean_manifest)
-            if self.representation == "E"
+            if self.representation == "E" and self.source_kind == "stage2_road"
             else None
         )
         terminal_counts = {task.terminal_count for task in self.tasks}
@@ -94,7 +114,11 @@ class Stage2TaskPool:
     def instance(self, task: Stage2ViewTask) -> EVRPTWInstance:
         cached = self._cache.pop(task.view_id, None)
         if cached is None:
-            cached = load_stage2_instance(task)
+            cached = (
+                load_synthetic_instance(task)
+                if self.source_kind == "terran_synthetic"
+                else load_stage2_instance(task)
+            )
             if self._euclidean is not None:
                 cached = euclidean_instance(cached, self._euclidean)
         self._cache[task.view_id] = cached

@@ -272,3 +272,39 @@ def test_drl_ts_scaling_is_a_frozen_implementation_contract() -> None:
     np.testing.assert_allclose(
         energy[0], env.energy_kwh / env.battery_capacity_kwh
     )
+
+
+@pytest.mark.parametrize("soft", [False, True])
+@pytest.mark.parametrize("stride", [1, 2])
+def test_decoder_checkpoint_preserves_routes_gradients_rng_and_encoder_bn(soft, stride):
+    from copy import deepcopy
+    from unittest.mock import patch
+    torch.manual_seed(401)
+    reference = _policy().train()
+    active = deepcopy(reference)
+    active.activation_checkpoint_stride = stride
+    assert deepcopy(active).activation_checkpoint_stride == stride
+    env_class = DRLTSSoftConstraintEnv if soft else DRLTSHardConstraintEnv
+    results, rngs = [], []
+    for policy in (reference, active):
+        torch.manual_seed(409)
+        result = rollout(policy, [env_class(_instance(), n_traj=4)],
+                         decode_type="sampling", max_steps=32, seed=419, soft_constraints=soft)
+        (result.training_cost.detach() * result.log_likelihood).mean().backward()
+        results.append(result)
+        rngs.append(torch.random.get_rng_state())
+    expected, actual = results
+    torch.testing.assert_close(actual.training_cost, expected.training_cost, rtol=0, atol=0)
+    torch.testing.assert_close(actual.log_likelihood, expected.log_likelihood, rtol=0, atol=0)
+    assert actual.infos[0]["routes"] == expected.infos[0]["routes"]
+    assert torch.equal(*rngs)
+    for got, want in zip(active.parameters(), reference.parameters()):
+        assert (got.grad is None) == (want.grad is None)
+        if got.grad is not None:
+            torch.testing.assert_close(got.grad, want.grad, rtol=2e-5, atol=2e-5)
+    for got, want in zip(active.buffers(), reference.buffers()):
+        torch.testing.assert_close(got, want, rtol=0, atol=0)
+    with torch.no_grad(), patch("EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.rollout.checkpoint") as call:
+        rollout(active, [env_class(_instance(), n_traj=2)], decode_type="greedy",
+                max_steps=32, seed=421, soft_constraints=soft)
+        call.assert_not_called()

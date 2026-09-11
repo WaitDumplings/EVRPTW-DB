@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from torch.utils.checkpoint import checkpoint
 
 from ..AM_EVRPTW.rollout import rollout_objective_arrays, stack_observations
 from ..common.method_auxiliary import MethodAuxiliaryProfile
@@ -125,9 +126,20 @@ def rollout(
     trajectory_steps = np.zeros_like(done, dtype=np.int64)
     station_visits = np.zeros((batch_size, n_traj), dtype=np.int64)
     log_likelihood = torch.zeros(batch_size, n_traj, device=policy.device)
-    for _ in range(int(max_steps)):
+    checkpoint_stride = int(getattr(policy, "activation_checkpoint_stride", 0))
+    for step_index in range(int(max_steps)):
         batch = stack_observations(observations)
-        logits, state = policy.logits(batch, travel_time, state, fixed=fixed)
+        if (checkpoint_stride > 0 and torch.is_grad_enabled()
+                and compute_log_likelihood and step_index % checkpoint_stride == 0):
+            # All arguments refer to this immutable observation/state snapshot.
+            # Non-reentrant checkpoint retains the complete recurrent gradient
+            # and handles nested dataclass states without detaching tensors.
+            logits, state = checkpoint(
+                policy.logits, batch, travel_time, state, fixed=fixed,
+                use_reentrant=False, preserve_rng_state=True,
+            )
+        else:
+            logits, state = policy.logits(batch, travel_time, state, fixed=fixed)
         distribution = (
             torch.distributions.Categorical(logits=logits)
             if decode_type == "sampling" or compute_log_likelihood

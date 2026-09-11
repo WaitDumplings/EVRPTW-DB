@@ -341,8 +341,9 @@ def paper_baseline_eval_due(method: str, optimizer_steps: int, args: Any) -> boo
     the much larger paper epochs. Consequently the schedule is expressed in
     optimizer steps: AM uses its published 2,500 batches per epoch, while
     EVRPTW-RL uses its published post-warmup 100-step interval. RRNCO-EV
-    deliberately matches AM for this controlled comparison. DRL-TS is not
-    assigned a schedule here because the full manuscript/source is unavailable.
+    deliberately matches AM for this controlled comparison. DRL-TS follows
+    the existing native adapter train.py: compare once per batches_per_epoch
+    optimizer updates. This is an adapter-source schedule, not a paper claim.
     """
 
     step = int(optimizer_steps)
@@ -350,6 +351,9 @@ def paper_baseline_eval_due(method: str, optimizer_steps: int, args: Any) -> boo
         return False
     if method in {"AM-EVRPTW", "RRNCO-EV"}:
         interval = int(args.steps_per_epoch)
+        return interval > 0 and step % interval == 0
+    if method == "DRL-TS":
+        interval = int(getattr(args, "batches_per_epoch", 250))
         return interval > 0 and step % interval == 0
     if method == "EVRPTW-RL":
         warmup = int(args.ema_warmup_steps)
@@ -1113,6 +1117,7 @@ def train_reinforce_data_passes(
                 policy.eval()
                 actor_costs = []
                 baseline_costs = []
+                probe_soft = group_soft if method == "DRL-TS" else False
                 for probe_index, instance in enumerate(baseline_probe_instances):
                     probe_seed = (
                         int(args.seed)
@@ -1122,10 +1127,10 @@ def train_reinforce_data_passes(
                     )
                     with torch.no_grad():
                         actor_result = make_baseline(
-                            policy, [instance], False, probe_seed
+                            policy, [instance], probe_soft, probe_seed
                         )
                         baseline_result = make_baseline(
-                            baseline, [instance], False, probe_seed
+                            baseline, [instance], probe_soft, probe_seed
                         )
                     actor_costs.append(
                         float(training_cost(actor_result).mean().cpu())
@@ -1156,7 +1161,8 @@ def train_reinforce_data_passes(
                         "probe_instances": len(actor_costs),
                         "paired_t_pvalue": paired_t_pvalue,
                         "baseline_updated": baseline_updated,
-                        "schedule_source": "publication",
+                        "schedule_source": ("native_adapter" if method == "DRL-TS" else "publication"),
+                        "probe_training_stage": "soft" if probe_soft else "hard",
                     },
                 )
                 policy.train()

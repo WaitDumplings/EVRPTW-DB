@@ -89,8 +89,8 @@ def _run(args, method):
     scale = float(objective.value(5.0, 1))
     calls = []
 
-    def result(instances, *, actor):
-        calls.append((actor, tuple(instances)))
+    def result(instances, *, actor, soft=False):
+        calls.append((actor, tuple(instances), soft))
         count = len(instances)
         offset = torch.tensor(instances, dtype=torch.float32)[:, None]
         cost = offset + torch.tensor([[2.0, 4.0]]) if actor else torch.ones(count, 1)
@@ -115,8 +115,8 @@ def _run(args, method):
 
     protocol_trainers.train_reinforce_data_passes(
         method=method, args=args, pool=_TinyPool(), policy=policy, optimizer=optimizer,
-        make_actor=lambda instances, _soft, _seed: result(instances, actor=True),
-        make_baseline=lambda _policy, instances, _soft, _seed: result(instances, actor=False),
+        make_actor=lambda instances, _soft, _seed: result(instances, actor=True, soft=_soft),
+        make_baseline=lambda _policy, instances, _soft, _seed: result(instances, actor=False, soft=_soft),
         training_cost=lambda value: value.cost,
         objective_distance=lambda value: value.objective,
         feasible=lambda value: value.feasible,
@@ -193,7 +193,7 @@ def test_diagnostics_preserve_updates_rng_and_log_actual_group_values(
 def test_ema_diagnostics_record_actual_sequential_warmup_baseline(tmp_path, method):
     args = _args(tmp_path / method, fixed=False, cost=True, ema=True)
     result = _run(args, method)
-    assert all(actor for actor, _instances in result[-1])
+    assert all(actor for actor, _instances, _soft in result[-1])
     rows = [json.loads(line) for line in (args.output_dir / "reward_diagnostics.jsonl").read_text().splitlines()]
     assert rows[0]["baseline_kind"] == "paper_ema"
     assert rows[0]["distributions"]["baseline_training_cost"]["mean"] == pytest.approx(3.05)
@@ -297,3 +297,20 @@ def test_warm_start_imports_policy_only_and_resets_training_state(tmp_path: Path
             objective_config=args.objective,
             contract_args=args,
         )
+
+
+def test_drl_ts_fixed_baseline_probes_follow_native_soft_hard_stage(tmp_path):
+    args = _args(tmp_path / "drl_native_baseline", fixed=True, cost=True)
+    args.batches_per_epoch = 1  # Accelerated native schedule for the tiny integration fixture.
+    args.baseline_eval_size = 2
+    args.baseline_alpha = 0.05
+    result = _run(args, "DRL-TS")
+    events = [json.loads(line) for line in (args.output_dir / "baseline_history.jsonl").read_text().splitlines()]
+    assert [row["optimizer_step"] for row in events] == [1, 2]
+    assert [row["probe_training_stage"] for row in events] == ["soft", "hard"]
+    assert all(row["schedule_source"] == "native_adapter" for row in events)
+    assert all(row["probe_instances"] == 2 for row in events)
+    calls = result[4]
+    assert len(calls) == 16
+    assert all(call[2] for call in calls[:8])
+    assert not any(call[2] for call in calls[8:])

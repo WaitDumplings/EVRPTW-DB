@@ -62,3 +62,15 @@ def test_paper_evidence_statuses_are_reported_without_overclaiming() -> None:
     assert report["models"]["terran"]["blocking_issue"] is None
     assert report["models"]["edge_direct_h"]["status"] == "paper_fidelity_blocked"
     assert report["models"]["edge_direct_h"]["formal_method"] is False
+
+
+def test_drl_ts_fixed_updates_preserve_existing_native_epoch_baseline_schedule():
+    from types import SimpleNamespace
+    args = SimpleNamespace(batches_per_epoch=250)
+    for step in (0, 1, 249, 251, 499):
+        assert not paper_baseline_eval_due("DRL-TS", step, args)
+    assert paper_baseline_eval_due("DRL-TS", 250, args)
+    assert paper_baseline_eval_due("DRL-TS", 500, args)
+    args.batches_per_epoch = 17
+    assert paper_baseline_eval_due("DRL-TS", 17, args)
+    assert not paper_baseline_eval_due("DRL-TS", 250, args)

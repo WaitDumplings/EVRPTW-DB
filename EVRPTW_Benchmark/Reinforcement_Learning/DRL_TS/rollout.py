@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from torch.utils.checkpoint import checkpoint
 
 from ..AM_EVRPTW.rollout import rollout_objective_arrays, stack_observations
 from ..common.reward_contract import (
@@ -159,9 +160,19 @@ def rollout(
     environment_transitions = 0
     trajectory_steps = np.zeros_like(done, dtype=np.int64)
     log_likelihood = torch.zeros(batch_size, n_traj, device=policy.device)
-    for _ in range(int(max_steps)):
+    checkpoint_stride = int(getattr(policy, "activation_checkpoint_stride", 0))
+    for step_index in range(int(max_steps)):
         batch = stack_observations(observations)
-        logits, state = policy.logits(batch, fixed, state)
+        if (checkpoint_stride > 0 and torch.is_grad_enabled()
+                and compute_log_likelihood and step_index % checkpoint_stride == 0):
+            # Only the stateless decoder is recomputed. Encoder BatchNorm
+            # runs exactly once and recurrent-state gradients remain intact.
+            logits, state = checkpoint(
+                policy.logits, batch, fixed, state,
+                use_reentrant=False, preserve_rng_state=True,
+            )
+        else:
+            logits, state = policy.logits(batch, fixed, state)
         distribution = (
             torch.distributions.Categorical(logits=logits)
             if compute_log_likelihood or decode_type == "sampling"

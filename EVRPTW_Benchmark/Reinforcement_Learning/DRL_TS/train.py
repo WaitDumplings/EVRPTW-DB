@@ -58,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--samples-per-instance", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=128)
+    parser.add_argument("--activation-checkpoint-stride", type=int, default=0, help="Checkpoint every Nth differentiable decoder step; 0 disables recomputation.")
     parser.add_argument("--n-encode-layers", type=int, default=2)
     parser.add_argument("--n-heads", type=int, default=8)
     parser.add_argument("--nearest-neighbors", type=int, default=10)
@@ -226,6 +227,14 @@ def _greedy_costs(policy, instances, args, *, soft: bool) -> np.ndarray:
 def main() -> None:
     args = parse_args()
     _configure_soft_auxiliary(args)
+    if args.batches_per_epoch <= 0:
+        raise ValueError("--batches-per-epoch must be positive")
+    args.resolved_training_method_fields = {
+        "rollout_baseline_schedule_source": "native_adapter",
+        "rollout_baseline_interval_optimizer_updates": int(args.batches_per_epoch),
+        "rollout_baseline_probe_source": "training_pool_only",
+        "rollout_baseline_stage_semantics": "current_native_soft_or_hard",
+    }
     objective_config = prepare_training_objective(args)
     args.objective = objective_config.to_dict()
     if not 0.0 <= args.soft_stage_fraction <= 1.0:
@@ -252,6 +261,14 @@ def main() -> None:
         nearest_neighbors=args.nearest_neighbors,
         tanh_clipping=args.tanh_clipping,
     ).to(args.device)
+    if args.activation_checkpoint_stride < 0:
+        raise ValueError("--activation-checkpoint-stride must be nonnegative")
+    policy.activation_checkpoint_stride = int(args.activation_checkpoint_stride)
+    if args.activation_checkpoint_stride:
+        args.resolved_training_method_fields.update({
+            "activation_checkpoint_stride": int(args.activation_checkpoint_stride),
+            "activation_checkpoint_semantics": "decoder_only_nonreentrant_full_recurrent_gradient_rng_preserved",
+        })
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)

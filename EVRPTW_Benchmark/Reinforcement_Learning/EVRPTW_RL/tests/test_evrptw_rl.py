@@ -238,3 +238,37 @@ def test_cost_only_rollout_preserves_sampling_and_skips_unused_work(
         assert distribution_counts[0] > 0 and distribution_counts[1] == 0
     else:
         assert distribution_counts[0] == distribution_counts[1] > 0
+
+
+@pytest.mark.parametrize("stride", [1, 2, 3])
+def test_activation_checkpoint_preserves_rollout_recurrence_gradients_and_rng(stride: int) -> None:
+    torch.manual_seed(181)
+    reference = _policy().train()
+    active = deepcopy(reference)
+    active.activation_checkpoint_stride = stride
+    assert deepcopy(active).activation_checkpoint_stride == stride
+    results, rng_states = [], []
+    for policy in (reference, active):
+        torch.manual_seed(191)
+        result = rollout(
+            policy, [EVRPTWVectorEnv(_instance(), n_traj=4)],
+            decode_type="sampling", max_steps=32, seed=193,
+        )
+        (result.training_cost.detach() * result.log_likelihood).mean().backward()
+        results.append(result)
+        rng_states.append(torch.random.get_rng_state())
+    expected, actual = results
+    torch.testing.assert_close(actual.training_cost, expected.training_cost, rtol=0, atol=0)
+    torch.testing.assert_close(actual.log_likelihood, expected.log_likelihood, rtol=0, atol=0)
+    assert actual.infos[0]["routes"] == expected.infos[0]["routes"]
+    assert torch.equal(*rng_states)
+    for observed, expected_parameter in zip(active.parameters(), reference.parameters()):
+        assert (observed.grad is None) == (expected_parameter.grad is None)
+        if observed.grad is not None:
+            torch.testing.assert_close(observed.grad, expected_parameter.grad, rtol=2e-5, atol=2e-5)
+    with torch.no_grad(), patch(
+        "EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.rollout.checkpoint"
+    ) as checkpoint_call:
+        rollout(active, [EVRPTWVectorEnv(_instance(), n_traj=2)],
+                decode_type="greedy", max_steps=32, seed=197)
+        checkpoint_call.assert_not_called()

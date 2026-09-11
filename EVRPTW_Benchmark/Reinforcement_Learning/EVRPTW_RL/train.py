@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples-per-instance", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=128)
     parser.add_argument("--structure2vec-rounds", type=int, default=3)
+    parser.add_argument("--activation-checkpoint-stride", type=int, default=0, help="Checkpoint every Nth differentiable decoder step; 0 disables recomputation.")
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--max-grad-norm", type=float, default=2.0)
     parser.add_argument("--ema-warmup-steps", type=int, default=1_000)
@@ -144,6 +145,14 @@ def main() -> None:
         embedding_dim=args.embedding_dim,
         structure2vec_rounds=args.structure2vec_rounds,
     ).to(args.device)
+    if args.activation_checkpoint_stride < 0:
+        raise ValueError("--activation-checkpoint-stride must be nonnegative")
+    policy.activation_checkpoint_stride = int(args.activation_checkpoint_stride)
+    if args.activation_checkpoint_stride:
+        args.resolved_training_method_fields = {
+            "activation_checkpoint_stride": int(args.activation_checkpoint_stride),
+            "activation_checkpoint_semantics": "nonreentrant_full_recurrent_gradient_rng_preserved",
+        }
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)
