@@ -224,17 +224,21 @@ def _greedy_costs(policy, instances, args, *, soft: bool) -> np.ndarray:
     return result.training_cost[:, 0].detach().cpu().numpy()
 
 
-def main() -> None:
-    args = parse_args()
-    _configure_soft_auxiliary(args)
-    if args.batches_per_epoch <= 0:
-        raise ValueError("--batches-per-epoch must be positive")
+def configure_method_fields(args) -> None:
     args.resolved_training_method_fields = {
         "rollout_baseline_schedule_source": "native_adapter",
         "rollout_baseline_interval_optimizer_updates": int(args.batches_per_epoch),
         "rollout_baseline_probe_source": "training_pool_only",
         "rollout_baseline_stage_semantics": "current_native_soft_or_hard",
     }
+
+
+def main() -> None:
+    args = parse_args()
+    _configure_soft_auxiliary(args)
+    if args.batches_per_epoch <= 0:
+        raise ValueError("--batches-per-epoch must be positive")
+    configure_method_fields(args)
     objective_config = prepare_training_objective(args)
     args.objective = objective_config.to_dict()
     if not 0.0 <= args.soft_stage_fraction <= 1.0:

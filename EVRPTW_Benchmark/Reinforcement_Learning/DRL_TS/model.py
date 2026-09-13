@@ -15,6 +15,14 @@ def _tensor(value: Any, device: torch.device) -> torch.Tensor:
     return torch.as_tensor(np.asarray(value), device=device)
 
 
+def _gather_edge_rows(edges: torch.Tensor, last: torch.Tensor) -> torch.Tensor:
+    """Select outgoing edge rows without a trajectory-expanded gradient buffer."""
+    # expand(B,T,N,N,E) + gather creates a T-fold edge gradient in backward.
+    # Direct indexing sums repeated last-node indices into the original edges.
+    batch_index = torch.arange(edges.shape[0], device=last.device)[:, None]
+    return edges[batch_index, last]
+
+
 class EdgeMultiHeadAttention(nn.Module):
     """Attention where each query-candidate pair has its own edge features."""
 
@@ -254,7 +262,6 @@ class DRLTSPolicy(nn.Module):
             last = last[:, None]
             action_mask = action_mask[:, None, :]
         batch_size, n_traj = last.shape
-        num_nodes = fixed.node_embeddings.size(1)
         nodes = fixed.node_embeddings[:, None, :, :].expand(
             -1,
             n_traj,
@@ -288,24 +295,7 @@ class DRLTSPolicy(nn.Module):
         )
         context = self.context_projection(context)
 
-        edge_index = last[:, :, None, None].expand(
-            -1,
-            -1,
-            1,
-            num_nodes,
-        )
-        expanded_edges = fixed.edge_embeddings[:, None, :, :, :].expand(
-            -1,
-            n_traj,
-            -1,
-            -1,
-            -1,
-        )
-        edge_from_previous = torch.gather(
-            expanded_edges,
-            2,
-            edge_index[..., None].expand(-1, -1, -1, -1, self.embedding_dim),
-        ).squeeze(2)
+        edge_from_previous = _gather_edge_rows(fixed.edge_embeddings, last)
         pairs = torch.cat((nodes, edge_from_previous), dim=-1)
         glimpse = self.glimpse(
             torch.cat((hidden, context), dim=-1),

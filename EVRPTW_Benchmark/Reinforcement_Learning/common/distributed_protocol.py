@@ -1,7 +1,7 @@
 """Opt-in synchronous REINFORCE; the existing single-GPU loop is unchanged.
 
-The first supported adapter is AM. Every rank owns a full replica, consumes a
-disjoint part of each global stream batch and sums globally normalized
+Supported adapters are AM, RRNCO-EV and the two-stage DRL-TS. Every rank owns
+a full replica, consumes a disjoint global-stream shard and sums normalized
 gradients. Validation is sharded by contiguous instance positions, preserving
 the original per-instance seeds and independent solution verification.
 """
@@ -29,8 +29,8 @@ from .distributed import DistributedContext
 from .protocol_trainers import (
     _append_reinforce_diagnostics, _collect_reinforce_diagnostics,
     _customer_count, _load_checkpoint, _load_warm_start_checkpoint,
-    _save_checkpoint, paper_baseline_eval_due, paper_ema_baseline_due,
-    prepare_training_objective,
+    _save_checkpoint, _resolve_soft_stage_contract, paper_baseline_eval_due,
+    paper_ema_baseline_due, same_instance_leave_one_out, prepare_training_objective,
 )
 from .training_protocol import (
     append_jsonl, atomic_json, assert_checkpoint_training_signature, load_state,
@@ -41,7 +41,8 @@ from .training_protocol import (
 from .training_stream import read_stream_view_ids
 
 
-def configure_distributed_contract(args: Any, context: DistributedContext) -> dict[str, Any]:
+def configure_distributed_contract(args: Any, context: DistributedContext, *,
+                                   method: str = "AM-EVRPTW") -> dict[str, Any]:
     physical, effective = require_registered_batches(args, int(args.batch_size))
     if effective % (physical * context.world_size):
         raise ValueError("effective batch must be divisible by physical batch times world size")
@@ -57,17 +58,56 @@ def configure_distributed_contract(args: Any, context: DistributedContext) -> di
         "validation": "contiguous_instance_shards_preserving_global_seeds",
         "resume_topology": "fixed_world_size_and_batch_contract",
     }
+    if method in {"RRNCO-EV", "DRL-TS"}:
+        baseline = getattr(args, "reinforce_baseline", "paper")
+        contract["method"] = method
+        contract["reinforce_baseline"] = baseline
+        if baseline == "leave_one_out":
+            contract["ema"] = "disabled_same_instance_leave_one_out"
+            contract["baseline_scope"] = "other_trajectories_of_the_same_instance_on_the_same_rank"
+        elif method == "DRL-TS":
+            contract["ema"] = "disabled_native_greedy_rollout"
+            contract["baseline_scope"] = "matching_soft_or_hard_stage_with_native_update_interval"
     args.distributed_training = True
     args.distributed_contract = contract
-    # Explicit AM settings supplement the common objective/stream signature.
-    args.resolved_training_method_fields = {
-        name: getattr(args, name, None) for name in (
+    # Keep the already-deployed AM signature byte-for-byte compatible. New
+    # adapters retain architecture/graph/auxiliary metadata resolved by train.py.
+    if method == "AM-EVRPTW":
+        args.resolved_training_method_fields = {
+            name: getattr(args, name, None) for name in (
+                "learning_rate", "max_grad_norm", "embedding_dim", "n_encode_layers",
+                "n_heads", "tanh_clipping", "steps_per_epoch", "baseline_warmup_epochs",
+                "baseline_eval_size", "baseline_alpha", "ema_decay",
+                "incomplete_penalty_km",
+            )
+        }
+    elif method in {"RRNCO-EV", "DRL-TS"}:
+        fields = deepcopy(getattr(args, "resolved_training_method_fields", None) or {})
+        fields.update({name: getattr(args, name) for name in (
             "learning_rate", "max_grad_norm", "embedding_dim", "n_encode_layers",
-            "n_heads", "tanh_clipping", "steps_per_epoch", "baseline_warmup_epochs",
-            "baseline_eval_size", "baseline_alpha", "ema_decay",
-            "incomplete_penalty_km",
-        )
-    }
+            "n_heads", "tanh_clipping", "baseline_eval_size", "baseline_alpha",
+            "incomplete_penalty",
+        ) if hasattr(args, name)})
+        fields["method"] = method
+        if method == "RRNCO-EV":
+            fields.update({name: getattr(args, name) for name in (
+                "graph_mode", "aft_mode", "distance_sampling", "relation_chunk_size",
+                "checkpoint_bias", "relation_temperature", "feedforward_hidden",
+                "distance_sample_size", "reinforce_baseline", "steps_per_epoch",
+                "baseline_warmup_epochs", "ema_decay",
+            ) if hasattr(args, name)})
+        else:
+            fields.update({name: getattr(args, name) for name in (
+                "nearest_neighbors", "activation_checkpoint_stride", "batches_per_epoch",
+                "capacity_penalty", "time_penalty", "energy_penalty",
+                "soft_violation_contract_id", "soft_violation_step_clip",
+                "soft_violation_component_clip", "soft_violation_denominator",
+            ) if hasattr(args, name)})
+            if getattr(args, "soft_stage_contract_snapshot", None) is not None:
+                fields["soft_stage_contract"] = deepcopy(args.soft_stage_contract_snapshot)
+        args.resolved_training_method_fields = fields
+    else:
+        raise ValueError(f"unsupported distributed adapter: {method}")
     return contract
 
 
@@ -211,10 +251,18 @@ def train_distributed_reinforce_data_passes(
 ) -> None:
     context = DistributedContext.current()
     with context.local_phase("protocol configuration"):
-        if method != "AM-EVRPTW" or soft_stage_fraction or soft_stage_end_epoch is not None:
-            raise ValueError("the initial distributed adapter supports hard-constraint AM-EVRPTW only")
-        if getattr(args, "reinforce_baseline", "paper") != "paper":
-            raise ValueError("distributed AM uses its paper EMA/rollout baseline")
+        if method not in {"AM-EVRPTW", "RRNCO-EV", "DRL-TS"}:
+            raise ValueError(f"unsupported distributed adapter: {method}")
+        if method != "DRL-TS" and (soft_stage_fraction or soft_stage_end_epoch is not None):
+            raise ValueError("soft constraints are supported only by DRL-TS")
+        reinforce_baseline = getattr(args, "reinforce_baseline", "paper")
+        use_leave_one_out = reinforce_baseline == "leave_one_out"
+        if reinforce_baseline not in {"paper", "leave_one_out"}:
+            raise ValueError(f"unsupported REINFORCE baseline: {reinforce_baseline}")
+        if use_leave_one_out and method != "RRNCO-EV":
+            raise ValueError("distributed leave_one_out is supported only for RRNCO-EV")
+        if use_leave_one_out and int(args.samples_per_instance) < 2:
+            raise ValueError("leave_one_out requires at least two trajectories per instance")
         if getattr(args, "data_passes", None) is not None or not getattr(args, "training_epochs", None):
             raise ValueError("distributed training requires fixed --training-epochs")
         if getattr(args, "max_batches_per_pass", None) is not None:
@@ -222,8 +270,14 @@ def train_distributed_reinforce_data_passes(
         if not getattr(args, "training_stream_path", None):
             raise ValueError("distributed training requires an explicit training stream")
         if getattr(args, "exposure_checkpoints", "") or getattr(args, "gpu_hour_checkpoints", ""):
-            raise ValueError("use epoch validation checkpoints for distributed AM")
-        contract = configure_distributed_contract(args, context)
+            raise ValueError("use epoch validation checkpoints for distributed training")
+        soft_stage_contract = _resolve_soft_stage_contract(
+            method=method, fixed_epochs=int(args.training_epochs), total_passes=1,
+            soft_stage_fraction=soft_stage_fraction, soft_stage_end_epoch=soft_stage_end_epoch)
+        # AM historically did not attach this optional field during setup.
+        if method != "AM-EVRPTW":
+            args.soft_stage_contract_snapshot = soft_stage_contract
+        contract = configure_distributed_contract(args, context, method=method)
         validation_decode, validation_candidates = require_validation_decoding(args)
         require_validation_rollout_steps(args)
         objective = prepare_training_objective(args)
@@ -297,11 +351,14 @@ def train_distributed_reinforce_data_passes(
         if missing:
             raise ValueError(f"training stream contains IDs outside the filtered pool: {sorted(missing)[:3]}")
         validation_pool = make_validation_pool(args, scale=args.scale, seed=args.seed)
+        if validation_pool is not None and hasattr(args, "instance_cache_size"):
+            validation_pool.cache_size = int(args.instance_cache_size)
         validation_tasks = ([] if validation_pool is None else
                             list(validation_pool.tasks[:int(args.validation_limit)]))
         if validation_pool is not None and len(validation_tasks) != int(args.validation_limit):
             raise ValueError("validation pool is smaller than the requested fixed cohort")
-        probe_size = min(max(0, int(getattr(args, "baseline_eval_size", 64))), len(pool))
+        probe_size = (0 if use_leave_one_out else
+                      min(max(0, int(getattr(args, "baseline_eval_size", 64))), len(pool)))
         probe_ids = list(payload.get("baseline_probe_view_ids",
                                     [task.view_id for task in pool.tasks[:probe_size]]))
         if len(probe_ids) != probe_size or any(view_id not in task_map for view_id in probe_ids):
@@ -339,7 +396,10 @@ def train_distributed_reinforce_data_passes(
         context.main_call(repair_resume_artifacts)
     context.broadcast_model(policy)
     context.broadcast_model(baseline)
-    initial_identities = context.gather_objects({"rank": context.rank, "pid": os.getpid(), "device": args.device})
+    identity = {"rank": context.rank, "pid": os.getpid(), "device": args.device}
+    if hasattr(args, "instance_cache_size"):
+        identity["host_instance_cache_size"] = int(args.instance_cache_size)
+    initial_identities = context.gather_objects(identity)
     best_key = tuple(payload.get("best_validation_key", [-math.inf, -math.inf]))
     best_minimum = tuple(payload.get("best_within_minimum_key", [-math.inf, -math.inf]))
     best_summary = payload.get("best_validation_summary")
@@ -428,6 +488,8 @@ def train_distributed_reinforce_data_passes(
     epoch_range = () if early_stopped else range(completed + 1, epochs + 1)
     for epoch in epoch_range:
         epoch_started = time.perf_counter()
+        soft = bool(soft_stage_contract is not None and
+                    epoch <= soft_stage_contract["resolved_soft_stage_end_epoch"])
         policy.train()
         local_sums = {key: 0.0 for key in ("loss", "cost", "distance", "objective", "vehicles", "feasible")}
         local_steps = []
@@ -448,20 +510,24 @@ def train_distributed_reinforce_data_passes(
                 instances = [pool.instance(task_map[view_id]) for view_id in ids]
                 local_ids.extend(ids)
                 torch.manual_seed(seed)
-                actor = make_actor(instances, False, seed)
+                actor = make_actor(instances, soft, seed)
                 actor_cost = training_cost(actor)
                 if not torch.isfinite(actor_cost).all():
                     raise FloatingPointError("non-finite actor training cost")
-            use_ema = paper_ema_baseline_due(method, epoch - 1, args)
+            use_ema = not use_leave_one_out and paper_ema_baseline_due(method, epoch - 1, args)
             if use_ema:
                 cost_sum, cost_count = context.sum_values([float(actor_cost.detach().double().sum().cpu()), actor_cost.numel()])
                 observed = cost_sum / cost_count
                 ema_cost = observed if ema_cost is None else float(args.ema_decay) * ema_cost + (1 - float(args.ema_decay)) * observed
                 baseline_cost = torch.full_like(actor_cost, float(ema_cost))
             with context.local_phase("baseline and backward"):
-                if not use_ema:
+                if use_leave_one_out:
+                    baseline_cost = same_instance_leave_one_out(actor_cost)
+                    if actor.log_likelihood.shape != actor_cost.shape:
+                        raise ValueError("leave_one_out cost and log_likelihood shapes must match")
+                elif not use_ema:
                     with torch.no_grad():
-                        reference = make_baseline(baseline, instances, False, seed)
+                        reference = make_baseline(baseline, instances, soft, seed)
                         baseline_cost = training_cost(reference)
                     del reference
                 advantage = (actor_cost - baseline_cost).detach()
@@ -516,8 +582,8 @@ def train_distributed_reinforce_data_passes(
                     instance = pool.instance(task_map[view_id])
                     probe_seed = int(args.seed) + 700_000 + epoch * 10_000 + probe_index
                     with torch.no_grad():
-                        current = make_baseline(policy, [instance], False, probe_seed)
-                        reference = make_baseline(baseline, [instance], False, probe_seed)
+                        current = make_baseline(policy, [instance], soft, probe_seed)
+                        reference = make_baseline(baseline, [instance], soft, probe_seed)
                     actor_costs.append(float(training_cost(current).mean().cpu()))
                     reference_costs.append(float(training_cost(reference).mean().cpu()))
                 test = ttest_rel(actor_costs, reference_costs, alternative="less")
@@ -538,14 +604,16 @@ def train_distributed_reinforce_data_passes(
                 "schema": "drl_rollout_baseline_event_v1", "method": method,
                 "optimizer_step": epoch, "probe_instances": probe_size,
                 "paired_t_pvalue": pvalue, "baseline_updated": baseline_updated,
-                "schedule_source": "publication", "probe_training_stage": "hard"}))
+                "schedule_source": "native_adapter" if method == "DRL-TS" else "publication",
+                "probe_training_stage": "soft" if soft else "hard"}))
             policy.train()
         epoch_wall = context.max_values([time.perf_counter() - epoch_started])[0]
         peak = (torch.cuda.max_memory_allocated(args.device) if str(args.device).startswith("cuda") else 0)
         peaks = context.gather_objects(int(peak))
         row = {
             "schema": "drl_logical_epoch_history_v1", "method": method,
-            "protocol_id": args.protocol_id, "logical_epoch": epoch, "training_stage": "hard",
+            "protocol_id": args.protocol_id, "logical_epoch": epoch,
+            "training_stage": "soft" if soft else "hard",
             "instances_seen": effective, "customer_exposures": effective * customers,
             "physical_microbatches": len(shards) * context.world_size,
             "physical_batch_size": physical, "effective_batch_size": effective,
@@ -563,7 +631,8 @@ def train_distributed_reinforce_data_passes(
             "mean_trajectory_steps": float(steps.mean()),
             "rollout_budget_exhausted_rate": exhausted / max(len(steps), 1),
             "terminal_outcome_reason_counts": dict(sorted(global_reasons.items())),
-            "baseline_kind": "paper_ema" if use_ema else "greedy_rollout", "ema_cost": ema_cost,
+            "baseline_kind": ("same_instance_leave_one_out" if use_leave_one_out else
+                              "paper_ema" if use_ema else "greedy_rollout"), "ema_cost": ema_cost,
             "baseline_eval_due": pvalue is not None, "paired_t_pvalue": pvalue,
             "baseline_updated": baseline_updated, "epoch_wall_time_s": epoch_wall,
             "peak_gpu_allocated_bytes_per_rank": peaks,
@@ -572,7 +641,7 @@ def train_distributed_reinforce_data_passes(
         def write_training():
             _append_reinforce_diagnostics(output=output, method=method, args=args,
                 objective_config=objective, session=session, data_pass=1, logical_epoch=epoch,
-                optimizer_steps=epoch, soft=False, baseline_kind=row["baseline_kind"],
+                optimizer_steps=epoch, soft=soft, baseline_kind=row["baseline_kind"],
                 distributions=diagnostics[0], components=diagnostics[1], scales=diagnostics[2],
                 pre_clip_norm=pre_clip_norm)
             append_jsonl(output / "logical_epoch_history.jsonl", row)
@@ -659,6 +728,11 @@ def train_distributed_reinforce_data_passes(
         "reward_contract_snapshot": getattr(args, "reward_contract_snapshot", None),
         "warm_start_provenance": warm_start,
     }
+    if method != "AM-EVRPTW":
+        result.update(reinforce_baseline=reinforce_baseline,
+                      soft_stage_contract_snapshot=soft_stage_contract,
+                      method_auxiliary_snapshot=getattr(args, "method_auxiliary_snapshot", None),
+                      host_instance_cache_size=getattr(args, "instance_cache_size", None))
     context.main_call(lambda: atomic_json(output / "training_result.json", result))
     context.main_call(lambda: atomic_json(output / "progress.json", {
         "status": "completed", "logical_epoch": terminal_epoch,
