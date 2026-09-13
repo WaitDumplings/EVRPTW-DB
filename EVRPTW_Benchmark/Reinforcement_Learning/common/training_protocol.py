@@ -209,6 +209,14 @@ def resolved_training_signature_from_args(args: Any) -> dict[str, Any]:
         "method_auxiliary_sha256": getattr(args, "method_auxiliary_sha256", None),
         "method_specific": method_fields,
     }
+    # Omit this field entirely for historical single-GPU signatures.
+    if getattr(args, "distributed_training", False):
+        contract = getattr(args, "distributed_contract", None)
+        if not isinstance(contract, dict):
+            raise ValueError("distributed training requires a resolved topology/batch contract")
+        payload["distributed_training"] = json.loads(
+            json.dumps(contract, sort_keys=True, allow_nan=False)
+        )
     for field in path_fields:
         value = getattr(args, field, None)
         payload[field] = str(Path(value).resolve()) if value is not None else None
@@ -500,6 +508,7 @@ def verified_validation(
     *,
     seed: int,
     objective_config=None,
+    cuda_rng_devices: list[int] | None = None,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     active_objective = resolve_objective(objective_config)
@@ -508,16 +517,24 @@ def verified_validation(
     # repeatable and cannot advance the training RNG stream.  Saving every
     # visible CUDA generator is intentional: ``torch.manual_seed`` seeds all
     # of them, and ``fork_rng`` restores them even when ``solve`` raises.
-    cuda_rng_devices = (
-        list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
-    )
+    explicit_rng_devices = cuda_rng_devices is not None
+    if cuda_rng_devices is None:
+        cuda_rng_devices = (
+            list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+        )
     for index, instance in enumerate(instances):
         instance_seed = int(seed) + index
         # Validation is selection-only. Retaining an autograd graph for every
         # sampled trajectory wastes GPU memory and can make best-of-K OOM even
         # though the corresponding training batch fits.
         with torch.random.fork_rng(devices=cuda_rng_devices, enabled=True):
-            torch.manual_seed(instance_seed)
+            if explicit_rng_devices:
+                # torch.manual_seed would also mutate every un-forked CUDA RNG.
+                torch.random.default_generator.manual_seed(instance_seed)
+                for device_index in cuda_rng_devices:
+                    torch.cuda.default_generators[device_index].manual_seed(instance_seed)
+            else:
+                torch.manual_seed(instance_seed)
             with torch.no_grad():
                 info = solve(instance, instance_seed)
         current_objective = resolve_objective(
