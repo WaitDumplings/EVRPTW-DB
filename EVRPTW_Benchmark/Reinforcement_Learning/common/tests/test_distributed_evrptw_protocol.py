@@ -187,7 +187,7 @@ def test_two_rank_evr_global_ema_warmup_handoff_probe_and_exact_resume(tmp_path,
         assert [view for row in sampled for view in row["view_ids"]] == [f"train-{i}" for i in range(24)]
 
 
-def _actual_evr_worker(rank, world_size, rendezvous, output):
+def _actual_evr_worker(rank, world_size, rendezvous, output, graph_aggregation):
     from EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.tests.test_am_model import _instance
     from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import EVRPTWVectorEnvFast
     from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.model import EVRPTWRLPolicy
@@ -196,7 +196,8 @@ def _actual_evr_worker(rank, world_size, rendezvous, output):
     ctx = init_gloo(rank, world_size, rendezvous)
     try:
         torch.manual_seed(125 + rank)
-        model = EVRPTWRLPolicy(embedding_dim=16, structure2vec_rounds=2).train()
+        model = EVRPTWRLPolicy(embedding_dim=16, structure2vec_rounds=2,
+                              graph_aggregation=graph_aggregation).train()
         model.activation_checkpoint_stride = 1
         ctx.broadcast_model(model)
         reference = deepcopy(model)
@@ -236,8 +237,9 @@ def _actual_evr_worker(rank, world_size, rendezvous, output):
         dist.destroy_process_group()
 
 
-def test_two_rank_actual_evr_checkpointed_recurrent_update_matches_serial_global_ema(tmp_path):
-    run_gloo_workers(_actual_evr_worker, tmp_path)
+@pytest.mark.parametrize("graph_aggregation", ["sum", "mean"])
+def test_two_rank_actual_evr_checkpointed_recurrent_update_matches_serial_global_ema(tmp_path, graph_aggregation):
+    run_gloo_workers(_actual_evr_worker, tmp_path, extra=(graph_aggregation,))
     assert len(list(tmp_path.glob("actual_evr_rank_*.json"))) == 2
 
 

@@ -54,6 +54,7 @@ def main() -> None:
     policy = EVRPTWRLPolicy(
         embedding_dim=int(model_args.get("embedding_dim", 128)),
         structure2vec_rounds=int(model_args.get("structure2vec_rounds", 3)),
+        graph_aggregation=model_args.get("graph_aggregation", "sum"),
     ).to(args.device)
     policy.load_state_dict(checkpoint["model"])
     policy.eval()

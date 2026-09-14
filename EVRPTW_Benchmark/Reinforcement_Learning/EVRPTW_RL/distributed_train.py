@@ -24,7 +24,9 @@ def prepare_method(args):
         raise ValueError("--ema-decay must be finite and in [0, 1]")
     fields = dict(getattr(args, "resolved_training_method_fields", None) or {})
     fields.update({
-        "architecture": "evrptw_rl_structure2vec_v1",
+        "architecture": ("evrptw_rl_structure2vec_mean_v1"
+                         if getattr(args, "graph_aggregation", "sum") == "mean"
+                         else "evrptw_rl_structure2vec_v1"),
         "structure2vec_rounds": int(args.structure2vec_rounds),
         "rollout_baseline_schedule_source": "existing_evrptw_rl_adapter",
         "rollout_baseline_interval_optimizer_updates": int(args.baseline_eval_interval),
@@ -38,7 +40,8 @@ def prepare_method(args):
 
 def build_policy(args):
     policy = EVRPTWRLPolicy(embedding_dim=args.embedding_dim,
-                           structure2vec_rounds=args.structure2vec_rounds)
+                           structure2vec_rounds=args.structure2vec_rounds,
+                           graph_aggregation=getattr(args, "graph_aggregation", "sum"))
     policy.activation_checkpoint_stride = int(args.activation_checkpoint_stride)
     return policy
 
