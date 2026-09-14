@@ -123,6 +123,16 @@ def _greedy_costs(policy, instances, args) -> np.ndarray:
     return result.training_cost[:, 0].detach().cpu().numpy()
 
 
+def configure_method_fields(args) -> None:
+    if args.activation_checkpoint_stride < 0:
+        raise ValueError("--activation-checkpoint-stride must be nonnegative")
+    if args.activation_checkpoint_stride:
+        args.resolved_training_method_fields = {
+            "activation_checkpoint_stride": int(args.activation_checkpoint_stride),
+            "activation_checkpoint_semantics": "nonreentrant_full_recurrent_gradient_rng_preserved",
+        }
+
+
 def main() -> None:
     args = parse_args()
     _configure_station_auxiliary(args)
@@ -145,14 +155,8 @@ def main() -> None:
         embedding_dim=args.embedding_dim,
         structure2vec_rounds=args.structure2vec_rounds,
     ).to(args.device)
-    if args.activation_checkpoint_stride < 0:
-        raise ValueError("--activation-checkpoint-stride must be nonnegative")
+    configure_method_fields(args)
     policy.activation_checkpoint_stride = int(args.activation_checkpoint_stride)
-    if args.activation_checkpoint_stride:
-        args.resolved_training_method_fields = {
-            "activation_checkpoint_stride": int(args.activation_checkpoint_stride),
-            "activation_checkpoint_semantics": "nonreentrant_full_recurrent_gradient_rng_preserved",
-        }
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)

@@ -1,6 +1,6 @@
 """Opt-in synchronous REINFORCE; the existing single-GPU loop is unchanged.
 
-Supported adapters are AM, RRNCO-EV and the two-stage DRL-TS. Every rank owns
+Supported adapters are AM, RRNCO-EV, DRL-TS and EVRPTW-RL. Every rank owns
 a full replica, consumes a disjoint global-stream shard and sums normalized
 gradients. Validation is sharded by contiguous instance positions, preserving
 the original per-instance seeds and independent solution verification.
@@ -58,7 +58,7 @@ def configure_distributed_contract(args: Any, context: DistributedContext, *,
         "validation": "contiguous_instance_shards_preserving_global_seeds",
         "resume_topology": "fixed_world_size_and_batch_contract",
     }
-    if method in {"RRNCO-EV", "DRL-TS"}:
+    if method in {"RRNCO-EV", "DRL-TS", "EVRPTW-RL"}:
         baseline = getattr(args, "reinforce_baseline", "paper")
         contract["method"] = method
         contract["reinforce_baseline"] = baseline
@@ -68,6 +68,9 @@ def configure_distributed_contract(args: Any, context: DistributedContext, *,
         elif method == "DRL-TS":
             contract["ema"] = "disabled_native_greedy_rollout"
             contract["baseline_scope"] = "matching_soft_or_hard_stage_with_native_update_interval"
+        elif method == "EVRPTW-RL":
+            contract["baseline_scope"] = "global_ema_then_greedy_rollout_with_post_warmup_probes"
+            contract["baseline_warmup_sync"] = "copy_synchronized_actor_after_last_ema_optimizer_update"
     args.distributed_training = True
     args.distributed_contract = contract
     # Keep the already-deployed AM signature byte-for-byte compatible. New
@@ -81,7 +84,7 @@ def configure_distributed_contract(args: Any, context: DistributedContext, *,
                 "incomplete_penalty_km",
             )
         }
-    elif method in {"RRNCO-EV", "DRL-TS"}:
+    elif method in {"RRNCO-EV", "DRL-TS", "EVRPTW-RL"}:
         fields = deepcopy(getattr(args, "resolved_training_method_fields", None) or {})
         fields.update({name: getattr(args, name) for name in (
             "learning_rate", "max_grad_norm", "embedding_dim", "n_encode_layers",
@@ -96,7 +99,7 @@ def configure_distributed_contract(args: Any, context: DistributedContext, *,
                 "distance_sample_size", "reinforce_baseline", "steps_per_epoch",
                 "baseline_warmup_epochs", "ema_decay",
             ) if hasattr(args, name)})
-        else:
+        elif method == "DRL-TS":
             fields.update({name: getattr(args, name) for name in (
                 "nearest_neighbors", "activation_checkpoint_stride", "batches_per_epoch",
                 "capacity_penalty", "time_penalty", "energy_penalty",
@@ -105,6 +108,11 @@ def configure_distributed_contract(args: Any, context: DistributedContext, *,
             ) if hasattr(args, name)})
             if getattr(args, "soft_stage_contract_snapshot", None) is not None:
                 fields["soft_stage_contract"] = deepcopy(args.soft_stage_contract_snapshot)
+        else:
+            fields.update({name: getattr(args, name) for name in (
+                "structure2vec_rounds", "activation_checkpoint_stride", "ema_warmup_steps",
+                "ema_decay", "baseline_eval_interval", "station_visit_penalty",
+            ) if hasattr(args, name)})
         args.resolved_training_method_fields = fields
     else:
         raise ValueError(f"unsupported distributed adapter: {method}")
@@ -251,7 +259,7 @@ def train_distributed_reinforce_data_passes(
 ) -> None:
     context = DistributedContext.current()
     with context.local_phase("protocol configuration"):
-        if method not in {"AM-EVRPTW", "RRNCO-EV", "DRL-TS"}:
+        if method not in {"AM-EVRPTW", "RRNCO-EV", "DRL-TS", "EVRPTW-RL"}:
             raise ValueError(f"unsupported distributed adapter: {method}")
         if method != "DRL-TS" and (soft_stage_fraction or soft_stage_end_epoch is not None):
             raise ValueError("soft constraints are supported only by DRL-TS")
@@ -562,6 +570,14 @@ def train_distributed_reinforce_data_passes(
                 raise FloatingPointError("non-finite synchronized gradient norm")
             optimizer.step()
         context.broadcast_buffers(policy)
+        baseline_warmup_synchronized = (
+            method == "EVRPTW-RL" and epoch == int(args.ema_warmup_steps))
+        if baseline_warmup_synchronized:
+            # The first greedy-baseline update must use the actor trained by
+            # the LAST EMA update, including the synchronized running buffers.
+            # This is an unconditional native transition, not a paired probe.
+            with context.local_phase("EVRPTW-RL warmup baseline synchronization"):
+                baseline.load_state_dict(policy.state_dict())
         terminal_epoch = epoch
         totals = context.sum_values([*local_sums.values(), local_transitions, local_exhausted])
         sums = dict(zip(local_sums, totals[:len(local_sums)]))
@@ -638,6 +654,8 @@ def train_distributed_reinforce_data_passes(
             "peak_gpu_allocated_bytes_per_rank": peaks,
             "global_stream_cursor": epoch * effective,
         }
+        if method == "EVRPTW-RL":
+            row["baseline_warmup_synchronized"] = baseline_warmup_synchronized
         def write_training():
             _append_reinforce_diagnostics(output=output, method=method, args=args,
                 objective_config=objective, session=session, data_pass=1, logical_epoch=epoch,
