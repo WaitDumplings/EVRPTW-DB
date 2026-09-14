@@ -41,15 +41,16 @@ def write_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
-def parse_gpus(value):
+def parse_gpus(value, *, fixed_gpus=(0, 1)):
     fields = str(value).split(",")
     if not fields or any(not field.strip().isdigit() for field in fields):
         raise ValueError("CUS500_GPUS must be comma-separated physical GPU indices, e.g. 0,1")
     result = [int(field.strip()) for field in fields]
     if len(result) != len(set(result)) or len(result) != 2:
         raise ValueError("This deployment requires exactly two distinct GPU indices")
-    if result != [0, 1]:
-        raise ValueError("The after-AM EVRPTW-RL deployment is fixed to physical GPUs 0,1")
+    if result != list(fixed_gpus):
+        expected = ",".join(str(index) for index in fixed_gpus)
+        raise ValueError(f"This EVRPTW-RL configuration is fixed to physical GPUs {expected}")
     return result
 
 
@@ -63,7 +64,9 @@ def resolve_road_root(value=None, repo=REPO):
             raise FileNotFoundError(f"Road train/val indexes missing under {root}; set CUS500_ROAD_ROOT")
         return root
     candidates = [repo / "EVRPTW_Dataset/Instances_v2" / RELEASE,
-                  repo / "EVRPTW_Dataset/Instances_v2/us_11city"]
+                  repo / "EVRPTW_Dataset/Instances_v2/us_11city",
+                  repo.parent / "EVRPTW-DB/EVRPTW_Dataset/Instances_v2" / RELEASE,
+                  repo.parent / "EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city"]
     for root in candidates:
         if (root / TRAIN_INDEX).is_file() and (root / VAL_INDEX).is_file():
             return root.resolve()
@@ -78,7 +81,7 @@ def load_config(path=None, *, model="evrptw_rl", gpus="0,1", batch=None, accumul
     if (config.get("schema") != "cus500_evrptw_rl_config_v1" or config.get("scale") != "Cus500"
             or config.get("model") != model):
         raise ValueError(f"Not a Cus500 {model} dual-GPU deployment configuration")
-    config["gpus"] = parse_gpus(gpus)
+    config["gpus"] = parse_gpus(gpus, fixed_gpus=config.get("fixed_gpus", (0, 1)))
     if batch is not None:
         config["physical_batch_size"] = int(batch)
     if accumulation is not None:
@@ -94,8 +97,18 @@ def load_config(path=None, *, model="evrptw_rl", gpus="0,1", batch=None, accumul
             raise ValueError(f"{key} must be a positive integer")
     if config["minimum_training_epochs"] > config["training_epochs"]:
         raise ValueError("minimum_training_epochs exceeds the maximum")
-    if config["validation_rollout_steps"] != (3 * config["training_rollout_steps"] + 1) // 2:
-        raise ValueError("Validation rollout cap must be ceil(1.5 * training cap)")
+    for key in ("training_rollout_steps", "validation_rollout_steps"):
+        if not isinstance(config[key], int) or isinstance(config[key], bool) or config[key] < 1:
+            raise ValueError(f"{key} rollout cap must be a positive integer")
+    cap_policy = config.get("rollout_cap_policy", "ceil_1_5")
+    if cap_policy == "explicit":
+        if config["validation_rollout_steps"] < config["training_rollout_steps"]:
+            raise ValueError("Explicit validation rollout cap must be at least the training cap")
+    elif cap_policy == "ceil_1_5":
+        if config["validation_rollout_steps"] != (3 * config["training_rollout_steps"] + 1) // 2:
+            raise ValueError("Validation rollout cap must be ceil(1.5 * training cap)")
+    else:
+        raise ValueError(f"Unknown rollout cap policy: {cap_policy}")
     for key in ("validation_every_epochs", "early_stop_patience_validations", "training_rollout_steps"):
         if not isinstance(config[key], int) or isinstance(config[key], bool) or config[key] < 1:
             raise ValueError(f"{key} must be a positive integer")

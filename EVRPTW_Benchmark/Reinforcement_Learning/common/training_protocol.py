@@ -90,11 +90,20 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--validation-candidates", type=int, default=1)
     parser.add_argument("--validation-seed", type=int)
     parser.add_argument(
+        "--validation-rollout-policy",
+        choices=("ceil_1_5", "explicit"),
+        default="ceil_1_5",
+        help=(
+            "Validation horizon policy: ceil_1_5 uses ceil(3/2 * training steps); "
+            "explicit requires a positive integer cap at least as large as training steps."
+        ),
+    )
+    parser.add_argument(
         "--validation-rollout-steps",
         type=int,
         help=(
-            "Validation rollout cap. It must equal ceil(3/2 * "
-            "--training-rollout-steps)."
+            "Validation rollout cap. The default policy requires ceil(3/2 * "
+            "--training-rollout-steps); the explicit policy preserves this exact cap."
         ),
     )
     parser.add_argument("--final-validation-limit", type=int, default=0)
@@ -209,6 +218,9 @@ def resolved_training_signature_from_args(args: Any) -> dict[str, Any]:
         "method_auxiliary_sha256": getattr(args, "method_auxiliary_sha256", None),
         "method_specific": method_fields,
     }
+    # Absence preserves the exact historical signature/checkpoint structure.
+    if _validation_rollout_policy(args) == "explicit":
+        payload["validation_rollout_policy"] = "explicit"
     # Omit this field entirely for historical single-GPU signatures.
     if getattr(args, "distributed_training", False):
         contract = getattr(args, "distributed_contract", None)
@@ -376,11 +388,32 @@ def validation_rollout_steps(training_rollout_steps: int) -> int:
     return (numerator + denominator - 1) // denominator
 
 
-def require_validation_rollout_steps(args: argparse.Namespace) -> int:
-    """Resolve and enforce the shared ceil(3/2) validation horizon."""
+def _validation_rollout_policy(args: Any) -> str:
+    policy = getattr(args, "validation_rollout_policy", "ceil_1_5")
+    if policy not in ("ceil_1_5", "explicit"):
+        raise ValueError(f"unsupported validation rollout policy: {policy}")
+    return policy
 
-    expected = validation_rollout_steps(require_training_rollout_steps(args))
+
+def require_validation_rollout_steps(args: argparse.Namespace) -> int:
+    """Resolve the registered validation horizon, preserving the legacy default."""
+
+    training_steps = require_training_rollout_steps(args)
     configured = getattr(args, "validation_rollout_steps", None)
+    if _validation_rollout_policy(args) == "explicit":
+        if configured is None:
+            raise ValueError("explicit validation rollout policy requires --validation-rollout-steps")
+        if (
+            isinstance(configured, bool)
+            or not isinstance(configured, (int, np.integer))
+            or configured <= 0
+        ):
+            raise ValueError("explicit --validation-rollout-steps must be a positive integer")
+        if configured < training_steps:
+            raise ValueError("explicit --validation-rollout-steps must be >= --training-rollout-steps")
+        setattr(args, "validation_rollout_steps", int(configured))
+        return int(configured)
+    expected = validation_rollout_steps(training_steps)
     if configured is not None and int(configured) != expected:
         raise ValueError(
             "--validation-rollout-steps must equal ceil(3/2 * "

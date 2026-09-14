@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch Road Cus500 EVRPTW-RL on GPUs 0,1 after AM has finished."""
+"""Launch Road Cus500 EVRPTW-RL on the two GPUs selected by its configuration."""
 from __future__ import annotations
 
 import argparse
@@ -141,6 +141,8 @@ def build_command(config, root, run, stream, *, python=sys.executable, resume=Fa
         "distributed-backend": "nccl", "distributed-timeout-seconds": config["distributed_timeout_seconds"],
         "expected-world-size": config["world_size"],
     }
+    if config.get("rollout_cap_policy") == "explicit":
+        values["validation-rollout-policy"] = "explicit"
     values["instance-cache-size"] = config["instance_cache_size"]
     if config.get("method_auxiliary_profile"):
         values["method-auxiliary-profile"] = REPO / config["method_auxiliary_profile"]

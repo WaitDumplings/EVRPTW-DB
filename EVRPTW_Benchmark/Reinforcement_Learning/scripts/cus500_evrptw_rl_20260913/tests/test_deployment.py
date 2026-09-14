@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from EVRPTW_Benchmark.Reinforcement_Learning.scripts.cus500_evrptw_rl_20260913.common import (
-    CONFIG, TRAIN_INDEX, VAL_INDEX, load_config, parse_gpus, resolve_road_root,
+    CONFIG, RELEASE, TRAIN_INDEX, VAL_INDEX, load_config, parse_gpus, resolve_road_root,
 )
 from EVRPTW_Benchmark.Reinforcement_Learning.scripts.cus500_evrptw_rl_20260913.launch import (
     DESKTOP_EXECUTABLE, build_command, lock_output, lock_gpus, read_status, last_jsonl, validate_gpus, validate_resume,
@@ -320,3 +320,145 @@ def test_cli_defaults_fixed_gpu_pair_despite_environment(tmp_path):
     output = subprocess.check_output([sys.executable, str(CONFIG.parent / "launch.py"),
                                      "--mode", "status", "--output-root", str(tmp_path)], env=env, text=True)
     assert json.loads(output)["model"] == "evrptw_rl"
+
+
+@pytest.mark.parametrize("gpus", ["0,1", "2,1", "1,3"])
+def test_mean_gpu12_config_rejects_other_physical_pairs(gpus):
+    with pytest.raises(ValueError, match="fixed to physical GPUs 1,2"):
+        load_config(CONFIG.with_name("config_gpu12_mean.json"), gpus=gpus)
+
+
+def test_mean_gpu12_recipe_parses_as_one_distributed_training_command(tmp_path):
+    from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.distributed_train import parse_args
+    from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import require_validation_rollout_steps
+
+    cfg = load_config(CONFIG.with_name("config_gpu12_mean.json"), gpus="1,2")
+    legacy = load_config()
+    with pytest.raises(ValueError, match="fixed to physical GPUs 0,1"):
+        load_config(gpus="1,2")
+    assert cfg["gpus"] == [1, 2]
+    assert cfg["world_size"] == 2
+    assert cfg["physical_batch_size"] == 24
+    assert cfg["effective_batch_size"] == 48
+    assert cfg["sample_count"] == 480000
+    assert cfg["rollout_cap_policy"] == "explicit"
+    assert (legacy["training_rollout_steps"], legacy["validation_rollout_steps"]) == (1700, 2550)
+    for key in ("protocol_id", "server", "run_id"):
+        assert cfg[key] != legacy[key]
+    run = tmp_path / "runs" / cfg["run_id"]
+    command = build_command(cfg, tmp_path / "road", run,
+                            {"path": "/stream.parquet", "contract": {"sha256": "abc"}},
+                            python="/env/python")
+    assert command[:4] == ["/env/python", "-m", "torch.distributed.run", "--standalone"]
+    assert command.count("torch.distributed.run") == 1
+    assert command.count("--nproc_per_node=2") == 1
+    assert command.count(cfg["train_module"]) == 1
+    args = parse_args(command[command.index(cfg["train_module"]) + 1:])
+    assert args.physical_batch_size == 24
+    assert args.effective_batch_size == 48
+    assert args.training_rollout_steps == 600
+    assert args.validation_rollout_steps == 700
+    assert args.validation_rollout_policy == "explicit"
+    assert require_validation_rollout_steps(args) == 700
+    assert args.samples_per_instance == args.validation_candidates == 30
+    assert args.graph_aggregation == "mean"
+    assert args.expected_world_size == 2
+    assert args.output_dir == run
+    assert not args.resume
+
+
+def test_sibling_road_fallback_preserves_explicit_root_errors(tmp_path, monkeypatch):
+    for name in ("CUS500_ROAD_ROOT", "CUS100_ROAD_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    repo = tmp_path / "training-worktree"
+    repo.mkdir()
+    release = tmp_path / "EVRPTW-DB/EVRPTW_Dataset/Instances_v2" / RELEASE
+    for relative in (TRAIN_INDEX, VAL_INDEX):
+        index = release / relative
+        index.parent.mkdir(parents=True, exist_ok=True)
+        index.write_bytes(b"index")
+    assert resolve_road_root(repo=repo) == release
+    with pytest.raises(FileNotFoundError, match="train/val indexes missing"):
+        resolve_road_root("missing-release", repo=repo)
+    monkeypatch.setenv("CUS500_ROAD_ROOT", str(tmp_path / "missing-env-release"))
+    with pytest.raises(FileNotFoundError, match="train/val indexes missing"):
+        resolve_road_root(repo=repo)
+
+
+def test_mean_gpu12_shell_status_ignores_legacy_environment_without_cuda(tmp_path):
+    import subprocess
+    import sys
+
+    output_root = tmp_path / "mean-output"
+    env = {**os.environ, "CUS500_PYTHON": sys.executable, "CUDA_VISIBLE_DEVICES": "",
+           "CUS500_EVRPTW_GPU12_OUTPUT_ROOT": str(output_root),
+           "CUS500_OUTPUT_ROOT": str(tmp_path / "legacy-output"), "CUS500_GPUS": "0,1",
+           "CUS500_ROAD_ROOT": str(tmp_path / "missing-road"),
+           "CUS500_BATCH_SIZE": "invalid", "CUS500_ACCUMULATION_STEPS": "invalid",
+           "CUS500_INSTANCE_CACHE_SIZE": "invalid"}
+    output = subprocess.check_output(
+        ["bash", str(CONFIG.parent / "evrptw_rl_gpu12.sh"), "--mode", "status",
+         "--config", str(CONFIG), "--gpus", "0,1"],
+        env=env, text=True)
+    state = json.loads(output)
+    assert state["status"] == "not_started"
+    assert state["model"] == "evrptw_rl"
+    assert Path(state["status_file"]) == output_root / "launchers/evrptw_rl_mean_gpu12/evrptw_rl/status.json"
+    assert not output_root.exists()
+    assert not (tmp_path / "legacy-output").exists()
+
+
+def test_mean_gpu12_shell_fixes_config_and_clears_only_legacy_overrides(tmp_path):
+    import subprocess
+    import sys
+
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        f"#!{sys.executable}\nimport json,os,sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'env': {key: value for key, value in os.environ.items() "
+        "if key.startswith('CUS500_')}}))\n")
+    fake_python.chmod(0o755)
+    env = {**os.environ, "CUS500_PYTHON": str(fake_python), "CUS500_GPUS": "0,1",
+           "CUS500_BATCH_SIZE": "1", "CUS500_ACCUMULATION_STEPS": "2",
+           "CUS500_INSTANCE_CACHE_SIZE": "0"}
+    output = subprocess.check_output(
+        ["bash", str(CONFIG.parent / "evrptw_rl_gpu12.sh"), "--config", "/old/config.json",
+         "--gpus", "0,1", "--model", "rrnco", "--batch-size", "12",
+         "--accumulation-steps", "3", "--instance-cache-size", "64", "--foreground"],
+        env=env, text=True)
+    recorded = json.loads(output)
+    argv = recorded["argv"]
+    assert argv[0] == str(CONFIG.parent / "launch.py")
+    assert argv[-6:] == ["--config", str(CONFIG.with_name("config_gpu12_mean.json")),
+                         "--model", "evrptw_rl", "--gpus", "1,2"]
+    for option, value in (("--batch-size", "12"), ("--accumulation-steps", "3"),
+                          ("--instance-cache-size", "64")):
+        assert argv[argv.index(option) + 1] == value
+    assert "--foreground" in argv
+    for key in ("CUS500_BATCH_SIZE", "CUS500_ACCUMULATION_STEPS", "CUS500_INSTANCE_CACHE_SIZE"):
+        assert key not in recorded["env"]
+
+
+@pytest.mark.parametrize("train_cap,val_cap", [(0, 700), (600, 0), (True, 700),
+                                               (600, True), (600.5, 700), (600, 700.5),
+                                               (600, 500)])
+def test_explicit_rollout_caps_require_positive_integers_and_longer_validation(tmp_path, train_cap, val_cap):
+    config = json.loads(CONFIG.with_name("config_gpu12_mean.json").read_text())
+    config.update(training_rollout_steps=train_cap, validation_rollout_steps=val_cap)
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+    with pytest.raises(ValueError):
+        load_config(path, gpus="1,2")
+
+
+def test_nonstandard_rollout_caps_require_explicit_policy(tmp_path):
+    config = json.loads(CONFIG.read_text())
+    config.update(training_rollout_steps=600, validation_rollout_steps=700)
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="cap"):
+        load_config(path)
+    config["rollout_cap_policy"] = "explicit"
+    path.write_text(json.dumps(config))
+    accepted = load_config(path)
+    assert (accepted["training_rollout_steps"], accepted["validation_rollout_steps"]) == (600, 700)

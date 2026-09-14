@@ -171,3 +171,57 @@ def test_bounded_host_instance_cache_preserves_sampling_and_immutable_payload(tm
     count = len(loads)
     assert cached.instance(tasks[0]) is item
     assert len(loads) == count, "A repeated view should reuse its immutable CPU instance"
+
+
+@pytest.mark.parametrize("training_cap,validation_cap", [(600, 700), (1, 1)])
+def test_evrptw_explicit_validation_cap_reaches_actual_cpu_rollout(
+    tmp_path, monkeypatch, training_cap, validation_cap,
+):
+    from EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.tests.test_am_model import _instance
+    from EVRPTW_Benchmark.Reinforcement_Learning.common import protocol_entrypoints as entry
+    from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import require_validation_rollout_steps
+    from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL import distributed_train as evr
+    from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL import rollout as rollout_module
+
+    args = evr.parse_args([
+        "--dataset-path", str(tmp_path / "train.parquet"), "--output-dir", str(tmp_path / "run"),
+        "--training-epochs", "1", "--physical-batch-size", "1", "--effective-batch-size", "2",
+        "--batch-size", "1", "--samples-per-instance", "2", "--device", "cpu",
+        "--expected-world-size", "2", "--distributed-backend", "gloo",
+        "--embedding-dim", "16", "--structure2vec-rounds", "1", "--graph-aggregation", "mean",
+        "--training-rollout-steps", str(training_cap), "--validation-rollout-steps", str(validation_cap),
+        "--validation-rollout-policy", "explicit",
+    ])
+    evr.prepare_method(args)
+    protocol.configure_distributed_contract(args, DistributedContext(rank=0, world_size=2), method="EVRPTW-RL")
+    require_validation_rollout_steps(args)
+    torch.manual_seed(419)
+    policy = evr.build_policy(args).eval()
+    pool = SimpleNamespace(reward_distance_scale_km=lambda _mode: 2.0, reward_scale_metadata={})
+    observed = []
+    actual_rollout = rollout_module.rollout
+
+    def record_rollout(active, envs, **kwargs):
+        result = actual_rollout(active, envs, **kwargs)
+        assert result.trajectory_steps.max() <= kwargs["max_steps"]
+        if kwargs["max_steps"] == 1:
+            assert result.trajectory_steps.eq(1).all()
+            assert result.rollout_budget_exhausted.all()
+        observed.append((kwargs["max_steps"], envs[0].n_traj, kwargs["compute_log_likelihood"]))
+        return result
+
+    def exercise_callbacks(**callbacks):
+        callbacks["make_actor"]([_instance()], False, 431)
+        callbacks["make_baseline"](policy, [_instance()], False, 433)
+        info = callbacks["validation_solve"](policy, _instance(), 439)
+        assert "routes" in info
+
+    monkeypatch.setattr(rollout_module, "rollout", record_rollout)
+    # Run the real adapter, model, environments and rollouts without optimization.
+    monkeypatch.setattr(entry, "train_reinforce_data_passes", exercise_callbacks)
+    with torch.no_grad():
+        evr.run_evrptw_rl(args, pool, policy, None)
+    assert observed == [(training_cap, 2, True), (training_cap, 1, False), (validation_cap, 1, False)]
+    signature = resolved_training_signature_from_args(args)
+    assert signature["validation_rollout_policy"] == "explicit"
+    assert signature["validation_rollout_steps"] == validation_cap
