@@ -1,38 +1,43 @@
 # TR17 / TR18 EVRPTW-RL stable retraining
 
-`evrptw_rl_stable.sh` starts only **Road Cus100 TR18 on physical GPU 2** and
-**Euclidean Cus100 TR17 on physical GPU 3**. Both are fresh runs with
-`--graph-aggregation mean`. This is a documented numerical-stability adaptation;
-legacy checkpoints and the original `full.sh` retain `sum` semantics.
-See [STABILITY_VALIDATION_REPORT.md](STABILITY_VALIDATION_REPORT.md) for the
-recorded CPU checks, limitations and reproducible diagnostic results.
+## Direct retraining on an idle server
 
-The old runs must first be preserved and stopped explicitly on 2080ti_4_2. This
-entry rejects occupied GPU 2/3 and never stops another process. Completed DRL-TS
-TR03/TR04 and work on GPU 0/1 are outside this launch.
-
-Use an isolated checkout so other running experiments keep their source files:
+On a server with the existing Cus100 data and two free GPUs, update the code and
+start both fresh runs directly:
 
 ```bash
 cd /data/Maojie/ICLR/EVRPTW-DB
 git fetch origin
-git worktree add /data/Maojie/ICLR/cus100-evrptw-stability-4-2 origin/cus100-evrptw-stability-4-2-20260914
-cd /data/Maojie/ICLR/cus100-evrptw-stability-4-2
+git switch cus100-evrptw-stability-4-2-20260914
+git pull --ff-only
 conda activate maojie
-python EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/2080ti_4_2/stop_old_evrptw_rl.py --stop
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/2080ti_4_2/evrptw_rl_stable.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/2080ti_4_2/retrain.sh
 ```
 
-The optional stop command above first verifies the old TR17/TR18 process identities
-and backs up already-saved checkpoints and metadata under the original
-`repair_backups/` directory, then sends SIGTERM only to those verified processes.
-Unsaved in-progress work is not checkpointed by stopping. The original output
-files remain available. Omit `--stop` to inspect without stopping anything.
+`retrain.sh` defaults to **physical GPU 0: Road Cus100 TR18**, **physical GPU 1:
+Euclidean Cus100 TR17**. To select another free pair, specify the GPUs in
+**Road, Euclidean** order:
 
-The launcher reuses existing data and frozen artifacts from the sibling
-`EVRPTW-DB` checkout when they are absent in this worktree. It checks the original
-SHA256 values and records the resolved absolute paths. Explicit overrides are
-also supported:
+```bash
+EVRPTW_GPUS=2,3 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/2080ti_4_2/retrain.sh
+```
+
+This direct entry skips GPU calibration and starts from seed 1234 with physical
+and effective batch **200**. It retains the previous batch setting to target
+roughly 10 GiB; **GPU memory has not been measured for this stable architecture
+on the destination server**. It does not automatically reduce batch. It checks
+that the selected GPUs are free and rejects occupied cards. No old tasks need
+to be stopped on the idle server, and no worktree or backup step is required.
+
+The model uses `--graph-aggregation mean`, a documented numerical-stability
+adaptation. Legacy checkpoints and the original `full.sh` retain `sum` semantics.
+These fresh runs do not load old checkpoints or change original output files.
+
+## Data and training settings
+
+The launcher reuses the existing frozen data, reward files and training streams,
+checks their original SHA256 values, and records resolved absolute paths. If
+needed, set the existing deployment locations explicitly:
 
 ```bash
 export CUS100_ROAD_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823
@@ -40,40 +45,50 @@ export CUS100_SYNTHETIC_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/TERRAN_s
 export CUS100_ARTIFACT_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus100_20260911
 ```
 
-It first checks that both assigned GPUs are idle, locks their physical UUIDs,
-checks frozen data/reward/stream files, and captures the actual source. Each
-source then receives a disposable six-update CUDA smoke run: two EMA updates,
-four greedy-baseline updates, baseline probes at 4/6, and two fixed validations
-at 3/6 (10 instances each). The smoke additionally checks multi-state action
-distinction and useful encoder gradients. Both sources must pass before either
-formal run starts. Smoke checkpoints are never reused for formal training.
-
-The initial physical batch is the old **200**, which previously used about 10 GiB
-but **has not yet been measured for this stable architecture on 2080ti_4_2**.
-OOM or a measured peak above 10.3 GiB triggers smaller physical microbatches,
-increments of 10 near 200. Effective batch stays **200**, preserving the original
-2,000,000-entry training stream and customer exposure budget. The measured
-allocation and whether it falls in 9.5–10.3 GiB are recorded. A lower peak is
-reported honestly; the launcher does not allocate unused tensors to fill VRAM.
-Non-OOM errors, unchanged smoke validation outputs, or ineffective policy
-diagnostics stop the deployment for inspection.
-
 Formal settings remain seed **1234**, n-traj **30**, rollout **240/360**, validation
 **500 every 100 epochs**, minimum **5000**, maximum **10000**, patience **5** after
-5000, AdamW **1e-3**, and native **1000-update EMA → greedy** baseline. The shared
-verified economic objective and source-specific frozen reward scales are
-unchanged; the existing station auxiliary remains `0.3 * legal_station_visits / N`.
+5000, AdamW **1e-3**, and native **1000-update EMA → greedy** baseline. Effective
+batch 200 preserves the original 2,000,000-entry training stream and exposure
+budget. The shared verified economic objective and source-specific frozen
+reward scales are unchanged. The station auxiliary remains
+`0.3 * legal_station_visits / N`.
 
-New default output root:
-`EVRPTW_Benchmark/results/cus100_evrptw_stable_20260914`, with runs
-`TR18_stable_mean` and `TR17_stable_mean`. Use `--output-root /absolute/new/path`
-for another fresh attempt. There is no resume option. Existing original outputs
-are never changed.
+Default output root: `EVRPTW_Benchmark/results/cus100_evrptw_stable_20260914`, with
+runs `TR18_stable_mean` and `TR17_stable_mean`. Use `--output-root /absolute/new/path`
+for another fresh attempt. Existing nonempty output is rejected; this entry has
+no resume option.
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/2080ti_4_2/evrptw_rl_stable.sh --mode status
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/2080ti_4_2/retrain.sh --mode status
 ```
 
-The usual status-table script also works after setting `CUS100_OUTPUT_ROOT` to
-the new root. Live logs are in `launchers/2080ti_4_2/launcher.log`, then each new
-run's `stdout.log`; calibration logs are retained under `calibration/`.
+Status includes current epoch, exact validation costs, feasibility and time
+since the last training-log write. Launcher logs are in
+`launchers/2080ti_4_2/launcher.log`; each run has `stdout.log` and `stderr.log`.
+`CUS100_STABLE_OUTPUT_ROOT` changes the default output location. The old status
+script can read these runs after setting its `CUS100_OUTPUT_ROOT` to the new root.
+
+## Optional guarded entry
+
+`evrptw_rl_stable.sh` retains the original guarded workflow, defaulting to
+physical GPU **2 for Road / 3 for Euclidean**. It first performs disposable CUDA
+calibration and learning checks on both sources, then starts both fresh formal
+runs only if the checks pass. It verifies six training updates, the EMA-to-greedy
+transition, finite and effective training gradients, two fixed validation
+outputs, and multi-state action distinction with encoder gradients. Smoke
+checkpoints are not reused for formal training.
+
+This optional workflow starts from physical batch 200 and can reduce the
+physical microbatch if measured memory exceeds 10.3 GiB or CUDA runs out of
+memory. Effective batch stays 200. Measured peaks and whether they reach
+9.5–10.3 GiB are recorded; other failures stop the guarded launch for inspection.
+This calibration is **not run by `retrain.sh`**.
+
+For a deliberate restart on the old occupied server, the separate
+`stop_old_evrptw_rl.py` helper can inspect old TR17/TR18 identities without taking
+action. Its explicit `--stop` option verifies those identities, backs up
+already-saved checkpoints and metadata, then sends SIGTERM only to the verified
+processes. Unsaved in-progress work is not checkpointed by stopping. This helper
+is optional and is not part of the idle-server direct-retraining steps above.
+
+The recorded CPU evidence and its limits are in [STABILITY_VALIDATION_REPORT.md](STABILITY_VALIDATION_REPORT.md).

@@ -214,17 +214,20 @@ def test_preflight_foreground_combination_never_starts_worker(tmp_path, monkeypa
     assert not (tmp_path / "launchers").exists()
 
 
-def test_start_holds_lock_and_freezes_jobs_before_spawning(tmp_path, monkeypatch):
+@pytest.mark.parametrize("direct", [False, True])
+def test_start_holds_lock_and_freezes_jobs_before_spawning(tmp_path, monkeypatch, direct):
     import fcntl
     import os
     from types import SimpleNamespace
-    monkeypatch.setattr(launch.sys, "argv", ["launch", "--output-root", str(tmp_path)])
+    monkeypatch.setattr(launch.sys, "argv", ["launch", "--output-root", str(tmp_path)] + (["--skip-calibration", "--gpus", "0,1"] if direct else []))
     monkeypatch.setattr(launch, "preflight", lambda *args: {"input_sha256": {"file": "hash"}})
     monkeypatch.setattr(launch, "capture_source", lambda *args: {"source_sha256": "frozen-source"})
     def fake_popen(command, **kwargs):
         request = json.loads((tmp_path / "launchers/2080ti_4_2/launch_request.json").read_text())
         assert request["source_sha256"] == "frozen-source"
         assert len(request["jobs"]) == 2
+        assert request["skip_calibration"] is direct
+        assert [job["gpu"] for job in request["jobs"]] == ([0, 1] if direct else [2, 3])
         fd = kwargs["pass_fds"][0]
         assert flag(command, "--launch-lock-fd") == str(fd)
         os.fstat(fd)
@@ -298,3 +301,47 @@ def test_actual_training_gradient_required_beyond_parameter_decay(tmp_path, grad
     (tmp_path / "reward_diagnostics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     with pytest.raises(RuntimeError, match="training gradients"):
         launch.audit_probe(tmp_path)
+
+
+def test_direct_worker_starts_formal_jobs_on_assigned_gpus_without_probes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    jobs = launch.stable_jobs(gpus=(0, 1))
+    launcher = tmp_path / "launchers/2080ti_4_2"
+    launch.write_json(launcher / "launch_request.json", {
+        "jobs": jobs, "source_sha256": "frozen", "skip_calibration": True,
+    })
+    gpus = [{"index": i, "uuid": f"GPU-{i}"} for i in (0, 1)]
+    monkeypatch.setattr(launch.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(launch, "require_source", lambda *args: None)
+    monkeypatch.setattr(launch, "preflight", lambda *args: {"gpus": gpus, "input_sha256": {}})
+    monkeypatch.setattr(launch, "lock_gpus", lambda *args: [])
+    monkeypatch.setattr(launch, "available_gpus", lambda *args: gpus)
+    monkeypatch.setattr(launch, "capture_source", lambda *args: {"source_sha256": "frozen", "source_version": "test"})
+    monkeypatch.setattr(launch, "audit_inputs", lambda *args: {"input_sha256": {}})
+    monkeypatch.setattr(launch, "calibrate_job", lambda *args: pytest.fail("direct mode must skip calibration"))
+    monkeypatch.setattr(launch.legacy, "completion_status", lambda *args: "completed")
+    calls = []
+    def fake_popen(command, **kwargs):
+        assert flag(command, "--training-epochs") == "10000"
+        assert flag(command, "--samples-per-instance") == "30"
+        assert flag(command, "--graph-aggregation") == "mean"
+        assert flag(command, "--physical-batch-size") == "200"
+        assert flag(command, "--effective-batch-size") == "200"
+        assert flag(command, "--ema-warmup-steps") == "1000"
+        assert "--resume" not in command
+        calls.append(kwargs["env"]["CUDA_VISIBLE_DEVICES"])
+        return SimpleNamespace(pid=100 + len(calls), returncode=0, poll=lambda: 0)
+    monkeypatch.setattr(launch.subprocess, "Popen", fake_popen)
+    assert launch.worker(SimpleNamespace(output_root=tmp_path, launch_lock_fd=None)) == 0
+    assert calls == ["GPU-0", "GPU-1"]
+    selected = json.loads((tmp_path / "selected_jobs.json").read_text())
+    assert all(job["calibration_status"] == "skipped_direct_retrain" for job in selected)
+    assert all("measured_peak_process_gib" not in job for job in selected)
+    assert not (tmp_path / "calibrated_jobs.json").exists()
+    assert not (tmp_path / "calibration").exists()
+
+
+@pytest.mark.parametrize("value", ["0,0", "-1,2", "0", "0,1,2", "0,a"])
+def test_invalid_gpu_pair_is_rejected(value):
+    with pytest.raises(launch.argparse.ArgumentTypeError):
+        launch.parse_gpus(value)

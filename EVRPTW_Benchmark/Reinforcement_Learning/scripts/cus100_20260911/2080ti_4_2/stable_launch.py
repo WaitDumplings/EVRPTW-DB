@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fresh, guarded TR17/TR18 mean-aggregation retraining on physical GPU 3/2."""
+"""Fresh TR17/TR18 mean-aggregation retraining on a configurable GPU pair."""
 from __future__ import annotations
 
 import argparse
@@ -37,7 +37,7 @@ def resolve_existing(value, *, repo=REPO):
     return (current if current.exists() or not fallback.exists() else fallback).resolve()
 
 
-def stable_jobs(*, manifest=legacy.MANIFEST, artifact_root=None, road_root=None, synthetic_root=None):
+def stable_jobs(*, manifest=legacy.MANIFEST, artifact_root=None, road_root=None, synthetic_root=None, gpus=None):
     old = {row["experiment_id"]: row for row in legacy.load_jobs(manifest)}
     artifacts = resolve_existing(artifact_root or os.environ.get("CUS100_ARTIFACT_ROOT", legacy.RUN_ROOT))
     jobs = []
@@ -66,6 +66,8 @@ def stable_jobs(*, manifest=legacy.MANIFEST, artifact_root=None, road_root=None,
         # measured physical microbatch may change on a card with less free RAM.
         job["extra_args"] = ["--activation-checkpoint-stride", "1", "--graph-aggregation", "mean",
                              "--learning-rate", "0.001", "--ema-warmup-steps", "1000"]
+        if gpus is not None:
+            job["gpu"] = gpus[len(jobs)]
         jobs.append(job)
     return jobs
 
@@ -403,16 +405,28 @@ def worker(args):
             audit["source_snapshot"] = snapshot
             write_json(launcher / "preflight.json", audit)
             selected = []
-            for job, gpu in zip(jobs, audit["gpus"]):
-                write_json(launcher / "status.json", {"status": "calibrating", "pid": os.getpid(), "time": timestamp(), "experiment_id": job["experiment_id"], "jobs": records})
-                selected.append(calibrate_job(job, root, gpu, locks, snapshot["source_sha256"]))
+            if request.get("skip_calibration", False):
+                for job in jobs:
+                    direct = copy.deepcopy(job)
+                    # Keep old sum-profile measurements as historical context,
+                    # never as measurements of this new mean-aggregation run.
+                    historical = {key: direct.pop(key) for key in list(direct)
+                                  if key.startswith(("calibration_", "measured_"))}
+                    direct.update(enabled=True, calibration_status="skipped_direct_retrain",
+                                  legacy_profile=historical)
+                    selected.append(direct)
+            else:
+                for job, gpu in zip(jobs, audit["gpus"]):
+                    write_json(launcher / "status.json", {"status": "calibrating", "pid": os.getpid(), "time": timestamp(), "experiment_id": job["experiment_id"], "jobs": records})
+                    selected.append(calibrate_job(job, root, gpu, locks, snapshot["source_sha256"]))
             require_source(snapshot["source_sha256"])
-            # Recheck both cards after every smoke run has finished and before
-            # starting either formal child. Other GPU 0/1 work is irrelevant.
+            # Recheck assigned cards before starting either formal child.
             available_gpus(selected)
             if audit_inputs(selected)["input_sha256"] != audit["input_sha256"]:
-                raise RuntimeError("Frozen inputs changed during calibration; formal training was not started")
-            write_json(root / "calibrated_jobs.json", selected)
+                raise RuntimeError("Frozen inputs changed before formal training")
+            write_json(root / "selected_jobs.json", selected)
+            if not request.get("skip_calibration", False):
+                write_json(root / "calibrated_jobs.json", selected)
             for job, gpu in zip(selected, audit["gpus"]):
                 out = root / "runs" / job["experiment_id"]
                 out.mkdir(parents=True, exist_ok=False)
@@ -455,6 +469,16 @@ def worker(args):
                 os.close(descriptor)
 
 
+def parse_gpus(value):
+    try:
+        indices = tuple(int(part.strip()) for part in value.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError("--gpus needs two physical indices, e.g. 0,1") from None
+    if len(indices) != 2 or len(set(indices)) != 2 or min(indices) < 0:
+        raise argparse.ArgumentTypeError("--gpus needs two distinct nonnegative indices, in Road,Euclidean order")
+    return indices
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("start", "worker", "status", "preflight"), default="start")
@@ -463,6 +487,8 @@ def main():
     parser.add_argument("--road-root", type=Path)
     parser.add_argument("--synthetic-root", type=Path)
     parser.add_argument("--foreground", action="store_true")
+    parser.add_argument("--gpus", type=parse_gpus, help="Physical GPU indices in Road,Euclidean order; default 2,3")
+    parser.add_argument("--skip-calibration", action="store_true", help="Start fresh formal training immediately with physical/effective batch 200")
     parser.add_argument("--launch-lock-fd", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     launcher = args.output_root.resolve() / "launchers/2080ti_4_2"
@@ -471,7 +497,7 @@ def main():
         return 0
     if args.mode == "worker":
         return worker(args)
-    jobs = stable_jobs(artifact_root=args.artifact_root, road_root=args.road_root, synthetic_root=args.synthetic_root)
+    jobs = stable_jobs(artifact_root=args.artifact_root, road_root=args.road_root, synthetic_root=args.synthetic_root, gpus=args.gpus)
     if args.mode == "preflight":
         print(json.dumps(preflight(jobs, args.output_root.resolve()), indent=2))
         return 0
@@ -481,7 +507,7 @@ def main():
         audit = preflight(jobs, args.output_root.resolve())
         snapshot = capture_source(REPO, args.output_root.resolve() / "provenance")
         request = {"time": timestamp(), "jobs": jobs, "source_sha256": snapshot["source_sha256"],
-                   "hostname": socket.gethostname(), "input_audit": audit}
+                   "hostname": socket.gethostname(), "input_audit": audit, "skip_calibration": args.skip_calibration}
         write_json(launcher / "launch_request.json", request)
         if args.foreground:
             args.launch_lock_fd = lock.fileno()

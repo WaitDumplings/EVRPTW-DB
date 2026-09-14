@@ -41,3 +41,7 @@ Use [README.md](README.md) and `evrptw_rl_stable.sh`. It runs new `TR18_stable_m
 GPU memory has **not** been measured for this revision. With both cards free, the launcher tests physical batch 200 and reduces it if OOM or measured process peak exceeds 10.3 GiB; effective batch remains 200. It records whether the measured peak reaches 9.5–10.3 GiB. Each source must finish the six-update actual GPU training/baseline/validation checks and the multi-state policy diagnostic before either formal job begins. Failures stop deployment for inspection.
 
 Original TR17/TR18 outputs are retained. The explicit stop helper verifies process identity and backs up already-saved checkpoints before TERM; unsaved current progress is not checkpointed by stopping. The optional stop helper has not been run against the user’s jobs during this repair.
+
+## Direct retraining option
+
+The subsequent `retrain.sh` entry starts formal training immediately on two free GPUs (default Road GPU0 / Euclidean GPU1), as requested. It skips the optional GPU probes above, retains physical/effective batch 200, and records calibration as skipped. CPU validation above remains applicable; no new GPU-memory measurement is claimed. The updated deployment suite passes 45 tests, including the actual worker path with mocked process spawning and frozen GPU/skip settings.
