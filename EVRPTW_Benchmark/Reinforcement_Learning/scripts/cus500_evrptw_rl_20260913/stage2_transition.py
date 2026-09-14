@@ -31,6 +31,10 @@ from ...common.training_protocol import (
     assert_checkpoint_training_signature, freeze_resolved_training_signature,
     resolved_training_signature_from_args, validation_key,
 )
+from ...common.training_stream import (
+    load_training_stream_contract, read_stream_view_ids, stream_content_sha256,
+    training_stream_contract_digest,
+)
 
 # Audited checkpoint_epoch_0200.pt of the existing, unmodified source run.
 # Every scientific/configuration field (including the stream path) is frozen by
@@ -199,21 +203,121 @@ def _validate_source_payload(payload: dict, epoch: int) -> argparse.Namespace:
     return args
 
 
-def stage2_args(source_args: argparse.Namespace, destination_run: Path | str) -> argparse.Namespace:
-    """Resolve the exact destination signature using real method helpers."""
+def _target_stream_descriptor(target_stream: dict | Path | str | None) -> dict | None:
+    if target_stream is None:
+        return None
+    descriptor = (json.loads(Path(target_stream).read_text())
+                  if isinstance(target_stream, (str, Path)) else deepcopy(target_stream))
+    _require(isinstance(descriptor, dict) and "path" in descriptor and "contract" in descriptor,
+             "target stream requires path and contract descriptor fields")
+    descriptor["path"] = str(Path(descriptor["path"]).resolve())
+    contract = descriptor["contract"]
+    _require(isinstance(contract, dict) and contract.get("sha256") == training_stream_contract_digest(contract),
+             "target stream contract SHA256 differs")
+    return descriptor
+
+
+def _validate_target_stream(source_args: argparse.Namespace, descriptor: dict) -> dict:
+    """Rehash both artifacts and verify the complete existing stream prefix."""
+    source_path, target_path = Path(source_args.training_stream_path).resolve(), Path(descriptor["path"])
+    _require(source_path != target_path, "target stream must be a separate extended artifact")
+    source_contract = load_training_stream_contract(source_path)
+    target_contract = load_training_stream_contract(target_path)
+    _require(state_equal(source_contract, source_args.training_stream_contract_snapshot),
+             "source stream artifact differs from the audited checkpoint snapshot")
+    _require(state_equal(target_contract, descriptor["contract"]),
+             "target stream artifact differs from the supplied descriptor")
+    for field in ("schema", "stream_schema", "content_digest_scheme", "scale", "seed",
+                  "source_index_sha256", "allowed_family_ids_sha256"):
+        _require(source_contract.get(field) == target_contract.get(field),
+                 f"target stream changes source support/configuration field: {field}")
+    expected_count = BOUNDARY_EPOCH * 48 + (source_args.training_epochs - BOUNDARY_EPOCH) * 72
+    _require(source_contract["sample_count"] == 480000 and target_contract["sample_count"] == expected_count,
+             "target stream sample budget differs from the three-worker continuation")
+    target_file_sha = sha256_file(target_path)
+    _require(descriptor.get("file_sha256", target_file_sha) == target_file_sha,
+             "target stream file SHA256 differs from the supplied descriptor")
+    source_ids = read_stream_view_ids(source_path)
+    target_prefix = read_stream_view_ids(target_path, stop=len(source_ids))
+    _require(source_ids == target_prefix, "target stream does not preserve the complete source prefix")
+    return {
+        "source_path": str(source_path), "destination_path": str(target_path),
+        "source_contract_sha256": source_contract["sha256"],
+        "destination_contract_sha256": target_contract["sha256"],
+        "source_file_sha256": sha256_file(source_path),
+        "destination_file_sha256": target_file_sha,
+        "verified_prefix_sample_count": len(source_ids),
+        "verified_prefix_content_sha256": stream_content_sha256(source_ids),
+        "source_sample_count": source_contract["sample_count"],
+        "destination_sample_count": target_contract["sample_count"],
+        "preserved_stream_cursor": BOUNDARY_EPOCH * 48,
+        "verification": "runtime_full_content_rehash_and_exact_complete_prefix_comparison",
+    }
+
+
+def stage2_args(source_args: argparse.Namespace, destination_run: Path | str, *,
+                target_world_size: int = 2, target_stream: dict | Path | str | None = None) -> argparse.Namespace:
+    """Resolve the destination with real helpers and a strict migration allowlist.
+
+    Stream bytes are validated once by prepare_stage2_run; this pure argument
+    resolver also supports the watcher's pre-stop launch-signature rehearsal.
+    """
     args = deepcopy(source_args)
     args.output_dir = Path(destination_run).resolve()
     args.resume = True
     args.ema_warmup_steps = BOUNDARY_EPOCH
+    _require(target_world_size in (2, 3), "stage2 target world size must be two or three")
+    descriptor = _target_stream_descriptor(target_stream)
+    _require((target_world_size == 3) == (descriptor is not None),
+             "three-worker continuation requires an extended target stream; two-worker mode preserves the source stream")
+    if target_world_size == 3:
+        args.expected_world_size = 3
+        args.effective_batch_size = 72
+        args.customer_exposure_budget = (BOUNDARY_EPOCH * 48 + (args.training_epochs - BOUNDARY_EPOCH) * 72) * 500
+        _require(descriptor["contract"].get("sample_count") == args.customer_exposure_budget // 500,
+                 "target stream sample budget differs from the three-worker continuation")
+        for field in ("schema", "stream_schema", "content_digest_scheme", "scale", "seed",
+                      "source_index_sha256", "allowed_family_ids_sha256"):
+            _require(source_args.training_stream_contract_snapshot.get(field) == descriptor["contract"].get(field),
+                     f"target stream changes source support/configuration field: {field}")
+        args.training_stream_path = Path(descriptor["path"])
+        args.training_stream_contract_snapshot = deepcopy(descriptor["contract"])
+        args.training_stream_contract_sha256 = descriptor["contract"]["sha256"]
+        if getattr(args, "reuse_preverified_training_streams", False):
+            args.training_stream_contract_snapshot_json = json.dumps(descriptor["contract"], sort_keys=True)
+        args.stream_continuation_epoch = BOUNDARY_EPOCH
+        args.stream_continuation_cursor = BOUNDARY_EPOCH * 48
+        args.stream_continuation_source_batch = 48
     prepare_method(args)
-    configure_distributed_contract(args, DistributedContext(rank=0, world_size=2), method="EVRPTW-RL")
+    configure_distributed_contract(args, DistributedContext(rank=0, world_size=target_world_size), method="EVRPTW-RL")
     signature = freeze_resolved_training_signature(args)
     expected = deepcopy(source_args.resolved_training_signature)
     expected["method_specific"]["ema_warmup_steps"] = BOUNDARY_EPOCH
     expected["method_specific"]["rollout_baseline_warmup_optimizer_updates"] = BOUNDARY_EPOCH
+    if target_world_size == 3:
+        expected["effective_batch_size"] = 72
+        expected["customer_exposure_budget"] = args.customer_exposure_budget
+        expected["training_stream_path"] = descriptor["path"]
+        expected["training_stream_contract_sha256"] = descriptor["contract"]["sha256"]
+        expected["distributed_training"]["world_size"] = 3
+        expected["distributed_training"]["effective_batch_size_global"] = 72
+        expected["distributed_training"]["stream_continuation"] = {
+            "schema": "drl_stream_continuation_v1", "completed_source_epochs": BOUNDARY_EPOCH,
+            "source_stream_cursor": BOUNDARY_EPOCH * 48, "source_effective_batch_size": 48,
+        }
     expected.pop("sha256")
     _require({key: value for key, value in signature.items() if key != "sha256"} == expected,
-             "stage2 changes a training-signature field other than EMA cutoff")
+             "stage2 changes a training-signature field outside the schedule/topology/stream allowlist")
+    allowed = {"output_dir", "resume", "ema_warmup_steps", "resolved_training_method_fields",
+               "distributed_contract", "resolved_training_signature", "resolved_training_signature_sha256"}
+    if target_world_size == 3:
+        allowed.update({"expected_world_size", "effective_batch_size", "customer_exposure_budget",
+                        "training_stream_path", "training_stream_contract_snapshot", "training_stream_contract_sha256",
+                        "training_stream_contract_snapshot_json", "stream_continuation_epoch",
+                        "stream_continuation_cursor", "stream_continuation_source_batch"})
+    _require(state_equal({k: v for k, v in vars(args).items() if k not in allowed},
+                         {k: v for k, v in vars(source_args).items() if k not in allowed}),
+             "stage2 changes an argument outside the explicit migration allowlist")
     return args
 
 
@@ -272,13 +376,55 @@ def _validate_histories(histories: dict[str, list[dict]], payloads: dict[int, di
                      "historical selected validation summary differs from committed history")
 
 
-def _migrate_payload(payload: dict, destination: Path, epoch: int, source_path: Path, source_sha: str) -> dict:
+def _new_rank_rng(payload: dict, source_sha: str, rank: int) -> tuple[dict, dict]:
+    """Create independent host RNGs without initializing CUDA on the CPU migrator.
+
+    The CUDA state is copied from the validated rank-zero checkpoint state.
+    The trainer explicitly reseeds torch for each actor rollout using seed,
+    epoch, microbatch and rank, before any actor sampling. Its new rank therefore
+    gets an independent CUDA stream before its first stochastic rollout.
+    """
+    material = {
+        "schema": "cus500_stage2_new_rank_rng_v1", "source_checkpoint_sha256": source_sha,
+        "protocol_id": payload["protocol_id"], "source_seed": int(payload["args"]["seed"]),
+        "destination_world_size": 3, "rank": rank,
+    }
+    digest = hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    seed = int(digest[:16], 16) % (2 ** 63 - 1)
+    rng = {
+        "python": random.Random(seed).getstate(),
+        "numpy": np.random.RandomState(seed % (2 ** 32)).get_state(),
+        "torch_cpu": torch.Generator(device="cpu").manual_seed(seed).get_state(),
+        "torch_cuda": payload["rank_rng_states"][0]["torch_cuda"].clone(),
+        "pool": np.random.default_rng(seed).bit_generator.state,
+    }
+    provenance = {
+        **material, "seed_material_sha256": digest, "derived_host_seed": seed,
+        "host_rng_policy": "independent_python_numpy_torch_cpu_pool_generators_from_sha256_seed",
+        "torch_cuda_policy": "clone_source_rank0_state_until_rank_specific_first_actor_manual_seed",
+        "first_actor_torch_seed": int(payload["args"]["seed"]) + 10_000_000 + (BOUNDARY_EPOCH + 1) * 100_000 + rank,
+        "cuda_initialized_by_migration": False,
+    }
+    return rng, provenance
+
+
+def _migrate_payload(payload: dict, destination: Path, epoch: int, source_path: Path, source_sha: str, *,
+                     target_world_size: int = 2, target_stream: dict | None = None,
+                     stream_extension: dict | None = None) -> dict:
     migrated = deepcopy(payload)
-    args = stage2_args(argparse.Namespace(**deepcopy(payload["args"])), destination)
+    args = stage2_args(argparse.Namespace(**deepcopy(payload["args"])), destination,
+                       target_world_size=target_world_size, target_stream=target_stream)
     migrated["args"] = vars(args)
     migrated["resolved_training_signature"] = deepcopy(args.resolved_training_signature)
     migrated["distributed_contract"] = deepcopy(args.distributed_contract)
     migrated["data_pass_state"]["last_checkpoint"] = str(destination / "checkpoint_latest.pt")
+    new_rank_provenance = None
+    if target_world_size == 3:
+        migrated["training_stream_contract"] = deepcopy(args.training_stream_contract_snapshot)
+        new_rng, new_rank_provenance = _new_rank_rng(payload, source_sha, 2)
+        migrated["rank_rng_states"].append(new_rng)
+        _require(state_equal(migrated["rank_rng_states"][:2], payload["rank_rng_states"]),
+                 "migration changed an existing rank RNG state")
     if epoch == BOUNDARY_EPOCH:
         migrated["baseline"] = deepcopy(migrated["model"])
     migrated["stage2_transition_provenance"] = {
@@ -287,11 +433,16 @@ def _migrate_payload(payload: dict, destination: Path, epoch: int, source_path: 
         "source_resolved_training_signature_sha256": payload["resolved_training_signature"]["sha256"],
         "destination_resolved_training_signature_sha256": args.resolved_training_signature_sha256,
         "source_ema_warmup_steps": SOURCE_WARMUP, "destination_ema_warmup_steps": BOUNDARY_EPOCH,
+        "source_world_size": 2, "destination_world_size": target_world_size,
+        "source_effective_batch_size": 48, "destination_effective_batch_size": args.effective_batch_size,
         "baseline_handoff_applied": epoch == BOUNDARY_EPOCH,
         "baseline_handoff": "copy_synchronized_actor_after_last_ema_optimizer_update",
-        "historical_checkpoint_compatible_prefix": epoch < BOUNDARY_EPOCH,
+        "historical_checkpoint_compatible_prefix": epoch < BOUNDARY_EPOCH and target_world_size == 2,
+        "historical_checkpoint_usage": ("validation_selection_weights_only_no_preboundary_resume"
+                                        if epoch < BOUNDARY_EPOCH and target_world_size == 3 else "strict_resume"),
         "historical_behavior": "epochs_1_through_300_use_paper_ema",
-        "preserved": "actor_optimizer_rank_rng_stream_epoch_validation_ema_probe_and_early_stop_state",
+        "preserved": "actor_optimizer_existing_rank_rng_stream_cursor_epoch_validation_ema_probe_and_early_stop_state",
+        "stream_extension": deepcopy(stream_extension), "new_rank_rng": new_rank_provenance,
     }
     # Whole-payload comparison is deliberately strict. Only these explicit
     # changes are authorized, so an omitted optimizer/RNG/selection field fails.
@@ -299,6 +450,9 @@ def _migrate_payload(payload: dict, destination: Path, epoch: int, source_path: 
     compare.pop("stage2_transition_provenance")
     for key in ("args", "resolved_training_signature", "distributed_contract", "baseline", "data_pass_state"):
         compare[key] = payload[key]
+    if target_world_size == 3:
+        compare["training_stream_contract"] = payload["training_stream_contract"]
+        compare["rank_rng_states"] = compare["rank_rng_states"][:2]
     _require(state_equal(compare, payload), "migration changed an unauthorized checkpoint field")
     assert_checkpoint_training_signature(migrated, args)
     return migrated
@@ -307,7 +461,9 @@ def _migrate_payload(payload: dict, destination: Path, epoch: int, source_path: 
 def prepare_stage2_run(source_run: Path | str, destination_run: Path | str,
                        boundary_epoch: int = BOUNDARY_EPOCH,
                        expected_source_checkpoint_sha: str | None = None,
-                       source_checkpoint: Path | str | None = None) -> dict:
+                       source_checkpoint: Path | str | None = None, *,
+                       target_world_size: int = 2,
+                       target_stream: dict | Path | str | None = None) -> dict:
     """Publish a validated continuation; return its JSON-serializable manifest.
 
     The destination must be absent. Repeating an already completed identical
@@ -316,6 +472,10 @@ def prepare_stage2_run(source_run: Path | str, destination_run: Path | str,
     Only the explicitly named epoch-300 checkpoint may supply continuation state.
     """
     _require(boundary_epoch == BOUNDARY_EPOCH, "only the audited epoch-300 transition is supported")
+    _require(target_world_size in (2, 3), "stage2 target world size must be two or three")
+    descriptor = _target_stream_descriptor(target_stream)
+    _require((target_world_size == 3) == (descriptor is not None),
+             "three-worker continuation requires an extended target stream; two-worker mode preserves the source stream")
     source, destination = Path(source_run).resolve(), Path(destination_run).resolve()
     _require(source.is_dir(), "source run directory does not exist")
     _require(source != destination and source not in destination.parents and destination not in source.parents,
@@ -334,8 +494,15 @@ def prepare_stage2_run(source_run: Path | str, destination_run: Path | str,
         _require(report.get("schema") == SCHEMA and report.get("source_run") == str(source)
                  and report.get("destination_run") == str(destination)
                  and report.get("source_checkpoint_sha256") == source_sha
-                 and report.get("boundary_epoch") == boundary_epoch,
+                 and report.get("boundary_epoch") == boundary_epoch
+                 and report.get("destination_world_size", 2) == target_world_size
+                 and (target_world_size == 2 or (
+                     report.get("stream_extension", {}).get("destination_contract_sha256") == descriptor["contract"]["sha256"]
+                     and report.get("stream_extension", {}).get("destination_path") == descriptor["path"])),
                  "destination transition provenance differs")
+        if target_world_size == 3:
+            _require(sha256_file(descriptor["path"]) == report["stream_extension"]["destination_file_sha256"],
+                     "published target stream file SHA256 changed")
         for record in report["migrated_checkpoints"]:
             _require(sha256_file(destination / record["name"]) == record["destination_sha256"],
                      "immutable migrated checkpoint SHA256 changed")
@@ -376,6 +543,8 @@ def prepare_stage2_run(source_run: Path | str, destination_run: Path | str,
             _validate_source_payload(payload, epoch)
             payloads[epoch] = payload
         boundary = payloads[boundary_epoch]
+        stream_extension = (_validate_target_stream(argparse.Namespace(**boundary["args"]), descriptor)
+                            if descriptor is not None else None)
         histories = {}
         for name in HISTORIES:
             path = archive / name
@@ -394,7 +563,9 @@ def prepare_stage2_run(source_run: Path | str, destination_run: Path | str,
         for epoch, payload in payloads.items():
             name = f"checkpoint_epoch_{epoch:04d}.pt"
             original_sha = sha256_file(archive / name)
-            migrated = _migrate_payload(payload, destination, epoch, source / name, original_sha)
+            migrated = _migrate_payload(payload, destination, epoch, source / name, original_sha,
+                                         target_world_size=target_world_size, target_stream=descriptor,
+                                         stream_extension=stream_extension)
             torch.save(migrated, staging / name)
             reloaded = torch.load(staging / name, map_location="cpu", weights_only=False)
             _require(state_equal(migrated, reloaded), "serialized transition checkpoint does not round-trip exactly")
@@ -413,7 +584,7 @@ def prepare_stage2_run(source_run: Path | str, destination_run: Path | str,
         final = torch.load(staging / "checkpoint_latest.pt", map_location="cpu", weights_only=False)
         _json(staging / "data_pass_state.json", final["data_pass_state"])
         _json(staging / "progress.json", {"status": "stage2_prepared", "logical_epoch": boundary_epoch,
-                                          "phase": "awaiting_resume", "world_size": 2})
+                                          "phase": "awaiting_resume", "world_size": target_world_size})
         report = {
             "schema": SCHEMA, "prepared_at_utc": datetime.now(timezone.utc).isoformat(),
             "source_run": str(source), "destination_run": str(destination),
@@ -430,6 +601,11 @@ def prepare_stage2_run(source_run: Path | str, destination_run: Path | str,
             "first_baseline_probe_epoch": ((boundary_epoch // 100) + 1) * 100,
             "optimizer_steps": boundary_epoch, "stream_cursor": boundary_epoch * 48,
             "completed_validation_checks": final["completed_validation_checks"],
+            "source_world_size": 2, "destination_world_size": target_world_size,
+            "source_effective_batch_size": 48, "destination_effective_batch_size": final["args"]["effective_batch_size"],
+            "customer_exposure_budget": final["args"]["customer_exposure_budget"],
+            "stream_extension": stream_extension,
+            "new_rank_rng": final["stage2_transition_provenance"]["new_rank_rng"],
             "source_archive": archived, "migrated_checkpoints": migrated_records,
             "history_policy": "original bytes archived; active JSONL retains completed epochs <= 300 unchanged",
             "source_was_modified": False,

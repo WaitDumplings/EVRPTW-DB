@@ -1,38 +1,62 @@
-# EVRPTW-RL Road Cus500: enter greedy-baseline training after epoch 300
+# EVRPTW-RL Road500: three GPUs after epoch 300
 
-This watcher implements an explicit continuation of the existing two-GPU Road500 run. EVRPTW-RL uses hard environment constraints throughout; its phase change is **EMA baseline → greedy rollout baseline**, not DRL-TS's soft/hard constraint stages.
+The watcher waits for the existing two-GPU run to finish epoch-300 validation and save its checkpoint, then continues on **physical GPUs 0/1/2** from **epoch 301**. The previous two-GPU watcher is superseded. EVRPTW-RL's phase change is EMA baseline → greedy rollout baseline; the environment uses hard constraints throughout.
 
-The original run uses EMA for 1,000 optimizer updates. The continuation changes that boundary to 300, initializes the greedy baseline from the actor saved at epoch 300, and resumes at **epoch 301**. Epochs are global optimizer updates in this deployment. Actor weights, AdamW state, per-rank RNG, stream cursor, validation history, historical best checkpoints, and the original minimum/maximum budget are preserved. Epoch 301 consumes the next global batch after cursor 14,400.
+Each worker keeps **batch 24** and **30 trajectories**, so global batch increases from **48 to 72**. Rollout caps remain **1700 training / 2550 validation**. Architecture (sum aggregation), learning rate, objective, station auxiliary and validation cohort remain the same. This is continuation of the original trained actor and AdamW state. Advancing the baseline schedule alone does not guarantee that cost will improve.
 
-The current configuration stays on **physical GPUs 0/1**, batch **24 per rank / 48 global**, **30 trajectories per instance**, rollout caps **1700 training / 2550 validation**, and the original sum-aggregation architecture, objective, and station auxiliary. This continuation does not apply the separate mean-aggregation retraining change. Advancing the baseline schedule alone does not guarantee that cost will improve. The original calibration already exercised the greedy-baseline transition with this batch size, peaking at 10,254 MiB per GPU.
+## Start and status
 
-## Register on this server
-
-Run from the isolated worktree containing these scripts. The default source is the live `cus500-evrptw-rl-after-am` experiment; the default destination is this worktree's `EVRPTW_Benchmark/results/cus500_evrptw_rl_stage2_at300_20260914`.
+From the isolated `cus500-evrptw-stage2-3gpu` worktree:
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_evrptw_rl_20260913/watch_stage2_at300.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_evrptw_rl_20260913/watch_stage2_gpu012.sh
 ```
 
-It registers a background watcher and returns immediately. Do not register it a second time. A duplicate registration in the same output directory is rejected. Use `CUS500_STAGE2_PYTHON` to select another compatible Python, or `--source-request /absolute/path/to/launch_request.json` and `--output-root /absolute/path` for explicit paths. The checkpoint migration is restricted to this audited Road500 configuration and epoch 300.
+This registers a background watcher. Do not register a second copy. To inspect it:
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_evrptw_rl_20260913/watch_stage2_at300.sh --mode status
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_evrptw_rl_20260913/watch_stage2_gpu012.sh --mode status
 ```
 
-Records are under `<output-root>/watcher/`: `request.json`, `status.json`, `watcher.log`, and (after stopping) `source_stop.json`. `stage2_config.json` records the changed schedule. The resumed run is under `<output-root>/runs/evrptw_rl_road_cus500_seed1234`; its launcher is under `launchers/local_after_am_gpu01/evrptw_rl`.
+The default source request belongs to `/data/Maojie/ICLR/cus500-evrptw-rl-after-am`. The destination is this worktree's `EVRPTW_Benchmark/results/cus500_evrptw_rl_stage2_3gpu_20260914`.
 
-## Handoff conditions
+Use `CUS500_STAGE2_PYTHON` for another compatible Python, or explicit `--source-request` and `--output-root` paths. This checkpoint migration is restricted to the audited Road500 source configuration and epoch 300. The older two-GPU behavior remains available with `watch_stage2_at300.sh --stage2-gpus 0,1` and a separate output root.
 
-1. Wait for epoch-300 validation, `checkpoint_epoch_0300.pt`, and the matching committed state. A training or validation log line alone cannot trigger a stop.
-2. Prepare an independent continuation directory, archive source checkpoint bytes with hashes, copy the epoch-300 actor into its baseline, and explicitly record the signature migration. Validate the exact resumed CLI, model, optimizer, dataset and reward contract **before stopping** the source.
-3. Signal only the registered torchrun through a Linux pidfd. Verify UID, PID start time, exact command, output path, process ancestry and working directory. Wait for the source launcher and both workers to exit and release the GPU locks. Other tasks are not signalled.
-4. Start the resumed two-rank trainer with the same UUID-bound GPU0/1 pair. Mark `handed_off` only after a newly completed epoch reports `baseline_kind=greedy_rollout`.
+## Training state and data accounting
 
-The old run and its original launch request remain available. The original launcher may record the intentional SIGTERM as `failed`; the separate `source_stop.json` explains the planned handoff. Any work begun after checkpoint 300 before the watcher stops the process is discarded; the continuation resumes exactly from checkpoint 300. The watcher records failures and does not silently restart or overwrite runs. If its host reboots or a prerequisite changes, inspect the recorded phase before intervening.
+Epochs 1–300 consumed **14,400** instances (`300 × 48`). After migration:
 
-The first paired baseline comparison is at epoch 400 (`step > 300`, interval 100), while greedy-baseline training starts at 301. The inherited budget remains minimum 5,000, maximum 10,000 epochs with the original validation and early-stop settings.
+- Epoch 301 reads stream positions `[14400, 14472)`, split into three consecutive 24-instance shards.
+- Completed epoch `e ≥ 300` has consumed `14400 + (e − 300) × 72` instances. Cursor and customer exposure are never reconstructed as `e × 72`.
+- The maximum remains 10,000 epochs, requiring **712,800** stream entries and **356,400,000** customer exposures; minimum epochs and early stopping remain 5,000 and the original settings.
+- The extended training stream preserves the complete original **480,000-entry prefix**, verified by content hash. It then extends the same deterministic shuffle cycles.
 
-## Validation
+The stage boundary copies the epoch-300 actor into its greedy baseline. Both original workers' RNG states, actor weights, AdamW moments/step, stream cursor, historical validation/best selections, and previous runtime accounting are preserved. New worker 2 receives independently seeded Python/NumPy/pool/CPU RNG state; its CUDA RNG starts from a documented copy of source worker 0 and is independently reseeded by the existing rank-specific actor rollout seed before its first action. This topology change is recorded explicitly and does not claim bitwise equivalence to the old two-worker trajectory.
 
-44 CPU tests passed, including watcher process guards, exact migration state, and the existing two-rank Gloo EMA/greedy/resume tests. A separate CPU-only rehearsal used the real epoch-200 checkpoint with a test-process boundary override, verified the actual resumed CLI and strict checkpoint loader, and checked exact actor, AdamW, RNG, baseline and historical-best state. It left the source checkpoint unchanged; production code remains fixed to epoch 300. No GPU training was started by that rehearsal.
+The first greedy-baseline update is epoch 301. The first paired baseline comparison remains epoch 400 (`step > 300`, interval 100). Accumulated GPU hours retain the original two-worker hours and add only the new three-worker session hours.
+
+## Safe handoff and records
+
+1. Require matching epoch-300 validation, epoch artifact, latest checkpoint and committed state. A training/validation log row alone cannot trigger stopping.
+2. Prepare an independent run, archive original checkpoint bytes with hashes, and explicitly migrate schedule/topology/stream signatures. Check the exact resumed CLI, actor, optimizer, data and GPU2 availability before stopping the source.
+3. Signal only the registered torchrun via Linux pidfd after checking PID start time, UID, exact argv/cwd and ancestry. Wait for the original launcher and both workers to exit and release their locks. GPU3 and other tasks are untouched.
+4. Recheck all three GPU UUIDs and availability, acquire all three GPU locks, then launch three workers. Confirm handoff only after a newly completed epoch reports `baseline_kind=greedy_rollout`.
+
+The old launcher may record its intentional SIGTERM as `failed`; `watcher/source_stop.json` records the planned reason. Any speculative work after checkpoint 300 is discarded. Failures are recorded rather than silently overwriting or restarting a run. If the host reboots or a prerequisite changes, inspect the recorded phase before intervening.
+
+Output records:
+
+- `watcher/request.json`, `status.json`, `watcher.log`, `source_stop.json`
+- `stage2_config.json`, `stage2_stream_preparation.json`, `verification/`
+- `runs/evrptw_rl_road_cus500_seed1234/stage2_transition.json` and `source_checkpoint_archive/`
+- `launchers/local_stage2_gpu012/evrptw_rl/status.json` and training logs in the run directory
+
+The new checkpoint's signed continuation fields permit later ordinary three-worker `--resume` with the same config, output, source and stream. Starting from a historical best checkpoint before the transition boundary is rejected as a continuation, while evaluating those historical weights remains supported.
+
+## Validation evidence
+
+202 deployment/distributed regression tests passed. The final 13-test continuation suite also passed after preserving migration lineage in subsequent checkpoints. The three-rank CPU Gloo test checks actual batch 24 × 30 per rank, the global gradient denominator, epoch-300 AdamW/RNG restore, contiguous samples from position 14,400, and exact interrupted/resumed state.
+
+A read-only rehearsal with the real epoch-200 checkpoint used a private temporary 715,200-entry stream and a test-process boundary override. The actual three-worker CLI, model and AdamW checkpoint loader passed; original weights, worker 0/1 RNG and accumulated GPU hours were preserved. Production remains fixed to epoch 300 with 712,800 stream entries.
+
+GPU2 separately passed an actual actor + greedy-baseline + backward/update using source checkpoint 200, batch24, n-traj30 and H1700. Peak process memory was 10,168 MiB (9.93 GiB), total probe time 217.58 seconds, with finite gradients and a nonzero parameter update. The H2550 validation-shaped probe used one training instance. This was a single-GPU feasibility test; simultaneous three-GPU NCCL training will first run at the planned handoff. Prior two-GPU calibration already passed the greedy transition at 10,254 MiB per rank.

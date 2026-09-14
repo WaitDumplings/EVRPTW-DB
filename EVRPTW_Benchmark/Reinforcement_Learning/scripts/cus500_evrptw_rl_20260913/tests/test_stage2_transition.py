@@ -7,6 +7,7 @@ import random
 import shutil
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 
@@ -17,7 +18,9 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.protocol_trainers import _lo
 from EVRPTW_Benchmark.Reinforcement_Learning.common.reward_contract import reward_contract_from_args
 from EVRPTW_Benchmark.Reinforcement_Learning.common.objective import objective_from_args
 from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import freeze_resolved_training_signature, assert_checkpoint_training_signature
-from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import training_stream_contract_digest
+from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import (
+    STREAM_SCHEMA, atomic_write_stream, load_training_stream_contract, training_stream_contract_digest,
+)
 from EVRPTW_Benchmark.Reinforcement_Learning.scripts.cus500_evrptw_rl_20260913 import stage2_transition as transition
 
 CONFIGS = Path(__file__).resolve().parents[3] / "configs"
@@ -224,3 +227,135 @@ def test_incomplete_latest_publication_and_ahead_sidecar_rejected(source, tmp_pa
     path.write_text(json.dumps(sidecar))
     with pytest.raises(ValueError, match="sidecar is ahead"):
         transition.prepare_stage2_run(source, tmp_path / "destination")
+
+
+@pytest.fixture
+def target_stream(source, tmp_path, monkeypatch):
+    """Exercise real artifact hashes and the entire 480,000-ID source prefix."""
+    source_path, target_path = tmp_path / "stream.parquet", tmp_path / "extended.parquet"
+    ids = np.asarray([f"view-{i % 127}" for i in range(712800)])
+    manifest = {"schema": STREAM_SCHEMA, "scale": "Cus500", "seed": 1234,
+                "source_index_sha256": "b" * 64, "prefix_stable": True}
+    for path, count in ((source_path, 480000), (target_path, 712800)):
+        atomic_write_stream(path, pd.DataFrame({"stream_position": np.arange(count), "view_id": ids[:count]}),
+                            {**manifest, "sample_count": count})
+    contract = load_training_stream_contract(source_path)
+    for epoch in (100, 200, 300):
+        path = source / f"checkpoint_epoch_{epoch:04d}.pt"
+        payload = torch.load(path, weights_only=False)
+        args = Namespace(**payload["args"])
+        args.training_stream_contract_snapshot = deepcopy(contract)
+        args.training_stream_contract_sha256 = contract["sha256"]
+        signature = freeze_resolved_training_signature(args)
+        payload.update(args=vars(args), resolved_training_signature=signature, training_stream_contract=deepcopy(contract))
+        torch.save(payload, path)
+    monkeypatch.setattr(transition, "EXPECTED_SOURCE_SIGNATURE_SHA256", signature["sha256"])
+    shutil.copy2(source / "checkpoint_epoch_0300.pt", source / "checkpoint_latest.pt")
+    return {"path": str(target_path), "contract": load_training_stream_contract(target_path)}
+
+
+def test_three_workers_preserve_real_prefix_state_and_initialize_only_new_rank(source, target_stream, tmp_path, monkeypatch):
+    destination = tmp_path / "three-workers"
+    original = torch.load(source / "checkpoint_epoch_0300.pt", weights_only=False)
+    before = {p.name: transition.sha256_file(p) for p in source.iterdir()}
+    global_rngs = (random.getstate(), np.random.get_state(), torch.get_rng_state())
+    def forbidden_cuda(*args, **kwargs):
+        raise AssertionError("CPU migration must not initialize CUDA")
+    monkeypatch.setattr(torch.cuda, "_lazy_init", forbidden_cuda)
+    report = transition.prepare_stage2_run(source, destination, target_world_size=3, target_stream=target_stream)
+    saved = torch.load(destination / "checkpoint_latest.pt", weights_only=False)
+    changed = {"args", "resolved_training_signature", "distributed_contract", "data_pass_state",
+               "baseline", "rank_rng_states", "training_stream_contract"}
+    for key in original.keys() - changed:
+        assert transition.state_equal(saved[key], original[key]), key
+    assert transition.state_equal(saved["rank_rng_states"][:2], original["rank_rng_states"])
+    assert transition.state_equal(saved["model"], saved["baseline"])
+    assert saved["data_pass_state"] == {**original["data_pass_state"], "last_checkpoint": str(destination / "checkpoint_latest.pt")}
+    assert transition.state_equal(global_rngs, (random.getstate(), np.random.get_state(), torch.get_rng_state()))
+    assert len(saved["rank_rng_states"]) == 3
+    extra = saved["rank_rng_states"][2]
+    for field in ("python", "numpy", "torch_cpu", "pool"):
+        assert all(not transition.state_equal(extra[field], old[field]) for old in original["rank_rng_states"])
+    assert transition.state_equal(extra["torch_cuda"], original["rank_rng_states"][0]["torch_cuda"])
+    expected_rng, provenance = transition._new_rank_rng(original, before["checkpoint_epoch_0300.pt"], 2)
+    assert transition.state_equal(extra, expected_rng)
+    assert report["new_rank_rng"] == provenance
+    assert provenance["first_actor_torch_seed"] == 40101236
+    args = Namespace(**saved["args"])
+    assert (args.expected_world_size, args.batch_size, args.physical_batch_size, args.effective_batch_size) == (3, 24, 24, 72)
+    assert (args.stream_continuation_epoch, args.stream_continuation_cursor, args.stream_continuation_source_batch) == (300, 14400, 48)
+    assert args.customer_exposure_budget == 356400000
+    assert report["stream_extension"]["verified_prefix_sample_count"] == 480000
+    assert report["stream_extension"]["destination_sample_count"] == 712800
+    assert saved["stream_cursor"] == saved["data_pass_state"]["instances_seen"] == 14400
+    assert json.loads((destination / "progress.json").read_text())["world_size"] == 3
+    transition.assert_stage2_launch_args(saved, args)
+    model, baseline = torch.nn.Linear(2, 1), torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    _load_checkpoint(destination / "checkpoint_latest.pt", policy=model, baseline=baseline,
+                     optimizer=optimizer, protocol_id=args.protocol_id,
+                     objective_config=objective_from_args(args), optimizer_name="adamw",
+                     optimizer_weight_decay=args.weight_decay, reward_contract_args=args)
+    assert transition.state_equal(optimizer.state_dict(), original["optimizer"])
+    for epoch in (100, 200):
+        historical = torch.load(destination / f"checkpoint_epoch_{epoch:04d}.pt", weights_only=False)
+        assert_checkpoint_training_signature(historical, args)
+        assert historical["stream_cursor"] == epoch * 48
+        assert historical["data_pass_state"]["instances_seen"] == epoch * 48
+        assert historical["stage2_transition_provenance"]["historical_checkpoint_usage"] == "validation_selection_weights_only_no_preboundary_resume"
+        assert not historical["stage2_transition_provenance"]["historical_checkpoint_compatible_prefix"]
+    assert before == {p.name: transition.sha256_file(p) for p in source.iterdir()}
+    assert transition.prepare_stage2_run(source, destination, target_world_size=3, target_stream=target_stream) == report
+    with pytest.raises(ValueError, match="provenance differs"):
+        transition.prepare_stage2_run(source, destination)
+    Path(target_stream["path"]).write_bytes(b"changed-stream")
+    with pytest.raises(ValueError, match="published target stream"):
+        transition.prepare_stage2_run(source, destination, target_world_size=3, target_stream=target_stream)
+
+
+@pytest.mark.parametrize("corruption", ["prefix", "support", "budget", "bytes", "descriptor"])
+def test_three_worker_stream_mismatch_fails_before_publication(source, target_stream, tmp_path, corruption):
+    path = Path(target_stream["path"])
+    manifest_path = path.with_suffix(".parquet.manifest.json")
+    manifest = json.loads(manifest_path.read_text())
+    if corruption == "descriptor":
+        target_stream["contract"]["sample_count"] -= 1
+    elif corruption == "bytes":
+        frame = pd.read_parquet(path)
+        frame.loc[0, "view_id"] = "changed-without-rehash"
+        frame.to_parquet(path)
+    else:
+        frame = pd.read_parquet(path)
+        if corruption == "prefix":
+            # Reject a change beyond the consumed 14,400 IDs as well.
+            frame.loc[200000, "view_id"] = "changed-prefix"
+        elif corruption == "support":
+            manifest["source_index_sha256"] = "c" * 64
+        else:
+            frame = frame.iloc[:-1]
+            manifest["sample_count"] = len(frame)
+        atomic_write_stream(path, frame, manifest)
+        target_stream["contract"] = load_training_stream_contract(path)
+    destination = tmp_path / "three-workers"
+    with pytest.raises(ValueError, match="stream"):
+        transition.prepare_stage2_run(source, destination, target_world_size=3, target_stream=target_stream)
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".three-workers.stage2-*"))
+
+
+def test_three_worker_requires_explicit_topology_and_stream(source, tmp_path):
+    with pytest.raises(ValueError, match="target world size"):
+        transition.prepare_stage2_run(source, tmp_path / "invalid", target_world_size=4)
+    with pytest.raises(ValueError, match="extended target stream"):
+        transition.prepare_stage2_run(source, tmp_path / "missing-stream", target_world_size=3)
+
+
+def test_argument_resolution_rejects_unapproved_method_changes(source, tmp_path, monkeypatch):
+    source_args = Namespace(**torch.load(source / "checkpoint_epoch_0300.pt", weights_only=False)["args"])
+    prepare = transition.prepare_method
+    def alter(args):
+        prepare(args)
+        args.instance_cache_size += 1
+    monkeypatch.setattr(transition, "prepare_method", alter)
+    with pytest.raises(ValueError, match="argument outside"):
+        transition.stage2_args(source_args, tmp_path / "destination")

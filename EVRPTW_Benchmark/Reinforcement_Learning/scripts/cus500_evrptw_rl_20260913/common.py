@@ -46,10 +46,8 @@ def parse_gpus(value):
     if not fields or any(not field.strip().isdigit() for field in fields):
         raise ValueError("CUS500_GPUS must be comma-separated physical GPU indices, e.g. 0,1")
     result = [int(field.strip()) for field in fields]
-    if len(result) != len(set(result)) or len(result) != 2:
-        raise ValueError("This deployment requires exactly two distinct GPU indices")
-    if result != [0, 1]:
-        raise ValueError("The after-AM EVRPTW-RL deployment is fixed to physical GPUs 0,1")
+    if result not in ([0, 1], [0, 1, 2]):
+        raise ValueError("Use physical GPUs 0,1 for the original run or 0,1,2 for stage2")
     return result
 
 
@@ -105,6 +103,15 @@ def load_config(path=None, *, model="evrptw_rl", gpus="0,1", batch=None, accumul
     config["effective_batch_size"] = (config["physical_batch_size"] * config["world_size"]
                                       * config["gradient_accumulation_steps"])
     config["sample_count"] = config["effective_batch_size"] * config["training_epochs"]
+    flags = ["--stream-continuation-epoch", "--stream-continuation-cursor", "--stream-continuation-source-batch"]
+    extra = config.get("extra_args", [])
+    if any(flag in extra for flag in flags):
+        if any(extra.count(flag) != 1 for flag in flags):
+            raise ValueError("Continuation requires all three unique stream cursor flags")
+        boundary, cursor, source_batch = [int(extra[extra.index(flag) + 1]) for flag in flags]
+        if not 0 < boundary < config["training_epochs"] or source_batch <= 0 or cursor != boundary * source_batch:
+            raise ValueError("Invalid continuation boundary/cursor")
+        config["sample_count"] = cursor + (config["training_epochs"] - boundary) * config["effective_batch_size"]
     config["customer_exposure_budget"] = config["sample_count"] * 500
     return config
 

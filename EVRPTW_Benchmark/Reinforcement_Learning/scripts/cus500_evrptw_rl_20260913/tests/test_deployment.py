@@ -24,7 +24,7 @@ def process(index=0, executable=DESKTOP_EXECUTABLE, memory=156):
     return {"gpu_uuid": f"GPU-{index}", "pid": 123, "used_memory_mib": memory, "executable": executable}
 
 
-@pytest.mark.parametrize("value", ["", "0", "0,0", "-1,2", "0,,1", "0,banana", "0,1,2", "1,2", "1,0"])
+@pytest.mark.parametrize("value", ["", "0", "0,0", "-1,2", "0,,1", "0,banana", "0,1,2,3", "1,2", "1,0"])
 def test_gpu_list_rejects_invalid(value):
     with pytest.raises(ValueError):
         parse_gpus(value)

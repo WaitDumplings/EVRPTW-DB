@@ -41,6 +41,37 @@ from .training_protocol import (
 from .training_stream import read_stream_view_ids
 
 
+def resolve_stream_continuation(args: Any) -> dict[str, Any] | None:
+    """Resolve one explicit batch-size transition without changing old signatures."""
+    fields = ("stream_continuation_epoch", "stream_continuation_cursor",
+              "stream_continuation_source_batch")
+    values = [getattr(args, field, None) for field in fields]
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError("stream continuation requires epoch, cursor and source batch together")
+    epoch, cursor, source_batch = map(int, values)
+    if epoch < 1 or source_batch < 1 or cursor != epoch * source_batch:
+        raise ValueError("stream continuation cursor must equal positive source epochs * source batch")
+    return {"schema": "drl_stream_continuation_v1", "completed_source_epochs": epoch,
+            "source_stream_cursor": cursor, "source_effective_batch_size": source_batch}
+
+
+def stream_cursor_after_epoch(args: Any, completed_epoch: int,
+                              effective_batch_size: int) -> int:
+    """Count actual consumed environments across an optional signed transition."""
+    epoch, effective = int(completed_epoch), int(effective_batch_size)
+    if epoch < 0 or effective < 1:
+        raise ValueError("completed epoch must be nonnegative and effective batch positive")
+    continuation = resolve_stream_continuation(args)
+    if continuation is None:
+        return epoch * effective
+    boundary = continuation["completed_source_epochs"]
+    if epoch <= boundary:
+        return epoch * continuation["source_effective_batch_size"]
+    return continuation["source_stream_cursor"] + (epoch - boundary) * effective
+
+
 def configure_distributed_contract(args: Any, context: DistributedContext, *,
                                    method: str = "AM-EVRPTW") -> dict[str, Any]:
     physical, effective = require_registered_batches(args, int(args.batch_size))
@@ -58,6 +89,9 @@ def configure_distributed_contract(args: Any, context: DistributedContext, *,
         "validation": "contiguous_instance_shards_preserving_global_seeds",
         "resume_topology": "fixed_world_size_and_batch_contract",
     }
+    continuation = resolve_stream_continuation(args)
+    if continuation is not None:
+        contract["stream_continuation"] = continuation
     if method in {"RRNCO-EV", "DRL-TS", "EVRPTW-RL"}:
         baseline = getattr(args, "reinforce_baseline", "paper")
         contract["method"] = method
@@ -121,14 +155,18 @@ def configure_distributed_contract(args: Any, context: DistributedContext, *,
 
 def shard_stream_epoch(view_ids: Sequence[str], *, logical_epoch: int,
                        physical_batch_size: int, effective_batch_size: int,
-                       rank: int, world_size: int) -> list[list[str]]:
+                       rank: int, world_size: int,
+                       start_cursor: int | None = None) -> list[list[str]]:
     """Partition one global batch without loading other ranks' instances."""
     physical, effective = int(physical_batch_size), int(effective_batch_size)
     if world_size < 1 or not 0 <= rank < world_size or physical < 1:
         raise ValueError("invalid rank/world size/physical batch")
     if effective <= 0 or effective % (physical * world_size):
         raise ValueError("effective batch must be divisible by physical batch times world size")
-    begin = (int(logical_epoch) - 1) * effective
+    if int(logical_epoch) < 1:
+        raise ValueError("logical epoch must be positive")
+    begin = ((int(logical_epoch) - 1) * effective
+             if start_cursor is None else int(start_cursor))
     if begin < 0 or begin + effective > len(view_ids):
         raise ValueError("logical epoch is outside the registered stream")
     return [list(view_ids[offset + rank * physical:offset + (rank + 1) * physical])
@@ -307,8 +345,15 @@ def train_distributed_reinforce_data_passes(
         if early_start >= epochs:
             raise ValueError("early-stop start must precede maximum training epochs")
         customers = _customer_count(args.scale)
-        if int(getattr(args, "customer_exposure_budget", 0) or 0) != epochs * effective * customers:
-            raise ValueError("customer-exposure budget must equal epochs * global effective batch * customers")
+        continuation = resolve_stream_continuation(args)
+        if continuation is not None:
+            if not args.resume:
+                raise ValueError("stream continuation requires an explicit --resume checkpoint")
+            if epochs < continuation["completed_source_epochs"]:
+                raise ValueError("training budget precedes the stream continuation boundary")
+        target_cursor = stream_cursor_after_epoch(args, epochs, effective)
+        if int(getattr(args, "customer_exposure_budget", 0) or 0) != target_cursor * customers:
+            raise ValueError("customer-exposure budget must equal final stream cursor * customers")
         output = Path(args.output_dir)
         output.mkdir(parents=True, exist_ok=True)
         state = load_state(output, args.protocol_id, bool(args.resume))
@@ -334,7 +379,9 @@ def train_distributed_reinforce_data_passes(
                 method=method, policy=policy, baseline=baseline,
                 objective_config=objective, contract_args=args)
         completed = int(payload.get("logical_epoch", 0))
-        cursor = completed * effective
+        cursor = stream_cursor_after_epoch(args, completed, effective)
+        if continuation is not None and completed < continuation["completed_source_epochs"]:
+            raise ValueError("resume checkpoint precedes the stream continuation boundary")
         if not 0 <= completed <= epochs:
             raise ValueError("checkpoint logical epoch is outside the requested budget")
         if args.resume:
@@ -353,7 +400,7 @@ def train_distributed_reinforce_data_passes(
             # checkpoint_latest.pt is atomically published BEFORE its JSON sidecar.
             # A crash in that window can leave a lagging sidecar, which is repairable.
             state = restored_state
-        view_ids = read_stream_view_ids(args.training_stream_path, stop=epochs * effective)
+        view_ids = read_stream_view_ids(args.training_stream_path, stop=target_cursor)
         task_map = pool._task_by_view_id
         missing = set(view_ids).difference(task_map)
         if missing:
@@ -422,6 +469,13 @@ def train_distributed_reinforce_data_passes(
     terminal_epoch = completed
     started = time.perf_counter()
     previous_wall = float(payload.get("total_wall_time_s", 0.0))
+    previous_gpu_hours = float(payload.get("total_gpu_hours", 0.0))
+
+    def gpu_hours(elapsed):
+        if continuation is not None:
+            return previous_gpu_hours + (elapsed - previous_wall) * context.world_size / 3600
+        return elapsed * context.world_size / 3600
+
     session = {"session_id": str(time.time_ns()), "resume_requested": bool(args.resume),
                "session_start_optimizer_steps": completed,
                "distributed_world_size": context.world_size,
@@ -457,12 +511,12 @@ def train_distributed_reinforce_data_passes(
         rank_rng = context.gather_objects(capture_rank_rng(pool, args.device))
         elapsed = context.max_values([time.perf_counter() - started])[0] + previous_wall
         state.optimizer_steps = epoch
-        state.instances_seen = epoch * effective
+        state.instances_seen = stream_cursor_after_epoch(args, epoch, effective)
         state.customer_exposures = state.instances_seen * customers
         state.environment_transitions = environment_transitions
         state.completed_data_passes = int(epoch == epochs)
         state.last_checkpoint = str(checkpoint)
-        extra = {"logical_epoch": epoch, "stream_cursor": epoch * effective,
+        extra = {"logical_epoch": epoch, "stream_cursor": state.instances_seen,
                  "distributed_contract": contract, "rank_rng_states": rank_rng,
                  "baseline_probe_view_ids": probe_ids, "ema_cost": ema_cost,
                  "data_pass_state": asdict(state),
@@ -473,8 +527,10 @@ def train_distributed_reinforce_data_passes(
                  "completed_validation_checks": validation_checks,
                  "baseline_eval_count": baseline_evals, "baseline_update_count": baseline_updates,
                  "early_stopped": early_stopped, "pilot_partial_pass": epoch < epochs,
-                 "total_wall_time_s": elapsed, "total_gpu_hours": elapsed * context.world_size / 3600,
+                 "total_wall_time_s": elapsed, "total_gpu_hours": gpu_hours(elapsed),
                  "warm_start_provenance": warm_start}
+        if continuation is not None and "stage2_transition_provenance" in payload:
+            extra["stage2_transition_provenance"] = deepcopy(payload["stage2_transition_provenance"])
         def write():
             path = output / f"checkpoint_epoch_{epoch:04d}.pt" if epoch_artifact else checkpoint
             _save_checkpoint(path, method=method, data_pass=state.completed_data_passes,
@@ -507,8 +563,11 @@ def train_distributed_reinforce_data_passes(
         distributions, components, scales = {}, {}, {}
         local_ids = []
         optimizer.zero_grad(set_to_none=True)
+        start_cursor = stream_cursor_after_epoch(args, epoch - 1, effective)
+        end_cursor = stream_cursor_after_epoch(args, epoch, effective)
         shards = shard_stream_epoch(view_ids, logical_epoch=epoch, physical_batch_size=physical,
-                                    effective_batch_size=effective, rank=context.rank, world_size=context.world_size)
+                                    effective_batch_size=effective, rank=context.rank,
+                                    world_size=context.world_size, start_cursor=start_cursor)
         context.main_call(lambda: atomic_json(output / "progress.json", {
             "status": "running", "logical_epoch": epoch, "completed_logical_epoch": epoch - 1,
             "phase": "training", "world_size": context.world_size, "workers": initial_identities}))
@@ -652,7 +711,7 @@ def train_distributed_reinforce_data_passes(
             "baseline_eval_due": pvalue is not None, "paired_t_pvalue": pvalue,
             "baseline_updated": baseline_updated, "epoch_wall_time_s": epoch_wall,
             "peak_gpu_allocated_bytes_per_rank": peaks,
-            "global_stream_cursor": epoch * effective,
+            "global_stream_cursor": end_cursor,
         }
         if method == "EVRPTW-RL":
             row["baseline_warmup_synchronized"] = baseline_warmup_synchronized
@@ -669,8 +728,8 @@ def train_distributed_reinforce_data_passes(
         ordered_ids = [view_id for start in range(0, len(sampled[0]), physical)
                        for part in sampled for view_id in part[start:start + physical]]
         context.main_call(lambda: append_jsonl(output / "sampled_view_ids.jsonl", {
-            "logical_epoch": epoch, "start_cursor": (epoch - 1) * effective,
-            "end_cursor": epoch * effective, "view_ids": ordered_ids}))
+            "logical_epoch": epoch, "start_cursor": start_cursor,
+            "end_cursor": end_cursor, "view_ids": ordered_ids}))
         if validation_tasks and epoch in scheduled:
             context.main_call(lambda: atomic_json(output / "progress.json", {
                 "status": "running", "logical_epoch": epoch, "phase": "validation",
@@ -727,8 +786,8 @@ def train_distributed_reinforce_data_passes(
         "objective_unit": objective.unit, "distributed_contract": contract,
         "requested_training_epochs": epochs, "completed_training_epochs": terminal_epoch,
         "early_stopped": early_stopped, "early_stop_epoch": terminal_epoch if early_stopped else None,
-        "optimizer_steps": terminal_epoch, "instances_seen": terminal_epoch * effective,
-        "customer_exposures": terminal_epoch * effective * customers,
+        "optimizer_steps": terminal_epoch, "instances_seen": state.instances_seen,
+        "customer_exposures": state.customer_exposures,
         "environment_transitions": environment_transitions,
         "logical_environments_per_epoch": effective, "training_rollout_steps": args.training_rollout_steps,
         "physical_batch_size": physical, "effective_batch_size": effective,
@@ -740,7 +799,7 @@ def train_distributed_reinforce_data_passes(
         "selected_checkpoint": str(output / "checkpoint_selected.pt"), "best_checkpoint": str(output / "best.ckpt"),
         "best_overall_checkpoint": str(output / "best_overall.ckpt"),
         "best_within_5000_checkpoint": str(output / "best_within_5000.ckpt"),
-        "total_wall_time_s": elapsed, "total_gpu_hours": elapsed * context.world_size / 3600,
+        "total_wall_time_s": elapsed, "total_gpu_hours": gpu_hours(elapsed),
         "resolved_training_signature": getattr(args, "resolved_training_signature", None),
         "training_stream_contract_snapshot": getattr(args, "training_stream_contract_snapshot", None),
         "reward_contract_snapshot": getattr(args, "reward_contract_snapshot", None),

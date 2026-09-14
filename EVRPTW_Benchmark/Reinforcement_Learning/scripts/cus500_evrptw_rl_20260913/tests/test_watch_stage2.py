@@ -176,7 +176,7 @@ def test_step_prepares_before_stop_and_stops_before_launch(scenario, monkeypatch
     watcher.request['source_launch'] = {'preflight': {'data': data}}
     fake_module = ModuleType(watch.__package__ + '.stage2_transition')
 
-    def prepare(source_path, target_path, epoch):
+    def prepare(source_path, target_path, epoch, **kwargs):
         events.append('prepare_and_validate')
         assert source_path == source
         assert target_path == Path(watcher.state['stage2_run'])
@@ -298,3 +298,41 @@ def test_stop_timeout_fails_without_further_signals(scenario, monkeypatch):
         watcher.stop_source()
     assert sent == [(watcher.request['source_processes']['torchrun'], signal.SIGTERM)]
     assert not (watcher.directory / 'source_stop.json').exists()
+
+
+def test_three_gpu_stage2_preserves_consumed_prefix_and_expands_future_batch(tmp_path):
+    original = load_config(batch=24)
+    updated = watch.stage_config(original, 300, gpus=(0, 1, 2))
+    assert updated['gpus'] == [0, 1, 2] and updated['world_size'] == 3
+    assert updated['physical_batch_size'] == 24 and updated['effective_batch_size'] == 72
+    assert updated['sample_count'] == 14400 + 9700 * 72 == 712800
+    assert updated['customer_exposure_budget'] == 356400000
+    assert updated['samples_per_instance'] == 30
+    assert watch.option(updated['extra_args'], '--stream-continuation-cursor') == '14400'
+    assert watch.option(updated['extra_args'], '--stream-continuation-source-batch') == '48'
+    path = tmp_path / 'three_gpu.json'
+    write_json(path, updated)
+    # Ordinary launcher resume must preserve the same continued budget.
+    assert load_config(path, gpus='0,1,2') == updated
+    assert original['effective_batch_size'] == 48
+
+
+def test_busy_third_gpu_prevents_stopping_source(scenario, monkeypatch):
+    watcher, _, _ = scenario
+    watcher.request['config']['gpus'] = [0, 1, 2]
+    watcher.request['config']['world_size'] = 3
+    watcher.request['source_launch'] = {'preflight': {'data': {'root': '/unused'}}}
+    fake = ModuleType(watch.__package__ + '.stage2_transition')
+    fake.prepare_stage2_run = lambda *args, **kwargs: {}
+    monkeypatch.setitem(sys.modules, fake.__name__, fake)
+    monkeypatch.setattr(watcher, 'guard', lambda **kwargs: None)
+    monkeypatch.setattr(watcher, 'boundary_ready', lambda: True)
+    monkeypatch.setattr(watch, 'validate_stage2_resume', lambda *args: {})
+    monkeypatch.setattr(watch.launch, 'environment_report', lambda *args: {})
+    monkeypatch.setattr(watch.launch, 'inspect_data', lambda *args: {'root': '/unused'})
+    monkeypatch.setattr(watch.launch, 'gpu_inventory', lambda: [])
+    monkeypatch.setattr(watch.launch, 'gpu_processes', lambda: [])
+    monkeypatch.setattr(watch.launch, 'validate_gpus', lambda *args: (_ for _ in ()).throw(RuntimeError('GPU 2 occupied')))
+    monkeypatch.setattr(watcher, 'stop_source', lambda: pytest.fail('Must leave original training running'))
+    with pytest.raises(RuntimeError, match='GPU 2 occupied'):
+        watcher.step()

@@ -27,7 +27,7 @@ if str(REPO) not in sys.path:
 
 TRAIN_MODULE = 'EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.distributed_train'
 DEFAULT_SOURCE = Path('/data/Maojie/ICLR/cus500-evrptw-rl-after-am/EVRPTW_Benchmark/results/cus500_evrptw_rl_20260913/launchers/local_after_am_gpu01/evrptw_rl/launch_request.json')
-DEFAULT_OUTPUT = REPO / 'EVRPTW_Benchmark/results/cus500_evrptw_rl_stage2_at300_20260914'
+DEFAULT_OUTPUT = REPO / 'EVRPTW_Benchmark/results/cus500_evrptw_rl_stage2_3gpu_20260914'
 TERMINAL = {'handed_off', 'failed'}
 
 
@@ -90,7 +90,7 @@ def option(argv, flag):
     return argv[argv.index(flag) + 1]
 
 
-def stage_config(old, boundary):
+def stage_config(old, boundary, *, gpus=(0, 1)):
     config = deepcopy(old)
     if (config.get('model') != 'evrptw_rl' or config.get('scale') != 'Cus500'
             or config.get('gpus') != [0, 1] or config.get('world_size') != 2
@@ -101,6 +101,18 @@ def stage_config(old, boundary):
     if not 0 < boundary < previous or boundary % config['validation_every_epochs']:
         raise ValueError('Boundary must precede the old warmup and fall on a validation checkpoint')
     extra[extra.index('--ema-warmup-steps') + 1] = str(boundary)
+    if list(gpus) not in ([0, 1], [0, 1, 2]):
+        raise ValueError('Stage2 GPUs must be 0,1 or 0,1,2')
+    if len(gpus) == 3:
+        source_batch = config['effective_batch_size']
+        source_cursor = boundary * source_batch
+        config.update(gpus=list(gpus), world_size=3, server='local_stage2_gpu012',
+                      effective_batch_size=config['physical_batch_size'] * 3 * config['gradient_accumulation_steps'])
+        config['sample_count'] = source_cursor + (config['training_epochs'] - boundary) * config['effective_batch_size']
+        config['customer_exposure_budget'] = config['sample_count'] * 500
+        extra.extend(['--stream-continuation-epoch', str(boundary),
+                      '--stream-continuation-cursor', str(source_cursor),
+                      '--stream-continuation-source-batch', str(source_batch)])
     return config
 
 
@@ -148,7 +160,26 @@ def lock_watcher(output):
     return fd, directory
 
 
-def make_request(source_request, output, boundary, poll_seconds):
+def prepare_extended_stream(upstream, config, output):
+    """Freeze a longer stream and verify its complete source prefix, not just IDs seen so far."""
+    from EVRPTW_Benchmark.Reinforcement_Learning.common.training_stream import read_stream_view_ids, stream_content_sha256
+    original = upstream['stream']
+    if digest(original['path']) != original['file_sha256']:
+        raise RuntimeError('Source stream changed before extension')
+    target = launch.prepare_stream(upstream['preflight']['data']['root'], Path(output) / 'artifacts',
+                                   config, audit=upstream['preflight']['data'])
+    prefix = read_stream_view_ids(target['path'], stop=original['contract']['sample_count'])
+    if stream_content_sha256(prefix) != original['contract']['stream_content_sha256']:
+        raise RuntimeError('Extended stream does not preserve the complete original stream prefix')
+    target['continuation_prefix'] = {
+        'source_path': original['path'], 'source_file_sha256': original['file_sha256'],
+        'source_contract': original['contract'],
+        'verified_prefix_length': original['contract']['sample_count'],
+        'verified_prefix_content_sha256': original['contract']['stream_content_sha256']}
+    return target
+
+
+def make_request(source_request, output, boundary, poll_seconds, *, stage2_gpus=(0, 1, 2)):
     source_request = Path(source_request).resolve()
     upstream = read_json(source_request)
     if upstream['preflight']['host'] != socket.gethostname():
@@ -157,7 +188,7 @@ def make_request(source_request, output, boundary, poll_seconds):
     source_run = Path(upstream['preflight']['output_dir']).resolve()
     if output == source_run or output in source_run.parents or source_run in output.parents:
         raise ValueError('Stage2 must use a separate output root')
-    config = stage_config(upstream['preflight']['config'], boundary)
+    config = stage_config(upstream['preflight']['config'], boundary, gpus=stage2_gpus)
     identities = bind_processes(upstream, read_json(source_request.parent / 'status.json'))
     progress = read_json(source_run / 'progress.json')
     if int(progress['logical_epoch']) > boundary:
@@ -169,12 +200,25 @@ def make_request(source_request, output, boundary, poll_seconds):
     original_source = source_snapshot(identities['torchrun']['cwd'])
     if original_source['source_sha256'] != upstream['source']['source_sha256']:
         raise RuntimeError('Live source differs from its original launch snapshot')
+    target_gpus = [row for row in launch.gpu_inventory() if row['index'] in config['gpus']]
+    if sorted(row['index'] for row in target_gpus) != config['gpus']:
+        raise RuntimeError('A requested stage2 GPU is missing')
+    for old_gpu in upstream['preflight']['gpus']:
+        if not any(row['index'] == old_gpu['index'] and row['uuid'] == old_gpu['uuid'] for row in target_gpus):
+            raise RuntimeError('Source physical GPU UUID changed')
+    if 2 in config['gpus']:
+        additional = dict(config, gpus=[2])
+        launch.validate_gpus(additional, target_gpus, launch.gpu_processes())
+    target_stream = upstream['stream']
+    if config['world_size'] == 3:
+        target_stream = prepare_extended_stream(upstream, config, output)
     return {'schema': 'evrptw_rl_stage2_watcher_request_v1', 'created_at': timestamp(),
             'host': socket.gethostname(), 'source_request': str(source_request),
             'source_request_sha256': digest(source_request), 'source_run': str(source_run),
             'source_repo': identities['torchrun']['cwd'],
             'source_code_sha256': original_source['source_sha256'],
             'source_processes': identities, 'source_launch': upstream,
+            'stage2_stream': target_stream, 'stage2_gpus': target_gpus,
             'output_root': str(output), 'config': config, 'boundary_epoch': boundary,
             'poll_seconds': poll_seconds, 'stage2_source': source_snapshot(),
             'python': sys.executable}
@@ -209,12 +253,12 @@ def validate_stage2_resume(request, run):
     from EVRPTW_Benchmark.Reinforcement_Learning.common.protocol_trainers import prepare_training_objective, _load_checkpoint
     from EVRPTW_Benchmark.Reinforcement_Learning.scripts.cus500_evrptw_rl_20260913.stage2_transition import assert_stage2_launch_args
     root = request['source_launch']['preflight']['data']['root']
-    command = launch.build_command(request['config'], root, run, request['source_launch']['stream'],
+    command = launch.build_command(request['config'], root, run, request.get('stage2_stream', request['source_launch']['stream']),
                                    python=request['python'], resume=True)
     args = entry.parse_args(command[command.index(TRAIN_MODULE) + 1:])
     args.device = 'cpu'
     entry.prepare_method(args)
-    contract = configure_distributed_contract(args, DistributedContext(rank=0, world_size=2), method='EVRPTW-RL')
+    contract = configure_distributed_contract(args, DistributedContext(rank=0, world_size=request['config']['world_size']), method='EVRPTW-RL')
     objective = prepare_training_objective(args)
     policy = entry.build_policy(args)
     baseline = deepcopy(policy)
@@ -241,7 +285,7 @@ class Watcher:
                       'watcher_pid': os.getpid(), 'host': socket.gethostname(),
                       'boundary_epoch': request['boundary_epoch'],
                       'resume_epoch': request['boundary_epoch'] + 1,
-                      'source_run': request['source_run'], 'physical_gpus': [0, 1],
+                      'source_run': request['source_run'], 'physical_gpus': request['config']['gpus'],
                       'stage2_run': str(self.output / 'runs' / request['config']['run_id'])}
         self.update()
 
@@ -261,6 +305,9 @@ class Watcher:
             stream = r['source_launch']['stream']
             if digest(stream['path']) != stream['file_sha256']:
                 raise RuntimeError('Frozen training stream changed')
+            target = r.get('stage2_stream', stream)
+            if digest(target['path']) != target['file_sha256']:
+                raise RuntimeError('Stage2 training stream changed')
 
     def live_source(self):
         live = []
@@ -324,7 +371,7 @@ class Watcher:
         fds = [lock_fd]
         try:
             audit = launch.preflight(config, root, self.output, resume=True)
-            expected = {row['index']: row['uuid'] for row in r['source_launch']['preflight']['gpus']}
+            expected = {row['index']: row['uuid'] for row in r.get('stage2_gpus', r['source_launch']['preflight']['gpus'])}
             if {row['index']: row['uuid'] for row in audit['gpus']} != expected:
                 raise RuntimeError('Physical GPU UUIDs changed')
             if audit['data'] != r['source_launch']['preflight']['data']:
@@ -333,12 +380,14 @@ class Watcher:
             request_path = directory / 'launch_request.json'
             if request_path.exists():
                 raise FileExistsError('Stage2 launch was already attempted; refusing duplicate launch')
-            command = launch.build_command(config, root, audit['output_dir'], r['source_launch']['stream'],
+            command = launch.build_command(config, root, audit['output_dir'], r.get('stage2_stream', r['source_launch']['stream']),
                                            python=r['python'], resume=True)
             request = {'schema': 'cus500_multigpu_stage2_launch_request_v1', 'time': timestamp(),
-                       'preflight': audit, 'stream': r['source_launch']['stream'],
+                       'preflight': audit, 'stream': r.get('stage2_stream', r['source_launch']['stream']),
                        'source': r['stage2_source'], 'command': command,
-                       'environment': r['source_launch']['environment'], 'stage2_transition': transition}
+                       'environment': dict(r['source_launch']['environment'],
+                                           CUDA_VISIBLE_DEVICES=','.join(row['uuid'] for row in audit['gpus'])),
+                       'stage2_transition': transition}
             write_json(request_path, request)
             with (directory / 'launcher.log').open('ab') as log:
                 child = subprocess.Popen([r['python'], str(HERE / 'launch.py'), '--mode', 'worker',
@@ -385,7 +434,10 @@ class Watcher:
         from EVRPTW_Benchmark.Reinforcement_Learning.scripts.cus500_evrptw_rl_20260913.stage2_transition import prepare_stage2_run
         # Prepare and validate the complete fork BEFORE stopping live training.
         transition = prepare_stage2_run(Path(self.request['source_run']), Path(self.state['stage2_run']),
-                                        self.request['boundary_epoch'])
+                                        self.request['boundary_epoch'],
+                                        target_world_size=self.request['config']['world_size'],
+                                        target_stream=(self.request.get('stage2_stream')
+                                                       if self.request['config']['world_size'] == 3 else None))
         self.update(transition=transition)
         resume_check = validate_stage2_resume(self.request, Path(self.state['stage2_run']))
         self.update(resume_check=resume_check)
@@ -394,6 +446,8 @@ class Watcher:
         if data != self.request['source_launch']['preflight']['data']:
             raise RuntimeError('Source dataset/objective changed before the planned stop')
         self.update(stage2_environment=environment)
+        if 2 in self.request['config']['gpus']:
+            launch.validate_gpus(dict(self.request['config'], gpus=[2]), launch.gpu_inventory(), launch.gpu_processes())
         self.guard(sources=True)
         self.stop_source()
         self.update(status='waiting_gpu_release')
@@ -429,6 +483,7 @@ def main(argv=None):
     parser.add_argument('--source-request', type=Path, default=DEFAULT_SOURCE)
     parser.add_argument('--output-root', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--boundary-epoch', type=int, default=300)
+    parser.add_argument('--stage2-gpus', choices=('0,1', '0,1,2'), default='0,1,2')
     parser.add_argument('--poll-seconds', type=float, default=20)
     parser.add_argument('--lock-fd', type=int, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -451,7 +506,8 @@ def main(argv=None):
     try:
         if (directory / 'request.json').exists():
             raise FileExistsError('Watcher already registered here; inspect status before creating another request')
-        request = make_request(args.source_request, output, args.boundary_epoch, args.poll_seconds)
+        request = make_request(args.source_request, output, args.boundary_epoch, args.poll_seconds,
+                               stage2_gpus=[int(value) for value in args.stage2_gpus.split(',')])
         write_json(directory / 'request.json', request)
         write_json(output / 'stage2_config.json', request['config'])
         with (directory / 'watcher.log').open('ab') as log:
@@ -459,7 +515,7 @@ def main(argv=None):
                                       '--output-root', str(output), '--lock-fd', str(fd)],
                                      cwd=REPO, stdout=log, stderr=log, start_new_session=True, pass_fds=(fd,))
         print(json.dumps({'watcher_pid': child.pid, 'boundary_epoch': args.boundary_epoch,
-                          'resume_epoch': args.boundary_epoch + 1, 'gpus': [0, 1],
+                          'resume_epoch': args.boundary_epoch + 1, 'gpus': request['config']['gpus'],
                           'status_file': str(directory / 'status.json')}, indent=2))
         return 0
     finally:

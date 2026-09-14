@@ -24,6 +24,12 @@ def parse_distributed_args(single_parse, argv=None):
     parser.add_argument("--distributed-backend", choices=("nccl", "gloo"))
     parser.add_argument("--distributed-timeout-seconds", type=int, default=7200)
     parser.add_argument("--expected-world-size", type=int)
+    parser.add_argument("--stream-continuation-epoch", type=int,
+                        help="Completed source epochs before a declared batch-size transition.")
+    parser.add_argument("--stream-continuation-cursor", type=int,
+                        help="Actual consumed stream rows at the transition; requires --resume.")
+    parser.add_argument("--stream-continuation-source-batch", type=int,
+                        help="Global effective batch used by the completed source epochs.")
     parser.add_argument("--instance-cache-size", type=int, default=256,
                         help="Maximum cached CPU instances per pool and worker; 0 disables caching.")
     options, remaining = parser.parse_known_args(sys.argv[1:] if argv is None else argv)
