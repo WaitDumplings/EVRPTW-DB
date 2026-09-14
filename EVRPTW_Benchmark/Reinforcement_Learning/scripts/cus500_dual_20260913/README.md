@@ -1,19 +1,18 @@
 # Road Cus500：RRNCO 与 DRL-TS 双卡部署
 
-每组两张 2080 Ti 同步训练一个模型。默认安排如下：
+每组两张 2080 Ti 同步训练一个模型。按用户确认的空闲卡分配：
 
-| 服务器 | 使用 GPU | 本轮任务 | 启动入口 |
+| 服务器条件 | 使用 GPU | 任务 | 独立启动入口 |
 |---|---|---|---|
-| 2080ti_4_1 | 0、1 | RRNCO Road Cus500，完整道路图 | `2080ti_4_1/full.sh` |
-| 2080ti_4_2 | 0、1 | DRL-TS Road Cus500，原生 soft → hard 两阶段 | `2080ti_4_2/full.sh` |
-| 2080ti_3_1 | 原 AM 三卡配置 | AM 已安排，沿用原脚本 | `../cus500_am_multigpu_20260912/2080ti_3_1/full.sh` |
+| GPU 0/1 空闲的服务器 | 0、1 | RRNCO Road Cus500，完整道路图 | `rrnco_gpu01.sh` |
+| GPU 1/2 空闲的服务器 | 1、2 | DRL-TS Road Cus500，soft → hard 两阶段 | `drl_ts_gpu12.sh` |
 
-TERRAN Cus500 使用用户在另一台服务器已启动的实验。这里仅新增 RRNCO 和 DRL-TS，
-不启动 EVRPTW-RL，不修改已有 AM、TERRAN 或 Cus100 任务。
+本机 2080ti_4_1 的 GPU 0/1 已用于 AM Road Cus500 双卡正式实验。
+新的两个入口分别在上述另外两台服务器启动；每卡 batch 仍为 RRNCO 22、DRL-TS 2。
 
 ## 在两台服务器准备代码
 
-在 **2080ti_4_1 和 2080ti_4_2 分别执行**：
+在上述 **两台服务器分别执行**：
 
 ```bash
 cd /data/Maojie/ICLR/EVRPTW-DB
@@ -25,8 +24,10 @@ conda activate maojie
 export CUS500_ROAD_ROOT="/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823"
 ```
 
-独立目录保留原仓库的本地修改和已有实验。若 `EVRPTW-DB-cus500-dual` 已存在，
-进入该目录检查实验状态，不要覆盖或重复创建。`caliroute` 环境也可以使用；脚本优先
+独立目录保留原仓库的本地修改和已有实验。若 `EVRPTW-DB-cus500-dual` 已存在且尚未启动
+实验，可在该目录执行 `git fetch origin`，再执行 `git switch --detach origin/cus500-dual-rrnco-drlts-20260913`
+更新到本次提交；Git 会拒绝覆盖有冲突的本地修改。正在运行或计划恢复的旧实验继续保留原代码。
+`caliroute` 环境也可以使用；脚本优先
 读取当前 conda 环境的 Python，可用 `CUS500_PYTHON=/绝对路径/bin/python` 显式指定。
 启动前检查 CUDA、NCCL 和 Python 依赖，记录实际版本。
 
@@ -35,22 +36,28 @@ export CUS500_ROAD_ROOT="/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2
 
 ## 启动与预检
 
-**2080ti_4_1：**
+**GPU 0/1 空闲的服务器：**
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/2080ti_4_1/full.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/rrnco_gpu01.sh
 ```
 
-**2080ti_4_2：**
+**GPU 1/2 空闲的服务器：**
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/2080ti_4_2/full.sh
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/drl_ts_gpu12.sh
 ```
 
 命令完成预检和 CPU 数据准备后，会后台启动并打印 launcher PID、完整命令和 status 路径。
 打印成功后可以退出 SSH。加 `--mode preflight` 只检查，不启动；加 `--foreground`
-在当前终端运行。两个 shell 使用同一个 `launch.py`，也可直接指定 `--model rrnco`
-或 `--model drl_ts`。GPU 编号可改为 `export CUS500_GPUS=1,2`，必须恰好两张不同卡。
+在当前终端运行。两个 shell 使用同一个 `launch.py`，分别固定模型和物理GPU编号；
+已有 `CUS500_GPUS` 环境变量或传入的 `--model`/`--gpus` 不会改变它们的分配。
+直接调用 `launch.py` 时仍可自行指定模型和两张卡。
+
+两个入口分别使用 `configs/rrnco_gpu01.json` 和 `configs/drl_ts_gpu12.json`，仅修改原配方的
+部署标签，训练参数完全一致。标签描述模型和卡号，实际机器名与GPU UUID记录在启动请求中。
+旧的 `2080ti_4_1/full.sh`、`2080ti_4_2/full.sh` 保留兼容；使用旧入口启动的实验应继续
+通过原入口和原代码恢复，新入口不会接管已有run。
 
 启动器不会终止任何已有进程。GPU 0 的桌面进程允许保留，前提是 `/proc/PID/exe`
 精确等于 `/usr/libexec/gnome-remote-desktop-daemon`，进程占用以及整卡启动前总占用
@@ -59,7 +66,7 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/2080ti
 
 ## 参数和比较口径
 
-模型默认配置分别是 [RRNCO](configs/rrnco.json) 和 [DRL-TS](configs/drl_ts.json)。
+两个新入口的配置分别是 [RRNCO GPU0/1](configs/rrnco_gpu01.json) 和 [DRL-TS GPU1/2](configs/drl_ts_gpu12.json)。
 显存目标是每卡 NVIDIA-SMI 进程峰值 **9.5–10.3 GiB**，batch 以最终实测配置为准；
 硬件、驱动和依赖版本不同会改变实际占用。不要将两张卡的显存相加来估算可装载的 batch。
 
@@ -142,17 +149,17 @@ CPU 线程默认每进程 2，保留用户已设置的 OMP/MKL/OpenBLAS/Numba �
 使用对应服务器的 shell 查看进度，不需要空闲 GPU：
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/2080ti_4_1/full.sh --mode status
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/rrnco_gpu01.sh --mode status
 ```
 
-在 4_2 将路径改为 `2080ti_4_2/full.sh`。状态输出包含最新训练 epoch、最新验证、best
+DRL-TS 使用 `drl_ts_gpu12.sh --mode status`。状态输出包含最新训练 epoch、最新验证、best
 验证摘要、进程状态和输出目录。另可执行 `watch -n 5 nvidia-smi`。
 
 默认输出根目录是 `EVRPTW_Benchmark/results/cus500_dual_20260913`：
 
 ```text
-launchers/2080ti_4_1/rrnco/{launch_request.json,status.json,launcher.log}
-launchers/2080ti_4_2/drl_ts/{launch_request.json,status.json,launcher.log}
+launchers/rrnco_gpu01/rrnco/{launch_request.json,status.json,launcher.log}
+launchers/drl_ts_gpu12/drl_ts/{launch_request.json,status.json,launcher.log}
 runs/rrnco_road_cus500_seed1234/
 runs/drl_ts_road_cus500_seed1234/
 ```
@@ -165,7 +172,7 @@ run 目录保存 `logical_epoch_history.jsonl`、`validation_history.jsonl`、
 中断后确认原训练进程已退出，使用**原 shell 和原环境变量**显式恢复：
 
 ```bash
-bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/2080ti_4_1/full.sh --resume
+bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/rrnco_gpu01.sh --resume
 ```
 
 恢复要求原配置、数据和源码摘要一致，恢复同一个全局 stream 位置和各 rank 的随机状态。
