@@ -44,4 +44,4 @@ Original TR17/TR18 outputs are retained. The explicit stop helper verifies proce
 
 ## Direct retraining option
 
-The subsequent `retrain.sh` entry starts formal training immediately on two free GPUs (default Road GPU0 / Euclidean GPU1), as requested. It skips the optional GPU probes above, retains physical/effective batch 200, and records calibration as skipped. CPU validation above remains applicable; no new GPU-memory measurement is claimed. The updated deployment suite passes 45 tests, including the actual worker path with mocked process spawning and frozen GPU/skip settings.
+The subsequent `retrain.sh` entry starts formal training immediately on two free GPUs (default Road GPU1 / Euclidean GPU2), as requested. It skips the optional GPU probes above, retains physical/effective batch 200, and records calibration as skipped. CPU validation above remains applicable; no new GPU-memory measurement is claimed. The updated deployment suite passes 45 tests, including the actual worker path with mocked process spawning and frozen GPU/skip settings.

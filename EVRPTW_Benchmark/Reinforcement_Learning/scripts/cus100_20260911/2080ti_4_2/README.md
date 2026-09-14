@@ -14,7 +14,7 @@ conda activate maojie
 bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus100_20260911/2080ti_4_2/retrain.sh
 ```
 
-`retrain.sh` defaults to **physical GPU 0: Road Cus100 TR18**, **physical GPU 1:
+`retrain.sh` defaults to **physical GPU 1: Road Cus100 TR18**, **physical GPU 2:
 Euclidean Cus100 TR17**. To select another free pair, specify the GPUs in
 **Road, Euclidean** order:
 
