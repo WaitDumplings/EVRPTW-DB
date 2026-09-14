@@ -1,6 +1,8 @@
 # AM 结束后的 EVRPTW-RL Road Cus500 双卡实验
 
-GPU1/2 的修复版直接重训入口见 [README_GPU12.md](README_GPU12.md)，使用 `evrptw_rl_gpu12.sh`。
+GPU2/3 的修复版直接重训入口见 [README_GPU23.md](README_GPU23.md)，使用 `evrptw_rl_gpu23.sh`；每卡 / 全局 batch 为 24 / 48，train / validation rollout 上限为 600 / 700，n-traj 为 30 / 30。
+
+旧 GPU1/2 入口 [README_GPU12.md](README_GPU12.md) 与 `evrptw_rl_gpu12.sh` 保留，兼容旧任务。
 
 本目录为本机 GPU **0、1** 的后续实验，训练一个 EVRPTW-RL Road Cus500 模型。
 AM 当前训练继续使用原工作目录；后续调度器等待 AM 正常完成或早停、相关进程退出且
