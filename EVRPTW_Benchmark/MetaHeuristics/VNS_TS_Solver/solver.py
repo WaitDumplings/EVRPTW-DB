@@ -72,7 +72,7 @@ class VNSTSolver:
         self.position_neighbor_limit = int(position_neighbor_limit)
         self.exchange_neighbor_limit = int(exchange_neighbor_limit)
         self.station_candidate_limit = int(station_candidate_limit)
-        self.fast_policy_version = "adaptive_nearest_best_fit_v3"
+        self.fast_policy_version = "adaptive_cost_best_fit_v4"
 
         # Tabu (global) / SA
         self.tabu_list = deque(maxlen=30)
@@ -1133,6 +1133,20 @@ class VNSTSolver:
                 fixed.append(r)
         return fixed
 
+    def _normalized_solution_view(self, solution):
+        """Match solution_fix without mutating the apply/rollback workspace."""
+        result = []
+        for route in solution:
+            if not any(node.type == "c" for node in route.nodes):
+                continue
+            if any(a.id == b.id for a, b in zip(route.nodes, route.nodes[1:])):
+                nodes = [route.nodes[0]]
+                nodes.extend(b for a, b in zip(route.nodes, route.nodes[1:]) if a.id != b.id)
+                result.append(Route(nodes))
+            else:
+                result.append(route)
+        return result
+
     # -------------------------
     # Tabu Search (full enumeration, apply+rollback, no candidate list)
     # -------------------------
@@ -1145,7 +1159,31 @@ class VNSTSolver:
     def _tabu_search(self, S):
         current_solution = self.clone_solution_shallow(S)
         best_solution = self.clone_solution_shallow(S)
+        best_solution_value = self.generalized_cost(best_solution, False, False, False)
+        if math.isfinite(best_solution_value) and best_solution_value < min(1e10, self.global_value):
+            self.global_value = best_solution_value
+            self.global_solution = self.clone_solution_shallow(best_solution)
+            self._report_incumbent()
         tabu_list = deque(maxlen=self.tabu_tenure)
+
+        def evaluate_current():
+            nonlocal best_solution, best_solution_value
+            # Keep enumeration indices and undo references intact. Empty routes
+            # and adjacent duplicate stops disappear only in this scoring view.
+            candidate = self._normalized_solution_view(current_solution)
+            cost = self.generalized_cost(candidate, True, True, True)
+            feasible_value = self.generalized_cost(candidate, False, False, False)
+            # Every evaluated feasible solution is an incumbent opportunity,
+            # even when the search chooses an infeasible or tabu trajectory.
+            if math.isfinite(feasible_value) and feasible_value < 1e10:
+                if feasible_value < best_solution_value:
+                    best_solution = self.clone_solution_shallow(candidate)
+                    best_solution_value = feasible_value
+                if feasible_value < self.global_value:
+                    self.global_value = feasible_value
+                    self.global_solution = self.clone_solution_shallow(candidate)
+                    self._report_incumbent()
+            return cost
 
         # helper to build route signature once per iteration
         def route_sig(route):
@@ -1162,9 +1200,6 @@ class VNSTSolver:
             best_move = None
             best_move_info = None
             best_move_cost = float("inf")
-
-            # Track best feasible cost-objective candidate
-            best_feas_cost = float("inf")
 
             # -------------------------
             # Enumerate 2-opt* (between two routes)
@@ -1188,18 +1223,13 @@ class VNSTSolver:
                             rj.nodes = old_j_nodes[:split2] + old_i_nodes[split1:]
 
                             # evaluate full cost
-                            c_full = self.generalized_cost(current_solution, penalty_value=True, p_div_value=True, allow_infeasible=True)
+                            c_full = evaluate_current()
                             info = ("Two_opt", f"{route_info[i]}@{split1}", f"{route_info[j]}@{split2}")
 
                             if c_full < best_move_cost and info not in tabu_list:
                                 best_move_cost = c_full
                                 best_move = ("two_opt", i, j, split1, split2, old_i_nodes, old_j_nodes)
                                 best_move_info = info
-
-                            # evaluate feasible cost objective
-                            c_feas = self.generalized_cost(current_solution, penalty_value=False, p_div_value=False, allow_infeasible=False)
-                            if c_feas < best_feas_cost:
-                                best_feas_cost = c_feas
 
                             # rollback
                             ri.nodes = old_i_nodes
@@ -1233,15 +1263,11 @@ class VNSTSolver:
                             rj.nodes.insert(adj_insert, removed)
 
                             info = ("Relocate", f"{route_info[i]}@{split_pos}", f"{route_info[j]}@{insert_pos}")
-                            c_full = self.generalized_cost(current_solution, True, True, True)
+                            c_full = evaluate_current()
                             if c_full < best_move_cost and info not in tabu_list:
                                 best_move_cost = c_full
                                 best_move = ("relocate", i, j, split_pos, insert_pos, removed)
                                 best_move_info = info
-
-                            c_feas = self.generalized_cost(current_solution, False, False, False)
-                            if c_feas < best_feas_cost:
-                                best_feas_cost = c_feas
 
                             # rollback
                             rj.nodes.pop(adj_insert)
@@ -1255,15 +1281,11 @@ class VNSTSolver:
                     current_solution.append(new_route)
 
                     info = ("RelocateNew", f"{route_info[i]}@{split_pos}")
-                    c_full = self.generalized_cost(current_solution, True, True, True)
+                    c_full = evaluate_current()
                     if c_full < best_move_cost and info not in tabu_list:
                         best_move_cost = c_full
                         best_move = ("relocate_new", i, split_pos, removed)
                         best_move_info = info
-
-                    c_feas = self.generalized_cost(current_solution, False, False, False)
-                    if c_feas < best_feas_cost:
-                        best_feas_cost = c_feas
 
                     # rollback
                     current_solution.pop()
@@ -1289,15 +1311,11 @@ class VNSTSolver:
                             ri.nodes[p1], rj.nodes[p2] = rj.nodes[p2], ri.nodes[p1]
 
                             info = ("Exchange", f"{route_info[i]}@{p1}", f"{route_info[j]}@{p2}")
-                            c_full = self.generalized_cost(current_solution, True, True, True)
+                            c_full = evaluate_current()
                             if c_full < best_move_cost and info not in tabu_list:
                                 best_move_cost = c_full
                                 best_move = ("exchange", i, j, p1, p2)
                                 best_move_info = info
-
-                            c_feas = self.generalized_cost(current_solution, False, False, False)
-                            if c_feas < best_feas_cost:
-                                best_feas_cost = c_feas
 
                             # rollback
                             ri.nodes[p1], rj.nodes[p2] = rj.nodes[p2], ri.nodes[p1]
@@ -1321,15 +1339,11 @@ class VNSTSolver:
                         removed_station = r.nodes.pop(pos)
 
                         info = ("StationRemove", f"{route_info[i]}@{pos}")
-                        c_full = self.generalized_cost(current_solution, True, True, True)
+                        c_full = evaluate_current()
                         if c_full < best_move_cost and info not in tabu_list:
                             best_move_cost = c_full
                             best_move = ("station_remove", i, pos, removed_station, arc)
                             best_move_info = info
-
-                        c_feas = self.generalized_cost(current_solution, False, False, False)
-                        if c_feas < best_feas_cost:
-                            best_feas_cost = c_feas
 
                         # rollback
                         r.nodes.insert(pos, removed_station)
@@ -1348,15 +1362,11 @@ class VNSTSolver:
                             r.nodes.insert(pos, st)
 
                             info = ("StationInsert", f"{route_info[i]}@{pos}", f"st={st.id}")
-                            c_full = self.generalized_cost(current_solution, True, True, True)
+                            c_full = evaluate_current()
                             if c_full < best_move_cost and info not in tabu_list:
                                 best_move_cost = c_full
                                 best_move = ("station_insert", i, pos, st, arc)
                                 best_move_info = info
-
-                            c_feas = self.generalized_cost(current_solution, False, False, False)
-                            if c_feas < best_feas_cost:
-                                best_feas_cost = c_feas
 
                             # rollback
                             r.nodes.pop(pos)
@@ -1421,22 +1431,6 @@ class VNSTSolver:
 
             current_solution = self.solution_fix(current_solution)
             self.update_diversification_history(current_solution)
-
-            # Track best_solution (you can choose either:
-            #   - best feasible cost-objective move's outcome, or
-            #   - best feasible encountered current_solution
-            # Here: update using current_solution feasibility.
-            cur_val = self.generalized_cost(current_solution, penalty_value=False, p_div_value=False, allow_infeasible=False)
-            best_val = self.generalized_cost(best_solution, penalty_value=False, p_div_value=False, allow_infeasible=False)
-            if cur_val < best_val:
-                best_solution = self.clone_solution_shallow(current_solution)
-                best_val = cur_val
-
-            # Update global best
-            if best_val < self.global_value:
-                self.global_value = best_val
-                self.global_solution = self.clone_solution_shallow(best_solution)
-                self._report_incumbent()
 
         return best_solution
 
@@ -1547,8 +1541,40 @@ class VNSTSolver:
         if item[0] < moves[worst_index][0]:
             moves[worst_index] = item
 
+    def _route_objective(self, nodes):
+        """Unpenalized objective after the same cleanup as accepted moves."""
+        if not any(node.type == "c" for node in nodes):
+            return 0.0
+        distance = sum(self._dist(a, b) for a, b in zip(nodes, nodes[1:]) if a.id != b.id)
+        return self.distance_unit_cost * distance + self.vehicle_fixed_cost
+
+    def _local_move_objective_delta(self, solution, move, route_costs):
+        """Score only the one or two changed routes, never clone the solution."""
+        kind = move[0]
+        if kind == "relocate":
+            _, i, pos, j, insert_pos = move
+            affected = {index: list(solution[index].nodes) for index in {i, j}}
+            node = affected[i].pop(pos)
+            adjusted = insert_pos - int(i == j and insert_pos > pos)
+            affected[j].insert(adjusted, node)
+            return sum(self._route_objective(nodes) - route_costs[index]
+                       for index, nodes in affected.items())
+        if kind == "relocate_new":
+            _, i, pos = move
+            nodes = list(solution[i].nodes)
+            node = nodes.pop(pos)
+            return (self._route_objective(nodes) - route_costs[i]
+                    + self._route_objective([self.instance.depot, node, self.instance.depot]))
+        if kind == "exchange":
+            _, i, p1, j, p2 = move
+            affected = {index: list(solution[index].nodes) for index in {i, j}}
+            affected[i][p1], affected[j][p2] = affected[j][p2], affected[i][p1]
+            return sum(self._route_objective(nodes) - route_costs[index]
+                       for index, nodes in affected.items())
+        raise ValueError(f"unsupported local proxy move: {kind}")
+
     def _ranked_candidate_moves_fast(self, solution):
-        """Build a bounded, relatedness-driven fast neighborhood."""
+        """Bound proposals by the cost delta; reserve a few recovery moves."""
         moves = []
         customer_positions = self._customer_positions(solution)
         if not customer_positions:
@@ -1560,6 +1586,15 @@ class VNSTSolver:
             exchange_neighbor_limit,
             candidate_limit,
         ) = self._effective_fast_limits(len(customer_positions))
+        route_costs = [self._route_objective(route.nodes) for route in solution]
+        recovery_moves = []
+        recovery_limit = max(1, candidate_limit // 5) if candidate_limit > 0 else 0
+
+        def retain(proxy, move, recovery=False):
+            self._bounded_insert(moves, (proxy, move), candidate_limit)
+            if recovery:
+                self._bounded_insert(recovery_moves, (proxy, move), recovery_limit)
+
         position_by_customer_id = {
             node.id: (route_index, position, node)
             for route_index, position, node in customer_positions
@@ -1590,34 +1625,27 @@ class VNSTSolver:
 
             for _, j in route_scores:
                 route = solution[j]
-                for proxy, insert_pos in self._route_insert_positions(
-                    route, node, position_neighbor_limit
-                ):
-                    if ridx == j and (insert_pos == pos or insert_pos == pos + 1):
-                        continue
-                    self._bounded_insert(
-                        moves,
-                        (proxy, ("relocate", ridx, pos, j, insert_pos)),
-                        candidate_limit,
-                    )
-
-            # Opening a route is useful during feasibility recovery, but keep it behind ordinary insertions.
-            if len(solution[ridx].nodes) > 3:
-                depot = self.instance.depot
-                if self._direct_terminal_index:
-                    depot_index, node_index = depot.id, node.id
+                if ridx == j:
+                    # Rank against the route *after* source removal. Otherwise
+                    # its two zero-distance self-insertions consume the small
+                    # position budget and hide real same-route improvements.
+                    reduced = Route(route.nodes[:pos] + route.nodes[pos + 1:])
+                    positions = self._route_insert_positions(reduced, node, position_neighbor_limit + 1)
+                    positions = [(delta, at + int(at > pos)) for delta, at in positions if at != pos]
+                    positions = positions[:position_neighbor_limit]
                 else:
-                    depot_index = self.node_id[depot.id]
-                    node_index = self.node_id[node.id]
-                proxy = (
-                    float(self.dist_matrix[depot_index, node_index])
-                    + float(self.dist_matrix[node_index, depot_index])
-                )
-                self._bounded_insert(
-                    moves,
-                    (proxy + 1e-6, ("relocate_new", ridx, pos)),
-                    candidate_limit,
-                )
+                    positions = self._route_insert_positions(route, node, position_neighbor_limit)
+                for _, insert_pos in positions:
+                    move = ("relocate", ridx, pos, j, insert_pos)
+                    proxy = self._local_move_objective_delta(solution, move, route_costs)
+                    retain(proxy, move)
+
+            # Reserve some openings for load/time feasibility recovery even
+            # when their fixed fee makes their raw cost delta unattractive.
+            if len(route_customer_ids[ridx]) > 1:
+                move = ("relocate_new", ridx, pos)
+                proxy = self._local_move_objective_delta(solution, move, route_costs)
+                retain(proxy, move, recovery=True)
 
         distance = self.dist_matrix
         direct_terminal_index = self._direct_terminal_index
@@ -1626,8 +1654,6 @@ class VNSTSolver:
         # Exchange moves: O(n*k) lookup into the immutable nearest-customer
         # ranks rather than rebuilding and sorting n complete neighbour lists.
         for i, p1, node1 in customer_positions:
-            source_index = node1.id if direct_terminal_index else node_id[node1.id]
-            distance_row = distance[source_index]
             nearest_ids = self._customer_neighbor_ids.get(node1.id, ())
             for other_id in nearest_ids[:exchange_neighbor_limit]:
                 other_position = position_by_customer_id.get(other_id)
@@ -1636,13 +1662,9 @@ class VNSTSolver:
                 j, p2, node2 = other_position
                 if (j, p2, i, p1) < (i, p1, j, p2):
                     continue
-                other_index = node2.id if direct_terminal_index else node_id[node2.id]
-                proxy = float(distance_row[other_index])
-                self._bounded_insert(
-                    moves,
-                    (proxy, ("exchange", i, p1, j, p2)),
-                    candidate_limit,
-                )
+                move = ("exchange", i, p1, j, p2)
+                proxy = self._local_move_objective_delta(solution, move, route_costs)
+                retain(proxy, move)
 
         # 2-opt*: restrict route pairs to those connected by at least one of the
         # precomputed nearest-customer relations.  Within a selected pair scan
@@ -1653,6 +1675,15 @@ class VNSTSolver:
                 j = customer_route.get(other_id)
                 if j is not None and i != j:
                     route_pairs.add((min(i, j), max(i, j)))
+        route_prefixes = []
+        for route in solution:
+            distances = [0.0]
+            counts = [0]
+            for position, node in enumerate(route.nodes):
+                counts.append(counts[-1] + int(node.type == "c"))
+                if position:
+                    distances.append(distances[-1] + self._dist(route.nodes[position - 1], node))
+            route_prefixes.append((distances, counts))
         for i, j in sorted(route_pairs):
             ri = solution[i]
             if len(ri.nodes) <= 3:
@@ -1661,6 +1692,8 @@ class VNSTSolver:
             if len(rj.nodes) <= 3:
                 continue
             split_candidates = []
+            pi, ci = route_prefixes[i]
+            pj, cj = route_prefixes[j]
             for s1 in range(1, len(ri.nodes) - 1):
                 for s2 in range(1, len(rj.nodes) - 1):
                     if direct_terminal_index:
@@ -1673,16 +1706,20 @@ class VNSTSolver:
                         ri_cur = node_id[ri.nodes[s1].id]
                         rj_prev = node_id[rj.nodes[s2 - 1].id]
                         rj_cur = node_id[rj.nodes[s2].id]
-                    old = float(distance[ri_prev, ri_cur]) + float(distance[rj_prev, rj_cur])
-                    new = float(distance[ri_prev, rj_cur]) + float(distance[rj_prev, ri_cur])
-                    split_candidates.append((new - old, s1, s2))
+                    # The two new routes retain their direction; if a tail
+                    # exchange leaves only stations, cleanup removes that route
+                    # (including all its distance and its fixed vehicle fee).
+                    ni = ci[s1] + cj[-1] - cj[s2]
+                    nj = cj[s2] + ci[-1] - ci[s1]
+                    di = pi[s1 - 1] + float(distance[ri_prev, rj_cur]) + pj[-1] - pj[s2]
+                    dj = pj[s2 - 1] + float(distance[rj_prev, ri_cur]) + pi[-1] - pi[s1]
+                    cost = self.distance_unit_cost * (di * bool(ni) + dj * bool(nj))
+                    cost += self.vehicle_fixed_cost * (bool(ni) + bool(nj))
+                    proxy = cost - route_costs[i] - route_costs[j]
+                    split_candidates.append((proxy, s1, s2))
             split_candidates.sort(key=lambda x: x[0])
             for proxy, s1, s2 in split_candidates[:position_neighbor_limit]:
-                self._bounded_insert(
-                    moves,
-                    (proxy, ("two_opt", i, j, s1, s2)),
-                    candidate_limit,
-                )
+                retain(proxy, ("two_opt", i, j, s1, s2))
 
         # Station remove/insert moves. Insertions focus on the first battery violation arc.
         for ridx, route in enumerate(solution):
@@ -1703,11 +1740,7 @@ class VNSTSolver:
                         - float(distance[prev_index, station_index])
                         - float(distance[station_index, next_index])
                     )
-                    self._bounded_insert(
-                        moves,
-                        (proxy, ("station_remove", ridx, pos)),
-                        candidate_limit,
-                    )
+                    retain(self.distance_unit_cost * proxy, ("station_remove", ridx, pos))
 
             sim_fail = None
             fuel_cap = float(self.instance.vehicle_params["fuel_cap"])
@@ -1744,15 +1777,24 @@ class VNSTSolver:
                     station_candidates.append((detour, st))
                 station_candidates.sort(key=lambda x: x[0])
                 for proxy, st in station_candidates[: max(0, self.station_candidate_limit)]:
-                    self._bounded_insert(
-                        moves,
-                        (proxy, ("station_insert", ridx, sim_fail + 1, st)),
-                        candidate_limit,
-                    )
+                    retain(self.distance_unit_cost * proxy,
+                           ("station_insert", ridx, sim_fail + 1, st), recovery=True)
 
         moves.sort(key=lambda x: x[0])
         if candidate_limit > 0:
-            moves = moves[:candidate_limit]
+            # Raw objective deltas alone can suppress every temporary route
+            # opening / charging repair. Keep at most 20% of the budget for
+            # their best proposals, with the rest still ranked by cost.
+            recovery_moves.sort(key=lambda item: item[0])
+            selected = list(recovery_moves)
+            selected_keys = {move for _, move in selected}
+            for item in moves:
+                if len(selected) >= candidate_limit:
+                    break
+                if item[1] not in selected_keys:
+                    selected.append(item)
+                    selected_keys.add(item[1])
+            moves = sorted(selected, key=lambda item: item[0])
         return moves
 
     def _candidate_moves_fast(self, solution):
@@ -1836,7 +1878,11 @@ class VNSTSolver:
     def _tabu_search_fast(self, S):
         current_solution = self.clone_solution_shallow(S)
         best_solution = self.clone_solution_shallow(S)
-        best_solution_value = None
+        best_solution_value = self.generalized_cost(best_solution, False, False, False)
+        if math.isfinite(best_solution_value) and best_solution_value < min(1e10, self.global_value):
+            self.global_value = best_solution_value
+            self.global_solution = self.clone_solution_shallow(best_solution)
+            self._report_incumbent()
         tabu_list = deque(maxlen=self.tabu_tenure)
 
         for _iter in range(self.tabu_iter):
@@ -1866,8 +1912,15 @@ class VNSTSolver:
                     allow_infeasible=False,
                     route_feasibility_cache=route_feasibility_cache,
                 )
-                candidate_feasible = math.isfinite(feasible_value) and feasible_value < 1e9
+                candidate_feasible = math.isfinite(feasible_value) and feasible_value < 1e10
                 is_aspiration = candidate_feasible and feasible_value < self.global_value
+                if candidate_feasible and feasible_value < best_solution_value:
+                    best_solution = self.clone_solution_shallow(candidate)
+                    best_solution_value = feasible_value
+                if is_aspiration:
+                    self.global_value = feasible_value
+                    self.global_solution = self.clone_solution_shallow(candidate)
+                    self._report_incumbent()
                 if key in tabu_list and not is_aspiration:
                     continue
 
@@ -1889,23 +1942,6 @@ class VNSTSolver:
             if best_key is not None:
                 tabu_list.append(best_key)
             self.update_diversification_history(current_solution)
-
-            cur_val = best_feasible_value
-            if best_solution_value is None:
-                best_solution_value = self.generalized_cost(
-                    best_solution,
-                    penalty_value=False,
-                    p_div_value=False,
-                    allow_infeasible=False,
-                )
-            if cur_val < best_solution_value:
-                best_solution = self.clone_solution_shallow(current_solution)
-                best_solution_value = cur_val
-
-            if best_solution_value < self.global_value:
-                self.global_value = best_solution_value
-                self.global_solution = self.clone_solution_shallow(best_solution)
-                self._report_incumbent()
 
         return best_solution
 

@@ -1,0 +1,14 @@
+{
+  "schema": "evrptw_objective_profile_v1",
+  "objective": {
+    "mode": "distance",
+    "profile_id": "distance_v1",
+    "electricity_price_usd_per_kwh": 0.0,
+    "consumption_kwh_per_km": 0.0,
+    "vehicle_fixed_cost_usd": 0.0
+  },
+  "accounting": {
+    "formula": "distance_km",
+    "note": "Explicit legacy distance-only benchmark; do not mix with energy_vehicle_cost results."
+  }
+}

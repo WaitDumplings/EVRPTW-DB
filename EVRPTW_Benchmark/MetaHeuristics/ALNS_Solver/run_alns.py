@@ -69,7 +69,11 @@ from solver import ALNS_Solver
 
 
 SOLVER_NAME = "alns_stage2_anytime"
-ALGORITHM_PROFILE_ID = "alns_stage2_scalable_v2"
+ALGORITHM_PROFILE_ID = "alns_stage2_scalable_cost_v3"
+DEFAULT_OBJECTIVE_CONFIG = (
+    REPO_ROOT / "EVRPTW_Benchmark" / "Reinforcement_Learning" / "configs"
+    / "rivian_energy_vehicle_cost_v2.json"
+)
 
 
 SUMMARY_FIELDNAMES = [
@@ -449,8 +453,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument(
         "--objective_config",
-        default="",
-        help="Versioned objective JSON; omitted keeps legacy distance_v1.",
+        default=str(DEFAULT_OBJECTIVE_CONFIG),
+        help=(
+            "Versioned objective JSON; defaults to rivian_energy_vehicle_cost_v2. "
+            "Pass distance_v1.json explicitly for legacy distance minimization."
+        ),
     )
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--max_instances", type=int, default=None)
@@ -487,11 +494,7 @@ def main() -> None:
     checkpoints_s, time_limit_s = resolve_schedule(
         parse_checkpoints(args.checkpoints_s), args.time_limit_s
     )
-    objective_config = (
-        load_objective(args.objective_config)
-        if args.objective_config
-        else ObjectiveConfig()
-    )
+    objective_config = load_objective(args.objective_config)
     save_path = Path(args.save_path)
     solutions_dir = save_path / "solutions"
     checkpoints_dir = solutions_dir / "checkpoints"

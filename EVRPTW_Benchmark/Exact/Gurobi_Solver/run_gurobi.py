@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO_ROOT / "EVRPTW_Dataset_Generator" / "src"))
 
 from evrptw_core.benchmark_schema import UNIFIED_TIME_TRACE_FIELDNAMES
 from evrptw_core.io import save_solution
-from evrptw_core.objective import ObjectiveConfig, load_objective
+from evrptw_core.objective import load_objective
 from evrptw_core.schema import EVRPTWSolution, solution_route_sequence
 from evrptw_core.validation import validate_instance_structure
 from gurobi_solver import (
@@ -25,6 +25,7 @@ from gurobi_solver import (
     GurobiEVRPTWSolver,
     GurobiSolverConfig,
 )
+from run_contract import build_run_contract, ensure_run_contract
 from stage2_adapter import (
     Stage2ViewTask,
     load_stage2_instance,
@@ -34,6 +35,10 @@ from stage2_adapter import (
 
 
 DEFAULT_EXACT_TIME_LIMIT_S = 1800.0
+DEFAULT_OBJECTIVE_CONFIG = REPO_ROOT / (
+    "EVRPTW_Benchmark/Reinforcement_Learning/configs/"
+    "rivian_energy_vehicle_cost_v2.json"
+)
 
 SUMMARY_FIELDNAMES = [
     "instance_id", "file", "family_id", "city_slug", "split_id", "track_id",
@@ -50,11 +55,11 @@ SUMMARY_FIELDNAMES = [
     "charging_time_model", "charging_power_min_kw", "charging_power_max_kw",
     "charging_power_derating_factor", "charging_power_factor_source",
     "route_validation_passed", "charging_visit_count", "total_charging_time_s",
-    "errors", "traceback",
+    "errors", "traceback", "run_contract_fingerprint", "is_certified_optimal",
 ]
 
 TIME_TRACE_FIELDNAMES = list(UNIFIED_TIME_TRACE_FIELDNAMES)
-GUROBI_ALGORITHM_PROFILE_ID = "gurobi_exact_energy_vehicle_cost_anytime_v1"
+GUROBI_ALGORITHM_PROFILE_ID = "gurobi_exact_energy_vehicle_cost_anytime_v2"
 
 TERMINAL_BENCHMARK_STATUSES = {
     "COMPLETED_OPTIMAL",
@@ -215,6 +220,7 @@ def write_checkpoint_solution(
         runtime_s=snapshot.get("elapsed_s"),
         feasible=True,
         metadata={
+            "run_contract_fingerprint": snapshot.get("run_contract_fingerprint"),
             "checkpoint_s": snapshot.get("checkpoint_s"),
             "reached_checkpoint": snapshot.get("reached_checkpoint"),
             "best_bound": snapshot.get("best_bound"),
@@ -473,6 +479,7 @@ def solved_summary_row(instance: Any, instance_file: Path, solution: EVRPTWSolut
         "benchmark_status": solution.metadata.get("benchmark_status"),
         "benchmark_completed": solution.metadata.get("benchmark_completed"),
         "has_incumbent": solution.metadata.get("has_incumbent"),
+        "is_certified_optimal": solution.metadata.get("is_certified_optimal", False),
         "objective_distance_km": solution.objective_distance_km,
         "objective_mode": solution.metadata.get("objective_mode"),
         "objective_profile_id": solution.metadata.get("objective_profile_id"),
@@ -607,7 +614,7 @@ def write_reference_route(
         ),
         "objective_unit": solution.metadata.get("objective_unit", "km"),
         "status": str(solution.metadata.get("gurobi_status_name") or "").lower(),
-        "is_certified_optimal": solution.metadata.get("gurobi_status_name") == "OPTIMAL",
+        "is_certified_optimal": bool(solution.metadata.get("is_certified_optimal")),
         "lower_bound": solution.metadata.get("best_bound"),
         "optimality_gap": solution.metadata.get("mip_gap"),
         "runtime_sec": solution.runtime_s,
@@ -645,8 +652,7 @@ def make_reference_row(
     else:
         solution_path = ""
 
-    status_name = str(summary_row.get("status_name") or "")
-    is_optimal = status_name == "OPTIMAL"
+    is_optimal = str(summary_row.get("is_certified_optimal", "")).lower() == "true"
     solver_name = solution.solver_name if solution is not None else GurobiEVRPTWSolver.name
     notes = ""
     if summary_row.get("vehicle_count") not in ("", None):
@@ -789,8 +795,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--time_limit_s", type=float, default=None, help="Max solve time in seconds. Default: 1800.")
     parser.add_argument(
         "--objective_config",
-        default="",
-        help="Versioned objective JSON; omitted keeps legacy distance_v1.",
+        default=str(DEFAULT_OBJECTIVE_CONFIG),
+        help="Objective JSON; default: rivian_energy_vehicle_cost_v2 (USD). Pass distance_v1.json explicitly for legacy distance.",
     )
     parser.add_argument("--mip_gap", type=float, default=0.0)
     parser.add_argument("--cs_copies", type=int, default=2, help="Number of dummy copies per active charging station. Default: 2.")
@@ -814,11 +820,7 @@ def main(argv: list[str] | None = None) -> None:
 
     requested_checkpoints_s = parse_checkpoints(args.checkpoints_s)
     checkpoints_s, time_limit_s = resolve_time_schedule(requested_checkpoints_s, args.time_limit_s)
-    objective_config = (
-        load_objective(args.objective_config)
-        if args.objective_config
-        else ObjectiveConfig()
-    )
+    objective_config = load_objective(args.objective_config)
     workers = max(1, int(args.workers))
     threads = args.threads if args.threads is not None else (1 if workers > 1 else None)
     scale_filter = parse_scales(args.scales)
@@ -871,11 +873,6 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     existing_summary_rows = read_csv_rows(summary_path)
-    completed_ids = {
-        str(row.get("instance_id", ""))
-        for row in existing_summary_rows
-        if is_terminal_summary_row(row)
-    }
     stage2_tasks = read_stage2_tasks(
         dataset_path,
         family_root=args.family_root or None,
@@ -886,6 +883,22 @@ def main(argv: list[str] | None = None) -> None:
             "accept the canonical CLE-backed Stage-2 layout; run the dataset "
             "generator or the CLE+ID reconstruction workflow first."
         )
+    run_contract = build_run_contract(
+        solver_config=solver_config,
+        tasks=stage2_tasks,
+        solver_version=solver_version,
+        algorithm_profile_id=GUROBI_ALGORITHM_PROFILE_ID,
+    )
+    ensure_run_contract(save_path, run_contract)
+    run_fingerprint = run_contract["fingerprint"]
+    if any(row.get("run_contract_fingerprint") != run_fingerprint
+           for row in existing_summary_rows):
+        raise ValueError("Existing Gurobi rows do not match the run contract; choose a new --save_path.")
+    completed_ids = {
+        str(row.get("instance_id", ""))
+        for row in existing_summary_rows
+        if is_terminal_summary_row(row)
+    }
     input_file_count = len({task.index_path for task in stage2_tasks})
     selected_tasks, skipped_range_count, skipped_completed_count = select_stage2_tasks(
         stage2_tasks,
@@ -946,11 +959,15 @@ def main(argv: list[str] | None = None) -> None:
         instance_id = str(result["instance_id"])
         summary_row = dict(result["summary_row"])
         summary_row["time_trace_path"] = str(trace_path)
+        summary_row["run_contract_fingerprint"] = run_fingerprint
         solution_dict = result.get("solution")
         solution = EVRPTWSolution.from_dict(solution_dict) if solution_dict is not None else None
         new_time_rows: list[dict[str, Any]] = []
 
         if solution is not None:
+            solution.metadata["run_contract_fingerprint"] = run_fingerprint
+            for snapshot in solution.metadata.get("checkpoint_snapshots", []):
+                snapshot["run_contract_fingerprint"] = run_fingerprint
             solution_path = solutions_dir / f"{instance_id}_solution.pkl"
             save_solution(solution_path, solution)
             summary_row["solution_path"] = str(solution_path)
@@ -965,6 +982,8 @@ def main(argv: list[str] | None = None) -> None:
         else:
             new_time_rows.extend(result.get("time_rows", []))
 
+        for row in new_time_rows:
+            row["run_contract_fingerprint"] = run_fingerprint
         summary_rows = upsert_instance_rows(summary_rows, [summary_row], instance_id)
         time_rows = upsert_instance_rows(time_rows, new_time_rows, instance_id)
 

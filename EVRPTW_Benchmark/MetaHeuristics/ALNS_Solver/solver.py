@@ -434,7 +434,7 @@ class ALNS_Solver:
         self.scalar_cache_limit = 50_000
         self.station_cache_limit = 12_000
         self.initial_construction_strategy = "singleton_best_fit_v1"
-        self.algorithm_profile_id = "alns_stage2_scalable_v2"
+        self.algorithm_profile_id = "alns_stage2_scalable_cost_v3"
         self.initial_construction_stats: Dict[str, Any] = {}
         self.singleton_source = "solver_repair"
         self._singleton_route_cache: Dict[int, List[int]] = {}
@@ -456,6 +456,8 @@ class ALNS_Solver:
         Export current solver state so we can resume later.
         """
         return {
+            "objective_contract": self._objective_contract(),
+            "algorithm_profile_id": self.algorithm_profile_id,
             "cur_iter": int(self.cur_iter),
             "max_iters": int(self.max_iters),
 
@@ -503,13 +505,63 @@ class ALNS_Solver:
             "scalar_cache_limit": self.scalar_cache_limit,
             "station_cache_limit": self.station_cache_limit,
             "published_incumbent_validation": "solver_full_then_runner_independent_replay",
+            "customer_insertion_score": "objective_delta_with_vehicle_fixed_fee_v1",
+            "objective_contract": self._objective_contract(),
         }
 
+    def _objective_contract(self) -> Dict[str, Any]:
+        """Freeze the units of incumbent values and simulated-annealing state."""
+        return {
+            "schema": "alns_linear_objective_v1",
+            "formula": "distance_unit_cost * distance + vehicle_fixed_cost * route_count",
+            "distance_unit_cost": self.distance_unit_cost,
+            "vehicle_fixed_cost": self.vehicle_fixed_cost,
+        }
 
     def load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """
-        Restore solver state from a previous checkpoint.
+        Restore state only when incumbent and temperature units match.
+
+        Checkpoints predating the objective contract are accepted only as
+        distance checkpoints, with their best value independently replayed.
+        A cost checkpoint without metadata must instead be used as an explicit
+        route warm start; its temperature/weights cannot safely be resumed.
         """
+        contract = checkpoint.get("objective_contract")
+        if contract is None:
+            if self.distance_unit_cost != 1.0 or self.vehicle_fixed_cost != 0.0:
+                raise ValueError(
+                    "legacy checkpoint has no objective contract; "
+                    "only distance_v1 resume is supported"
+                )
+        elif contract != self._objective_contract():
+            raise ValueError("checkpoint objective contract does not match this solver")
+
+        # Validate before mutating any live state, including search temperature.
+        best_routes = [list(r) for r in checkpoint.get("best_routes", [])]
+        best_value = float(checkpoint.get("global_value", float("inf")))
+        if best_routes:
+            replayed_value = self.objective_value(best_routes)
+            if not math.isfinite(replayed_value) or not math.isclose(
+                best_value, replayed_value, rel_tol=1e-10, abs_tol=1e-8
+            ):
+                raise ValueError(
+                    "checkpoint best value disagrees with replayed objective"
+                )
+        elif best_value != float("inf"):
+            raise ValueError(
+                "checkpoint without best routes must have an infinite best value"
+            )
+        elif contract is None and checkpoint.get("temperature") is not None:
+            raise ValueError(
+                "legacy checkpoint temperature units cannot be verified without best routes"
+            )
+        temperature = checkpoint.get("temperature")
+        if temperature is not None:
+            temperature = float(temperature)
+            if not math.isfinite(temperature) or temperature < 0.0:
+                raise ValueError("checkpoint temperature must be finite and nonnegative")
+
         self.cur_iter = int(checkpoint.get("cur_iter", 1))
 
         # optional: allow checkpoint to overwrite max_iters if present
@@ -517,13 +569,9 @@ class ALNS_Solver:
             self.max_iters = int(checkpoint["max_iters"])
 
         self.current_routes = [list(r) for r in checkpoint.get("current_routes", [])]
-        self.best_routes = [list(r) for r in checkpoint.get("best_routes", [])]
-
-        self.global_value = float(checkpoint.get("global_value", float("inf")))
-
-        self.temperature = checkpoint.get("temperature", None)
-        if self.temperature is not None:
-            self.temperature = float(self.temperature)
+        self.best_routes = best_routes
+        self.global_value = best_value
+        self.temperature = temperature
 
         self.cr_weights = dict(checkpoint.get("cr_weights", self.cr_weights))
         self.ci_weights = dict(checkpoint.get("ci_weights", self.ci_weights))
@@ -1983,7 +2031,9 @@ class ALNS_Solver:
                         - self.time_matrix[prev_node, next_node]
                     )
                 else:
-                    proxy = dist_delta
+                    # Existing routes keep the vehicle count fixed.  New
+                    # routes are retained separately below, including the fee.
+                    proxy = self.distance_unit_cost * dist_delta
 
                 cheap_candidates.append((proxy, ridx, pos, base_dist, base_time))
 
@@ -2004,7 +2054,8 @@ class ALNS_Solver:
             delta = (
                 self._route_total_time(repaired) - base_time
                 if mode == "time"
-                else self._route_distance(repaired) - base_dist
+                else self.distance_unit_cost
+                * (self._route_distance(repaired) - base_dist)
             )
             options.append((ridx, repaired, delta))
 
@@ -2015,7 +2066,8 @@ class ALNS_Solver:
                 delta = (
                     self._route_total_time(new_route)
                     if mode == "time"
-                    else self._route_distance(new_route)
+                    else self.distance_unit_cost * self._route_distance(new_route)
+                    + self.vehicle_fixed_cost
                 )
                 options.append((len(routes), new_route, delta))
 
@@ -2029,6 +2081,9 @@ class ALNS_Solver:
         allowed_routes: Optional[set] = None,
         include_new_route: bool = True,
     ) -> List[Tuple[int, List[int], float]]:
+        # Historical mode name "distance" now means the configured objective:
+        # alpha * delta_distance + beta * delta_vehicle_count.  Time-based
+        # operators intentionally retain their different exploration ranking.
         if self.customer_top_k is not None:
             return self._all_customer_insertions_part(
                 routes,
@@ -2077,14 +2132,20 @@ class ALNS_Solver:
                 delta = (
                     self._route_total_time(repaired) - base_time
                     if mode == "time"
-                    else self._route_distance(repaired) - base_dist
+                    else self.distance_unit_cost
+                    * (self._route_distance(repaired) - base_dist)
                 )
                 options.append((ridx, repaired, delta))
 
         if include_new_route:
             new_route = self._make_single_customer_route(customer)
             if new_route is not None:
-                delta = self._route_total_time(new_route) if mode == "time" else self._route_distance(new_route)
+                delta = (
+                    self._route_total_time(new_route)
+                    if mode == "time"
+                    else self.distance_unit_cost * self._route_distance(new_route)
+                    + self.vehicle_fixed_cost
+                )
                 options.append((len(routes), new_route, delta))
 
         return options

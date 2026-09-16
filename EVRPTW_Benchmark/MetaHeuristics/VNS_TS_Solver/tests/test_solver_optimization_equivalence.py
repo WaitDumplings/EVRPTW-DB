@@ -670,7 +670,7 @@ def test_effective_fast_policy_is_exposed_and_scale_adaptive() -> None:
     small = solver.effective_fast_policy(50)
     medium = solver.effective_fast_policy(100)
     large = solver.effective_fast_policy(500)
-    assert small["version"] == "adaptive_nearest_best_fit_v3"
+    assert small["version"] == "adaptive_cost_best_fit_v4"
     assert small["move_candidate_limit"] >= medium["move_candidate_limit"]
     assert medium["move_candidate_limit"] >= large["move_candidate_limit"]
     assert large["route_neighbor_limit"] <= small["route_neighbor_limit"]
@@ -720,10 +720,10 @@ def test_preexecution_contract_exactly_matches_runtime_fast_policy(
         )
     }
     assert runner.contract_algorithm_profile_id("fast") == (
-        "vns_ts_stage2_adaptive_fast_v4"
+        "vns_ts_stage2_adaptive_fast_cost_v5"
     )
     assert runner.contract_algorithm_profile_id("full") == (
-        "vns_ts_stage2_full_enumeration_v3"
+        "vns_ts_stage2_full_enumeration_cost_v4"
     )
 
 

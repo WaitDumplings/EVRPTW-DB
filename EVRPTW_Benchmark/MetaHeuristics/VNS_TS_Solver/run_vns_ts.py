@@ -69,13 +69,23 @@ from vnst_adapter import to_vnst_instance
 
 
 SOLVER_NAME = "vns_ts_stage2_anytime"
+DEFAULT_OBJECTIVE_CONFIG = (
+    REPO_ROOT / "EVRPTW_Benchmark" / "Reinforcement_Learning" / "configs" / "rivian_energy_vehicle_cost_v2.json"
+)
+
+
+def resolve_objective_config(value):
+    # An empty argument is not an implicit switch back to the legacy objective.
+    if value == "distance":
+        return ObjectiveConfig()
+    return load_objective(value or DEFAULT_OBJECTIVE_CONFIG)
 
 
 def contract_algorithm_profile_id(search_mode: str) -> str:
     return (
-        "vns_ts_stage2_adaptive_fast_v4"
+        "vns_ts_stage2_adaptive_fast_cost_v5"
         if str(search_mode) == "fast"
-        else "vns_ts_stage2_full_enumeration_v3"
+        else "vns_ts_stage2_full_enumeration_cost_v4"
     )
 
 
@@ -88,7 +98,7 @@ def contract_effective_fast_policy(
     exchange_neighbor_limit: int,
     station_candidate_limit: int,
 ) -> dict[str, int | str]:
-    """Mirror adaptive_nearest_best_fit_v3 for pre-execution run identity."""
+    """Mirror adaptive_cost_best_fit_v4 for pre-execution run identity."""
 
     scale = max(1, int(customer_count))
     if scale >= 500:
@@ -110,7 +120,7 @@ def contract_effective_fast_policy(
     if candidate_limit > 0:
         candidate_limit = max(12, int(round(candidate_limit * multiplier)))
     return {
-        "version": "adaptive_nearest_best_fit_v3",
+        "version": "adaptive_cost_best_fit_v4",
         "move_candidate_limit": candidate_limit,
         "route_neighbor_limit": max(1, route_limit),
         "position_neighbor_limit": max(1, position_limit),
@@ -586,8 +596,8 @@ def main() -> None:
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument(
         "--objective_config",
-        default="",
-        help="Versioned objective JSON; omitted keeps legacy distance_v1.",
+        default=str(DEFAULT_OBJECTIVE_CONFIG),
+        help="Versioned objective JSON (default: Rivian v2); use 'distance' for legacy distance_v1.",
     )
     parser.add_argument("--max_instances", type=int, default=None)
     parser.add_argument("--start_index", type=int, default=0, help="Inclusive filtered index")
@@ -638,11 +648,7 @@ def main() -> None:
     checkpoints_s, time_limit_s = resolve_schedule(
         parse_checkpoints(args.checkpoints_s), args.time_limit_s
     )
-    objective_config = (
-        load_objective(args.objective_config)
-        if args.objective_config
-        else ObjectiveConfig()
-    )
+    objective_config = resolve_objective_config(args.objective_config)
     save_path = Path(args.save_path)
     solutions_dir = save_path / "solutions"
     checkpoints_dir = solutions_dir / "checkpoints"

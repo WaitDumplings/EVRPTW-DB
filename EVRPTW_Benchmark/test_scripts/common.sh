@@ -92,7 +92,7 @@ if [[ "${DRY_RUN}" == "0" && ! -d "${DATASET_ROOT}" ]]; then
 fi
 readonly DATASET_ROOT
 readonly FAMILY_ROOT="${DATASET_ROOT}/materialized/families"
-results_root_raw="${EVRPTW_TEST_RESULTS_ROOT:-EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2}"
+results_root_raw="${EVRPTW_TEST_RESULTS_ROOT:-EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2_searchfix_20260916}"
 readonly RESULTS_ROOT="${results_root_raw}"
 
 if [[ "${DRY_RUN}" == "0" ]]; then

@@ -8,7 +8,7 @@ solver does not have a separate restored-instance code path.
 The solver contract matches Stage 2 and the exact benchmark:
 
 - objective: the configured cost profile, or directed `distance_matrix_km`
-  when using the compatible `distance_v1` default;
+  when explicitly selecting the compatible `distance_v1` profile;
 - travel time: directed `running_time_shortest_matrix_s`;
 - battery use: directed `running_time_path_energy_kwh`;
 - charging: `full_charge_linear_derated_v2`, using each station's own
@@ -39,8 +39,9 @@ bash EVRPTW_Benchmark/test_scripts/run_alns_cus50_test.sh
 The launcher and the example below select the same
 `rivian_energy_vehicle_cost_v2.json` profile as the DRL benchmarks: electricity
 cost for directed route distance plus a fixed cost per vehicle, reported in
-USD. A direct Python invocation that omits `--objective_config` retains the
-compatible `distance_v1` default.
+USD. Direct Python invocations also default to this v2 cost profile. Legacy
+distance-only runs require an explicit `--objective_config` pointing to
+`EVRPTW_Benchmark/Reinforcement_Learning/configs/distance_v1.json`.
 
 Equivalent raw runner invocation:
 

@@ -1029,7 +1029,7 @@ def test_both_runner_clocks_include_constructor_and_pass_only_remaining_budget(m
     assert vns_result["runtime_s"] >= 0.045
     assert 0.0 < FakeVNSTSolver.solve_budget_s < 0.46
     assert vns_result["timing_scope"] == ALGORITHM_TIMING_SCOPE
-    assert vns_result["algorithm_profile_id"] == "vns_ts_stage2_adaptive_fast_v4"
+    assert vns_result["algorithm_profile_id"] == "vns_ts_stage2_adaptive_fast_cost_v5"
     assert (
         vns_result["initial_construction_strategy"]
         == "certificate_singleton_best_fit_v1"

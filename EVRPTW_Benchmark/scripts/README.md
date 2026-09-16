@@ -67,8 +67,9 @@ All shells use the frozen contract: checkpoints at 60, 300, 900, and 1800 second
 `rivian_energy_vehicle_cost_v2` objective:
 `0.151750972762646 × distance_km + 413.6331536717643 × vehicles_started`
 USD. Final evaluation costs match DRL; shaping rewards and heuristic search
-penalties are not added to this value. The same JSON must be passed explicitly
-when invoking a Python solver directly; its legacy default is distance only.
+penalties are not added to this value. The Python solver entry points also default to this profile. To run a legacy
+distance-only comparison, explicitly pass `--objective_config
+EVRPTW_Benchmark/Reinforcement_Learning/configs/distance_v1.json`.
 See [the objective audit](OBJECTIVE_AUDIT_20260909_ZH.md) for the calculation
 paths, route-counting rules, and remaining feasible-set differences.
 
@@ -98,9 +99,10 @@ provide certified bounds.
 
 The filenames remain solver-specific
 (`gurobi_time_trace.csv`, `alns_time_trace.csv`, and
-`vns_ts_time_trace.csv`) so existing resume trees remain compatible. If a
+`vns_ts_time_trace.csv`). Resuming requires a matching objective, budget and
+algorithm contract; pre-fix result directories must remain separate. If a
 run finishes early, later checkpoints repeat the final incumbent; only Gurobi
-may label a solution proven optimal.
+with a validated zero-gap optimum may label a solution proven optimal.
 
 ## Multi-server shards
 
@@ -136,8 +138,9 @@ EVRPTW_DRY_RUN=1          print the command without solving
 
 Every launcher resumes terminal instances through `--skip_completed`. Output
 directories include solver, scale, test, and shard identity. The default root
-is `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2`.
-This separates the four-checkpoint runs from older two-checkpoint or two-hour
-results, which cannot supply a missing earlier incumbent. When overriding
+is `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2_searchfix_20260916`.
+The `searchfix_20260916` root separates the corrected cost-aware search from
+previous runs. Algorithm contract versions also prevent `--skip_completed`
+from reusing an older search result under the new implementation. When overriding
 `EVRPTW_TEST_RESULTS_ROOT`, use a fresh directory for this timing contract;
 resume it only with the same checkpoints, objective, and solver settings.

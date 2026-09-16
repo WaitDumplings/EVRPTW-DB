@@ -95,16 +95,26 @@ class GurobiEVRPTWSolver:
         self.node_map = node_map
         self.x = x
 
+        model_build_runtime_s = time.perf_counter() - start
+        remaining_time_s = max(0.0, float(self.config.time_limit_s) - model_build_runtime_s)
         trace = self._new_trace()
-        callback = self._make_callback(trace, node_map, x, instance)
-        model.optimize(callback)
-
-        stage1_status = int(model.Status)
+        optimization_started = remaining_time_s > 0.0
+        if optimization_started:
+            model.Params.TimeLimit = remaining_time_s
+            callback = self._make_callback(trace, node_map, x, instance, clock_start_s=start)
+            model.optimize(callback)
+            stage1_status = int(model.Status)
+            stage1_optimization_runtime_s = self._safe_model_float(model, "Runtime")
+            if stage1_optimization_runtime_s is None:
+                stage1_optimization_runtime_s = time.perf_counter() - start - model_build_runtime_s
+        else:
+            # Building the model is algorithm work. If it consumes the budget,
+            # do not start a fresh full-budget optimization after the deadline.
+            stage1_status = GRB.TIME_LIMIT
+            stage1_optimization_runtime_s = 0.0
         stage1_status_name = self._status_name(stage1_status)
-        stage1_runtime_s = self._safe_model_float(model, "Runtime")
-        if stage1_runtime_s is None:
-            stage1_runtime_s = time.perf_counter() - start
-        stage1_has_solution = model.SolCount > 0
+        stage1_runtime_s = time.perf_counter() - start
+        stage1_has_solution = optimization_started and model.SolCount > 0
         stage1_best_objective = self._safe_model_float(model, "ObjVal") if stage1_has_solution else None
         stage1_best_bound = self._safe_model_float(model, "ObjBound")
         stage1_mip_gap = self._safe_model_float(model, "MIPGap") if stage1_has_solution else None
@@ -126,18 +136,11 @@ class GurobiEVRPTWSolver:
             solver_status=stage1_status_name,
             objective_distance_km=stage1_route_distance,
             objective_value=stage1_best_objective,
-            best_bound=(
-                stage1_best_objective
-                if stage1_status == GRB.OPTIMAL
-                and stage1_best_objective is not None
-                else stage1_best_bound
-            ),
+            best_bound=stage1_best_bound,
             routes=stage1_routes,
             source="primary_final",
         )
-        if stage1_status == GRB.OPTIMAL and stage1_route_distance is not None:
-            stage1_final_snapshot["mip_gap"] = 0.0
-        elif stage1_mip_gap is not None:
+        if stage1_mip_gap is not None:
             stage1_final_snapshot["mip_gap"] = stage1_mip_gap
         self._finalize_checkpoints(
             trace,
@@ -157,6 +160,7 @@ class GurobiEVRPTWSolver:
             and not self.objective_config.is_cost
             and stage1_has_solution
             and stage1_status == GRB.OPTIMAL
+            and stage1_mip_gap == 0.0
             and stage1_best_objective is not None
         ):
             remaining_time_s = max(
@@ -235,10 +239,28 @@ class GurobiEVRPTWSolver:
                 ],
             }
 
+        if (
+            has_solution and stage1_best_objective is not None
+            and objective_fields
+            and not math.isclose(
+                stage1_best_objective, float(objective_fields["objective_value"]),
+                rel_tol=1e-7, abs_tol=1e-6,
+            )
+        ):
+            feasible = False
+            violations["objective_value_mismatch"] = {
+                "model_objective": stage1_best_objective,
+                "replayed_route_objective": objective_fields["objective_value"],
+            }
+
+        optimality_proven = bool(
+            feasible and status == GRB.OPTIMAL and stage1_mip_gap == 0.0
+        )
         benchmark_status = self._benchmark_status(
             status=status,
             has_solution=has_solution,
             feasible=bool(feasible),
+            optimality_proven=optimality_proven,
         )
         benchmark_completed = bool(has_solution and feasible)
         self._validate_checkpoint_snapshots(instance, trace)
@@ -262,14 +284,13 @@ class GurobiEVRPTWSolver:
                 "gurobi_status": status,
                 "gurobi_status_name": status_name,
                 "benchmark_status": benchmark_status,
+                "is_certified_optimal": optimality_proven,
                 "benchmark_completed": benchmark_completed,
                 "has_incumbent": bool(has_solution),
-                "mip_gap": 0.0 if status == GRB.OPTIMAL and objective is not None else mip_gap,
-                "best_bound": (
-                    objective_fields.get("objective_value")
-                    if status == GRB.OPTIMAL and objective is not None
-                    else best_bound
-                ),
+                # OPTIMAL means the configured tolerances were met; a positive
+                # MIPGap must not be rewritten into an exact zero-gap proof.
+                "mip_gap": mip_gap,
+                "best_bound": best_bound,
                 **objective_fields,
                 "objective_config": self.objective_config.to_dict(),
                 "cs_copies": int(self.config.cs_copies),
@@ -283,7 +304,11 @@ class GurobiEVRPTWSolver:
                 "tie_break_skipped_no_time": bool(tie_break_skipped_no_time),
                 "stage1_best_distance_km": stage1_route_distance,
                 "stage1_best_objective_value": stage1_best_objective,
-                "stage1_optimization_runtime_s": stage1_runtime_s,
+                "model_build_runtime_s": model_build_runtime_s,
+                "stage1_optimization_started": optimization_started,
+                "stage1_optimization_runtime_s": stage1_optimization_runtime_s,
+                "stage1_elapsed_s": stage1_runtime_s,
+                "algorithm_timing_scope": "solve_wall_including_model_construction",
                 "wall_runtime_s": runtime,
                 "stage1_gurobi_status": stage1_status,
                 "stage1_gurobi_status_name": stage1_status_name,
@@ -582,12 +607,18 @@ class GurobiEVRPTWSolver:
         node_map: NodeMap,
         x: dict[tuple[int, int], Any],
         instance: EVRPTWInstance,
+        *,
+        clock_start_s: float | None = None,
     ):
         arcs = list(x.keys())
         x_vars = [x[arc] for arc in arcs]
 
         def callback(model: Model, where: int) -> None:
-            runtime = self._callback_float(model, GRB.Callback.RUNTIME)
+            runtime = (
+                time.perf_counter() - clock_start_s
+                if clock_start_s is not None
+                else self._callback_float(model, GRB.Callback.RUNTIME)
+            )
             if runtime is None:
                 return
 
@@ -605,6 +636,19 @@ class GurobiEVRPTWSolver:
                 best_bound = self._callback_float(model, GRB.Callback.MIPSOL_OBJBND)
                 if best_bound is None:
                     best_bound = trace.get("last_best_bound")
+                if best_bound is not None:
+                    trace["last_best_bound"] = best_bound
+                # MIPSOL may report worse or equal solutions, including MIP
+                # starts. Keep the best observed route/objective pair.
+                previous = trace.get("last_incumbent")
+                if objective is None or (
+                    previous is not None
+                    and objective >= float(previous["objective_value"])
+                ):
+                    self._record_due_checkpoints(
+                        trace, runtime, "RUNNING", include_equal=True,
+                    )
+                    return
                 values = model.cbGetSolution(x_vars)
                 arc_values = {arc: float(value) for arc, value in zip(arcs, values)}
                 routes = self._extract_routes_from_arc_values(node_map, arc_values)
@@ -770,11 +814,12 @@ class GurobiEVRPTWSolver:
         status: int,
         has_solution: bool,
         feasible: bool,
+        optimality_proven: bool,
     ) -> str:
         if has_solution and feasible:
             return (
                 "COMPLETED_OPTIMAL"
-                if status == GRB.OPTIMAL
+                if optimality_proven
                 else "COMPLETED_WITH_INCUMBENT"
             )
         if has_solution:
@@ -785,8 +830,8 @@ class GurobiEVRPTWSolver:
             return "NO_FEASIBLE_SOLUTION"
         return "UNFINISHED_NO_INCUMBENT"
 
-    @staticmethod
     def _validate_checkpoint_snapshots(
+        self,
         instance: EVRPTWInstance,
         trace: dict[str, Any],
     ) -> None:
@@ -832,6 +877,21 @@ class GurobiEVRPTWSolver:
                 validation["passed"] = False
                 validation["violations"].append(
                     "checkpoint objective does not match independent replay"
+                )
+
+            claimed_cost = snapshot.get("objective_value")
+            if (
+                validation.get("passed") and claimed_cost is not None
+                and replay_objective is not None
+                and not math.isclose(
+                    float(claimed_cost),
+                    float(self.objective_config.value(replay_objective, len(routes))),
+                    rel_tol=1e-7, abs_tol=1e-6,
+                )
+            ):
+                validation["passed"] = False
+                validation["violations"].append(
+                    "checkpoint cost/vehicle count does not match independent replay"
                 )
 
             snapshot["route_validation"] = validation

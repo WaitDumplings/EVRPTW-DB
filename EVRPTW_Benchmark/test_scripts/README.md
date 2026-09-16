@@ -156,7 +156,7 @@ a fallback on the generation server.
 
 ## Outputs
 
-Outputs are written below `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2`.
+Outputs are written below `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2_searchfix_20260916`.
 Each solver writes a summary CSV, a time-trace CSV containing objective and full
 `routes_json` at all four checkpoints, final solution files, and checkpoint
 solution files. Every published route is independently replayed.

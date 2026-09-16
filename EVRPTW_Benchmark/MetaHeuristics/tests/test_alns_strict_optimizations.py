@@ -262,7 +262,7 @@ def test_fixed_iteration_search_matches_persistent_golden_state() -> None:
     with contextlib.redirect_stdout(io.StringIO()):
         result = solver.solve(delta_iters=35)
 
-    assert solver.algorithm_profile_id == "alns_stage2_scalable_v2"
+    assert solver.algorithm_profile_id == "alns_stage2_scalable_cost_v3"
     assert result == [1, 2, 0, 4, 6, 5, 0, 8, 7, 3, 0]
     assert solver.global_value.hex() == "0x1.032b020c49ba6p+5"
     assert _golden_sha256(_search_state_payload(solver, result)) == SEARCH_GOLDEN_SHA256

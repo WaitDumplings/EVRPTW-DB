@@ -109,8 +109,11 @@ bash EVRPTW_Benchmark/test_scripts/run_gurobi_cus50_test.sh
 The launcher and the example below select the same
 `rivian_energy_vehicle_cost_v2.json` profile as the DRL benchmarks: electricity
 cost for directed route distance plus a fixed cost per vehicle, reported in
-USD. A direct Python invocation that omits `--objective_config` retains the
-compatible `distance_v1` default.
+USD. The Python CLI also defaults to this v2 USD profile. To reproduce the
+legacy distance objective, explicitly pass
+`--objective_config EVRPTW_Benchmark/Reinforcement_Learning/configs/distance_v1.json`.
+The low-level `GurobiSolverConfig` API retains its explicit legacy-compatible
+parameter defaults; the runner resolves and supplies the selected profile.
 
 Equivalent raw runner invocation:
 
@@ -142,6 +145,15 @@ The configured objective controls the full budget and callback trace. The
 formal launcher above optimizes electricity-plus-vehicle cost; its final
 objective, bound and gap therefore refer to that USD objective.
 
+The algorithm clock starts on entry to `solve()` and includes model
+construction. Gurobi optimization receives only the remaining wall-clock
+budget, and callback/checkpoint timestamps use that same clock. If construction
+uses the entire budget, optimization is not started and the attempt is reported
+as `TIME_LIMIT` without an incumbent. `model_build_runtime_s`,
+`stage1_optimization_runtime_s` and `stage1_elapsed_s` retain the separate
+construction, Gurobi optimization and combined timings. Dataset loading before
+`solve()` remains outside the algorithm clock.
+
 The optional vehicle-count tie break applies only to the legacy `distance_v1`
 mode and is disabled by default. If explicitly enabled in that mode, it is
 diagnostic only: the published final objective and route remain the frozen
@@ -151,12 +163,20 @@ For Stage-2 inputs, `--start_index A --end_index B` selects the half-open stable
 position range `[A,B)` after `--scales` filtering. This matches the ALNS and
 VNS-TS runners and supports identical disjoint server shards without
 interpreting the hashed `view_id`. `--skip_completed` resumes from an existing
-summary.
+summary only after validating `run_contract.json`. The contract binds resolved
+objective coefficients, time budget/checkpoints, CS copies, tie-break settings,
+Gurobi version, model threads, source hashes, view-index contents and family
+manifests. Instance-range selection and process count may change for resuming
+shards; the actual per-model thread count remains part of the contract.
+Existing results without a contract or with a different contract are rejected
+with a request for a new `--save_path`, so old distance results cannot silently
+satisfy a new cost benchmark.
 
 ## Outputs
 
 The runner incrementally writes:
 
+- `run_contract.json`: the immutable identity checked before resuming;
 - `gurobi_summary.csv`: final status, incumbent, bound/gap, Stage-2 identity,
   matrix sources, charging model, power range, and route-replay result;
 - `gurobi_time_trace.csv`: the best incumbent available at each checkpoint;
@@ -168,6 +188,10 @@ seconds (1, 5, 15, and 30 minutes). Each time-trace row contains both
 `objective_distance_km` and the corresponding `routes_json`; the same route is
 also persisted under `solutions/checkpoints/`.
 
+Incumbent callbacks retain the best configured objective seen so far. Gurobi
+can emit worse or equal `MIPSOL` candidates; these events update available
+bounds without replacing the best route or worsening its time curve.
+
 Checkpoint values are strictly causal: a route first found after checkpoint
 `t` is never written at `t`. If optimization ends before the requested
 time limit, its final best route and objective are forward-filled to every later
@@ -176,8 +200,8 @@ checkpoint with `reached_checkpoint=false` and
 
 `benchmark_status` makes result completeness explicit:
 
-- `COMPLETED_OPTIMAL`: a valid incumbent with proven optimality for the configured objective;
-- `COMPLETED_WITH_INCUMBENT`: a valid time-limited incumbent;
+- `COMPLETED_OPTIMAL`: a replayed incumbent with a reported zero MIP gap for the configured model and objective;
+- `COMPLETED_WITH_INCUMBENT`: a valid incumbent stopped by a budget or tolerance without a reported zero gap;
 - `UNFINISHED_NO_INCUMBENT`: the budget ended without any incumbent;
 - `INVALID_INCUMBENT`: Gurobi returned a route that failed independent replay;
 - `NO_FEASIBLE_SOLUTION`: infeasibility/unboundedness was concluded without a
@@ -197,9 +221,13 @@ result, original objective, and original route remain available in
 and a full `TIME_LIMIT` attempt without an incumbent. It does not skip invalid
 incumbents or interrupted unfinished attempts.
 
-`OPTIMAL` is reported only when Gurobi proves optimality. A time-limit result
-with an incumbent remains a feasible time-limited incumbent and retains its
-best bound and MIP gap. A run without an incumbent remains uncovered rather
+The raw Gurobi `OPTIMAL` status means its configured tolerances were met.
+If a positive `--mip_gap` stops optimization with a nonzero gap, the actual
+bound and gap are retained, the benchmark reports `COMPLETED_WITH_INCUMBENT`,
+and `is_certified_optimal` is false. Bounds and gaps are never replaced by a
+fabricated zero-gap proof. Certification refers to the configured finite-CS-copy
+model, not an unrestricted charging-station expansion. A time-limit result
+with an incumbent likewise retains its best bound and MIP gap. A run without an incumbent remains uncovered rather
 than being assigned an artificial objective.
 
 ## Tests
@@ -214,7 +242,12 @@ pytest -q -p no:cacheprovider \
 
 The regression suite includes strict checkpoint causality and forward-fill
 semantics, checkpoint-route replay, an energy-infeasible direct route, a
-required-CS MILP, and 11 kW versus 100 kW arrival-SOC charging.
+required-CS MILP, and 11 kW versus 100 kW arrival-SOC charging. Additional
+regressions solve real tiny MILPs that distinguish cost from distance, exercise
+non-improving MIPSOL events and preserve a positive optimality gap. Resume tests
+reject changed objective/budget/model/data identities and legacy unbound results.
+Controlled slow-model tests verify that construction time consumes the budget
+and cannot backfill an incumbent into an earlier checkpoint.
 
 ## Environment
 
