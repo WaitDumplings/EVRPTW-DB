@@ -101,6 +101,12 @@ def validate_routes(
         if any(node < 0 or node >= terminal_count for node in route):
             violations.append(f"route {route_index} contains an invalid terminal")
             continue
+        if 0 in route[1:-1]:
+            violations.append(f"route {route_index} contains an internal depot visit")
+            continue
+        if not any(1 <= node <= n for node in route[1:-1]):
+            violations.append(f"route {route_index} contains no customer")
+            continue
 
         current_time = float(instance.working_start_s)
         remaining_battery = battery_capacity

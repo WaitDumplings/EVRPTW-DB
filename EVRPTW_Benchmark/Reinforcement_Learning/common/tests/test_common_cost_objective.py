@@ -196,11 +196,35 @@ def test_cost_selection_skips_cheaper_environment_success_that_fails_verifier(in
     assert verification["passed"]
 
 
-def test_paid_charger_only_trip_and_interior_depot_departures_count_in_replayed_cost():
-    instance = economic_instance()
-    info = candidate_info([[[0, 3, 0], [0, 1, 0, 2, 0]]])
-    _, _, verification = select_min_verified_objective(instance, info)
+@pytest.mark.parametrize("invalid_routes", [
+    [[0, 1, 0, 2, 0]],
+    [[0, 1, 0], [0, 2, 0], [0, 3, 0]],
+])
+def test_cost_selection_skips_structurally_invalid_candidates(invalid_routes):
+    # With no fixed fee, both invalid candidates are cheaper than the valid
+    # 34 km route. The verifier must reject them before selecting that route.
+    objective = replace(cost_config(), vehicle_fixed_cost_usd=0.0)
+    valid_routes = [[0, 1, 2, 0]]
+    info = candidate_info([invalid_routes, valid_routes], objective=objective)
+    selected, selected_routes, verification = select_min_verified_objective(
+        selection_instance(), info,
+    )
+    assert selected == 1
+    assert selected_routes == valid_routes
     assert verification["passed"]
+    assert verification["objective_distance_km"] == 34
+
+
+def test_invalid_route_structure_is_rejected_but_incurred_cost_is_preserved():
+    instance = economic_instance()
+    info = candidate_info(
+        [[[0, 3, 0], [0, 1, 0, 2, 0]]], distance=[19], vehicles=[3],
+    )
+    _, _, verification = select_min_verified_objective(instance, info)
+    assert not verification["passed"]
+    assert not verification["route_verifier_passed"]
+    assert any("internal depot visit" in message for message in verification["violations"])
+    assert any("contains no customer" in message for message in verification["violations"])
     assert verification["vehicles_started"] == 3
     assert verification["objective_distance_km"] == 19
     assert verification["vehicle_cost_usd"] == pytest.approx(3 * 33.56)
