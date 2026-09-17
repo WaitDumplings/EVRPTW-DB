@@ -39,15 +39,18 @@
     "validation_every_epochs": 100,
     "validation_limit": 500,
     "validation_rollout_steps": 2700,
-    "world_size": 4
+    "world_size": 4,
+    "early_stop_patience_validations": 0,
+    "early_stop_start_epoch": 0
   },
   "cpu_tests": {
     "deployment": 11,
     "existing": 58,
     "fixed_batch": 4,
     "resume_scope": "two-rank CPU validation; four-GPU NCCL resume was not exercised",
-    "total": 74,
-    "fixed_entrypoint": 1
+    "total": 78,
+    "fixed_entrypoint": 1,
+    "production_schedule": 4
   },
   "evidence": {
     "baseline_history": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/target_band_1789630771663585007/batch12_confirmation/run/baseline_history.jsonl",
@@ -106,5 +109,25 @@
   "validation_complete_and_feasible": [
     10,
     10
-  ]
+  ],
+  "production_startup_fix": {
+    "status": "passed",
+    "original_failure": "51ba4a2: early-stop start equalled max epochs; configuration rejected before training",
+    "production_training_epochs": 2000,
+    "production_minimum_training_epochs": 2000,
+    "early_stop_patience_validations": 0,
+    "early_stop_start_epoch": 0,
+    "world_size": 4,
+    "physical_batch_size": 12,
+    "effective_batch_size": 48,
+    "completed_optimizer_updates": 1,
+    "first_update_wall_seconds": 251.6822450910695,
+    "first_update_mean_loss": -223.61814880371094,
+    "intentionally_stopped": true,
+    "own_gpu_workers_released": true,
+    "full_validation_exercised": false,
+    "source_sha256": "65a2086816e4ac516647a6d80b41d99b08690e9d8b92c968a9d3d797e9d2cb39",
+    "evidence": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_production_startup_fix_1789633481272246299/startup_verification.json",
+    "historical_formal_config_note": "Initial calibrated_config.json predates this startup fix; deploy current repository config.json."
+  }
 }

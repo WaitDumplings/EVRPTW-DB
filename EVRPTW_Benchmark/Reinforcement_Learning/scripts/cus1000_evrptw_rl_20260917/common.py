@@ -111,9 +111,19 @@ def load_config(path=None, *, model="evrptw_rl", gpus="0,1,2,3", batch=None, acc
             raise ValueError("Validation rollout cap must be ceil(1.5 * training cap)")
     else:
         raise ValueError(f"Unknown rollout cap policy: {cap_policy}")
-    for key in ("validation_every_epochs", "early_stop_patience_validations", "training_rollout_steps"):
+    for key in ("validation_every_epochs", "training_rollout_steps"):
         if not isinstance(config[key], int) or isinstance(config[key], bool) or config[key] < 1:
             raise ValueError(f"{key} must be a positive integer")
+    for key in ("early_stop_patience_validations", "early_stop_start_epoch"):
+        if not isinstance(config[key], int) or isinstance(config[key], bool) or config[key] < 0:
+            raise ValueError(f"{key} must be a nonnegative integer")
+    # Match the trainer's schedule constraints before creating a background worker.
+    # Fixed min=max budgets disable early stopping with patience=0 and start=0.
+    if config["early_stop_start_epoch"] >= config["training_epochs"]:
+        raise ValueError("early-stop start must precede maximum training epochs")
+    if (config["early_stop_patience_validations"]
+            and config["early_stop_start_epoch"] < config["minimum_training_epochs"]):
+        raise ValueError("early stopping cannot precede minimum training epochs")
     if config["training_epochs"] % config["validation_every_epochs"]:
         raise ValueError("Training budget must end on a validation checkpoint")
     config["world_size"] = len(config["gpus"])
