@@ -1,0 +1,110 @@
+{
+  "baseline_probe_optimizer_steps": [
+    4,
+    6
+  ],
+  "branch": "cus1000-evrptw-rl-4gpu-20260917",
+  "calibration_source_sha256": "c154b4193d5fd79bf7cc729a38716a8193b341175f9d67e3f5eefce42a178e51",
+  "calibration_time": "2026-09-17T08:05:03.685964+00:00",
+  "checkpoint_audit": {
+    "baseline_transition_checked": true,
+    "changed_float_tensors": 15,
+    "final_validation_feasible": 10,
+    "finite_parameters": true,
+    "optimizer_updates": 6,
+    "validation_checkpoints": 2,
+    "validation_instances_each": 10
+  },
+  "configuration": {
+    "baseline_probe_instances": 64,
+    "customer_exposure_budget": 96000000,
+    "effective_batch_size": 48,
+    "ema_warmup_updates": 1000,
+    "gpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "gradient_accumulation_steps": 1,
+    "graph_aggregation": "mean",
+    "minimum_training_epochs": 2000,
+    "physical_batch_size": 12,
+    "sample_count": 96000,
+    "samples_per_instance": 30,
+    "scale": "Cus1000",
+    "training_epochs": 2000,
+    "training_rollout_steps": 1800,
+    "validation_candidates": 30,
+    "validation_every_epochs": 100,
+    "validation_limit": 500,
+    "validation_rollout_steps": 2700,
+    "world_size": 4
+  },
+  "cpu_tests": {
+    "deployment": 11,
+    "existing": 58,
+    "fixed_batch": 4,
+    "resume_scope": "two-rank CPU validation; four-GPU NCCL resume was not exercised",
+    "total": 74,
+    "fixed_entrypoint": 1
+  },
+  "evidence": {
+    "baseline_history": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/target_band_1789630771663585007/batch12_confirmation/run/baseline_history.jsonl",
+    "best_checkpoint": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/target_band_1789630771663585007/batch12_confirmation/run/best.ckpt",
+    "calibration_report": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/report.json",
+    "confirmation_config": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/target_band_1789630771663585007/batch12_confirmation/config.json",
+    "formal_config": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibrated_config.json",
+    "latest_checkpoint": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/target_band_1789630771663585007/batch12_confirmation/run/checkpoint_latest.pt",
+    "logical_epoch_history": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/target_band_1789630771663585007/batch12_confirmation/run/logical_epoch_history.jsonl",
+    "training_result": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/target_band_1789630771663585007/batch12_confirmation/run/training_result.json",
+    "validation_history": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Benchmark/results/cus1000_evrptw_rl_4gpu_profile_20260917/calibration/target_band_1789630771663585007/batch12_confirmation/run/validation_history.jsonl"
+  },
+  "formal_config_sha256": "ccc5bc109951f90d47e4b4e6adaf54baff8eb739ef73758c4761f525d5176e17",
+  "peak_host_rss_gib": {
+    "0": 7.814727783203125,
+    "1": 7.838390350341797,
+    "2": 7.746662139892578,
+    "3": 7.858512878417969
+  },
+  "peak_process_gib": {
+    "0": 9.197265625,
+    "1": 9.197265625,
+    "2": 9.197265625,
+    "3": 9.197265625
+  },
+  "schema": "cus1000_4gpu_measured_profile_v1",
+  "source_baseline_commit": "684b1ca",
+  "status": "passed",
+  "thermal_throttling_observed_physical_gpus": [
+    0,
+    3
+  ],
+  "timing": {
+    "confirmation_wall_seconds": 1531.3881904180162,
+    "ema_mean_seconds": 265.9649776495062,
+    "ema_update_seconds": [
+      265.6029882780276,
+      266.32696702098474
+    ],
+    "eta_caveat": "Extrapolation from 2 EMA / 4 greedy updates and 10-instance validation, not a measured full run. Greedy samples contain two 2-instance baseline probes; production probes use 64 instances every 100 updates. Thermal throttling and route lengths vary.",
+    "greedy_mean_seconds": 237.02921894390602,
+    "greedy_update_seconds": [
+      267.1234886269085,
+      250.15910238795914,
+      219.21000754483975,
+      211.62427721591666
+    ],
+    "ten_instance_validation_seconds": [
+      19.31179113010876,
+      16.666326591046527
+    ],
+    "training_only_extrapolated_days": 5.82169209020153,
+    "training_plus_validation_extrapolated_days": 6.029898789976734,
+    "validation_linear_extrapolated_days": 0.2082066997752042
+  },
+  "validation_complete_and_feasible": [
+    10,
+    10
+  ]
+}
