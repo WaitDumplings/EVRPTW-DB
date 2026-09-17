@@ -5,10 +5,10 @@ import unittest
 import numpy as np
 
 from evrptw_core.schema import EVRPTWInstance
-from EVRPTW_Benchmark.Exact.Gurobi_Solver.route_validator import (
+from route_validator import (
     validate_routes as validate_exact_routes,
 )
-from EVRPTW_Benchmark.MetaHeuristics.benchmark_common import (
+from benchmark_common import (
     validate_routes as validate_metaheuristic_routes,
 )
 
