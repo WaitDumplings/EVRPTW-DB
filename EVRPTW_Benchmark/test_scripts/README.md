@@ -152,7 +152,10 @@ EVRPTW_DRY_RUN=1          print commands without running solvers
 
 The canonical restored dataset location is detected automatically at
 `EVRPTW_Dataset/Instances_v2/us_11city`. The frozen generation root is used as
-a fallback on the generation server.
+a fallback on the generation server. `EVRPTW_DATASET_ROOT` also accepts an
+absolute path, which the shared launcher converts to a repository-relative
+path before constructing solver commands. Relative overrides are interpreted
+from the repository root regardless of the caller's working directory.
 
 ## Outputs
 

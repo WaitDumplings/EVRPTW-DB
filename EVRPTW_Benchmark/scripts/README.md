@@ -103,9 +103,11 @@ order:
 3. `evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city` beside one of the
    repository's first three parent directories.
 
-`EVRPTW_DATASET_ROOT` is available for nonstandard layouts, but it must be
-relative to the repository root. Absolute dataset overrides are rejected so a
-server-specific path cannot leak into a launcher command or result manifest.
+`EVRPTW_DATASET_ROOT` accepts either an absolute path or a path relative to
+the repository root. Absolute overrides are converted with `realpath` to
+repository-relative paths before building solver commands, including in the
+background child process. Dataset and test-index existence checks still apply
+for actual runs; dry runs can describe a dataset before it is restored.
 
 ## Unified checkpoint output
 
@@ -149,7 +151,7 @@ EVRPTW_MAX_INSTANCES      pilot limit within the selected shard
 EVRPTW_START_INDEX        manual inclusive filtered position
 EVRPTW_END_INDEX          manual exclusive filtered position
 EVRPTW_CONDA_ENV          default maojie
-EVRPTW_DATASET_ROOT       restored dataset root (repository-relative only)
+EVRPTW_DATASET_ROOT       restored dataset root (absolute or repository-relative)
 EVRPTW_NOHUP_LOG_ROOT     detached-job log root (default logs/benchmarks/nohup)
 EVRPTW_FOREGROUND=1       disable nohup for interactive debugging
 EVRPTW_DRY_RUN=1          print the command without solving

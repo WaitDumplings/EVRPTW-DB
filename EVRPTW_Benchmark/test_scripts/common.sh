@@ -66,11 +66,12 @@ dataset_candidates=(
 
 if [[ -n "${EVRPTW_DATASET_ROOT:-}" ]]; then
   if [[ "${EVRPTW_DATASET_ROOT}" == /* ]]; then
-    echo "EVRPTW_DATASET_ROOT must be relative to the repository root." >&2
-    echo "Example: EVRPTW_DATASET_ROOT=../evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city" >&2
-    exit 2
+    # Accept server-local absolute overrides while keeping solver arguments
+    # repository-relative. -m also permits command-only dry runs before restore.
+    DATASET_ROOT="$(realpath -m --relative-to="${REPO_ROOT}" -- "${EVRPTW_DATASET_ROOT}")"
+  else
+    DATASET_ROOT="${EVRPTW_DATASET_ROOT}"
   fi
-  DATASET_ROOT="${EVRPTW_DATASET_ROOT}"
 else
   DATASET_ROOT=""
   for candidate in "${dataset_candidates[@]}"; do
@@ -87,7 +88,8 @@ if [[ "${DRY_RUN}" == "0" && ! -d "${DATASET_ROOT}" ]]; then
   echo "No Stage-2 v7 dataset root was found." >&2
   echo "Checked repository-relative roots:" >&2
   printf '  %s\n' "${dataset_candidates[@]}" >&2
-  echo "Set EVRPTW_DATASET_ROOT to a repository-relative path if needed." >&2
+  echo "Resolved dataset root: ${DATASET_ROOT:-<not found>}" >&2
+  echo "Set EVRPTW_DATASET_ROOT to an absolute or repository-relative path if needed." >&2
   exit 2
 fi
 readonly DATASET_ROOT
