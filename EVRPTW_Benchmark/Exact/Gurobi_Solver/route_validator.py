@@ -102,6 +102,13 @@ def validate_routes(
             violations.append(f"route {route_index} contains an invalid terminal")
             continue
 
+        if 0 in route[1:-1]:
+            violations.append(f"route {route_index} contains an internal depot visit")
+            continue
+        if not any(1 <= node <= n for node in route[1:-1]):
+            violations.append(f"route {route_index} serves no customer")
+            continue
+
         current_time = float(instance.working_start_s)
         remaining_battery = battery_capacity
         load = 0.0
@@ -179,6 +186,7 @@ def validate_routes(
         "passed": not violations,
         "violations": violations,
         "objective_distance_km": total_distance,
+        "objective_distance_source": instance.metadata.get("objective_distance_source", "distance_matrix_km"),
         "charging_visit_count": charging_visits,
         "total_charging_time_s": total_charge_time,
         "charging_power_source": profile.power_source,

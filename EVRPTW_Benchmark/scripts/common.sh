@@ -35,15 +35,15 @@ run_frozen_test() {
   local solver_label
   case "${solver_kind}" in
     Gurobi)
-      solver_dir="Gurobi_Solver_${CUS_SCALE}_cs2_30m_cost_v2"
+      solver_dir="Gurobi_Solver_${CUS_SCALE}_cs2_30m_dtime_cost_v3"
       solver_label="Gurobi exact (cs_copies=2, threads=1)"
       ;;
     ALNS)
-      solver_dir="ALNS_Solver_${CUS_SCALE}_30m_cost_v2"
+      solver_dir="ALNS_Solver_${CUS_SCALE}_30m_dtime_cost_v3"
       solver_label="ALNS"
       ;;
     VNSTS)
-      solver_dir="VNS_TS_Solver_${CUS_SCALE}_30m_cost_v2"
+      solver_dir="VNS_TS_Solver_${CUS_SCALE}_30m_dtime_cost_v3"
       solver_label="VNS-TS adaptive-fast"
       ;;
     *)

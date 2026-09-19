@@ -71,7 +71,12 @@ from vnst_adapter import to_vnst_instance
 SOLVER_NAME = "vns_ts_stage2_anytime"
 
 
-def contract_algorithm_profile_id(search_mode: str) -> str:
+def contract_algorithm_profile_id(search_mode: str, *, cost_search: bool = False) -> str:
+    if cost_search:
+        return (
+            "vns_ts_stage2_monetary_fast_v5" if str(search_mode) == "fast"
+            else "vns_ts_stage2_monetary_full_v4"
+        )
     return (
         "vns_ts_stage2_adaptive_fast_v4"
         if str(search_mode) == "fast"
@@ -87,8 +92,9 @@ def contract_effective_fast_policy(
     position_neighbor_limit: int,
     exchange_neighbor_limit: int,
     station_candidate_limit: int,
+    cost_search: bool = False,
 ) -> dict[str, int | str]:
-    """Mirror adaptive_nearest_best_fit_v3 for pre-execution run identity."""
+    """Record monetary-delta or legacy geometric policy before execution."""
 
     scale = max(1, int(customer_count))
     if scale >= 500:
@@ -110,7 +116,7 @@ def contract_effective_fast_policy(
     if candidate_limit > 0:
         candidate_limit = max(12, int(round(candidate_limit * multiplier)))
     return {
-        "version": "adaptive_nearest_best_fit_v3",
+        "version": "adaptive_monetary_delta_v4" if cost_search else "adaptive_nearest_best_fit_v3",
         "move_candidate_limit": candidate_limit,
         "route_neighbor_limit": max(1, route_limit),
         "position_neighbor_limit": max(1, position_limit),
@@ -123,7 +129,7 @@ SUMMARY_FIELDNAMES = [
     "instance_id", "file", "family_id", "city_slug", "split_id", "track_id", "scale_id",
     "day_type", "status", "benchmark_status", "benchmark_completed", "has_incumbent",
     "feasible", "objective_distance_km", "objective_mode", "objective_profile_id",
-    "objective_unit", "objective_value", "objective_cost_usd",
+    "objective_unit", "objective_value", "objective_cost_usd", "objective_distance_source",
     "electricity_cost_usd", "vehicle_cost_usd", "vehicles_started",
     "vehicle_count", "runtime_s",
     "first_feasible_time_s", "time_limit_s", "terminated_by_time_limit", "timing_scope",
@@ -188,7 +194,8 @@ def failed_result(
             "run_contract_fingerprint": task.get("run_contract_fingerprint", ""),
             "run_contract_json": task.get("run_contract_json", ""),
             "algorithm_profile_id": contract_algorithm_profile_id(
-                str(task.get("search_mode", "fast"))
+                str(task.get("search_mode", "fast")),
+                cost_search=ObjectiveConfig(**task.get("objective_config", {})).is_cost,
             ),
             "routes_json": "[]",
             "route_sequence_json": "[]",
@@ -207,7 +214,8 @@ def failed_result(
             provenance={
                 "solver_name": SOLVER_NAME,
                 "algorithm_profile_id": contract_algorithm_profile_id(
-                    str(task.get("search_mode", "fast"))
+                    str(task.get("search_mode", "fast")),
+                    cost_search=ObjectiveConfig(**task.get("objective_config", {})).is_cost,
                 ),
                 "seed": task.get("seed", ""),
                 "seed_scheme": task.get("seed_scheme", SEED_SCHEME),
@@ -339,7 +347,7 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
         )
         algorithm_profile = {
             "algorithm_profile_id": contract_algorithm_profile_id(
-                task["search_mode"]
+                task["search_mode"], cost_search=objective_config.is_cost
             ),
             "initial_construction_strategy": str(
                 getattr(
@@ -395,6 +403,7 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
                     "checkpoint_snapshots": snapshots,
                     **objective_fields,
                     "objective_config": objective_config.to_dict(),
+                    "objective_distance_source": instance.metadata.get("objective_distance_source", "distance_matrix_km"),
                     "charging_model": "full_charge_linear_derated_v2",
                     "charging_power_derating_factor": charging_power_factor,
                     "benchmark_status": status,
@@ -433,6 +442,7 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
             "objective_distance_km": (
                 "" if distance_objective is None else distance_objective
             ),
+            "objective_distance_source": instance.metadata.get("objective_distance_source", "distance_matrix_km"),
             "objective_mode": objective_config.mode,
             "objective_profile_id": objective_config.profile_id,
             "objective_unit": objective_config.unit,
@@ -586,8 +596,8 @@ def main() -> None:
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument(
         "--objective_config",
-        default="",
-        help="Versioned objective JSON; omitted keeps legacy distance_v1.",
+        default=str(REPO_ROOT / "EVRPTW_Benchmark" / "Reinforcement_Learning" / "configs" / "rivian_energy_vehicle_cost_v2.json"),
+        help="Versioned objective JSON; defaults to monetary cost. Pass an empty string explicitly for legacy distance_v1.",
     )
     parser.add_argument("--max_instances", type=int, default=None)
     parser.add_argument("--start_index", type=int, default=0, help="Inclusive filtered index")
@@ -619,7 +629,7 @@ def main() -> None:
         "--eta_dist",
         type=int,
         default=None,
-        help="Outer distance-search iterations; default uses the full wall-clock budget",
+        help="Outer objective-search iterations; default uses the full wall-clock budget",
     )
     parser.add_argument("--tabu_iter", type=int, default=10)
     parser.add_argument("--tabu_tenure", type=int, default=30)
@@ -715,11 +725,12 @@ def main() -> None:
             position_neighbor_limit=args.position_neighbor_limit,
             exchange_neighbor_limit=args.exchange_neighbor_limit,
             station_candidate_limit=args.station_candidate_limit,
+            cost_search=objective_config.is_cost,
         )
         fingerprint, contract_json = build_run_contract(
             task,
             algorithm_name=SOLVER_NAME,
-            algorithm_profile_id=contract_algorithm_profile_id(args.search_mode),
+            algorithm_profile_id=contract_algorithm_profile_id(args.search_mode, cost_search=objective_config.is_cost),
             base_seed=args.seed,
             solver_parameters={
                 "predefine_route_number": args.predefine_route_number,

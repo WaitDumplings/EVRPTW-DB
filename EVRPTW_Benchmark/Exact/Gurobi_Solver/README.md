@@ -15,7 +15,8 @@ There is no legacy pickle input fallback.
 
 For every directed terminal arc, the current solver uses:
 
-- `distance_matrix_km` for route distance and the electricity-cost term;
+- `running_time_path_distance_km` for route distance and the electricity-cost term
+  in monetary mode (selected into the solver copy of `distance_matrix_km`);
 - `running_time_shortest_matrix_s` for time propagation and time windows; and
 - `running_time_path_energy_kwh` for battery propagation.
 
@@ -48,7 +49,9 @@ Every returned incumbent is independently replayed after optimization. The
 replay checks customer coverage, directed distance, running time, waiting,
 service time, time windows, volume, battery, station-specific charging time,
 and return before the horizon. A Gurobi incumbent is reported as feasible only
-when this replay passes.
+when this replay passes. Replay also rejects internal depot visits and trips
+serving no customer. Explicit legacy distance mode retains the released
+shortest-distance matrix; monetary mode requires the fastest-path matrix.
 
 ## Stage-2 input layout
 
@@ -109,8 +112,10 @@ bash EVRPTW_Benchmark/test_scripts/run_gurobi_cus50_test.sh
 The launcher and the example below select the same
 `rivian_energy_vehicle_cost_v2.json` profile as the DRL benchmarks: electricity
 cost for directed route distance plus a fixed cost per vehicle, reported in
-USD. A direct Python invocation that omits `--objective_config` retains the
-compatible `distance_v1` default.
+USD, using fastest-time-path distance under the revised reporting contract.
+The Python CLI now defaults to that cost JSON. Explicit
+`--objective_config ""` retains the legacy `distance_v1` behavior. Historical
+DRL evaluation records and archived result files are not converted.
 
 Equivalent raw runner invocation:
 
@@ -123,7 +128,7 @@ EVRPTW_Dataset/Instances_v2/us_11city/generation_plan/compatibility_cus50/test/t
   --family_root \
 EVRPTW_Dataset/Instances_v2/us_11city/materialized/families \
   --save_path \
-EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/Gurobi_Solver_cs2_30m_cost_v2 \
+EVRPTW_Benchmark/results/CLE_EVRPTW_v2/compatibility_cus50/test1/Gurobi_Solver_cs2_30m_dtime_cost_v3 \
   --time_limit_s 1800 \
   --checkpoints_s 60,300,900,1800 \
   --objective_config EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json \
@@ -222,3 +227,16 @@ Install the packages in `requirements.txt`. `gurobipy` must match the installed
 Gurobi major version and license. The runner records model/environment errors
 per view instead of terminating the whole batch; use `--save_traceback` while
 debugging.
+
+## One random Cus500 instance, native Gurobi settings
+
+```bash
+conda activate maojie
+bash EVRPTW_Benchmark/scripts/Gurobi/Cus500/random_one.sh
+```
+
+This is a direct, foreground single-instance solve, independent of the cohort
+launcher defaults. It does not set `Threads`, `MIPGap`, or `TimeLimit` unless an
+optional time limit is supplied. Native Gurobi output, incumbent, bound,
+relative gap, optimizer Runtime, and wall time including construction are
+saved separately. [Full instructions](../../scripts/Gurobi/Cus500/README_random_one.md).

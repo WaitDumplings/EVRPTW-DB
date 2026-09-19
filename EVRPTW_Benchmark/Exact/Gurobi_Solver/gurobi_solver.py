@@ -9,7 +9,7 @@ import numpy as np
 
 from gurobipy import GRB, Model, quicksum
 
-from evrptw_core.objective import ObjectiveConfig
+from evrptw_core.objective import ObjectiveConfig, select_objective_distance
 from evrptw_core.schema import EVRPTWInstance, EVRPTWSolution, merge_route_sequences
 from route_validator import resolve_charging_profile, validate_routes
 
@@ -19,8 +19,8 @@ STANDARD_BENCHMARK_CHECKPOINTS_S = (60.0, 300.0, 900.0, 1800.0)
 
 @dataclass(frozen=True)
 class GurobiSolverConfig:
-    time_limit_s: float = 1800.0
-    mip_gap: float = 0.0
+    time_limit_s: float | None = 1800.0
+    mip_gap: float | None = 0.0
     cs_copies: int = 2
     output_flag: int = 0
     checkpoints_s: tuple[float, ...] = field(
@@ -90,6 +90,7 @@ class GurobiEVRPTWSolver:
 
     def solve(self, instance: EVRPTWInstance) -> EVRPTWSolution:
         start = time.perf_counter()
+        instance = select_objective_distance(instance, self.objective_config)
         model, node_map, x, distance_expr, vehicle_expr, metric_metadata = self._build_model(instance)
         self.model = model
         self.node_map = node_map
@@ -126,18 +127,13 @@ class GurobiEVRPTWSolver:
             solver_status=stage1_status_name,
             objective_distance_km=stage1_route_distance,
             objective_value=stage1_best_objective,
-            best_bound=(
-                stage1_best_objective
-                if stage1_status == GRB.OPTIMAL
-                and stage1_best_objective is not None
-                else stage1_best_bound
-            ),
+            best_bound=stage1_best_bound,
             routes=stage1_routes,
             source="primary_final",
         )
-        if stage1_status == GRB.OPTIMAL and stage1_route_distance is not None:
-            stage1_final_snapshot["mip_gap"] = 0.0
-        elif stage1_mip_gap is not None:
+        # OPTIMAL means the configured tolerances were met; keep Gurobi's
+        # actual nonzero residual gap and bound, rather than fabricating zero.
+        if stage1_mip_gap is not None:
             stage1_final_snapshot["mip_gap"] = stage1_mip_gap
         self._finalize_checkpoints(
             trace,
@@ -161,7 +157,7 @@ class GurobiEVRPTWSolver:
         ):
             remaining_time_s = max(
                 0.0,
-                float(self.config.time_limit_s) - (time.perf_counter() - start),
+                (float(self.config.time_limit_s) if self.config.time_limit_s is not None else math.inf) - (time.perf_counter() - start),
             )
             if remaining_time_s > 1e-6:
                 tie_break_applied = True
@@ -246,7 +242,7 @@ class GurobiEVRPTWSolver:
             trace,
             final_benchmark_status=benchmark_status,
             final_has_incumbent=bool(stage1_has_solution),
-            terminal_budget_s=float(self.config.time_limit_s),
+            terminal_budget_s=float(self.config.time_limit_s) if self.config.time_limit_s is not None else math.inf,
         )
 
         return EVRPTWSolution(
@@ -264,12 +260,8 @@ class GurobiEVRPTWSolver:
                 "benchmark_status": benchmark_status,
                 "benchmark_completed": benchmark_completed,
                 "has_incumbent": bool(has_solution),
-                "mip_gap": 0.0 if status == GRB.OPTIMAL and objective is not None else mip_gap,
-                "best_bound": (
-                    objective_fields.get("objective_value")
-                    if status == GRB.OPTIMAL and objective is not None
-                    else best_bound
-                ),
+                "mip_gap": mip_gap,
+                "best_bound": best_bound,
                 **objective_fields,
                 "objective_config": self.objective_config.to_dict(),
                 "cs_copies": int(self.config.cs_copies),
@@ -299,6 +291,7 @@ class GurobiEVRPTWSolver:
         )
 
     def _build_model(self, instance: EVRPTWInstance) -> tuple[Model, NodeMap, dict[tuple[int, int], Any], Any, Any, dict[str, Any]]:
+        instance = select_objective_distance(instance, self.objective_config)
         n = instance.num_customers
         m = instance.num_charging_stations
         cs_copies = int(self.config.cs_copies) if m else 0
@@ -344,8 +337,10 @@ class GurobiEVRPTWSolver:
             )
 
         model = Model(f"EVRPTW_{instance.instance_id}")
-        model.Params.TimeLimit = float(self.config.time_limit_s)
-        model.Params.MIPGap = float(self.config.mip_gap)
+        if self.config.time_limit_s is not None:
+            model.Params.TimeLimit = float(self.config.time_limit_s)
+        if self.config.mip_gap is not None:
+            model.Params.MIPGap = float(self.config.mip_gap)
         model.Params.OutputFlag = int(self.config.output_flag)
         if self.config.threads is not None:
             model.Params.Threads = int(self.config.threads)
@@ -532,7 +527,7 @@ class GurobiEVRPTWSolver:
             energy_source = "distance_times_vehicle_consumption"
 
         metric_metadata = {
-            "distance_matrix_source": "distance_matrix_km",
+            "distance_matrix_source": instance.metadata.get("objective_distance_source", "distance_matrix_km"),
             "travel_time_matrix_source": travel_time_source,
             "energy_matrix_source": energy_source,
             "ev_transition_time_matrix_available": instance.ev_transition_time_matrix_s is not None,
@@ -605,32 +600,61 @@ class GurobiEVRPTWSolver:
                 best_bound = self._callback_float(model, GRB.Callback.MIPSOL_OBJBND)
                 if best_bound is None:
                     best_bound = trace.get("last_best_bound")
-                values = model.cbGetSolution(x_vars)
-                arc_values = {arc: float(value) for arc, value in zip(arcs, values)}
-                routes = self._extract_routes_from_arc_values(node_map, arc_values)
-                route_distance = self._route_distance_km(routes, instance)
-                snapshot = self._make_snapshot(
-                    checkpoint_s=None,
-                    elapsed_s=runtime,
-                    reached_checkpoint=True,
-                    solver_status="RUNNING",
-                    objective_distance_km=route_distance,
-                    objective_value=objective,
-                    best_bound=best_bound,
-                    routes=routes,
-                    source="incumbent",
+                # MIPSOL can report a feasible candidate that is worse than
+                # the incumbent. Keep the first retained route at tied cost;
+                # never replace it with a worse candidate. A MIP callback may
+                # have reported a better objective before its route arrives,
+                # so compare route improvements against last_incumbent, not
+                # only last_best_obj: the later matching route must be kept.
+                reported_best = self._callback_float(
+                    model, GRB.Callback.MIPSOL_OBJBST
                 )
-                trace["last_incumbent"] = snapshot
-                trace["last_best_obj"] = objective
+                known_values = [
+                    value
+                    for value in (trace.get("last_best_obj"), reported_best)
+                    if value is not None
+                ]
+                known_best = min(known_values) if known_values else None
+                retained = trace.get("last_incumbent")
+                retained_objective = (
+                    retained.get("objective_value") if retained is not None else None
+                )
+                improves_route = (
+                    objective is not None
+                    and (retained_objective is None or objective < retained_objective)
+                    and (known_best is None or objective <= known_best)
+                )
+                if objective is not None:
+                    known_best = (
+                        objective if known_best is None else min(known_best, objective)
+                    )
+                trace["last_best_obj"] = known_best
                 if best_bound is not None:
                     trace["last_best_bound"] = best_bound
-                if trace["first_feasible_time_s"] is None:
-                    trace["first_feasible_time_s"] = runtime
-                if self.config.record_incumbent_events:
-                    event = dict(snapshot)
-                    event.pop("routes", None)
-                    event.pop("route_sequence", None)
-                    trace["incumbent_events"].append(event)
+                if improves_route:
+                    values = model.cbGetSolution(x_vars)
+                    arc_values = {arc: float(value) for arc, value in zip(arcs, values)}
+                    routes = self._extract_routes_from_arc_values(node_map, arc_values)
+                    route_distance = self._route_distance_km(routes, instance)
+                    snapshot = self._make_snapshot(
+                        checkpoint_s=None,
+                        elapsed_s=runtime,
+                        reached_checkpoint=True,
+                        solver_status="RUNNING",
+                        objective_distance_km=route_distance,
+                        objective_value=objective,
+                        best_bound=best_bound,
+                        routes=routes,
+                        source="incumbent",
+                    )
+                    trace["last_incumbent"] = snapshot
+                    if trace["first_feasible_time_s"] is None:
+                        trace["first_feasible_time_s"] = runtime
+                    if self.config.record_incumbent_events:
+                        event = dict(snapshot)
+                        event.pop("routes", None)
+                        event.pop("route_sequence", None)
+                        trace["incumbent_events"].append(event)
                 self._record_due_checkpoints(
                     trace,
                     runtime,
@@ -648,7 +672,10 @@ class GurobiEVRPTWSolver:
                 best_obj = self._callback_float(model, GRB.Callback.MIP_OBJBST)
                 best_bound = self._callback_float(model, GRB.Callback.MIP_OBJBND)
                 if best_obj is not None and math.isfinite(best_obj):
-                    trace["last_best_obj"] = best_obj
+                    previous_best = trace.get("last_best_obj")
+                    trace["last_best_obj"] = (
+                        best_obj if previous_best is None else min(previous_best, best_obj)
+                    )
                 if best_bound is not None and math.isfinite(best_bound):
                     trace["last_best_bound"] = best_bound
                 self._record_due_checkpoints(
@@ -986,8 +1013,11 @@ class GurobiEVRPTWSolver:
             return None
         if not math.isfinite(objective) or not math.isfinite(bound):
             return None
-        denom = max(abs(objective), 1e-9)
-        return float(abs(objective - bound) / denom)
+        if abs(objective) >= GRB.INFINITY or abs(bound) >= GRB.INFINITY:
+            return None
+        if objective == 0.0:
+            return 0.0 if bound == 0.0 else None
+        return float(abs(objective - bound) / abs(objective))
 
     @staticmethod
     def _callback_float(model: Model, what: int) -> float | None:
@@ -995,7 +1025,7 @@ class GurobiEVRPTWSolver:
             value = float(model.cbGet(what))
         except Exception:
             return None
-        return value if math.isfinite(value) else None
+        return value if math.isfinite(value) and abs(value) < GRB.INFINITY else None
 
     @staticmethod
     def _safe_model_float(model: Model, attr: str) -> float | None:
@@ -1003,7 +1033,7 @@ class GurobiEVRPTWSolver:
             value = float(getattr(model, attr))
         except Exception:
             return None
-        return value if math.isfinite(value) else None
+        return value if math.isfinite(value) and abs(value) < GRB.INFINITY else None
 
     @staticmethod
     def _status_name(status: int) -> str:

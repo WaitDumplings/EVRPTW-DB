@@ -434,7 +434,10 @@ class ALNS_Solver:
         self.scalar_cache_limit = 50_000
         self.station_cache_limit = 12_000
         self.initial_construction_strategy = "singleton_best_fit_v1"
-        self.algorithm_profile_id = "alns_stage2_scalable_v2"
+        self.algorithm_profile_id = (
+            "alns_stage2_cost_operators_v3" if self.uses_monetary_objective
+            else "alns_stage2_scalable_v2"
+        )
         self.initial_construction_stats: Dict[str, Any] = {}
         self.singleton_source = "solver_repair"
         self._singleton_route_cache: Dict[int, List[int]] = {}
@@ -503,6 +506,10 @@ class ALNS_Solver:
             "scalar_cache_limit": self.scalar_cache_limit,
             "station_cache_limit": self.station_cache_limit,
             "published_incumbent_validation": "solver_full_then_runner_independent_replay",
+            "operator_objective_scoring": (
+                "monetary_marginals_with_dispatch_v1" if self.uses_monetary_objective
+                else "legacy_distance_v1"
+            ),
         }
 
 
@@ -809,6 +816,20 @@ class ALNS_Solver:
     # ======================================================================
     # Objective / acceptance
     # ======================================================================
+    @property
+    def uses_monetary_objective(self) -> bool:
+        """Keep the explicitly requested distance-v1 search compatible."""
+        return self.distance_unit_cost != 1.0 or self.vehicle_fixed_cost != 0.0
+
+    def _route_objective(self, route: List[int]) -> float:
+        """Objective contribution of one customer-serving vehicle route."""
+        return self.distance_unit_cost * self._route_distance(route) + self.vehicle_fixed_cost
+
+    def _insertion_score_mode(self, mode: str) -> str:
+        # Time/zone operators can restrict the candidate neighborhood, but in
+        # monetary runs the final insertion decision must include dispatch cost.
+        return "cost" if self.uses_monetary_objective else mode
+
     def objective_value(self, routes: List[List[int]]) -> float:
         if not self.is_solution_feasible(routes):
             return float("inf")
@@ -1194,7 +1215,10 @@ class ALNS_Solver:
             if budget_expired():
                 budget_exhausted = True
 
-            if best is None:
+            if best is None or (
+                self.uses_monetary_objective
+                and best[2] >= self._route_objective(routes[customer - 1])
+            ):
                 merged_routes.append(routes[customer - 1])
             else:
                 ridx, new_route, _ = best
@@ -1241,7 +1265,7 @@ class ALNS_Solver:
     ) -> Optional[Tuple[int, List[int], float]]:
         """Evaluate a bounded set of promising positions with exact checks.
 
-        The local distance delta is only a ranking proxy.  Returned routes have
+        The local objective delta is only a ranking proxy. Returned routes have
         gone through the normal station repair and full route-feasibility test.
         """
 
@@ -1265,7 +1289,7 @@ class ALNS_Solver:
                     continue
                 previous = route[pos - 1]
                 following = route[pos]
-                proxy = float(
+                proxy = self.distance_unit_cost * float(
                     self.dist_matrix[previous, customer]
                     + self.dist_matrix[customer, following]
                     - self.dist_matrix[previous, following]
@@ -1286,7 +1310,7 @@ class ALNS_Solver:
             # station repair remains available to the main ALNS search.
             if not self.is_route_feasible(trial):
                 continue
-            delta = self._route_distance(trial) - base_distance
+            delta = self.distance_unit_cost * (self._route_distance(trial) - base_distance)
             if best is None or delta < best[2]:
                 best = (ridx, trial, delta)
         return best
@@ -1304,13 +1328,23 @@ class ALNS_Solver:
         return self._remove_customers_with_mode(routes, removed, mode), removed
 
     def _cr_worst_distance(self, routes: List[List[int]]) -> Tuple[List[List[int]], List[int]]:
+        # Preserve the historical operator key in checkpoint dictionaries.
+        # Cost mode ranks the actual removal saving, including route deletion
+        # and the station cleanup performed by the selected removal mode.
+        mode = self._random_customer_removal_mode() if self.uses_monetary_objective else None
         scored = []
         for route in routes:
             for pos in range(1, len(route) - 1):
                 u = route[pos]
                 if u not in self.customer_to_mask:
                     continue
-                cost = self.dist_matrix[route[pos - 1], u] + self.dist_matrix[u, route[pos + 1]]
+                if self.uses_monetary_objective:
+                    remaining = self._remove_customers_with_mode([route], [u], mode)
+                    cost = self._route_objective(route) - sum(
+                        self._route_objective(candidate) for candidate in remaining
+                    )
+                else:
+                    cost = self.dist_matrix[route[pos - 1], u] + self.dist_matrix[u, route[pos + 1]]
                 scored.append((cost, u))
 
         if not scored:
@@ -1319,7 +1353,8 @@ class ALNS_Solver:
         scored.sort(reverse=True)
         q = min(len(scored), self._num_customers_to_remove())
         removed = self._select_ranked_with_noise(scored, q, self.worst_determinism)
-        mode = self._random_customer_removal_mode()
+        if mode is None:
+            mode = self._random_customer_removal_mode()
         return self._remove_customers_with_mode(routes, removed, mode), removed
 
     def _cr_worst_time(self, routes: List[List[int]]) -> Tuple[List[List[int]], List[int]]:
@@ -1515,7 +1550,7 @@ class ALNS_Solver:
                     + self.dist_matrix[s, route[pos + 1]]
                     - self.dist_matrix[route[pos - 1], route[pos + 1]]
                 )
-                scored.append((detour, ridx, pos))
+                scored.append((self.distance_unit_cost * detour, ridx, pos))
 
         if not scored:
             return routes, []
@@ -1613,7 +1648,13 @@ class ALNS_Solver:
                 for i in range(1, min(k, len(options))):
                     regret += options[i][2] - primary
                 if len(options) < k:
-                    regret += (k - len(options)) * max(1.0, self.max_distance)
+                    # Missing alternatives use the same objective units as
+                    # insertion deltas, including a dispatch in cost mode.
+                    regret_scale = (
+                        self.distance_unit_cost * self.max_distance + self.vehicle_fixed_cost
+                        if self.uses_monetary_objective else self.max_distance
+                    )
+                    regret += (k - len(options)) * max(1.0, regret_scale)
 
                 if regret > best_regret or (math.isclose(regret, best_regret) and primary < best_primary):
                     best_regret = regret
@@ -1800,7 +1841,7 @@ class ALNS_Solver:
                     candidates.append(cand2)
 
                 if candidates:
-                    candidates.sort(key=lambda r: self._route_distance(r))
+                    candidates.sort(key=self._route_objective)
                     return candidates[0]
 
             for arc_pos in candidate_positions:
@@ -1818,7 +1859,7 @@ class ALNS_Solver:
         if not feasible_candidates:
             return None
 
-        feasible_candidates.sort(key=lambda r: self._route_distance(r))
+        feasible_candidates.sort(key=self._route_objective)
         return feasible_candidates[0]
 
     def _best_station_on_arc(self, route: List[int], arc_pos: int) -> Optional[List[int]]:
@@ -1854,7 +1895,7 @@ class ALNS_Solver:
             if self._energy(i, s) > self.Q + 1e-9:
                 continue
 
-            detour = float(self.dist_matrix[i, s] + self.dist_matrix[s, j] - base_arc)
+            detour = self.distance_unit_cost * float(self.dist_matrix[i, s] + self.dist_matrix[s, j] - base_arc)
             if detour >= best_delta:
                 continue
 
@@ -1875,7 +1916,7 @@ class ALNS_Solver:
                 ):
                     continue
 
-            delta = self._route_distance(trial) - base_dist
+            delta = self.distance_unit_cost * (self._route_distance(trial) - base_dist)
             if delta < best_delta:
                 best_delta = delta
                 best_route = trial
@@ -1931,6 +1972,8 @@ class ALNS_Solver:
         allowed_routes: Optional[set] = None,
         include_new_route: bool = True,
     ) -> List[Tuple[int, List[int], float]]:
+        proposal_mode = mode
+        mode = self._insertion_score_mode(mode)
         options = []
         cheap_candidates = []
 
@@ -1976,14 +2019,16 @@ class ALNS_Solver:
                     - self.dist_matrix[prev_node, next_node]
                 )
 
-                if mode == "time":
+                # Time-based repair keeps a temporal candidate shortlist;
+                # the exact final scores below still use monetary deltas.
+                if proposal_mode == "time":
                     proxy = (
                         self.time_matrix[prev_node, customer]
                         + self.time_matrix[customer, next_node]
                         - self.time_matrix[prev_node, next_node]
                     )
                 else:
-                    proxy = dist_delta
+                    proxy = self.distance_unit_cost * dist_delta
 
                 cheap_candidates.append((proxy, ridx, pos, base_dist, base_time))
 
@@ -2004,7 +2049,7 @@ class ALNS_Solver:
             delta = (
                 self._route_total_time(repaired) - base_time
                 if mode == "time"
-                else self._route_distance(repaired) - base_dist
+                else self.distance_unit_cost * (self._route_distance(repaired) - base_dist)
             )
             options.append((ridx, repaired, delta))
 
@@ -2015,7 +2060,7 @@ class ALNS_Solver:
                 delta = (
                     self._route_total_time(new_route)
                     if mode == "time"
-                    else self._route_distance(new_route)
+                    else self._route_objective(new_route)
                 )
                 options.append((len(routes), new_route, delta))
 
@@ -2037,6 +2082,7 @@ class ALNS_Solver:
                 allowed_routes=allowed_routes,
                 include_new_route=include_new_route,
             )
+        mode = self._insertion_score_mode(mode)
         options = []
 
         route_ids = range(len(routes))
@@ -2077,14 +2123,14 @@ class ALNS_Solver:
                 delta = (
                     self._route_total_time(repaired) - base_time
                     if mode == "time"
-                    else self._route_distance(repaired) - base_dist
+                    else self.distance_unit_cost * (self._route_distance(repaired) - base_dist)
                 )
                 options.append((ridx, repaired, delta))
 
         if include_new_route:
             new_route = self._make_single_customer_route(customer)
             if new_route is not None:
-                delta = self._route_total_time(new_route) if mode == "time" else self._route_distance(new_route)
+                delta = self._route_total_time(new_route) if mode == "time" else self._route_objective(new_route)
                 options.append((len(routes), new_route, delta))
 
         return options
@@ -2289,7 +2335,10 @@ class ALNS_Solver:
                 if route[pos] not in self.station_index_set:
                     continue
                 trial = route[:pos] + route[pos + 1 :]
-                if self.is_route_feasible(trial):
+                if self.is_route_feasible(trial) and (
+                    not self.uses_monetary_objective
+                    or self._route_objective(trial) <= self._route_objective(route) + 1e-9
+                ):
                     route = trial
                     changed = True
                     break

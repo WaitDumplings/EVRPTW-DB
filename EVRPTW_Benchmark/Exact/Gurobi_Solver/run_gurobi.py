@@ -45,7 +45,7 @@ SUMMARY_FIELDNAMES = [
     "routes_json", "route_sequence_json", "solution_path", "time_trace_path",
     "tie_break_applied", "stage1_best_distance_km", "stage1_best_objective_value",
     "distance_tolerance",
-    "travel_time_matrix_source", "energy_matrix_source",
+    "objective_distance_source", "travel_time_matrix_source", "energy_matrix_source",
     "travel_time_asymmetry_max_s", "energy_asymmetry_max_kwh",
     "charging_time_model", "charging_power_min_kw", "charging_power_max_kw",
     "charging_power_derating_factor", "charging_power_factor_source",
@@ -54,7 +54,7 @@ SUMMARY_FIELDNAMES = [
 ]
 
 TIME_TRACE_FIELDNAMES = list(UNIFIED_TIME_TRACE_FIELDNAMES)
-GUROBI_ALGORITHM_PROFILE_ID = "gurobi_exact_energy_vehicle_cost_anytime_v1"
+GUROBI_ALGORITHM_PROFILE_ID = "gurobi_exact_dtime_cost_anytime_v2"
 
 TERMINAL_BENCHMARK_STATUSES = {
     "COMPLETED_OPTIMAL",
@@ -387,6 +387,7 @@ def invalid_summary_row(instance: Any, instance_file: Path, errors: str) -> dict
         "tie_break_applied": "",
         "stage1_best_distance_km": "",
         "distance_tolerance": "",
+        "objective_distance_source": "",
         "travel_time_matrix_source": "",
         "energy_matrix_source": "",
         "travel_time_asymmetry_max_s": "",
@@ -438,6 +439,7 @@ def error_summary_row(
         "tie_break_applied": "",
         "stage1_best_distance_km": "",
         "distance_tolerance": "",
+        "objective_distance_source": "",
         "travel_time_matrix_source": "",
         "energy_matrix_source": "",
         "travel_time_asymmetry_max_s": "",
@@ -497,6 +499,7 @@ def solved_summary_row(instance: Any, instance_file: Path, solution: EVRPTWSolut
             "stage1_best_objective_value"
         ),
         "distance_tolerance": solution.metadata.get("distance_tolerance"),
+        "objective_distance_source": solution.metadata.get("distance_matrix_source"),
         "travel_time_matrix_source": solution.metadata.get("travel_time_matrix_source"),
         "energy_matrix_source": solution.metadata.get("energy_matrix_source"),
         "travel_time_asymmetry_max_s": solution.metadata.get("travel_time_asymmetry_max_s"),
@@ -789,8 +792,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--time_limit_s", type=float, default=None, help="Max solve time in seconds. Default: 1800.")
     parser.add_argument(
         "--objective_config",
-        default="",
-        help="Versioned objective JSON; omitted keeps legacy distance_v1.",
+        default=str(REPO_ROOT / "EVRPTW_Benchmark/Reinforcement_Learning/configs/rivian_energy_vehicle_cost_v2.json"),
+        help="Versioned objective JSON; defaults to monetary cost with D_time distance. Pass an explicit distance profile for legacy min_dist.",
     )
     parser.add_argument("--mip_gap", type=float, default=0.0)
     parser.add_argument("--cs_copies", type=int, default=2, help="Number of dummy copies per active charging station. Default: 2.")
@@ -871,6 +874,21 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     existing_summary_rows = read_csv_rows(summary_path)
+    contract_path = save_path / "objective_contract.json"
+    contract = {
+        "schema": "exact_objective_contract_v2", "objective": objective_config.to_dict(),
+        "cost_distance_source": "running_time_path_distance_km" if objective_config.is_cost else "distance_matrix_km",
+        "route_structure": "no_internal_depot_and_each_trip_serves_customer",
+        "time_limit_s": time_limit_s, "mip_gap": args.mip_gap, "cs_copies": args.cs_copies,
+        "checkpoints_s": list(checkpoints_s), "threads": threads,
+    }
+    if contract_path.exists():
+        if json.loads(contract_path.read_text()) != contract:
+            raise ValueError("Existing output uses a different objective/solver contract; use a new --save_path.")
+    elif existing_summary_rows:
+        raise ValueError("Existing outputs have no revised objective contract; use a new --save_path to avoid mixing D_dist and D_time.")
+    else:
+        contract_path.write_text(json.dumps(contract, indent=2) + "\n")
     completed_ids = {
         str(row.get("instance_id", ""))
         for row in existing_summary_rows

@@ -58,6 +58,7 @@ def _charging_fixture(*, power_kw: float = 100.0) -> EVRPTWInstance:
         "charging_policy": {"charging_power_derating_factor": 0.9},
         "running_time_shortest_matrix_s": travel,
         "running_time_path_energy_kwh": energy,
+        "running_time_path_distance_km": distance * 2.0,
     }
     return EVRPTWInstance.from_dict(payload)
 

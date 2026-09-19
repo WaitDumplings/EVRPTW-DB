@@ -61,16 +61,32 @@ existing job instead of starting a duplicate. Use `EVRPTW_FOREGROUND=1` only
 for interactive debugging; `EVRPTW_DRY_RUN=1` remains non-executing and
 prints the resolved command directly.
 
-All shells use the frozen contract: checkpoints at 60, 300, 900, and 1800 seconds
+The cohort test shells use the benchmark contract: checkpoints at 60, 300, 900, and 1800 seconds
 (1, 5, 15, and 30 minutes); an 1800-second limit; 30 workers by default; seed 2026 for ALNS/VNS-TS; and
 `cs_copies=2`, `mip_gap=0`, and one Gurobi thread per worker for Exact. All three solvers optimize the frozen
 `rivian_energy_vehicle_cost_v2` objective:
-`0.151750972762646 × distance_km + 413.6331536717643 × vehicles_started`
-USD. Final evaluation costs match DRL; shaping rewards and heuristic search
-penalties are not added to this value. The same JSON must be passed explicitly
-when invoking a Python solver directly; its legacy default is distance only.
-See [the objective audit](OBJECTIVE_AUDIT_20260909_ZH.md) for the calculation
-paths, route-counting rules, and remaining feasible-set differences.
+`0.39 × (100/257) × D_time_km + 413.6331536717643 × vehicles_started`
+USD. New monetary runs use `running_time_path_distance_km` for cost, matching
+the revised paper contract. Historical DRL evaluations used `D_dist` and are
+not retrospectively converted by this change. Training shaping and heuristic
+constraint penalties are not part of the reported monetary objective.
+The three Python runners now default to the cost JSON; explicitly passing
+`--objective_config ""` selects the legacy distance mode.
+See [the current objective audit](OBJECTIVE_AUDIT_20260919_ZH.md) for operator
+scoring, matrix mapping, and differences from historical runs.
+
+For **one random Cus500 T1 instance with native Gurobi defaults**, use the
+separate foreground launcher:
+
+```bash
+conda activate maojie
+bash EVRPTW_Benchmark/scripts/Gurobi/Cus500/random_one.sh
+```
+
+This launcher does not use the cohort worker pool, thread cap, zero-gap target,
+or 30-minute limit. It records native optimizer logs and structured
+objective/bound/gap/runtime history. See its
+[usage and output reference](Gurobi/Cus500/README_random_one.md).
 
 Dataset arguments stay repository-relative. The launcher changes to the
 repository root before validation and execution, so it is safe to invoke a
@@ -135,7 +151,9 @@ EVRPTW_DRY_RUN=1          print the command without solving
 ```
 
 Every launcher resumes terminal instances through `--skip_completed`. Output
-directories include solver, scale, test, and shard identity. The default root
+directories include solver, scale, test, and shard identity. New monetary runs
+use leaf directories ending in `dtime_cost_v3`, separate from the historical
+`cost_v2` leaves; an incompatible run contract cannot be resumed. The default root
 is `EVRPTW_Benchmark/results/CLE_EVRPTW_v2_test_1m_5m_15m_30m_cost_v2`.
 This separates the four-checkpoint runs from older two-checkpoint or two-hour
 results, which cannot supply a missing earlier incumbent. When overriding

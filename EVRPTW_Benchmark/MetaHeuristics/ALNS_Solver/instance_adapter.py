@@ -18,7 +18,8 @@ def to_alns_tensor_instance(instance: EVRPTWInstance) -> dict[str, Any]:
 
     ALNS internally uses minutes for time, km for distance, kWh for battery,
     and the canonical node order [depot, customers, charging stations]. The
-    objective remains total road distance in km, matching the exact solver.
+    route-distance matrix is passed through unchanged; the runner supplies the
+    selected objective's distance coefficient and fixed vehicle charge.
     """
     battery_capacity = float(instance.vehicle.get("battery_capacity_kwh", 100.0))
     charging_power_kw, charging_power_factor, charging_power_source = charging_profile(instance)

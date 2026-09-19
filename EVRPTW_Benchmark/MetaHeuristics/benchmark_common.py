@@ -14,6 +14,12 @@ import numpy as np
 import pandas as pd
 
 from evrptw_core.schema import EVRPTWInstance, merge_route_sequences
+from evrptw_core.objective import (
+    COST_DISTANCE_SOURCE,
+    LEGACY_DISTANCE_SOURCE,
+    ObjectiveConfig,
+    select_objective_distance,
+)
 from evrptw_stage2.artifacts import load_materialized_view
 from evrptw_stage2.contracts import STAGE2_GENERATION_CONTRACT
 
@@ -23,7 +29,7 @@ DEFAULT_TIME_LIMIT_S = 1800.0
 SEED_SCHEME = "blake2b_view_id_v1"
 TIME_BUDGET_ITERATION_CEILING = 2_147_483_647
 ALGORITHM_TIMING_SCOPE = "adapter_solver_constructor_and_solve"
-RUN_CONTRACT_SCHEMA = "evrptw_meta_run_contract_v3"
+RUN_CONTRACT_SCHEMA = "evrptw_meta_run_contract_v4"
 CANONICAL_REPLAY_PROFILE_ID = "full_charge_derated_strict_route_v3"
 FAMILY_SCHEMA = "cle_evrptw_materialized_matrix_family_v3"
 VIEW_SCHEMA = "cle_evrptw_materialized_view_v4"
@@ -235,6 +241,11 @@ def build_run_contract(
         },
         "timing_scope": ALGORITHM_TIMING_SCOPE,
         "canonical_replay_profile_id": CANONICAL_REPLAY_PROFILE_ID,
+        "objective_distance_source": (
+            COST_DISTANCE_SOURCE
+            if task.get("objective_config", {}).get("mode") == "energy_vehicle_cost"
+            else LEGACY_DISTANCE_SOURCE
+        ),
         "data_identity": {
             "input_kind": str(task.get("input_kind", "")),
             "view_id": str(reference.get("view_id", "")),
@@ -561,6 +572,10 @@ def load_input_task(task: dict[str, Any]) -> tuple[EVRPTWInstance, dict[str, str
     if task["input_kind"] == "stage2":
         ref = Stage2ViewTask.from_dict(task["stage2_task"])
         instance = load_stage2_instance(ref)
+        if "objective_config" in task:
+            instance = select_objective_distance(
+                instance, ObjectiveConfig(**task["objective_config"])
+            )
         return instance, {
             "file": ref.index_path,
             "family_id": ref.family_id,
@@ -721,6 +736,9 @@ def validate_routes(
         "passed": not violations,
         "violations": violations,
         "objective_distance_km": total_distance,
+        "objective_distance_source": instance.metadata.get(
+            "objective_distance_source", LEGACY_DISTANCE_SOURCE
+        ),
         "charging_visit_count": charging_visits,
         "total_charging_time_s": total_charging_time,
         "charging_power_source": power_source,

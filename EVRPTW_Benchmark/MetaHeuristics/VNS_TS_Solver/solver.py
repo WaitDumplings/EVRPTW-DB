@@ -72,7 +72,10 @@ class VNSTSolver:
         self.position_neighbor_limit = int(position_neighbor_limit)
         self.exchange_neighbor_limit = int(exchange_neighbor_limit)
         self.station_candidate_limit = int(station_candidate_limit)
-        self.fast_policy_version = "adaptive_nearest_best_fit_v3"
+        self.fast_policy_version = (
+            "adaptive_monetary_delta_v4" if self._cost_search
+            else "adaptive_nearest_best_fit_v3"
+        )
 
         # Tabu (global) / SA
         self.tabu_list = deque(maxlen=30)
@@ -158,13 +161,21 @@ class VNSTSolver:
             self.initial_construction_budget_s = 0.50
             self.initial_merge_route_limit = 24
             self.initial_exact_candidate_limit = 40
-        self.initial_construction_strategy = "certificate_singleton_best_fit_v1"
+        self.initial_construction_strategy = (
+            "certificate_singleton_monetary_best_fit_v2" if self._cost_search
+            else "certificate_singleton_best_fit_v1"
+        )
         self.initial_construction_stats = {}
         self.singleton_source = "none"
 
     # -------------------------
     # Basic utilities
     # -------------------------
+    @property
+    def _cost_search(self):
+        # Explicit distance_v1 retains its historical search behavior.
+        return self.vehicle_fixed_cost != 0.0 or self.distance_unit_cost != 1.0
+
     def instance_dist_matrix_calculatrion(self):
         """Map node.id -> index for dist/time matrix lookup."""
         terminal_order = list(getattr(self.instance, "terminal_order", ()) or ())
@@ -587,6 +598,11 @@ class VNSTSolver:
         allow_infeasible=True,
         route_feasibility_cache=None,
     ):
+        if self._cost_search and getattr(self, "search_mode", "fast") == "full":
+            # Full enumeration evaluates in-place edits before solution_fix.
+            # Charge the route set actually retained after the move, including
+            # removing a now-customer-free source route and its dispatch cost.
+            S = self.solution_fix(self.clone_solution_shallow(S))
         if not allow_infeasible and not self.is_solution_feasible(
             S, route_feasibility_cache=route_feasibility_cache
         ):
@@ -627,9 +643,18 @@ class VNSTSolver:
                     penalty_sum += self.attribute_frequency.get(key, 0)
 
             denom = (1e-10 + float(self.attribute_total))
-            p_div_penalty = (self.lambda_div * total_distance * penalty_sum *
+            diversification_base = (
+                self.distance_unit_cost * total_distance + self.vehicle_fixed_cost * len(S)
+                if self._cost_search else total_distance
+            )
+            p_div_penalty = (self.lambda_div * diversification_base * penalty_sum *
                              math.sqrt(float(num_customers * num_vehicles)) / denom)
 
+        if self._cost_search:
+            return (
+                self.distance_unit_cost * (total_distance + total_penalty)
+                + self.vehicle_fixed_cost * len(S) + p_div_penalty
+            )
         return (
             self.distance_unit_cost
             * (total_distance + total_penalty + p_div_penalty)
@@ -865,9 +890,10 @@ class VNSTSolver:
     def _consolidate_singleton_solution(self, singleton_routes, deadline=None):
         """Build a complete best-fit solution under a short wall-clock budget.
 
-        Distance deltas only rank work.  Every accepted insertion is checked by
-        ``is_route_feasible`` and the complete result is checked again before it
-        can replace the singleton fallback.
+        Monetary search compares insertion with retaining the singleton,
+        including the saved dispatch charge; a feasible but more expensive
+        merge is rejected. Distance mode retains its historical policy.
+        Every accepted insertion and complete result is replayed for feasibility.
         """
 
         construction_start = time.perf_counter()
@@ -931,6 +957,10 @@ class VNSTSolver:
                 break
 
             singleton = singleton_by_customer[customer.id]
+            singleton_cost = (
+                self.distance_unit_cost * self._route_distance_value(singleton)
+                + self.vehicle_fixed_cost
+            )
             route_best_relatedness = {}
             if self._direct_terminal_index:
                 distance_row = self.dist_matrix[customer.id]
@@ -953,6 +983,8 @@ class VNSTSolver:
                 )[: self.initial_merge_route_limit]
             ]
 
+            if self._cost_search:
+                route_ids = range(len(merged_routes))
             cheap_candidates = []
             segments = self._singleton_insertion_segments(singleton, customer)
             for route_index in route_ids:
@@ -987,6 +1019,19 @@ class VNSTSolver:
                             )
                         )
 
+            if self._cost_search:
+                # Rank all retained candidate routes by monetary insertion, not
+                # the distance to one of their customers. Route shortlist is
+                # constructed below for cost mode from all routes.
+                cheap_candidates = [
+                    (self.distance_unit_cost * item[0] - singleton_cost, *item[1:])
+                    for item in cheap_candidates
+                ]
+                route_min_cost = {}
+                for item in cheap_candidates:
+                    route_min_cost[item[1]] = min(route_min_cost.get(item[1], float("inf")), item[0])
+                eligible_routes = set(sorted(route_min_cost, key=lambda i: (route_min_cost[i], i))[:self.initial_merge_route_limit])
+                cheap_candidates = [item for item in cheap_candidates if item[1] in eligible_routes]
             cheap_candidates.sort(key=lambda item: item[0])
             best = None
             for _, route_index, insert_position, segment_index, base_distance in (
@@ -1002,6 +1047,10 @@ class VNSTSolver:
                 if not self.is_route_feasible(trial):
                     continue
                 delta = self._route_distance_value(trial) - base_distance
+                if self._cost_search:
+                    delta = self.distance_unit_cost * delta - singleton_cost
+                    if delta > NUMERICAL_EPS:
+                        continue
                 if best is None or delta < best[0]:
                     best = (delta, route_index, trial)
 
@@ -1548,7 +1597,9 @@ class VNSTSolver:
             moves[worst_index] = item
 
     def _ranked_candidate_moves_fast(self, solution):
-        """Build a bounded, relatedness-driven fast neighborhood."""
+        """Build a bounded neighborhood under the declared objective."""
+        if self._cost_search:
+            return self._ranked_cost_candidate_moves_fast(solution)
         moves = []
         customer_positions = self._customer_positions(solution)
         if not customer_positions:
@@ -1754,6 +1805,128 @@ class VNSTSolver:
         if candidate_limit > 0:
             moves = moves[:candidate_limit]
         return moves
+
+    def _local_move_cost_delta(self, solution, move, route_costs=None):
+        """Exact objective change of affected routes after normal cleanup.
+
+        All customer-free routes, station remnants and consecutive duplicates
+        follow the same cleanup as the candidate actually passed to replay.
+        No feasibility penalties or geometric relatedness enter this value.
+        """
+        kind = move[0]
+        if kind in {"relocate", "exchange"}:
+            original = list(dict.fromkeys((move[1], move[3])))
+            local = list(move)
+            local[1] = original.index(move[1])
+            local[3] = original.index(move[3])
+        elif kind == "two_opt":
+            original = [move[1], move[2]]
+            local = [kind, 0, 1, *move[3:]]
+        else:
+            original = [move[1]]
+            local = [kind, 0, *move[2:]]
+        before = [solution[index] for index in original]
+        after = self._apply_fast_move(before, tuple(local))
+        if after is None:
+            return float("inf")
+        before_value = sum(
+            route_costs[index] if route_costs is not None else
+            self.distance_unit_cost * self._route_distance_value(solution[index]) + self.vehicle_fixed_cost
+            for index in original
+        )
+        after_value = sum(
+            self.distance_unit_cost * self._route_distance_value(route) + self.vehicle_fixed_cost
+            for route in after
+        )
+        return after_value - before_value
+
+    def _ranked_cost_candidate_moves_fast(self, solution):
+        """Rank the bounded min-cost neighborhood by exact USD deltas.
+
+        Monetary route/exchange shortlists replace the historical nearest-node
+        prefixes. Resource replay remains restricted to the best cost deltas;
+        this is candidate-budgeted search, not exhaustive tabu search.
+        """
+        positions = self._customer_positions(solution)
+        route_limit, position_limit, exchange_limit, candidate_limit = self._effective_fast_limits(len(positions))
+        route_costs = [self.distance_unit_cost * self._route_distance_value(route) + self.vehicle_fixed_cost for route in solution]
+        moves = []
+        def scored(move):
+            return (self._local_move_cost_delta(solution, move, route_costs), move)
+        def retain(items):
+            for item in items:
+                if math.isfinite(item[0]):
+                    self._bounded_insert(moves, item, candidate_limit)
+        def finish():
+            return sorted(moves, key=lambda item: item[0])
+
+        for i, pos, node in positions:
+            if self._time_limit_reached():
+                return finish()
+            route_candidates = []
+            for j, route in enumerate(solution):
+                local_moves = [
+                    scored(("relocate", i, pos, j, insert_pos))
+                    for insert_pos in range(1, len(route.nodes))
+                    if not (i == j and insert_pos in (pos, pos + 1))
+                ]
+                local_moves.sort(key=lambda item: item[0])
+                if local_moves:
+                    route_candidates.append((local_moves[0][0], j, local_moves[:position_limit]))
+            route_candidates.sort(key=lambda item: (item[0], item[1]))
+            for _, _, local_moves in route_candidates[:route_limit]:
+                retain(local_moves)
+            if sum(node.type == "c" for node in solution[i].nodes) > 1:
+                retain([scored(("relocate_new", i, pos))])
+
+        # Each pair is examined by actual affected-arc cost; proximity of the
+        # exchanged customers can have the opposite ordering on directed roads.
+        for offset, (i, p1, _) in enumerate(positions):
+            if self._time_limit_reached():
+                return finish()
+            exchanges = [scored(("exchange", i, p1, j, p2)) for j, p2, _ in positions[offset + 1:]]
+            exchanges.sort(key=lambda item: item[0])
+            retain(exchanges[:exchange_limit])
+
+        for i, ri in enumerate(solution):
+            if self._time_limit_reached():
+                return finish()
+            pair_candidates = []
+            for j in range(i + 1, len(solution)):
+                rj = solution[j]
+                splits = [scored(("two_opt", i, j, s1, s2))
+                          for s1 in range(1, len(ri.nodes) - 1)
+                          for s2 in range(1, len(rj.nodes) - 1)]
+                splits.sort(key=lambda item: item[0])
+                if splits:
+                    pair_candidates.append((splits[0][0], j, splits[:position_limit]))
+            pair_candidates.sort(key=lambda item: (item[0], item[1]))
+            for _, _, splits in pair_candidates[:route_limit]:
+                retain(splits)
+
+        for i, route in enumerate(solution):
+            if self._time_limit_reached():
+                return finish()
+            for pos, node in enumerate(route.nodes[1:-1], start=1):
+                if node.type == "f":
+                    retain([scored(("station_remove", i, pos))])
+            fuel_cap = float(self.instance.vehicle_params["fuel_cap"])
+            fuel = fuel_cap
+            for pos in range(len(route.nodes) - 1):
+                a, b = route.nodes[pos:pos + 2]
+                fuel -= self.fuel_consumption(a, b)
+                if fuel < -NUMERICAL_EPS:
+                    station_moves = [scored(("station_insert", i, pos + 1, station))
+                                     for station in self.instance.stations
+                                     if station.id not in {a.id, b.id}
+                                     and self.fuel_consumption(a, station) <= fuel_cap + NUMERICAL_EPS
+                                     and self.fuel_consumption(station, b) <= fuel_cap + NUMERICAL_EPS]
+                    station_moves.sort(key=lambda item: item[0])
+                    retain(station_moves[:max(0, self.station_candidate_limit)])
+                    break
+                if b.type == "f":
+                    fuel = fuel_cap
+        return finish()
 
     def _candidate_moves_fast(self, solution):
         return [move for _, move in self._ranked_candidate_moves_fast(solution)]

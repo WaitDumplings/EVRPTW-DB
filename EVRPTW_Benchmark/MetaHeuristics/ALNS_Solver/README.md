@@ -8,7 +8,7 @@ solver does not have a separate restored-instance code path.
 The solver contract matches Stage 2 and the exact benchmark:
 
 - objective: the configured cost profile, or directed `distance_matrix_km`
-  when using the compatible `distance_v1` default;
+  when explicitly selecting the compatible `distance_v1` profile;
 - travel time: directed `running_time_shortest_matrix_s`;
 - battery use: directed `running_time_path_energy_kwh`;
 - charging: `full_charge_linear_derated_v2`, using each station's own
@@ -36,11 +36,13 @@ The default solve budget is 1800 seconds; explicit `--time_limit_s` and
 bash EVRPTW_Benchmark/test_scripts/run_alns_cus50_test.sh
 ```
 
-The launcher and the example below select the same
-`rivian_energy_vehicle_cost_v2.json` profile as the DRL benchmarks: electricity
-cost for directed route distance plus a fixed cost per vehicle, reported in
-USD. A direct Python invocation that omits `--objective_config` retains the
-compatible `distance_v1` default.
+The launcher and the example below select the monetary coefficients in
+`rivian_energy_vehicle_cost_v2.json`. New non-learning cost runs price the
+distance of the fastest-time path and add a fixed charge per vehicle, in USD.
+The coefficients match the archived DRL profile; the revised distance mapping
+must not be confused with the archived DRL evaluation's shortest-distance cost. A direct Python invocation defaults to this monetary profile too. Select an
+explicit distance profile (or `--objective_config ""`) only for a legacy
+`distance_v1` run.
 
 Equivalent raw runner invocation:
 
@@ -134,3 +136,21 @@ python -m pytest -q \
 The opt-in `MetaHeuristics/tests/runner_ab_harness.py` runs one real Stage-2
 view through both solvers in single-worker and process-pool modes and compares
 their deterministic solution fields.
+
+### Cost-aware operators
+
+In cost mode, greedy, regret, time-neighborhood and zone repair compare
+monetary insertion increments. Opening a route includes its fixed dispatch
+charge; inserting into an existing route includes only its distance-cost
+increment. Worst removal uses the saving after its selected removal and
+station-cleanup operation, including the fixed charge if a vehicle disappears.
+Regret fallback scores, station choices, annealing, best-incumbent selection,
+and adaptive operator rewards use the configured objective units. Construction
+compares merging with opening its verified singleton route, and station pruning
+cannot increase cost (fastest-path distances need not form a distance metric).
+
+Shaw relatedness, time-window slack, random destruction and geographic/zone
+neighborhoods remain proposal/diversification mechanisms. They do not define
+the accepted objective or the reward used to adapt operator weights. Historical
+operator keys containing `distance` are retained for checkpoint compatibility;
+these names do not imply distance-only scoring in a cost run.

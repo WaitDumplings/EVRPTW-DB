@@ -69,14 +69,14 @@ from solver import ALNS_Solver
 
 
 SOLVER_NAME = "alns_stage2_anytime"
-ALGORITHM_PROFILE_ID = "alns_stage2_scalable_v2"
+ALGORITHM_PROFILE_ID = "alns_stage2_cost_operators_v3"
 
 
 SUMMARY_FIELDNAMES = [
     "instance_id", "file", "family_id", "city_slug", "split_id", "track_id", "scale_id",
     "day_type", "status", "benchmark_status", "benchmark_completed", "has_incumbent",
     "feasible", "objective_distance_km", "objective_mode", "objective_profile_id",
-    "objective_unit", "objective_value", "objective_cost_usd",
+    "objective_unit", "objective_distance_source", "objective_value", "objective_cost_usd",
     "electricity_cost_usd", "vehicle_cost_usd", "vehicles_started",
     "vehicle_count", "runtime_s",
     "first_feasible_time_s", "time_limit_s", "terminated_by_time_limit", "timing_scope",
@@ -303,6 +303,9 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
                     "checkpoint_snapshots": snapshots,
                     **objective_fields,
                     "objective_config": objective_config.to_dict(),
+                    "objective_distance_source": instance.metadata.get(
+                        "objective_distance_source", "distance_matrix_km"
+                    ),
                     "charging_model": "full_charge_linear_derated_v2",
                     "charging_power_derating_factor": charging_power_factor,
                     "benchmark_status": status,
@@ -335,6 +338,9 @@ def solve_one(task: dict[str, Any]) -> dict[str, Any]:
             ),
             "objective_mode": objective_config.mode,
             "objective_profile_id": objective_config.profile_id,
+            "objective_distance_source": instance.metadata.get(
+                "objective_distance_source", "distance_matrix_km"
+            ),
             "objective_unit": objective_config.unit,
             "objective_value": (
                 "" if best is None else objective_fields["objective_value"]
@@ -449,8 +455,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument(
         "--objective_config",
-        default="",
-        help="Versioned objective JSON; omitted keeps legacy distance_v1.",
+        default=str(REPO_ROOT / "EVRPTW_Benchmark" / "Reinforcement_Learning" / "configs" / "rivian_energy_vehicle_cost_v2.json"),
+        help="Versioned objective JSON; defaults to monetary min-cost. Pass an explicit distance profile or an empty string for legacy distance_v1.",
     )
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--max_instances", type=int, default=None)
@@ -559,7 +565,10 @@ def main() -> None:
         fingerprint, contract_json = build_run_contract(
             task,
             algorithm_name=SOLVER_NAME,
-            algorithm_profile_id=ALGORITHM_PROFILE_ID,
+            algorithm_profile_id=(
+                ALGORITHM_PROFILE_ID if objective_config.mode == "energy_vehicle_cost"
+                else "alns_stage2_scalable_v2"
+            ),
             base_seed=args.seed,
             solver_parameters={
                 "search_budget_mode": search_budget_mode,
