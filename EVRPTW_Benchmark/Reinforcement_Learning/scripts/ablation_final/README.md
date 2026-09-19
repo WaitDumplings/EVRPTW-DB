@@ -39,7 +39,10 @@ Cus100 rollout cap 240/360（train/val）；Cus500 通常1700/2550，EVRPTW-RL�
 - TERRAN使用一致的legacy PPO+PBRS配置，不跨规模切换stable-cost critic架构。
   LR=0.0001、PPO3轮/4 minibatches、vf_coef=0.1、Smooth-L1 critic、backbone梯度0.1。
   新多卡入口真实同步模型梯度，rank0独立验证和保存；只支持fresh fixed-epoch运行。
-- AM LR=0.0001。RRNCO full关系模式、stable AFT、nearest关系选择、LOO baseline、LR=0.0001。
+- AM LR=0.0001；原生 `steps_per_epoch=2500 × baseline_warmup_epochs=1` 对应
+  前2500次optimizer updates使用EMA baseline。这轮300 logical epochs各一次更新，
+  因此也全部处于EMA阶段，尚不能评价切换greedy-rollout baseline后的表现。
+- RRNCO full关系模式、stable AFT、nearest关系选择、LOO baseline、LR=0.0001。
 - AdamW、weight decay=0.01；各模型其它原生参数保存到各自checkpoint/训练signature。
 
 `configs/reward_dtime.json` 将旧v3训练集标定的数值尺度作为本轮**固定超参**保留，
@@ -94,3 +97,18 @@ bash EVRPTW_Benchmark/Reinforcement_Learning/scripts/ablation_final/train.sh \
 只有正常退出、训练达到声明epoch，且每个声明验证点均完整评测指定实例数，才记为
 completed。参数诊断应联合看FR、可行实例cost与训练稳定性；300epoch不是收敛证明。
 不同batch意味着不同样本暴露，不能据此单独证明架构优劣。
+
+
+用只读报告脚本汇总或持续观察：
+
+```bash
+python EVRPTW_Benchmark/Reinforcement_Learning/scripts/ablation_final/report.py \
+  --output-root /data/ablation_final_road_cus100_300_20260919 --watch
+```
+
+默认每30秒刷新 `analysis/summary_by_epoch.csv`、`summary_at_300.csv`、
+`RESULTS_SUMMARY.md`、cost及FR曲线，所有任务终止后退出。报告保留缺失、失败及
+排队状态；1 epoch profile不会成为300 epoch结果。CSV保留原始浮点精度。
+Cost使用各模型各次验证自身的可行实例，**不是五模型共同可行交集**；FR使用完整
+验证cohort。AM的2500-update EMA warmup、EVRPTW-RL的1000-update EMA warmup、
+DRL-TS的soft阶段分别标注，不能把这轮短试跑当作完整训练流程的最终排名。

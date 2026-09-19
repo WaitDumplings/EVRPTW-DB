@@ -109,3 +109,53 @@ def test_inventory_respects_visible_indices_and_uuids(monkeypatch):
     assert [g['index'] for g in LAUNCH.gpu_inventory()] == [1, 2]
     monkeypatch.setenv('CUDA_VISIBLE_DEVICES', '')
     assert LAUNCH.gpu_inventory() == []
+
+
+@pytest.mark.parametrize('method', LAUNCH.METHODS)
+@pytest.mark.parametrize('scale,world_size', [(500, 2), (1000, 3), (1000, 4)])
+def test_generated_multigpu_command_is_accepted_by_actual_training_parser(tmp_path, method, scale, world_size):
+    """Validate method-specific options, not only their spelling in a command list.
+
+    The fake stream paths are parsed, never opened; no process group, model,
+    dataset pool, or CUDA context is constructed by this test.
+    """
+    import importlib
+    from EVRPTW_Benchmark.Reinforcement_Learning.common.distributed_entrypoints import parse_distributed_args
+    from EVRPTW_Benchmark.Reinforcement_Learning.common.training_protocol import (
+        require_registered_batches, require_validation_rollout_steps,
+    )
+    job = LAUNCH.make_job(method, scale, world_size, 300)
+    job.update(training_stream_path=str(tmp_path / 'stream.parquet'),
+               training_stream_contract_sha256='a' * 64)
+    command = LAUNCH.command_for(job, tmp_path / 'data', tmp_path / 'run')
+    start = command.index('--module')
+    module = importlib.import_module(command[start + 1])
+    argv = command[start + 2:]
+    if method == 'terran':
+        args = parse_distributed_args(module.parse_args, argv)
+        legacy_batch = args.num_envs_per_gpu
+        assert args.num_charging_stations == 50
+        assert job['num_charging_stations'] == 50
+    else:
+        args = module.parse_args(argv)
+        legacy_batch = args.batch_size
+    physical, effective = require_registered_batches(args, legacy_batch)
+    assert physical == job['physical_batch_size']
+    assert effective == physical * world_size
+    assert args.expected_world_size == world_size
+    assert args.training_stream_path == tmp_path / 'stream.parquet'
+    assert args.customer_exposure_budget == 300 * effective * scale
+    assert args.objective_distance_source == 'running_time_path_distance_km'
+    assert args.validation_decode_type == 'sampling'
+    assert args.validation_candidates == 30
+    assert require_validation_rollout_steps(args) == job['validation_rollout_steps']
+    if method == 'evrptw_rl' and scale == 500:
+        assert args.validation_rollout_policy == 'explicit'
+        assert (args.training_rollout_steps, args.validation_rollout_steps) == (600, 700)
+    else:
+        assert args.validation_rollout_policy == 'ceil_1_5'
+        assert args.validation_rollout_steps == (3 * args.training_rollout_steps + 1) // 2
+    if method == 'am_evrptw':
+        assert '--activation-checkpoint-stride' not in argv
+    elif method != 'terran':
+        assert args.activation_checkpoint_stride == 1

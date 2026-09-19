@@ -152,7 +152,9 @@ def make_job(method, scale, world_size, epochs, validation_every=100, validation
         job['terran_config_path'] = str(config.relative_to(REPO))
         job['terran_config_sha256'] = digest(config)
         job['ppo_step_chunk_size'] = {100: 64, 500: 16, 1000: 8}[scale]
-    elif scale > 100:
+        job['num_charging_stations'] = 20 if scale == 100 else 50
+        job['extra_args'].extend(['--num-charging-stations', str(job['num_charging_stations'])])
+    elif scale > 100 and method in {'evrptw_rl', 'drl_ts', 'rrnco'}:
         if '--activation-checkpoint-stride' not in job['extra_args']:
             job['extra_args'].extend(['--activation-checkpoint-stride', '1'])
     return job
