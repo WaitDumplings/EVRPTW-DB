@@ -66,9 +66,9 @@ dataset_candidates=(
 
 if [[ -n "${EVRPTW_DATASET_ROOT:-}" ]]; then
   if [[ "${EVRPTW_DATASET_ROOT}" == /* ]]; then
-    # Accept server-local absolute overrides while keeping solver arguments
-    # repository-relative. -m also permits command-only dry runs before restore.
-    DATASET_ROOT="$(realpath -m --relative-to="${REPO_ROOT}" -- "${EVRPTW_DATASET_ROOT}")"
+    # Python's standard library works on macOS and Linux, resolves symlinks,
+    # and permits command-only dry runs before the dataset has been restored.
+    DATASET_ROOT="$(python3 -c 'import os, sys; print(os.path.relpath(os.path.realpath(sys.argv[1]), os.path.realpath(sys.argv[2])))' "${EVRPTW_DATASET_ROOT}" "${REPO_ROOT}")"
   else
     DATASET_ROOT="${EVRPTW_DATASET_ROOT}"
   fi

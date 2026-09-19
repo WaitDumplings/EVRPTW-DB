@@ -70,7 +70,9 @@ run_frozen_test() {
     }
     local launcher_path
     launcher_path="$(cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")"
-    local job_slug="${solver_kind,,}_${CUS_SCALE,,}_${track_id}"
+    # macOS ships Bash 3.2, which does not support ${name,,} expansion.
+    local job_slug
+    job_slug="$(printf '%s_%s_%s' "${solver_kind}" "${CUS_SCALE}" "${track_id}" | tr '[:upper:]' '[:lower:]')"
     if [[ -n "${RESULT_PARTITION_DIR}" ]]; then
       job_slug+="_${RESULT_PARTITION_DIR}"
     fi
@@ -98,7 +100,7 @@ run_frozen_test() {
     fi
 
     printf '%s\n' "RUNNING" > "${exit_file}"
-    printf '\n[%s] starting %s %s %s\n' "$(date -Is)" "${solver_kind}" "${CUS_SCALE}" "${track_id}" >> "${log_file}"
+    printf '\n[%s] starting %s %s %s\n' "$(date "+%Y-%m-%dT%H:%M:%S%z")" "${solver_kind}" "${CUS_SCALE}" "${track_id}" >> "${log_file}"
     nohup env EVRPTW_NOHUP_CHILD=1 EVRPTW_NOHUP_EXIT_FILE="${exit_file}" bash "${launcher_path}" >> "${log_file}" 2>&1 < /dev/null &
     local launched_pid=$!
     printf '%s\n' "${launched_pid}" > "${pid_file}"

@@ -104,10 +104,12 @@ order:
    repository's first three parent directories.
 
 `EVRPTW_DATASET_ROOT` accepts either an absolute path or a path relative to
-the repository root. Absolute overrides are converted with `realpath` to
-repository-relative paths before building solver commands, including in the
+the repository root. Absolute overrides are converted with Python 3's standard
+library to repository-relative paths before building solver commands, including in the
 background child process. Dataset and test-index existence checks still apply
 for actual runs; dry runs can describe a dataset before it is restored.
+The shared entry points support macOS's default Bash 3.2 and do not require
+GNU `realpath`; Python 3 must be available in the activated environment.
 
 ## Unified checkpoint output
 
