@@ -152,7 +152,7 @@ class RewardContract:
             )
 
         objective_payload = snapshot.get("objective")
-        required_objective = set(ObjectiveConfig.__dataclass_fields__)
+        required_objective = set(ObjectiveConfig.__dataclass_fields__) - {"objective_distance_source"}
         if not isinstance(objective_payload, Mapping) or not required_objective.issubset(
             objective_payload
         ):

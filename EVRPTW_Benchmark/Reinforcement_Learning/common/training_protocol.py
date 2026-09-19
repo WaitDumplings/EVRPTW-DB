@@ -14,12 +14,18 @@ import torch
 
 from .data_pass import DataPassState
 from .evaluation import select_min_verified_objective
-from .objective import resolve_objective
+from .objective import objective_from_args, resolve_objective
 from .stage2_data import Stage2TaskPool
 
 
 def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--objective-config", type=Path, help="Versioned objective JSON; omitted means legacy distance.")
+    parser.add_argument(
+        "--objective-distance-source",
+        choices=("distance_matrix_km", "running_time_path_distance_km"),
+        default=None,
+        help="Cost-distance matrix; omitted preserves the objective/checkpoint contract.",
+    )
     parser.add_argument(
         "--reward-contract",
         type=Path,
@@ -525,6 +531,7 @@ def make_validation_pool(
         return None
     return Stage2TaskPool(
         dataset_path=args.validation_dataset_path,
+        objective_config=objective_from_args(args),
         family_root=args.validation_family_root,
         scale=scale,
         split_ids="val",
@@ -605,6 +612,7 @@ def verified_validation(
         "objective_profile_id": active_objective.profile_id,
         "objective_unit": active_objective.unit,
         "objective_config": active_objective.to_dict(),
+        "objective_distance_source": active_objective.objective_distance_source,
         "mean_verified_objective": (
             float(np.mean([row["objective_value"] for row in passed])) if passed else None
         ),

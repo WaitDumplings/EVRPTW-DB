@@ -72,8 +72,13 @@ not retrospectively converted by this change. Training shaping and heuristic
 constraint penalties are not part of the reported monetary objective.
 The three Python runners now default to the cost JSON; explicitly passing
 `--objective_config ""` selects the legacy distance mode.
-See [the current objective audit](OBJECTIVE_AUDIT_20260919_ZH.md) for operator
-scoring, matrix mapping, and differences from historical runs.
+See [the objective audit](OBJECTIVE_AUDIT_20260919_ZH.md) and the
+[ablation follow-up audit](ABLATION_NONLEARNING_AUDIT.md) for operator scoring,
+matrix mapping, and differences from historical runs. The ablation branch adds
+monetary ALNS construction and time-repair shortlists. Its cohort shells write
+under `EVRPTW_Benchmark/results/ablation_final_nonlearning_dtime` by default;
+`EVRPTW_TEST_RESULTS_ROOT` can override this root. Historical output directories
+are not used as the default resume source.
 
 For **one random Cus500 T1 instance with native Gurobi defaults**, use the
 separate foreground launcher:

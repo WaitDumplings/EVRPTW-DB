@@ -1,7 +1,7 @@
 """Versioned benchmark objectives, independent of policy architecture and shaping."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import math
 from pathlib import Path
@@ -18,10 +18,18 @@ class ObjectiveConfig:
     electricity_price_usd_per_kwh: float = 0.1341
     consumption_kwh_per_km: float = 100.0 / 257.0
     vehicle_fixed_cost_usd: float = 33.56
+    # Old checkpoints omit this field; final runs opt in explicitly.
+    objective_distance_source: str = "distance_matrix_km"
 
     def __post_init__(self) -> None:
         if self.mode not in {"distance", "energy_vehicle_cost"}:
             raise ValueError(f"unsupported objective mode: {self.mode}")
+        if self.objective_distance_source not in {
+            "distance_matrix_km", "running_time_path_distance_km",
+        }:
+            raise ValueError(f"unsupported objective distance source: {self.objective_distance_source}")
+        if self.objective_distance_source == "running_time_path_distance_km" and not self.is_cost:
+            raise ValueError("fastest-time-path cost distance requires the monetary objective")
         if not self.profile_id:
             raise ValueError("objective profile_id must be nonempty")
         for name in (
@@ -71,7 +79,11 @@ class ObjectiveConfig:
         return float(self.value(distance_scale, dispatches))
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        snapshot = asdict(self)
+        if self.objective_distance_source == "distance_matrix_km":
+            # Preserve historical objective/reward-contract serializations.
+            snapshot.pop("objective_distance_source")
+        return snapshot
 
     def fields(self, distance: float, vehicles: int) -> dict[str, Any]:
         distance = float(distance)
@@ -121,7 +133,26 @@ def objective_from_args(args: Any) -> ObjectiveConfig:
     selected = getattr(args, "objective", None)
     if selected is None:
         selected = getattr(args, "objective_config", None)
-    return resolve_objective(selected)
+    objective = resolve_objective(selected)
+    source = getattr(args, "objective_distance_source", None)
+    return objective if source is None else replace(objective, objective_distance_source=source)
+
+
+def select_objective_instance(instance: Any, objective: Any = None) -> Any:
+    """Select the saved cost distance for model features, rewards and replay.
+
+    Time and energy retain the released fastest-time-path quantities. The core
+    adapter copies mappings without mutating the released or archived input.
+    """
+    config = resolve_objective(objective)
+    if config.objective_distance_source == "distance_matrix_km":
+        if instance.metadata.get("objective_distance_source") != "running_time_path_distance_km":
+            return instance
+        from evrptw_core.objective import ObjectiveConfig as CoreObjective
+        from evrptw_core.objective import select_objective_distance
+        return select_objective_distance(instance, CoreObjective())
+    from evrptw_core.objective import select_objective_distance
+    return select_objective_distance(instance, config)
 
 
 def objective_from_checkpoint(checkpoint: dict[str, Any], override: Any = None) -> ObjectiveConfig:
@@ -160,5 +191,5 @@ def route_dispatch_count(routes: list[list[int]]) -> int:
 
 __all__ = [
     "ObjectiveConfig", "resolve_objective", "load_objective", "objective_from_args",
-    "objective_from_checkpoint", "route_dispatch_count",
+    "objective_from_checkpoint", "route_dispatch_count", "select_objective_instance",
 ]

@@ -148,6 +148,12 @@ Regret fallback scores, station choices, annealing, best-incumbent selection,
 and adaptive operator rewards use the configured objective units. Construction
 compares merging with opening its verified singleton route, and station pruning
 cannot increase cost (fastest-path distances need not form a distance metric).
+In the ablation branch, construction ranks its route shortlist by USD insertion
+increments instead of nearest-node distance. Time-named repair operators also
+rank their top-k candidates in USD; time remains a feasibility constraint.
+The new algorithm profile is `alns_stage2_cost_operators_v4`. Candidate limits
+still make this a bounded heuristic: cost before station repair is a ranking
+proxy, and each retained repaired route receives its exact monetary score.
 
 Shaw relatedness, time-window slack, random destruction and geographic/zone
 neighborhoods remain proposal/diversification mechanisms. They do not define

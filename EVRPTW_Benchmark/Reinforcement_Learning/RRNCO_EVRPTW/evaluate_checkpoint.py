@@ -160,6 +160,7 @@ def main() -> None:
     policy.eval()
     pool = Stage2TaskPool(
         dataset_path=cli.dataset_path,
+        objective_config=objective,
         family_root=cli.family_root,
         scale=saved.scale,
         split_ids="val",

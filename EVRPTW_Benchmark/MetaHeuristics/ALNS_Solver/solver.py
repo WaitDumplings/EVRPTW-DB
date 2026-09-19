@@ -433,9 +433,12 @@ class ALNS_Solver:
             self.simulation_cache_limit = 30_000
         self.scalar_cache_limit = 50_000
         self.station_cache_limit = 12_000
-        self.initial_construction_strategy = "singleton_best_fit_v1"
+        self.initial_construction_strategy = (
+            "singleton_monetary_best_fit_v2" if self.uses_monetary_objective
+            else "singleton_best_fit_v1"
+        )
         self.algorithm_profile_id = (
-            "alns_stage2_cost_operators_v3" if self.uses_monetary_objective
+            "alns_stage2_cost_operators_v4" if self.uses_monetary_objective
             else "alns_stage2_scalable_v2"
         )
         self.initial_construction_stats: Dict[str, Any] = {}
@@ -507,7 +510,7 @@ class ALNS_Solver:
             "station_cache_limit": self.station_cache_limit,
             "published_incumbent_validation": "solver_full_then_runner_independent_replay",
             "operator_objective_scoring": (
-                "monetary_marginals_with_dispatch_v1" if self.uses_monetary_objective
+                "monetary_marginals_and_shortlists_with_dispatch_v2" if self.uses_monetary_objective
                 else "legacy_distance_v1"
             ),
         }
@@ -1194,7 +1197,11 @@ class ALNS_Solver:
 
             route_ids = list(range(len(merged_routes)))
             candidate_limit = self.initial_merge_candidate_limit
-            if candidate_limit is not None and len(route_ids) > candidate_limit:
+            if (
+                not self.uses_monetary_objective
+                and candidate_limit is not None
+                and len(route_ids) > candidate_limit
+            ):
                 # Rank only which routes receive exact insertion evaluation.
                 # Every selected candidate is still fully repaired and checked.
                 route_ids.sort(
@@ -1272,6 +1279,8 @@ class ALNS_Solver:
         customer_demand = float(self.nodes[customer]["demand"])
         cheap: List[Tuple[float, int, int, float]] = []
         for ridx in route_ids:
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
             route = routes[ridx]
             route_demand = self._route_demand(route)
             if route_demand + customer_demand > self.C + 1e-9:
@@ -1295,6 +1304,18 @@ class ALNS_Solver:
                     - self.dist_matrix[previous, following]
                 )
                 cheap.append((proxy, ridx, pos, base_distance))
+
+        if self.uses_monetary_objective and self.initial_merge_candidate_limit is not None:
+            # Select routes by their cheapest USD insertion, never nearest-node
+            # distance. The singleton alternative (including its dispatch fee)
+            # is identical for all these insertions and is compared by caller.
+            route_min_cost: Dict[int, float] = {}
+            for score, ridx, _, _ in cheap:
+                route_min_cost[ridx] = min(route_min_cost.get(ridx, math.inf), score)
+            eligible_routes = set(sorted(
+                route_min_cost, key=lambda ridx: (route_min_cost[ridx], ridx)
+            )[: self.initial_merge_candidate_limit])
+            cheap = [item for item in cheap if item[1] in eligible_routes]
 
         # Python's stable sort preserves route/position enumeration for ties.
         cheap.sort(key=lambda item: item[0])
@@ -1972,7 +1993,6 @@ class ALNS_Solver:
         allowed_routes: Optional[set] = None,
         include_new_route: bool = True,
     ) -> List[Tuple[int, List[int], float]]:
-        proposal_mode = mode
         mode = self._insertion_score_mode(mode)
         options = []
         cheap_candidates = []
@@ -2019,9 +2039,10 @@ class ALNS_Solver:
                     - self.dist_matrix[prev_node, next_node]
                 )
 
-                # Time-based repair keeps a temporal candidate shortlist;
-                # the exact final scores below still use monetary deltas.
-                if proposal_mode == "time":
+                # Cost-mode shortlists and exact ranking use the same USD
+                # objective. A temporal shortlist survives only in the explicit
+                # legacy distance protocol, not under a time-named cost repair.
+                if mode == "time":
                     proxy = (
                         self.time_matrix[prev_node, customer]
                         + self.time_matrix[customer, next_node]

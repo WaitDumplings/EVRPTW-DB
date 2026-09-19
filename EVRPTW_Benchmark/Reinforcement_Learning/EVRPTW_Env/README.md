@@ -119,7 +119,7 @@ kilometres remain a separate diagnostic in the new cost track.
 ## Active cost objective
 
 The optional `objective_config` selects the versioned electricity-plus-vehicle
-objective used by all four formal training methods. Its complete semantics
+objective used by all five formal training methods. Its complete semantics
 and parameter source are in
 [`COST_OBJECTIVE_CONTRACT_V1.md`](../COST_OBJECTIVE_CONTRACT_V1.md).
 The environment records `vehicles_started` on valid depot departures, charges
@@ -128,6 +128,28 @@ This does not change the energy matrix, masks, charging time or fleet limit.
 `reward_objective_scale` normalizes the whole scalar cost; the old
 `reward_distance_scale_km` still normalizes distance features. Omitting the
 objective retains the explicit legacy distance behavior.
+
+### Final D_time contract
+
+New ablation/final runs explicitly set
+`objective.objective_distance_source = "running_time_path_distance_km"`, or pass
+`--objective-distance-source running_time_path_distance_km` with the monetary
+`--objective-config`. This selects the distance travelled along the fastest-time
+path for the environment's distance ledger, its distance features (including
+DRL-TS/RRNCO pairwise relations and decoder distance biases), training-pool
+normalization, candidate ordering, and independent validation/replay. Scheduling
+still uses the released `shortest_time_matrix_s` (`T_time`), and battery use still
+uses the released `energy_matrix_kwh` (`kappa * D_time`). The original arrays and
+on-disk dataset are not modified. Missing `running_time_path_distance_km` is an
+error; the adapter never substitutes `D_dist` silently.
+
+The source is frozen inside checkpoint objective snapshots and must also match
+any reward contract. A resume that changes the source is rejected. Old objective
+snapshots without this field retain their original `distance_matrix_km`
+interpretation and serialization; old reported scores are not relabelled. The
+new source is applied by all five training/validation entry points, their shared
+pools and environment, and checkpoint evaluation entry points. The same applies
+to the multi-GPU REINFORCE adapters and TERRAN's distributed pool.
 
 ## Route Export
 

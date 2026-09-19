@@ -157,6 +157,7 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pool = Stage2TaskPool(
         dataset_path=args.dataset_path,
+        objective_config=objective_from_args(args),
         family_root=args.family_root,
         scale=args.scale,
         split_ids=args.split_ids,

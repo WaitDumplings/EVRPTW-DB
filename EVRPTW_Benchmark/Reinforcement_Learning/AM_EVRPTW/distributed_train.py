@@ -54,10 +54,11 @@ def main() -> None:
         with context.local_phase("AM initialization"):
             configure_distributed_contract(args, context)
             require_validation_rollout_steps(args)
-            prepare_training_objective(args)
+            objective_config = prepare_training_objective(args)
             single_gpu.set_seed(args.seed)
             pool = Stage2TaskPool(
                 dataset_path=args.dataset_path, family_root=args.family_root,
+                objective_config=objective_config,
                 scale=args.scale, split_ids=args.split_ids, track_ids=args.track_ids,
                 city_slugs=args.city_slugs, seed=args.seed,
                 representation=args.training_representation, euclidean_manifest=args.euclidean_manifest)

@@ -121,6 +121,9 @@ class EVRPTWVectorEnv(Env):
             self.action_space = spaces.MultiDiscrete([1] * self.n_traj)
 
     def set_instance(self, instance: EVRPTWInstance) -> None:
+        from ..common.objective import select_objective_instance
+
+        instance = select_objective_instance(instance, self.objective_config)
         self.instance = instance
         self.num_customers = int(instance.num_customers)
         self.num_stations = int(instance.num_charging_stations)
@@ -789,6 +792,7 @@ class EVRPTWVectorEnv(Env):
             ),
             "vehicles_started": self.vehicles_started.copy(),
             "objective_config": objective.to_dict(),
+            "objective_distance_source": objective.objective_distance_source,
             "reward_objective_scale": self.reward_objective_scale,
         }
 

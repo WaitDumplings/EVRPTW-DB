@@ -509,6 +509,7 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     )
     pool = Stage2TaskPool(
         dataset_path=args.stage2_dataset_path,
+        objective_config=resolve_objective(overrides.get("objective")),
         family_root=args.stage2_family_root,
         scale=args.stage2_scale,
         split_ids=args.stage2_split_ids or "train",

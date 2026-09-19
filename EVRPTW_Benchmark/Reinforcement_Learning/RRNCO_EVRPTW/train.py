@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from ..common.protocol_entrypoints import run_rrnco_ev
+from ..common.objective import objective_from_args
 from ..common.stage2_data import Stage2TaskPool
 from ..common.training_protocol import (
     add_data_pass_arguments,
@@ -118,6 +119,7 @@ def main() -> None:
     set_seed(args.seed)
     pool = Stage2TaskPool(
         dataset_path=args.dataset_path,
+        objective_config=objective_from_args(args),
         family_root=args.family_root,
         scale=args.scale,
         split_ids=args.split_ids,

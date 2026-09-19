@@ -550,7 +550,8 @@ def resolved_terran_scientific_fields(
     logical_microbatches = max(
         1, int(training.get("logical_microbatches_per_epoch", 1))
     )
-    effective_batch = num_envs * logical_microbatches
+    distributed_world_size = int(training.get("distributed_world_size", 1))
+    effective_batch = num_envs * logical_microbatches * distributed_world_size
     ppo_step_chunk = int(training.get("ppo_step_chunk_size", 0) or 0)
     if ppo_step_chunk <= 0:
         ppo_step_chunk = 0
@@ -671,6 +672,8 @@ def resolved_terran_scientific_fields(
         "training": {
             "epochs": epochs,
             "num_envs_per_gpu": num_envs,
+            **({"distributed_world_size": distributed_world_size}
+               if distributed_world_size > 1 else {}),
             "n_traj": n_traj,
             "rollout_steps": rollout_steps,
             "logical_microbatches_per_epoch": logical_microbatches,
@@ -1861,6 +1864,7 @@ def make_envs(cfg: dict[str, Any], seed: int):
             stream_integrity_mode = STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED
         pool = Stage2TERRANPool(
             dataset_path=_resolve_repo_path(stage2_dataset_path),
+            objective_config=resolve_objective(cfg.get("objective")),
             family_root=_resolve_repo_path(data_cfg.get("stage2_family_root")),
             scale=data_cfg.get("stage2_scale", data_cfg.get("num_customers")),
             split_ids=data_cfg.get("stage2_split_ids", "train"),
@@ -1871,6 +1875,9 @@ def make_envs(cfg: dict[str, Any], seed: int):
             completed_data_passes=int(data_cfg.get("stage2_completed_data_passes", 0)),
             completed_samples=int(data_cfg.get("stage2_completed_samples", 0)),
             record_sample_ids=bool(data_cfg.get("stage2_record_sample_ids", False)),
+            distributed_rank=int(data_cfg.get("distributed_rank", 0)),
+            distributed_world_size=int(train_cfg.get("distributed_world_size", 1)),
+            physical_batch_size=num_envs,
             training_stream_path=_resolve_repo_path(
                 data_cfg.get("stage2_training_stream_path")
             ),
@@ -2088,6 +2095,7 @@ def evaluate_fixed_dataset(
     if eval_cfg.get("eval_scale"):
         pool = Stage2TaskPool(
             dataset_path=eval_path,
+            objective_config=objective_config,
             family_root=_resolve_repo_path(eval_cfg.get("eval_family_root")),
             scale=str(eval_cfg["eval_scale"]),
             split_ids=str(eval_cfg.get("eval_split_ids", "val")),

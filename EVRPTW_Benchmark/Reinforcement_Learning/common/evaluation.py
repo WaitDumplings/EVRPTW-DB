@@ -41,12 +41,15 @@ def select_min_verified_objective(
     count or an old distance-only ranking. Replaying the matrix sums is cheap;
     the full resource verifier is still called in sorted order until one passes.
     """
+    from .objective import select_objective_instance
+
     config = resolve_objective(
         objective_config if objective_config is not None else info.get("objective_config")
     )
     if (objective_config is not None and info.get("objective_config") is not None
             and resolve_objective(info["objective_config"]).to_dict() != config.to_dict()):
         raise ValueError("candidate/environment objective config does not match evaluation objective")
+    instance = select_objective_instance(instance, config)
     if not config.is_cost:
         selected, routes, verification = select_min_verified_distance(instance, info)
         verification = dict(verification)

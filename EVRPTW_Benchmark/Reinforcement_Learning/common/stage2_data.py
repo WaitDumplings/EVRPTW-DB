@@ -26,6 +26,7 @@ from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_Env import (
     EVRPTWVectorEnvFast,
 )
 from .data_pass import pass_batches
+from .objective import select_objective_instance
 from .euclidean import euclidean_instance, load_euclidean_manifest
 from .training_stream import load_training_stream_contract, read_stream_view_ids
 from .terran_synthetic import (
@@ -55,6 +56,7 @@ class Stage2TaskPool:
     cache_size: int = 4
     representation: str = "G"
     euclidean_manifest: str | Path | None = None
+    objective_config: Any = None
 
     def __post_init__(self) -> None:
         self.source_kind = (
@@ -121,6 +123,7 @@ class Stage2TaskPool:
             )
             if self._euclidean is not None:
                 cached = euclidean_instance(cached, self._euclidean)
+            cached = select_objective_instance(cached, self.objective_config)
         self._cache[task.view_id] = cached
         while len(self._cache) > max(0, int(self.cache_size)):
             self._cache.popitem(last=False)

@@ -1,0 +1,41 @@
+{
+  "contract_id": "ablation_dtime_fixed_reference_scale_v1",
+  "objective": {
+    "mode": "energy_vehicle_cost",
+    "profile_id": "rivian_energy_vehicle_cost_v2",
+    "electricity_price_usd_per_kwh": 0.39,
+    "consumption_kwh_per_km": 0.38910505836575876,
+    "vehicle_fixed_cost_usd": 413.6331536717643,
+    "objective_distance_source": "running_time_path_distance_km"
+  },
+  "scales": {
+    "Cus100": {
+      "failure_base": 4.913082471598237,
+      "objective_scale": 432.7147451224062,
+      "unserved_coefficient": 1.0
+    },
+    "Cus1000": {
+      "failure_base": 3.0482759351224384,
+      "objective_scale": 8116.152780908988,
+      "unserved_coefficient": 1.0
+    },
+    "Cus50": {
+      "failure_base": 3.0392953581806426,
+      "objective_scale": 427.5975425080555,
+      "unserved_coefficient": 1.0
+    },
+    "Cus500": {
+      "failure_base": 3.21013867342889,
+      "objective_scale": 4238.927542618743,
+      "unserved_coefficient": 1.0
+    }
+  },
+  "schema": "drl_reward_contract_v1",
+  "normalization_provenance": {
+    "policy": "retain prior training-only numerical normalizers as fixed pilot hyperparameters; not recalibrated on D_time",
+    "source_contract_id": "drl_energy_vehicle_reference_scale_v3",
+    "source_sha256": "21105b1bcd92ffe4574611cc33c3949e7b7239b0b5ee13ad884efe0e65d73465",
+    "test_or_val_used": false
+  },
+  "sha256": "5e7276f545f7cb92cc653488daea9e9caf0c2133fde51f3ddd70d6e205573968"
+}

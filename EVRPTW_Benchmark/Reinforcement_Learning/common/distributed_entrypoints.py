@@ -62,10 +62,11 @@ def run_distributed_adapter(*, args, method, single_seed, prepare_method, build_
             prepare_method(args)
             configure_distributed_contract(args, context, method=method)
             require_validation_rollout_steps(args)
-            prepare_training_objective(args)
+            objective_config = prepare_training_objective(args)
             single_seed(args.seed)
             pool = Stage2TaskPool(
                 dataset_path=args.dataset_path, family_root=args.family_root,
+                objective_config=objective_config,
                 scale=args.scale, split_ids=args.split_ids, track_ids=args.track_ids,
                 city_slugs=args.city_slugs, seed=args.seed,
                 cache_size=args.instance_cache_size,

@@ -1,5 +1,11 @@
 # Electricity and vehicle-dispatch objective — v1
 
+> Historical v1 contract. The `ablation` branch's new final runs use the v2
+> monetary coefficients and explicitly price `running_time_path_distance_km`
+> (`D_time`); see [the final matrix contract](EVRPTW_Env/README.md#final-d_time-contract)
+> and the versioned configurations in `scripts/ablation_final/configs`. The text
+> below records the earlier v1 runs; it does not define those new experiments.
+
 This is the active objective for fresh AM-EVRPTW, EVRPTW-RL, DRL-TS and TERRAN
 training in the formal RQ queues. It supersedes the distance-only objective for
 these new runs, not the historical results or the physical dataset contract.

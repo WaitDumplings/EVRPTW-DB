@@ -69,7 +69,7 @@ from solver import ALNS_Solver
 
 
 SOLVER_NAME = "alns_stage2_anytime"
-ALGORITHM_PROFILE_ID = "alns_stage2_cost_operators_v3"
+ALGORITHM_PROFILE_ID = "alns_stage2_cost_operators_v4"
 
 
 SUMMARY_FIELDNAMES = [

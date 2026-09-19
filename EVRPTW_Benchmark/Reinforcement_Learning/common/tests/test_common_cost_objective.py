@@ -196,11 +196,12 @@ def test_cost_selection_skips_cheaper_environment_success_that_fails_verifier(in
     assert verification["passed"]
 
 
-def test_paid_charger_only_trip_and_interior_depot_departures_count_in_replayed_cost():
+def test_paid_charger_only_trip_and_interior_depot_are_rejected_but_keep_diagnostics():
     instance = economic_instance()
-    info = candidate_info([[[0, 3, 0], [0, 1, 0, 2, 0]]])
+    info = candidate_info([[[0, 3, 0], [0, 1, 0, 2, 0]]], distance=[19])
     _, _, verification = select_min_verified_objective(instance, info)
-    assert verification["passed"]
+    assert not verification["passed"]
+    assert not verification["route_verifier_passed"]
     assert verification["vehicles_started"] == 3
     assert verification["objective_distance_km"] == 19
     assert verification["vehicle_cost_usd"] == pytest.approx(3 * 33.56)

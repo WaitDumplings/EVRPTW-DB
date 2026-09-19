@@ -45,7 +45,11 @@ class Stage2TERRANPool:
     stream_integrity_mode: str = STREAM_INTEGRITY_MODE_RUNTIME_REVERIFIED
     representation: str = "G"
     euclidean_manifest: str | Path | None = None
+    objective_config: Any = None
     record_sample_ids: bool = False
+    distributed_rank: int = 0
+    distributed_world_size: int = 1
+    physical_batch_size: int = 1
 
     def __post_init__(self) -> None:
         self._sampled_view_ids: list[str] = []
@@ -60,6 +64,7 @@ class Stage2TERRANPool:
             cache_size=self.cache_size,
             representation=self.representation,
             euclidean_manifest=self.euclidean_manifest,
+            objective_config=self.objective_config,
         )
         if self.stream_integrity_mode not in {
             STREAM_INTEGRITY_MODE_PREVERIFIED,
@@ -142,9 +147,38 @@ class Stage2TERRANPool:
             self._order = seeded_pass_order(
                 len(self.pool), self.seed, self.sample_count // len(self.pool) + 1
             )
+        if (self.distributed_world_size < 1
+                or not 0 <= self.distributed_rank < self.distributed_world_size
+                or self.physical_batch_size < 1):
+            raise ValueError("invalid TERRAN distributed sampler topology")
+        if self.distributed_world_size > 1:
+            if self.sample_count % (self.physical_batch_size * self.distributed_world_size):
+                raise ValueError("distributed sampler must resume at a global physical batch boundary")
+            self.sample_count //= self.distributed_world_size
+            self._distributed_pass = None
         self.region_pool_status = f"stage2_frozen:{Path(self.dataset_path)}"
 
     def sample(self) -> EVRPTWInstance:
+        if self.distributed_world_size > 1:
+            # Local physical batches are disjoint contiguous slices of the SAME
+            # seeded global stream; other ranks' instances are never loaded.
+            group, offset = divmod(self.sample_count, self.physical_batch_size)
+            position = (group * self.physical_batch_size * self.distributed_world_size
+                        + self.distributed_rank * self.physical_batch_size + offset)
+            if self._stream_view_ids is not None:
+                if position >= len(self._stream_view_ids):
+                    raise RuntimeError("TERRAN exhausted the registered training ID stream")
+                task = self._task_by_view_id[self._stream_view_ids[position]]
+            else:
+                data_pass, index = divmod(position, len(self.pool))
+                if self._distributed_pass != data_pass:
+                    self._order = seeded_pass_order(len(self.pool), self.seed, data_pass + 1)
+                    self._distributed_pass = data_pass
+                task = self.pool.tasks[int(self._order[index])]
+            self.sample_count += 1
+            if self.record_sample_ids:
+                self._sampled_view_ids.append(str(task.view_id))
+            return self.pool.instance(task)
         if self._stream_view_ids is not None:
             if self.sample_count >= len(self._stream_view_ids):
                 raise RuntimeError("TERRAN exhausted the registered training ID stream")

@@ -26,6 +26,8 @@ run_frozen_test() {
   fi
 
   # Reuse the validated restore discovery, shard, resume, and timing contract.
+  # The ablation branch's revised candidate rules must not resume old runs.
+  : "${EVRPTW_TEST_RESULTS_ROOT:=EVRPTW_Benchmark/results/ablation_final_nonlearning_dtime}"
   source "${BENCHMARK_SCRIPT_ROOT}/../test_scripts/common.sh"
 
   local test_index="${DATASET_ROOT}/generation_plan/${relative_index}"

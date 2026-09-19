@@ -116,8 +116,8 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> None:
-    args = parse_args()
+def prepare_training(args: argparse.Namespace):
+    """Resolve the shared CLI without starting training or writing outputs."""
     cfg = load_config(args.config)
     overrides: dict[str, Any] = {
         "data": {},
@@ -128,7 +128,8 @@ def main() -> None:
     if getattr(args, "objective_config", None) is not None:
         overrides["objective"] = objective_from_args(args).to_dict()
     else:
-        overrides["objective"] = resolve_objective(cfg.get("objective")).to_dict()
+        args.objective = resolve_objective(cfg.get("objective")).to_dict()
+        overrides["objective"] = objective_from_args(args).to_dict()
     if getattr(args, "reward_contract", None) is not None:
         overrides["reward_contract"] = str(args.reward_contract.resolve())
     if args.mother_board_pool_size is not None:
@@ -238,6 +239,12 @@ def main() -> None:
         overrides["output_dir"] = str(args.output_dir.resolve())
     overrides = {key: value for key, value in overrides.items() if value}
     overrides, protocol_meta = configure_protocol(args, overrides)
+    return cfg, overrides, protocol_meta
+
+
+def main() -> None:
+    args = parse_args()
+    cfg, overrides, protocol_meta = prepare_training(args)
     ckpt = train_from_config(cfg, seed=args.seed, device=args.device, overrides=overrides)
     finalize_protocol(args, ckpt, protocol_meta)
     print(f"Saved final checkpoint: {ckpt}")

@@ -117,3 +117,43 @@ def test_initial_consolidation_declines_more_expensive_nonmetric_merge():
     routes = [[0, 1, 0], [0, 2, 0]]
     constructed = solver._construct_initial_solution(singleton_routes=routes, use_wall_clock_budget=False)
     assert constructed == routes
+
+
+@pytest.mark.parametrize("monetary", [True, False])
+def test_time_named_repair_shortlists_by_usd_in_cost_mode(monetary):
+    solver = make_solver(monetary=monetary, top_k=1)
+    solver.dist_matrix[0, 1] = solver.dist_matrix[1, 0] = 10.0
+    solver.dist_matrix[0, 2] = solver.dist_matrix[2, 1] = 30.0
+    solver.dist_matrix[1, 2] = solver.dist_matrix[2, 0] = 1.0
+    solver.time_matrix[1, 2] = solver.time_matrix[2, 0] = 100.0
+    # Before customer 1 is temporally cheaper; after it is monetarily cheaper.
+    options = solver._all_customer_insertions(
+        [[0, 1, 0]], 2, mode="time", include_new_route=False
+    )
+    assert len(options) == 1
+    assert options[0][1] == ([0, 1, 2, 0] if monetary else [0, 2, 1, 0])
+    if monetary:
+        assert options[0][2] == pytest.approx(-1.2)
+
+
+def test_initial_route_shortlist_uses_insertion_cost_not_nearest_node():
+    solver = make_solver()
+    solver.initial_merge_candidate_limit = 1
+    solver.initial_exact_insertion_limit = 2
+    solver.dist_matrix[0, 1] = solver.dist_matrix[1, 0] = 1.0
+    solver.dist_matrix[0, 2] = solver.dist_matrix[2, 0] = 1000.0
+    solver.dist_matrix[1, 2] = solver.dist_matrix[2, 1] = 10000.0
+    solver.dist_matrix[1, 3] = solver.dist_matrix[3, 1] = 1.0
+    solver.singleton_source = "test_verified_singletons"
+    # Customers 1 and 2 cannot profitably merge. Customer 3 is nearer to 1,
+    # but replacing 2's costly depot arc saves more money.
+    routes = solver._construct_initial_solution(
+        singleton_routes=[[0, 1, 0], [0, 2, 0], [0, 3, 0]],
+        use_wall_clock_budget=False,
+    )
+    assert routes[0] == [0, 1, 0]
+    assert len(routes) == 2
+    assert set(routes[1]) == {0, 2, 3}
+    assert solver.objective_value(routes) < solver.objective_value(
+        [[0, 1, 3, 0], [0, 2, 0]]
+    )
