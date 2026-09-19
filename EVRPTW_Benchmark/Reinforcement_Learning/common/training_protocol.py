@@ -90,11 +90,20 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--validation-candidates", type=int, default=1)
     parser.add_argument("--validation-seed", type=int)
     parser.add_argument(
+        "--validation-rollout-policy",
+        choices=("ceil_1_5", "explicit"),
+        default="ceil_1_5",
+        help=(
+            "Validation horizon policy: ceil_1_5 uses ceil(3/2 * training steps); "
+            "explicit requires a positive integer cap at least as large as training steps."
+        ),
+    )
+    parser.add_argument(
         "--validation-rollout-steps",
         type=int,
         help=(
-            "Validation rollout cap. It must equal ceil(3/2 * "
-            "--training-rollout-steps)."
+            "Validation rollout cap. The default policy requires ceil(3/2 * "
+            "--training-rollout-steps); the explicit policy preserves this exact cap."
         ),
     )
     parser.add_argument("--final-validation-limit", type=int, default=0)
@@ -209,6 +218,17 @@ def resolved_training_signature_from_args(args: Any) -> dict[str, Any]:
         "method_auxiliary_sha256": getattr(args, "method_auxiliary_sha256", None),
         "method_specific": method_fields,
     }
+    # Absence preserves the exact historical signature/checkpoint structure.
+    if _validation_rollout_policy(args) == "explicit":
+        payload["validation_rollout_policy"] = "explicit"
+    # Omit this field entirely for historical single-GPU signatures.
+    if getattr(args, "distributed_training", False):
+        contract = getattr(args, "distributed_contract", None)
+        if not isinstance(contract, dict):
+            raise ValueError("distributed training requires a resolved topology/batch contract")
+        payload["distributed_training"] = json.loads(
+            json.dumps(contract, sort_keys=True, allow_nan=False)
+        )
     for field in path_fields:
         value = getattr(args, field, None)
         payload[field] = str(Path(value).resolve()) if value is not None else None
@@ -368,11 +388,32 @@ def validation_rollout_steps(training_rollout_steps: int) -> int:
     return (numerator + denominator - 1) // denominator
 
 
-def require_validation_rollout_steps(args: argparse.Namespace) -> int:
-    """Resolve and enforce the shared ceil(3/2) validation horizon."""
+def _validation_rollout_policy(args: Any) -> str:
+    policy = getattr(args, "validation_rollout_policy", "ceil_1_5")
+    if policy not in ("ceil_1_5", "explicit"):
+        raise ValueError(f"unsupported validation rollout policy: {policy}")
+    return policy
 
-    expected = validation_rollout_steps(require_training_rollout_steps(args))
+
+def require_validation_rollout_steps(args: argparse.Namespace) -> int:
+    """Resolve the registered validation horizon, preserving the legacy default."""
+
+    training_steps = require_training_rollout_steps(args)
     configured = getattr(args, "validation_rollout_steps", None)
+    if _validation_rollout_policy(args) == "explicit":
+        if configured is None:
+            raise ValueError("explicit validation rollout policy requires --validation-rollout-steps")
+        if (
+            isinstance(configured, bool)
+            or not isinstance(configured, (int, np.integer))
+            or configured <= 0
+        ):
+            raise ValueError("explicit --validation-rollout-steps must be a positive integer")
+        if configured < training_steps:
+            raise ValueError("explicit --validation-rollout-steps must be >= --training-rollout-steps")
+        setattr(args, "validation_rollout_steps", int(configured))
+        return int(configured)
+    expected = validation_rollout_steps(training_steps)
     if configured is not None and int(configured) != expected:
         raise ValueError(
             "--validation-rollout-steps must equal ceil(3/2 * "
@@ -500,6 +541,7 @@ def verified_validation(
     *,
     seed: int,
     objective_config=None,
+    cuda_rng_devices: list[int] | None = None,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     active_objective = resolve_objective(objective_config)
@@ -508,16 +550,24 @@ def verified_validation(
     # repeatable and cannot advance the training RNG stream.  Saving every
     # visible CUDA generator is intentional: ``torch.manual_seed`` seeds all
     # of them, and ``fork_rng`` restores them even when ``solve`` raises.
-    cuda_rng_devices = (
-        list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
-    )
+    explicit_rng_devices = cuda_rng_devices is not None
+    if cuda_rng_devices is None:
+        cuda_rng_devices = (
+            list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+        )
     for index, instance in enumerate(instances):
         instance_seed = int(seed) + index
         # Validation is selection-only. Retaining an autograd graph for every
         # sampled trajectory wastes GPU memory and can make best-of-K OOM even
         # though the corresponding training batch fits.
         with torch.random.fork_rng(devices=cuda_rng_devices, enabled=True):
-            torch.manual_seed(instance_seed)
+            if explicit_rng_devices:
+                # torch.manual_seed would also mutate every un-forked CUDA RNG.
+                torch.random.default_generator.manual_seed(instance_seed)
+                for device_index in cuda_rng_devices:
+                    torch.cuda.default_generators[device_index].manual_seed(instance_seed)
+            else:
+                torch.manual_seed(instance_seed)
             with torch.no_grad():
                 info = solve(instance, instance_seed)
         current_objective = resolve_objective(

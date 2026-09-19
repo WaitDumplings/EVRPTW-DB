@@ -86,3 +86,42 @@ The architecture and training logic above are claims about correspondence to
 the publication.  Numerical equality with the paper is not claimed: the data,
 fleet assumption, node attributes, physical charging model, and directed road
 matrices differ, and the paper does not release all implementation details.
+
+## Optional numerical stability adapter (2026-09-14)
+
+The Cus100 TR17/TR18 investigation found a reproducible saturation failure in
+this reimplementation. In the initial state of one real training instance per
+source, the saved Road step-2 and Euclidean step-3 checkpoints produced context
+and choice projections of approximately 2.3e5–3.1e5. Their `tanh` outputs were
+identical across nodes, and legal-action logits differed by only about 1e-7.
+The encoder gradient for a single-action diagnostic was zero. These are local
+state measurements, not a claim that every state in either full rollout has
+zero gradient. Remote run histories separately showed identical full-precision
+validation costs over 25/28 validation checkpoints.
+
+The opt-in `--graph-aggregation mean` adapter divides the neighboring-node sum
+and the off-diagonal edge-time sum by `max(num_nodes - 1, 1)`. Local/global
+features, recurrent state, learned layers and parameter counts remain the same.
+This prevents repeated neighborhood aggregation from multiplying the input
+scale with graph size. It is a **documented numerical adaptation** of Equation
+(6), which specifies sums; it must not be presented as the unmodified published
+reward/model implementation. Experiments should identify this configuration as
+`EVRPTW-RL (mean-aggregation adaptation)` and retain the original failed-run
+records.
+
+`sum` remains the default for legacy configurations and checkpoints. The
+aggregation mode is recorded in new checkpoint arguments and in the resolved
+training signature, together with its normalizer, Structure2Vec round count and
+`evrptw_rl_structure2vec_mean_v1` architecture identifier for the adapted mode.
+Evaluation reconstructs the mode from the checkpoint. Changing aggregation during resume is rejected. A stable
+experiment starts with fresh parameters and optimizer state; interpreting old
+saturated weights under a different aggregation rule is only a diagnostic
+intervention, not a resumed formal experiment.
+
+The 2080ti_4_2 repair keeps the existing station auxiliary `0.3 * visits / N`,
+shared objective, data splits, seed, logical batch, training stream, trajectory
+count and rollout caps. It does not add station restrictions or tune on the test
+set. Numerical checks include action distinguishability and encoder-gradient
+propagation across multiple states; a finite loss or changing parameter bytes
+alone does not establish useful learning. Short engineering runs are reported
+separately from formal convergence and benchmark performance.

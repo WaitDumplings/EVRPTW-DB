@@ -716,6 +716,16 @@ def train_reinforce_data_passes(
     never need to traverse the full training index. The legacy complete-pass
     mode remains available for old explicit CLI invocations.
     """
+    if getattr(args, "distributed_training", False):
+        from .distributed_protocol import train_distributed_reinforce_data_passes
+        return train_distributed_reinforce_data_passes(
+            method=method, args=args, pool=pool, policy=policy, optimizer=optimizer,
+            make_actor=make_actor, make_baseline=make_baseline,
+            training_cost=training_cost, objective_distance=objective_distance,
+            feasible=feasible, validation_solve=validation_solve,
+            legacy_batch_size=legacy_batch_size, soft_stage_fraction=soft_stage_fraction,
+            soft_stage_end_epoch=soft_stage_end_epoch,
+        )
     reinforce_baseline = getattr(args, "reinforce_baseline", "paper")
     if reinforce_baseline not in {"paper", "leave_one_out"}:
         raise ValueError(f"unsupported REINFORCE baseline: {reinforce_baseline}")

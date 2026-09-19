@@ -46,6 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples-per-instance", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=128)
     parser.add_argument("--structure2vec-rounds", type=int, default=3)
+    parser.add_argument("--graph-aggregation", choices=("sum", "mean"), default="sum",
+                        help="Structure2Vec message aggregation; mean is the explicitly signed size-stable adapter.")
     parser.add_argument("--activation-checkpoint-stride", type=int, default=0, help="Checkpoint every Nth differentiable decoder step; 0 disables recomputation.")
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--max-grad-norm", type=float, default=2.0)
@@ -123,6 +125,29 @@ def _greedy_costs(policy, instances, args) -> np.ndarray:
     return result.training_cost[:, 0].detach().cpu().numpy()
 
 
+def configure_method_fields(args) -> None:
+    if args.activation_checkpoint_stride < 0:
+        raise ValueError("--activation-checkpoint-stride must be nonnegative")
+    fields = dict(getattr(args, "resolved_training_method_fields", None) or {})
+    if args.activation_checkpoint_stride:
+        fields.update({
+            "activation_checkpoint_stride": int(args.activation_checkpoint_stride),
+            "activation_checkpoint_semantics": "nonreentrant_full_recurrent_gradient_rng_preserved",
+        })
+    aggregation = getattr(args, "graph_aggregation", "sum")
+    if aggregation not in {"sum", "mean"}:
+        raise ValueError("--graph-aggregation must be sum or mean")
+    if aggregation == "mean":
+        fields.update({
+            "architecture": "evrptw_rl_structure2vec_mean_v1",
+            "structure2vec_rounds": int(args.structure2vec_rounds),
+            "graph_aggregation": "mean",
+            "graph_aggregation_normalizer": "max(num_nodes_minus_one,1)_excluding_self_edges",
+        })
+    if fields:
+        args.resolved_training_method_fields = fields
+
+
 def main() -> None:
     args = parse_args()
     _configure_station_auxiliary(args)
@@ -144,15 +169,10 @@ def main() -> None:
     policy = EVRPTWRLPolicy(
         embedding_dim=args.embedding_dim,
         structure2vec_rounds=args.structure2vec_rounds,
+        graph_aggregation=args.graph_aggregation,
     ).to(args.device)
-    if args.activation_checkpoint_stride < 0:
-        raise ValueError("--activation-checkpoint-stride must be nonnegative")
+    configure_method_fields(args)
     policy.activation_checkpoint_stride = int(args.activation_checkpoint_stride)
-    if args.activation_checkpoint_stride:
-        args.resolved_training_method_fields = {
-            "activation_checkpoint_stride": int(args.activation_checkpoint_stride),
-            "activation_checkpoint_semantics": "nonreentrant_full_recurrent_gradient_rng_preserved",
-        }
     baseline = deepcopy(policy).eval()
     for parameter in baseline.parameters():
         parameter.requires_grad_(False)

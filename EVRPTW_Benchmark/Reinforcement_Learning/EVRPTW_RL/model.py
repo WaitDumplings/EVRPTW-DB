@@ -43,12 +43,16 @@ class EVRPTWRLPolicy(nn.Module):
         self,
         embedding_dim: int = 128,
         structure2vec_rounds: int = 3,
+        graph_aggregation: str = "sum",
     ) -> None:
         super().__init__()
         if embedding_dim <= 0:
             raise ValueError("embedding_dim must be positive")
         if structure2vec_rounds <= 0:
             raise ValueError("structure2vec_rounds must be positive")
+        if graph_aggregation not in {"sum", "mean"}:
+            raise ValueError("graph_aggregation must be sum or mean")
+        self.graph_aggregation = graph_aggregation
         self.embedding_dim = int(embedding_dim)
         self.structure2vec_rounds = int(structure2vec_rounds)
 
@@ -115,6 +119,10 @@ class EVRPTWRLPolicy(nn.Module):
         embedding = local_hat
         for _ in range(self.structure2vec_rounds):
             neighbor_sum = embedding.sum(dim=2, keepdim=True) - embedding
+            if self.graph_aggregation == "mean":
+                # Complete-graph mean messages avoid O(N) amplification at
+                # every Structure2Vec round. Keep the legacy sum path exact.
+                neighbor_sum = neighbor_sum / max(num_nodes - 1, 1)
             embedding = torch.relu(
                 local_hat
                 + global_hat
@@ -173,7 +181,11 @@ class EVRPTWRLPolicy(nn.Module):
         edge_time = _tensor(normalized_travel_time, self.device).float()
         if edge_time.shape != (batch_size, num_nodes, num_nodes):
             raise ValueError("normalized travel-time matrix has an invalid shape")
-        edge_row_sum = edge_time.sum(dim=-1)[:, None, :, None]
+        edge_row_sum = edge_time.sum(dim=-1)
+        if self.graph_aggregation == "mean":
+            # Self edges are absent from the neighborhood, including N=1.
+            edge_row_sum = (edge_row_sum - edge_time.diagonal(dim1=-2, dim2=-1)) / max(num_nodes - 1, 1)
+        edge_row_sum = edge_row_sum[:, None, :, None]
         edge_message = torch.relu(edge_row_sum * self.edge_direction)
         return self.edge_projection(edge_message)
 

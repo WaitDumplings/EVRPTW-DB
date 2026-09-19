@@ -42,4 +42,21 @@ explicitly documented unimplemented paper option.
 
 Every selected route is replayed with the same independent verifier used for
 the exact and metaheuristic baselines.  Training reward is not an evaluation
-metric; the reported objective is physical directed-road distance.
+metric; the reported objective follows the frozen objective profile. The
+Cus100 repair uses verified electricity plus vehicle fixed cost; its station
+visit auxiliary is used only for training. Legacy distance profiles remain
+available.
+
+### Cus100 numerical stability repair
+
+For the opt-in 2080ti_4_2 TR17/TR18 repair, use `--graph-aggregation mean`.
+Legacy/default `sum` is preserved. The mean mode normalizes both neighbor and
+edge aggregation by node degree to address the observed attention saturation;
+it adds no learned layers. Its difference from the published sum equation is
+recorded in [ADAPTATION.md](ADAPTATION.md).
+
+Start a new experiment for the changed aggregation, and retain its explicit
+configuration when evaluating its checkpoint. The repair deployment is
+[`scripts/cus100_20260911/2080ti_4_2/evrptw_rl_stable.sh`](../scripts/cus100_20260911/2080ti_4_2/evrptw_rl_stable.sh).
+It targets only TR17/TR18 in new output directories, first checking useful
+numerical behavior and GPU memory before starting fresh formal training.

@@ -31,8 +31,8 @@ from EVRPTW_Benchmark.Reinforcement_Learning.EVRPTW_RL.rollout import (
 )
 
 
-def _policy() -> EVRPTWRLPolicy:
-    return EVRPTWRLPolicy(embedding_dim=32, structure2vec_rounds=2)
+def _policy(graph_aggregation="sum") -> EVRPTWRLPolicy:
+    return EVRPTWRLPolicy(embedding_dim=32, structure2vec_rounds=2, graph_aggregation=graph_aggregation)
 
 
 def test_logits_respect_mask_and_recurrent_shape() -> None:
@@ -129,11 +129,12 @@ def test_evrptw_rl_normalization_and_reward_match_adapter_contract() -> None:
 
 
 @pytest.mark.parametrize("training", [False, True])
+@pytest.mark.parametrize("graph_aggregation", ["sum", "mean"])
 def test_static_cache_preserves_dynamic_logits_recurrence_and_gradients(
-    training: bool,
+    training: bool, graph_aggregation: str,
 ) -> None:
     torch.manual_seed(131)
-    policy = _policy().train(training)
+    policy = _policy(graph_aggregation).train(training)
     reference = deepcopy(policy)
     policy.load_state_dict(reference.state_dict(), strict=True)
     original_keys = tuple(policy.state_dict())
@@ -241,9 +242,10 @@ def test_cost_only_rollout_preserves_sampling_and_skips_unused_work(
 
 
 @pytest.mark.parametrize("stride", [1, 2, 3])
-def test_activation_checkpoint_preserves_rollout_recurrence_gradients_and_rng(stride: int) -> None:
+@pytest.mark.parametrize("graph_aggregation", ["sum", "mean"])
+def test_activation_checkpoint_preserves_rollout_recurrence_gradients_and_rng(stride: int, graph_aggregation: str) -> None:
     torch.manual_seed(181)
-    reference = _policy().train()
+    reference = _policy(graph_aggregation).train()
     active = deepcopy(reference)
     active.activation_checkpoint_stride = stride
     assert deepcopy(active).activation_checkpoint_stride == stride

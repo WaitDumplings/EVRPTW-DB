@@ -1,0 +1,956 @@
+{
+  "schema": "cus500_dual_calibration_v1",
+  "date": "2026-09-13",
+  "hardware": "RTX 2080 Ti 11 GiB, local physical GPU 0/1",
+  "target_process_memory_gib": [
+    9.5,
+    10.3
+  ],
+  "memory_sampling": "NVIDIA-SMI compute-process memory sampled approximately every 0.5 seconds; PyTorch allocator maxima also in training logs",
+  "formal_training_started": false,
+  "runs": {
+    "rrnco": {
+      "batch_per_gpu": 22,
+      "global_batch": 44,
+      "updates": 6,
+      "soft_end": 0,
+      "exit_code": 0,
+      "wall_seconds": 429.597689548973,
+      "peak_process_mib": {
+        "0": 9818,
+        "1": 9818
+      },
+      "peak_process_gib": {
+        "0": 9.587890625,
+        "1": 9.587890625
+      },
+      "peak_host_rss_gib": {
+        "0": 6.832523345947266,
+        "1": 6.69696044921875
+      },
+      "raw_output_relative": "EVRPTW_Benchmark/results/cus500_dual_20260913/profiling/rrnco_dual_b22_u6_soft0_1789337415",
+      "training_steps": 1700,
+      "validation_steps": 2550,
+      "n_traj": 30,
+      "validation_limit": 10,
+      "environment": {
+        "conda_environment": "base",
+        "cuda_visible_devices_inherited": null,
+        "host_memory": {
+          "MemAvailable_gib": 236.95851135253906,
+          "MemTotal_gib": 251.52865600585938
+        },
+        "instance_cache_size_per_rank": 256,
+        "python": "/home/npg/miniconda3/envs/maojie/bin/python",
+        "python_version": "3.11.13 (main, Jun  5 2025, 13:12:00) [GCC 11.2.0]",
+        "torch_cuda": "12.1",
+        "versions": {
+          "gymnasium": "1.3.0",
+          "numba": "0.64.0",
+          "numpy": "2.3.5",
+          "pandas": "2.3.3",
+          "pyarrow": "24.0.0",
+          "scipy": "1.17.0",
+          "torch": "2.5.1+cu121"
+        }
+      },
+      "source_sha256_at_launch": "5c276144c62c91fa24d4c6bc6b85a351e9cfe0d3283d4efcbcdd3327a2630b9c",
+      "training_stage_counts": {
+        "soft": 0,
+        "hard": 6
+      },
+      "epoch_seconds": [
+        68.46961957297754,
+        70.45573759404942,
+        67.94248099904507,
+        60.34325220796745,
+        56.24804915301502,
+        46.173187211039476
+      ],
+      "validation": [
+        {
+          "logical_epoch": 3,
+          "instances": 10,
+          "complete_and_feasible": 10,
+          "mean_verified_cost_usd": 14744.205618763775,
+          "validation_wall_time_s": 15.921951983007602,
+          "validation_shards": 2
+        },
+        {
+          "logical_epoch": 6,
+          "instances": 10,
+          "complete_and_feasible": 10,
+          "mean_verified_cost_usd": 5873.191085024947,
+          "validation_wall_time_s": 9.443376814946532,
+          "validation_shards": 2
+        }
+      ],
+      "checkpoint_audit": {
+        "all_model_tensors_finite": true,
+        "audit_device": "cpu",
+        "changed_parameter_tensor_count": 572,
+        "customer_exposures": 132000,
+        "epochs_checked": [
+          3,
+          6
+        ],
+        "global_effective_batch": 44,
+        "global_optimizer_updates": 6,
+        "latest_model_optimizer_equal_e6": true,
+        "metadata_contract_checks": "RR full/stable/nearest/temp5/chunk32/relationcheckpoint/LOO/decodercheckpoint1/cache256 all passed",
+        "parameter_delta_l2_e3_to_e6": 0.26833439157725797,
+        "parameter_tensor_count": 572,
+        "rank_cuda_rng_distinct": true,
+        "rank_rng_state_count": 2,
+        "rank_shards": [
+          {
+            "epoch": 1,
+            "matches_global_stream": true,
+            "rank_counts": [
+              22,
+              22
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 2,
+            "matches_global_stream": true,
+            "rank_counts": [
+              22,
+              22
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 3,
+            "matches_global_stream": true,
+            "rank_counts": [
+              22,
+              22
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 4,
+            "matches_global_stream": true,
+            "rank_counts": [
+              22,
+              22
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 5,
+            "matches_global_stream": true,
+            "rank_counts": [
+              22,
+              22
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 6,
+            "matches_global_stream": true,
+            "rank_counts": [
+              22,
+              22
+            ],
+            "shared_view_ids": 0
+          }
+        ],
+        "run": "/data/Maojie/ICLR/cus500-dual-models/EVRPTW_Benchmark/results/cus500_dual_20260913/profiling/rrnco_dual_b22_u6_soft0_1789337415/runs/rrnco_disposable_nccl",
+        "schema": "cus500_distributed_engineering_checkpoint_audit_v1",
+        "scientific_scope": "six-update engineering smoke with ten validation instances; not a full training or model quality comparison",
+        "selected_aliases": {
+          "best.ckpt": {
+            "byte_equal": true,
+            "epoch_artifact": "checkpoint_epoch_0006.pt"
+          },
+          "best_overall.ckpt": {
+            "byte_equal": true,
+            "epoch_artifact": "checkpoint_epoch_0006.pt"
+          },
+          "best_within_5000.ckpt": {
+            "byte_equal": true,
+            "epoch_artifact": "checkpoint_epoch_0003.pt"
+          },
+          "checkpoint_selected.pt": {
+            "byte_equal": true,
+            "epoch_artifact": "checkpoint_epoch_0006.pt"
+          }
+        },
+        "selected_validation_epoch": 6,
+        "status": "passed",
+        "stream_cursor": 264,
+        "validation_complete_and_feasible": 10,
+        "validation_instances": 10
+      }
+    },
+    "drl_ts": {
+      "batch_per_gpu": 2,
+      "global_batch": 4,
+      "updates": 12,
+      "soft_end": 6,
+      "exit_code": 0,
+      "wall_seconds": 139.75846036407165,
+      "peak_process_mib": {
+        "0": 9508,
+        "1": 9508
+      },
+      "peak_process_gib": {
+        "0": 9.28515625,
+        "1": 9.28515625
+      },
+      "peak_host_rss_gib": {
+        "0": 2.568805694580078,
+        "1": 2.552440643310547
+      },
+      "raw_output_relative": "EVRPTW_Benchmark/results/cus500_dual_20260913/profiling/drl_ts_dual_b2_u12_soft6_1789337845",
+      "training_steps": 1700,
+      "validation_steps": 2550,
+      "n_traj": 30,
+      "validation_limit": 10,
+      "environment": {
+        "conda_environment": "base",
+        "cuda_visible_devices_inherited": null,
+        "host_memory": {
+          "MemAvailable_gib": 237.06618118286133,
+          "MemTotal_gib": 251.52865600585938
+        },
+        "instance_cache_size_per_rank": 256,
+        "python": "/home/npg/miniconda3/envs/maojie/bin/python",
+        "python_version": "3.11.13 (main, Jun  5 2025, 13:12:00) [GCC 11.2.0]",
+        "torch_cuda": "12.1",
+        "versions": {
+          "gymnasium": "1.3.0",
+          "numba": "0.64.0",
+          "numpy": "2.3.5",
+          "pandas": "2.3.3",
+          "pyarrow": "24.0.0",
+          "scipy": "1.17.0",
+          "torch": "2.5.1+cu121"
+        }
+      },
+      "source_sha256_at_launch": "bb2ec8ae438527551ebc4c8e069dd9ccd99bc9c7a5819d93687b91538d7e033c",
+      "training_stage_counts": {
+        "soft": 6,
+        "hard": 6
+      },
+      "epoch_seconds": [
+        8.132414012099616,
+        7.228675269987434,
+        7.660205058986321,
+        7.904684784007259,
+        8.182725250022486,
+        10.20601861400064,
+        8.174076276016422,
+        7.497208056971431,
+        7.416985542979091,
+        7.389360481058247,
+        7.4998143329285085,
+        10.106956869945861
+      ],
+      "validation": [
+        {
+          "logical_epoch": 6,
+          "instances": 10,
+          "complete_and_feasible": 10,
+          "mean_verified_cost_usd": 12962.493876055356,
+          "validation_wall_time_s": 6.236666899989359,
+          "validation_shards": 2
+        },
+        {
+          "logical_epoch": 12,
+          "instances": 10,
+          "complete_and_feasible": 10,
+          "mean_verified_cost_usd": 12879.730562976172,
+          "validation_wall_time_s": 6.09555382700637,
+          "validation_shards": 2
+        }
+      ],
+      "checkpoint_audit": {
+        "all_model_tensors_finite": true,
+        "audit_device": "cpu",
+        "baseline_probes": [
+          {
+            "epoch": 6,
+            "source": "native_adapter",
+            "stage": "soft"
+          },
+          {
+            "epoch": 12,
+            "source": "native_adapter",
+            "stage": "hard"
+          }
+        ],
+        "changed_parameter_tensor_count": 70,
+        "customer_exposures": 24000,
+        "epochs_checked": [
+          6,
+          12
+        ],
+        "global_effective_batch": 4,
+        "global_optimizer_updates": 12,
+        "latest_model_optimizer_equal_e12": true,
+        "metadata_contract_checks": "native DRL-TS/decoderCP1/direct edge indexing/cache256/soft auxiliary/stage contract all passed",
+        "parameter_delta_l2_e6_to_e12": 0.16180575032010594,
+        "parameter_tensor_count": 70,
+        "rank_cuda_rng_distinct": true,
+        "rank_rng_state_count": 2,
+        "rank_shards": [
+          {
+            "epoch": 1,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 2,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 3,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 4,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 5,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 6,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 7,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 8,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 9,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 10,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 11,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          },
+          {
+            "epoch": 12,
+            "matches_global_stream": true,
+            "rank_counts": [
+              2,
+              2
+            ],
+            "shared_view_ids": 0
+          }
+        ],
+        "run": "/data/Maojie/ICLR/cus500-dual-models/EVRPTW_Benchmark/results/cus500_dual_20260913/profiling/drl_ts_dual_b2_u12_soft6_1789337845/runs/drl_ts_disposable_nccl",
+        "schema": "cus500_distributed_engineering_checkpoint_audit_v1",
+        "scientific_scope": "twelve-update engineering smoke; accelerated soft boundary and baseline interval six, ten validation instances; not full training or quality comparison",
+        "selected_aliases": {
+          "best.ckpt": {
+            "byte_equal": true,
+            "epoch_artifact": "checkpoint_epoch_0012.pt"
+          },
+          "best_overall.ckpt": {
+            "byte_equal": true,
+            "epoch_artifact": "checkpoint_epoch_0012.pt"
+          },
+          "best_within_5000.ckpt": {
+            "byte_equal": true,
+            "epoch_artifact": "checkpoint_epoch_0006.pt"
+          },
+          "checkpoint_selected.pt": {
+            "byte_equal": true,
+            "epoch_artifact": "checkpoint_epoch_0012.pt"
+          }
+        },
+        "selected_validation_epoch": 12,
+        "status": "passed",
+        "stream_cursor": 48,
+        "training_stage_sequence": [
+          "soft",
+          "soft",
+          "soft",
+          "soft",
+          "soft",
+          "soft",
+          "hard",
+          "hard",
+          "hard",
+          "hard",
+          "hard",
+          "hard"
+        ],
+        "validation_complete_and_feasible_per_checkpoint": [
+          10,
+          10
+        ],
+        "validation_epochs": [
+          6,
+          12
+        ],
+        "validation_hard_constraint_evidence": {
+          "callback_soft_argument_literal": false,
+          "callback_source_sha256": "d7ef7ec6f9a2429b89a25f72487f7a426bca5751c19b7825cf3ead21a012cb97",
+          "independent_strict_verifier_passed_epochs": [
+            6,
+            12
+          ]
+        },
+        "validation_instances_per_checkpoint": 10
+      }
+    }
+  },
+  "stream_audit": {
+    "schema": "cus500_dual_final_stream_audit_v1",
+    "streams": [
+      {
+        "contract": {
+          "allowed_family_ids_sha256": null,
+          "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+          "manifest_sha256": "85e6219537d7f5f0160ac1473d08279404629a44ccfaf17ef493baa78050c3e2",
+          "sample_count": 440000,
+          "scale": "Cus500",
+          "schema": "drl_training_stream_contract_v1",
+          "seed": 1234,
+          "sha256": "2ad688ae84e8ade42b1132d4b5d47dc8c6630e1d07e4ed0e515e7d9af9dbcbdb",
+          "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+          "stream_content_sha256": "82beaa914e841de3f3b276eb7f86529aac54b8dd3ddad261e792bb784d46099c",
+          "stream_schema": "drl_training_id_stream_v3"
+        },
+        "customer_exposure_budget": 220000000,
+        "file_sha256": "1eeb0520c6a9839dd805327744595eb5cc469bcd4aa1c3f7cd3d1749ef7f156a",
+        "global_effective_batch_size": 44,
+        "model": "rrnco",
+        "path": "/data/Maojie/ICLR/cus500-dual-models/EVRPTW_Benchmark/results/cus500_dual_20260913/deployment_cpu_audit/artifacts/streams/road_cus500_seed1234_n440000.parquet",
+        "physical_batch_size": 22,
+        "reuse_identical": true,
+        "training_epochs": 10000,
+        "world_size": 2
+      },
+      {
+        "contract": {
+          "allowed_family_ids_sha256": null,
+          "content_digest_scheme": "sha256_length_prefixed_ordered_view_ids_v1",
+          "manifest_sha256": "844b3a2051d6eb166c3cfef8257e34b310a2e815c3afa5952186d359fea98289",
+          "sample_count": 40000,
+          "scale": "Cus500",
+          "schema": "drl_training_stream_contract_v1",
+          "seed": 1234,
+          "sha256": "33c332524e1459e8da68b2ebf8e7d2c56a75423a4f8d328316de729f1ccae58a",
+          "source_index_sha256": "42b58b6c7e79c3a6438ad51fa8f2573055e01e3fd1fcc01b2edd990921caed56",
+          "stream_content_sha256": "a8590103d8dd54830d15a70335c405f9094c98b41919cbd9e363e9b1e796af38",
+          "stream_schema": "drl_training_id_stream_v3"
+        },
+        "customer_exposure_budget": 20000000,
+        "file_sha256": "47eb5e9b129589450bfef18262ce398490c0fe53ad7fd7789e660cd1e99fd906",
+        "global_effective_batch_size": 4,
+        "model": "drl_ts",
+        "path": "/data/Maojie/ICLR/cus500-dual-models/EVRPTW_Benchmark/results/cus500_dual_20260913/deployment_cpu_audit/artifacts/streams/road_cus500_seed1234_n40000.parquet",
+        "physical_batch_size": 2,
+        "reuse_identical": true,
+        "training_epochs": 10000,
+        "world_size": 2
+      }
+    ]
+  },
+  "cpu_cache_measurement": {
+    "schema": "cus500_cpu_cache_measurement_v1",
+    "time": "2026-09-13T22:07:34.502472+00:00",
+    "pid": 884342,
+    "python": "/home/npg/miniconda3/envs/maojie/bin/python",
+    "cuda_visible_devices": "",
+    "scope": "Fresh CPU-only process; lazy load 250 validation + 256 training instances; no model/GPU initialized",
+    "rss_after_imports": {
+      "VmHWM_bytes": 255844352,
+      "VmRSS_bytes": 255844352
+    },
+    "cache_size_per_pool": 256,
+    "root": "/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823",
+    "validation_pool_init_seconds": 0.15113626408856362,
+    "rss_after_validation_pool_init": {
+      "VmHWM_bytes": 270000128,
+      "VmRSS_bytes": 270000128
+    },
+    "one_validation_instance_ndarrays": {
+      "unique_array_objects": 22,
+      "unique_ndarray_nbytes": 6100532,
+      "unique_backing_storage_nbytes": 6100532,
+      "arrays": [
+        {
+          "field": "instance.depot",
+          "shape": [
+            2
+          ],
+          "dtype": "float32",
+          "nbytes": 8
+        },
+        {
+          "field": "instance.customers",
+          "shape": [
+            500,
+            2
+          ],
+          "dtype": "float32",
+          "nbytes": 4000
+        },
+        {
+          "field": "instance.charging_stations",
+          "shape": [
+            50,
+            2
+          ],
+          "dtype": "float32",
+          "nbytes": 400
+        },
+        {
+          "field": "instance.distance_matrix_km",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.demands_cm3",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.package_counts",
+          "shape": [
+            500
+          ],
+          "dtype": "int32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.service_time_s",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.tw_s",
+          "shape": [
+            500,
+            2
+          ],
+          "dtype": "float32",
+          "nbytes": 4000
+        },
+        {
+          "field": "instance.cs_time_to_depot_s",
+          "shape": [
+            50
+          ],
+          "dtype": "float32",
+          "nbytes": 200
+        },
+        {
+          "field": "instance.raw_travel_time_matrix_s",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.energy_matrix_kwh",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.cs_activation.charging_power_kw",
+          "shape": [
+            50
+          ],
+          "dtype": "float32",
+          "nbytes": 200
+        },
+        {
+          "field": "instance.raw.running_time_path_distance_km",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.raw.distance_path_travel_time_s",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.raw.terminal_parent_indices",
+          "shape": [
+            551
+          ],
+          "dtype": "int32",
+          "nbytes": 2204
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.certificate_service_arrival_time_s",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.return_duration_s",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.requires_charging",
+          "shape": [
+            500
+          ],
+          "dtype": "bool",
+          "nbytes": 500
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.charging_visit_count",
+          "shape": [
+            500
+          ],
+          "dtype": "int16",
+          "nbytes": 1000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.inbound_full_state_terminal_index",
+          "shape": [
+            500
+          ],
+          "dtype": "int32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.first_post_customer_charger_terminal_index",
+          "shape": [
+            500
+          ],
+          "dtype": "int32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.customer_transition_energy_margin_kwh",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        }
+      ]
+    },
+    "validation_250_load_seconds": 5.340791244991124,
+    "rss_after_validation_250": {
+      "VmHWM_bytes": 1838522368,
+      "VmRSS_bytes": 1836425216
+    },
+    "validation_cached_instances": 250,
+    "rss_after_validation_gc": {
+      "VmHWM_bytes": 1838522368,
+      "VmRSS_bytes": 1836425216
+    },
+    "training_pool_init_seconds": 6.0136436419561505,
+    "rss_after_both_pool_init": {
+      "VmHWM_bytes": 1944223744,
+      "VmRSS_bytes": 1938440192
+    },
+    "one_training_instance_ndarrays": {
+      "unique_array_objects": 22,
+      "unique_ndarray_nbytes": 6100532,
+      "unique_backing_storage_nbytes": 6100532,
+      "arrays": [
+        {
+          "field": "instance.depot",
+          "shape": [
+            2
+          ],
+          "dtype": "float32",
+          "nbytes": 8
+        },
+        {
+          "field": "instance.customers",
+          "shape": [
+            500,
+            2
+          ],
+          "dtype": "float32",
+          "nbytes": 4000
+        },
+        {
+          "field": "instance.charging_stations",
+          "shape": [
+            50,
+            2
+          ],
+          "dtype": "float32",
+          "nbytes": 400
+        },
+        {
+          "field": "instance.distance_matrix_km",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.demands_cm3",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.package_counts",
+          "shape": [
+            500
+          ],
+          "dtype": "int32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.service_time_s",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.tw_s",
+          "shape": [
+            500,
+            2
+          ],
+          "dtype": "float32",
+          "nbytes": 4000
+        },
+        {
+          "field": "instance.cs_time_to_depot_s",
+          "shape": [
+            50
+          ],
+          "dtype": "float32",
+          "nbytes": 200
+        },
+        {
+          "field": "instance.raw_travel_time_matrix_s",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.energy_matrix_kwh",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.cs_activation.charging_power_kw",
+          "shape": [
+            50
+          ],
+          "dtype": "float32",
+          "nbytes": 200
+        },
+        {
+          "field": "instance.raw.running_time_path_distance_km",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.raw.distance_path_travel_time_s",
+          "shape": [
+            551,
+            551
+          ],
+          "dtype": "float32",
+          "nbytes": 1214404
+        },
+        {
+          "field": "instance.raw.terminal_parent_indices",
+          "shape": [
+            551
+          ],
+          "dtype": "int32",
+          "nbytes": 2204
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.certificate_service_arrival_time_s",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.return_duration_s",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.requires_charging",
+          "shape": [
+            500
+          ],
+          "dtype": "bool",
+          "nbytes": 500
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.charging_visit_count",
+          "shape": [
+            500
+          ],
+          "dtype": "int16",
+          "nbytes": 1000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.inbound_full_state_terminal_index",
+          "shape": [
+            500
+          ],
+          "dtype": "int32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.first_post_customer_charger_terminal_index",
+          "shape": [
+            500
+          ],
+          "dtype": "int32",
+          "nbytes": 2000
+        },
+        {
+          "field": "instance.raw.feasibility_certificate.customer_transition_energy_margin_kwh",
+          "shape": [
+            500
+          ],
+          "dtype": "float32",
+          "nbytes": 2000
+        }
+      ]
+    },
+    "training_256_load_seconds": 4.8838226849911734,
+    "training_cached_instances": 256,
+    "rss_after_both_caches": {
+      "VmHWM_bytes": 3526508544,
+      "VmRSS_bytes": 3524411392
+    },
+    "rss_after_both_caches_gc": {
+      "VmHWM_bytes": 3526508544,
+      "VmRSS_bytes": 3524411392
+    },
+    "validation_250_cached_lookup_seconds": 0.0001624880824238062,
+    "two_rank_measured_process_rss_extrapolation_gib": 6.564727783203125,
+    "per_rank_cache_and_pool_rss_growth_gib": 3.0440902709960938,
+    "limitations": [
+      "CPU cache/pool memory only; training models, PyTorch tensors, NCCL, verifier work buffers and launcher add memory.",
+      "OS page cache excluded from process RSS; first 250 validation and first 256 training views measured; remote RAM availability/storage speed may differ.",
+      "RSS extrapolation assumes two similar rank processes; it is not a full formal training peak measurement."
+    ]
+  },
+  "validation_limits": "Engineering smoke only: 10 validation instances per checkpoint; formal deployment always uses 500. DRL-TS smoke compresses the soft stage to 6 updates and baseline interval/probe to 6/2; production remains 2500/250/64. Costs here are not convergence or method-comparison results."
+}
