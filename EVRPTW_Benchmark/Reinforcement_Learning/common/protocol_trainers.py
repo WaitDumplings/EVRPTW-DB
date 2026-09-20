@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -64,6 +65,11 @@ def prepare_training_objective(args: Any):
     freeze_resolved_training_signature(args)
     resume = bool(getattr(args, "resume", False))
     warm_start = getattr(args, "warm_start_checkpoint", None)
+    objective_transition = bool(getattr(args, "warm_start_objective_transition", False))
+    if objective_transition and warm_start is None:
+        raise ValueError(
+            "--warm-start-objective-transition requires --warm-start-checkpoint"
+        )
     if resume and warm_start is not None:
         raise ValueError("--resume and --warm-start-checkpoint are mutually exclusive")
     formal = (
@@ -496,6 +502,8 @@ def _save_checkpoint(
             args, "soft_stage_contract_snapshot", None
         ),
     }
+    if getattr(args, "warm_start_provenance", None) is not None:
+        payload["warm_start_provenance"] = args.warm_start_provenance
     payload.update(extra or {})
     temporary = path.with_suffix(path.suffix + ".tmp")
     torch.save(payload, temporary)
@@ -579,6 +587,55 @@ def _load_checkpoint(
     return payload
 
 
+# These policy settings can change predictions without changing tensor shapes.
+# Runtime memory controls and training/baseline schedules deliberately stay out.
+_WARM_START_ARCHITECTURE_FIELDS = {
+    "AM-EVRPTW": ("embedding_dim", "n_encode_layers", "n_heads", "tanh_clipping"),
+    "EVRPTW-RL": ("embedding_dim", "structure2vec_rounds", "graph_aggregation"),
+    "DRL-TS": (
+        "embedding_dim", "n_encode_layers", "n_heads", "nearest_neighbors",
+        "tanh_clipping",
+    ),
+    "RRNCO-EV": (
+        "embedding_dim", "n_encode_layers", "n_heads", "feedforward_hidden",
+        "distance_sample_size", "tanh_clipping", "graph_mode", "aft_mode",
+        "distance_sampling", "relation_temperature",
+    ),
+}
+
+
+def _assert_warm_start_architecture(
+    method: str, saved_args: dict[str, Any], requested_args: Any,
+) -> None:
+    for field in _WARM_START_ARCHITECTURE_FIELDS.get(method, ()):
+        requested = getattr(requested_args, field, None)
+        if requested is None:
+            continue
+        saved = saved_args.get(field)
+        if saved != requested:
+            raise ValueError(
+                f"warm-start architecture {field} mismatch: {saved!r} != {requested!r}"
+            )
+    saved_fields = saved_args.get("resolved_training_method_fields") or {}
+    requested_fields = getattr(requested_args, "resolved_training_method_fields", None) or {}
+    if requested_fields.get("architecture") is not None:
+        if saved_fields.get("architecture") != requested_fields["architecture"]:
+            raise ValueError("warm-start architecture identifier mismatch")
+
+
+def _source_training_stage(payload: dict[str, Any]) -> str | None:
+    if payload.get("method") != "DRL-TS":
+        return "hard"
+    contract = payload.get("soft_stage_contract") or {}
+    end_epoch = contract.get("resolved_soft_stage_end_epoch")
+    if end_epoch is not None and payload.get("logical_epoch") is not None:
+        return "soft" if int(payload["logical_epoch"]) <= int(end_epoch) else "hard"
+    end_pass = contract.get("resolved_soft_stage_end_data_pass")
+    if end_pass is not None and payload.get("data_pass") is not None:
+        return "soft" if int(payload["data_pass"]) <= int(end_pass) else "hard"
+    return None
+
+
 def _load_warm_start_checkpoint(
     path: Path,
     *,
@@ -588,19 +645,32 @@ def _load_warm_start_checkpoint(
     objective_config: Any,
     contract_args: Any,
 ) -> dict[str, Any]:
-    """Load compatible model weights while resetting all training state."""
+    """Import policy weights only; objective transitions require explicit opt-in.
 
-    policy_device = getattr(policy, "device", None)
-    if policy_device is None:
-        policy_device = next(policy.parameters()).device
-    payload = torch.load(path, map_location=policy_device, weights_only=False)
+    Source optimizer, baseline, reward/environment settings and counters are never
+    installed. CPU loading also avoids allocating the unused optimizer on GPU.
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+        stream.seek(0)
+        payload = torch.load(stream, map_location="cpu", weights_only=False)
     if payload.get("method") != method:
         raise ValueError(
             f"warm-start method mismatch: {payload.get('method')!r} != {method!r}"
         )
-    objective_from_checkpoint(payload, override=objective_config)
-    assert_checkpoint_reward_contract(payload, contract_args)
-    _assert_checkpoint_soft_stage_contract(payload, contract_args)
+    transition = bool(getattr(contract_args, "warm_start_objective_transition", False))
+    source_objective = objective_from_checkpoint(payload)
+    if not transition:
+        objective_from_checkpoint(payload, override=objective_config)
+        assert_checkpoint_reward_contract(payload, contract_args)
+        _assert_checkpoint_soft_stage_contract(payload, contract_args)
+    elif method == "DRL-TS" and getattr(contract_args, "soft_stage_end_epoch", None) is None:
+        raise ValueError(
+            "DRL-TS objective transition requires explicit --soft-stage-end-epoch; "
+            "use 0 to continue a pretrained hard stage"
+        )
     expected_auxiliary_method = getattr(
         contract_args, "method_auxiliary_method", None
     )
@@ -620,18 +690,26 @@ def _load_warm_start_checkpoint(
             raise ValueError(
                 f"warm-start {field} mismatch: {saved!r} != {requested!r}"
             )
+    _assert_warm_start_architecture(method, saved_args, contract_args)
     state_dict = payload.get("model")
     if not isinstance(state_dict, dict):
         raise ValueError("warm-start checkpoint is missing model weights")
-    policy.load_state_dict(state_dict)
-    baseline.load_state_dict(policy.state_dict())
+    policy.load_state_dict(state_dict, strict=True)
+    baseline.load_state_dict(policy.state_dict(), strict=True)
     return {
         "checkpoint": str(path.resolve()),
+        "checkpoint_sha256": digest.hexdigest(),
         "method": payload.get("method"),
+        "objective_transition": transition,
+        "source_objective_config": source_objective.to_dict(),
+        "source_reward_contract": payload.get("reward_contract"),
+        "source_soft_stage_contract": payload.get("soft_stage_contract"),
+        "source_training_stage": _source_training_stage(payload),
         "source_logical_epoch": int(payload.get("logical_epoch", 0) or 0),
         "source_data_pass": int(payload.get("data_pass", 0) or 0),
         "optimizer_reset": True,
         "epoch_reset": True,
+        "sample_counters_reset": True,
         "baseline_history_reset": True,
         "validation_state_reset": True,
         "early_stop_state_reset": True,
@@ -882,6 +960,11 @@ def train_reinforce_data_passes(
             optimizer_weight_decay=getattr(args, "weight_decay", None),
             reward_contract_args=args,
         )
+        warm_start_provenance = resume_extra.get("warm_start_provenance") or (
+            resume_extra.get("args", {}).get("warm_start_provenance")
+        )
+        if warm_start_provenance is not None:
+            args.warm_start_provenance = warm_start_provenance
         if int(resume_extra.get("data_pass", -1)) != state.completed_data_passes:
             raise ValueError("checkpoint and data-pass state disagree")
     elif checkpoint.exists():
@@ -956,15 +1039,19 @@ def train_reinforce_data_passes(
     # A fixed-update run is one logical pass even while an interrupted or
     # explicitly extended budget has completed_data_passes=1 from its previous
     # terminal checkpoint. Resume from logical_epoch, not from the pass flag.
-    first_pass = (
-        1 if fixed_epochs is not None else state.completed_data_passes + 1
-    )
+    if fixed_epochs is not None:
+        first_pass = 1 if completed_logical_epochs < fixed_epochs else total_passes + 1
+    else:
+        first_pass = state.completed_data_passes + 1
     for data_pass in range(first_pass, total_passes + 1):
         pass_started = time.perf_counter()
         soft = bool(soft_stage_fraction and data_pass <= int(total_passes * soft_stage_fraction))
         training_stage = "soft" if soft else "hard"
-        if fixed_epochs is not None and (soft_stage_fraction or soft_stage_end_epoch is not None):
-            training_stage = "mixed"
+        if fixed_epochs is not None and soft_stage_contract is not None:
+            boundary = int(soft_stage_contract["resolved_soft_stage_end_epoch"])
+            training_stage = (
+                "hard" if boundary == 0 else "soft" if boundary >= fixed_epochs else "mixed"
+            )
         sums = {key: 0.0 for key in ("loss", "cost", "distance", "objective", "vehicles_started", "feasible")}
         instances_seen = 0
         transition_count = 0

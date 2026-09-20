@@ -1435,7 +1435,30 @@ def validate_warm_start_contract(
     saved_cfg = payload.get("config")
     if not isinstance(saved_cfg, dict):
         raise ValueError("TERRAN warm-start checkpoint is missing its frozen config")
-    _validate_task_reward_compatibility(cfg, payload, operation="warm-start")
+    current_protocol = cfg.get("protocol", {})
+    declared = current_protocol.get("warm_start")
+    objective_transition = bool(
+        isinstance(declared, Mapping) and declared.get("objective_transition", False)
+    )
+    if objective_transition:
+        from .protocol import _valid_warm_start_weights_provenance
+
+        if (
+            not _valid_warm_start_weights_provenance(declared)
+            or warm_start_epoch_mode(cfg) != "reset"
+        ):
+            raise ValueError("TERRAN objective-transition provenance requires actor-only reset")
+        if any(
+            config.get("training", {}).get("algorithm") == "stable_cost_v1"
+            for config in (saved_cfg, cfg)
+        ):
+            raise ValueError("TERRAN objective-transition warm start requires the legacy actor")
+        if declared["source_objective"] != objective_from_checkpoint(payload).to_dict():
+            raise ValueError("TERRAN warm-start source objective disagrees with provenance")
+        if declared["target_objective"] != resolve_objective(cfg.get("objective")).to_dict():
+            raise ValueError("TERRAN warm-start target objective disagrees with provenance")
+    else:
+        _validate_task_reward_compatibility(cfg, payload, operation="warm-start")
     if _warm_start_model_signature(saved_cfg) != _warm_start_model_signature(cfg):
         raise ValueError("TERRAN warm-start model architecture mismatch")
     if _warm_start_scale_signature(saved_cfg) != _warm_start_scale_signature(cfg):
@@ -1483,7 +1506,16 @@ def validate_warm_start_contract(
         "source_seed": int(payload["seed"]),
         "source_checkpoint_path": str(source),
         "source_checkpoint_sha256": _sha256_file(source),
-        "model_state_dict_loaded": True,
+        "model_state_dict_loaded": not objective_transition,
+        **({
+            "objective_transition": True,
+            "weights_scope": "actor_only",
+            "actor_state_dict_loaded": True,
+            "critic_state_dict_loaded": False,
+            "critic_reset": True,
+            "source_objective": declared["source_objective"],
+            "target_objective": declared["target_objective"],
+        } if objective_transition else {}),
         "optimizer_state_dict_loaded": False,
         "optimizer_name": "adamw",
         "optimizer_reset": True,
@@ -2587,19 +2619,36 @@ def apply_training_initialization(
     resume_payload: Mapping[str, Any] | None = None,
     warm_start_payload: Mapping[str, Any] | None = None,
     warm_start_mode: str = "continue_global",
+    warm_start_objective_transition: bool = False,
 ) -> int:
     """Load a continuation checkpoint or weights-only initialization."""
 
     if resume_payload is not None and warm_start_payload is not None:
         raise ValueError("resume and weights-only warm start are mutually exclusive")
+    if warm_start_objective_transition and (
+        resume_payload is not None
+        or warm_start_payload is None
+        or warm_start_mode != "reset"
+    ):
+        raise ValueError("TERRAN objective transition requires an actor-only reset warm start")
     if resume_payload is not None:
         agent.load_state_dict(resume_payload["model_state_dict"])
         optimizer.load_state_dict(resume_payload["optimizer_state_dict"])
         return int(resume_payload["epoch"]) + 1
     if warm_start_payload is not None:
-        agent.load_state_dict(warm_start_payload["model_state_dict"], strict=True)
         if optimizer.state:
             raise RuntimeError("TERRAN warm-start AdamW optimizer was not reset")
+        if warm_start_objective_transition:
+            actor_state = {
+                key.removeprefix("backbone."): value
+                for key, value in warm_start_payload["model_state_dict"].items()
+                if key.startswith("backbone.")
+            }
+            # The legacy shared backbone is the complete policy. Its separate
+            # critic head retains the new run's initialization under new returns.
+            agent.backbone.load_state_dict(actor_state, strict=True)
+        else:
+            agent.load_state_dict(warm_start_payload["model_state_dict"], strict=True)
         if warm_start_mode == "reset":
             return 1
         if warm_start_mode == "continue_global":
@@ -2613,6 +2662,8 @@ def apply_training_initialization(
 def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None, overrides: dict[str, Any] | None = None) -> Path:
     cfg = deep_update(cfg, overrides or {})
     if cfg.get("training", {}).get("algorithm") == "stable_cost_v1":
+        if (cfg.get("protocol", {}).get("warm_start") or {}).get("objective_transition"):
+            raise ValueError("TERRAN objective-transition warm start requires the legacy actor")
         from .stable_trainer import train_stable_cost
         return train_stable_cost(cfg, seed=seed, device=device)
     set_seed(seed)
@@ -2793,6 +2844,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         resume_payload=resume_payload,
         warm_start_payload=warm_start_payload,
         warm_start_mode=warm_start_mode,
+        warm_start_objective_transition=bool(
+            (protocol_cfg.get("warm_start") or {}).get("objective_transition", False)
+        ) if warm_start_payload is not None else False,
     )
     if resume_payload is not None:
         del resume_payload

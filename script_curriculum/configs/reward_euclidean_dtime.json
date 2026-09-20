@@ -1,0 +1,26 @@
+{
+  "contract_id": "curriculum_euclidean100_dtime_fixed_reference_v1",
+  "objective": {
+    "mode": "energy_vehicle_cost",
+    "profile_id": "rivian_energy_vehicle_cost_v2",
+    "electricity_price_usd_per_kwh": 0.39,
+    "consumption_kwh_per_km": 0.38910505836575876,
+    "vehicle_fixed_cost_usd": 413.6331536717643,
+    "objective_distance_source": "running_time_path_distance_km"
+  },
+  "scales": {
+    "Cus100": {
+      "objective_scale": 6530.963114223516,
+      "failure_base": 3.371478213719905,
+      "unserved_coefficient": 1.0
+    }
+  },
+  "schema": "drl_reward_contract_v1",
+  "normalization_provenance": {
+    "policy": "retain frozen Euclidean training-only normalizers as fixed hyperparameters; canonical Euclidean D_time equals D_dist",
+    "source_contract_id": "drl_terran_synthetic100_reference_scale_20260911_v1",
+    "source_sha256": "c607cbdb49bcc6641c68b65082b0fba8aa6befa430ddda6c3636584573d527cc",
+    "test_or_val_used": false
+  },
+  "sha256": "0cbc458d9f9613a4ad05a348789fa1da3cff71e0f54bd0df1a19b834c3aee608"
+}

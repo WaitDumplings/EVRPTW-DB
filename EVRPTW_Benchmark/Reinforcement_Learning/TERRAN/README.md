@@ -41,6 +41,25 @@ commit and using `full.sh` separates the new run without rebuilding shared ID
 streams. See the [server restart instructions](../scripts/rq_v1/README.md).
 Explicit legacy configurations retain their historical gamma values.
 
+## Explicit curriculum objective transition
+
+For a legacy TERRAN actor trained under an earlier objective or reward contract,
+use `--warm-start-checkpoint SOURCE --warm-start-objective-transition
+--warm-start-epoch-mode reset` with the new objective, reward contract, and a
+fresh output directory. The single-GPU `TERRAN.train` entry point strictly loads
+the actor backbone and retains a freshly initialized critic head. The optimizer,
+epoch, data cursor, validation history, and early-stop state start fresh.
+`--training-epochs 2000` therefore runs 2000 additional epochs even if the source
+checkpoint is from epoch 3300 or 4200. The source path, SHA256, epoch, seed,
+source/target objectives, actor-only weight scope, and critic reset are recorded
+in checkpoint/run provenance.
+
+Use `configs/stage2_cus100_terran.yaml` for the legacy Cus100 checkpoints;
+objective transitions reject `stable_cost_v1`. Actor architecture, scale, G/E
+representation, and seed still must match. Without the explicit transition flag,
+weights-only warm starts continue to require identical objective/reward semantics
+and load both actor and critic. Resume retains its existing strict contract.
+
 ## Components
 
 - `models/`: migrated TERRAN attention backbone, actor, and critic.

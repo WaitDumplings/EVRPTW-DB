@@ -131,6 +131,15 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
             "state are reset; this is intentionally different from --resume."
         ),
     )
+    parser.add_argument(
+        "--warm-start-objective-transition",
+        action="store_true",
+        help=(
+            "Explicitly initialize compatible policy weights for a new objective "
+            "and reward contract. Requires --warm-start-checkpoint; all training "
+            "state resets and DRL-TS requires an explicit soft-stage boundary."
+        ),
+    )
     parser.add_argument("--max-batches-per-pass", type=int)
     parser.add_argument("--pilot-mode", action="store_true")
 

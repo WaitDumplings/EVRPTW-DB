@@ -105,13 +105,14 @@ def test_cli_exposes_weights_only_warm_start_and_rejects_resume_combination(
         train.parse_args()
 
 
+@pytest.mark.parametrize("objective_transition", [False, True])
 def test_protocol_counts_only_post_source_stream_and_global_validations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, objective_transition: bool,
 ) -> None:
     checkpoint = tmp_path / "source.pt"
     torch.save(
         {
-            "epoch": 1250,
+            "epoch": 4200 if objective_transition else 1250,
             "seed": 1234,
             "model_state_dict": {"weight": torch.ones(1)},
         },
@@ -126,51 +127,52 @@ def test_protocol_counts_only_post_source_stream_and_global_validations(
     monkeypatch.setattr(
         protocol,
         "read_stream_view_ids",
-        lambda _path: ["view"] * 35_000,
+        lambda _path: ["view"] * (768_000 if objective_transition else 35_000),
     )
     monkeypatch.setattr(
         protocol, "training_stream_contract_from_args", lambda *_args, **_kwargs: None
     )
     args = SimpleNamespace(
-        training_epochs=10_000,
+        training_epochs=2_000 if objective_transition else 10_000,
         data_passes=None,
         stage2_dataset_path=Path("train.parquet"),
         stage2_family_root=Path("families"),
-        stage2_scale="Cus1000",
+        stage2_scale="Cus100" if objective_transition else "Cus1000",
         stage2_split_ids="train",
         stage2_track_ids="train",
         output_dir=tmp_path / "fresh-output",
         resume=False,
         warm_start_checkpoint=checkpoint,
-        warm_start_epoch_mode="continue_global",
+        warm_start_epoch_mode="reset" if objective_transition else "continue_global",
+        warm_start_objective_transition=objective_transition,
         protocol_id="warm-start-test",
         terminal_success_bonus=None,
-        num_envs_per_gpu=4,
-        physical_batch_size=4,
-        effective_batch_size=4,
+        num_envs_per_gpu=384 if objective_transition else 4,
+        physical_batch_size=384 if objective_transition else 4,
+        effective_batch_size=384 if objective_transition else 4,
         training_rollout_steps=1250,
         validation_rollout_steps=1875,
         seed=1234,
         max_batches_per_pass=None,
         validation_every_passes=5,
-        validation_every_epochs=250,
-        minimum_training_epochs=5000,
+        validation_every_epochs=100 if objective_transition else 250,
+        minimum_training_epochs=2000 if objective_transition else 5000,
         post_minimum_validation_every_epochs=50,
-        validation_checkpoints=115,
-        early_stop_patience_validations=10,
-        early_stop_start_epoch=5000,
+        validation_checkpoints=20 if objective_transition else 115,
+        early_stop_patience_validations=0 if objective_transition else 10,
+        early_stop_start_epoch=0 if objective_transition else 5000,
         validation_dataset_path=Path("val.parquet"),
         validation_family_root=Path("families"),
         validation_limit=500,
         validation_decode_type="sampling",
-        validation_candidates=100,
+        validation_candidates=30 if objective_transition else 100,
         validation_seed=77,
         training_representation="G",
         euclidean_manifest=None,
         pilot_mode=False,
         training_stream_path=Path("stream.parquet"),
         training_stream_contract_sha256=None,
-        customer_exposure_budget=35_000_000,
+        customer_exposure_budget=76_800_000 if objective_transition else 35_000_000,
         final_validation_limit=0,
         exposure_checkpoints="",
         gpu_hour_checkpoints="",
@@ -178,6 +180,17 @@ def test_protocol_counts_only_post_source_stream_and_global_validations(
 
     configured, meta = protocol.configure_protocol(args, {})
 
+    if objective_transition:
+        assert configured["training"]["epochs"] == 2000
+        assert configured["protocol"]["planned_training_epochs"] == 2000
+        assert configured["protocol"]["warm_start_epoch_offset"] == 0
+        assert configured["training"]["validation_epochs"] == list(range(100, 2001, 100))
+        assert configured["evaluation"]["eval_limit"] == 500
+        assert configured["evaluation"]["eval_n_traj"] == 30
+        assert configured["protocol"]["completed_samples"] == 0
+        assert configured["protocol"]["warm_start"]["critic_reset"] is True
+        assert meta["planned_training_epochs"] == 2000
+        return
     assert configured["training"]["epochs"] == 10_000
     assert configured["protocol"]["planned_training_epochs"] == 8750
     assert configured["protocol"]["epochs_per_pass"] == 8750
@@ -381,4 +394,124 @@ def test_resume_accepts_only_legacy_continue_global_signature_enrichment() -> No
     with pytest.raises(ValueError, match="resolved training signature mismatch"):
         trainer._validate_resume_training_signature(
             changed_cfg, payload, current_seed=1234
+        )
+
+
+@pytest.mark.parametrize("extra", [
+    [], ["--warm-start-checkpoint", "source.pt", "--resume"],
+    ["--warm-start-checkpoint", "source.pt", "--warm-start-epoch-mode", "continue_global"],
+])
+def test_objective_transition_cli_requires_fresh_reset(monkeypatch, extra) -> None:
+    monkeypatch.setattr(sys, "argv", [
+        "terran-train", "--config", "config.yaml", "--seed", "1234",
+        "--warm-start-objective-transition", *extra,
+    ])
+    with pytest.raises(SystemExit):
+        train.parse_args()
+
+
+def _transition_fixture(tmp_path):
+    source_cfg = _semantic_config()
+    source_cfg["objective"] = {
+        "mode": "energy_vehicle_cost", "profile_id": "source-cost",
+    }
+    source = trainer.Agent(**source_cfg["model"], device="cpu")
+    payload = {
+        "epoch": 4200, "seed": 1234, "config": source_cfg,
+        "model_state_dict": source.state_dict(),
+        "optimizer_state_dict": {"state": {"must_not_be_loaded": True}},
+    }
+    checkpoint = tmp_path / "source.ckpt"
+    torch.save(payload, checkpoint)
+    target_cfg = deepcopy(source_cfg)
+    target_cfg["training"].update(epochs=2000, reward_contract_id="new-cost-contract")
+    target_cfg["objective"] = {
+        "mode": "energy_vehicle_cost", "profile_id": "target-time-path-cost",
+        "objective_distance_source": "running_time_path_distance_km",
+    }
+    target_cfg["protocol"] = {
+        "warm_start_checkpoint": str(checkpoint),
+        "warm_start_epoch_mode": "reset", "warm_start_epoch_offset": 0,
+        "warm_start": protocol._explicit_warm_start_provenance(
+            checkpoint, epoch_mode="reset", objective_transition=True,
+            target_objective=target_cfg["objective"],
+        ),
+    }
+    return source, payload, checkpoint, target_cfg
+
+
+def test_objective_transition_records_source_and_target_and_resets_state(tmp_path) -> None:
+    source, payload, checkpoint, target_cfg = _transition_fixture(tmp_path)
+    result = trainer.validate_warm_start_contract(
+        target_cfg, payload, current_seed=1234, checkpoint_path=checkpoint,
+    )
+    assert result["source_epoch"] == 4200
+    assert result["source_checkpoint_sha256"] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    assert result["target_objective"]["objective_distance_source"] == "running_time_path_distance_km"
+    assert result["critic_reset"] is True
+    assert result["model_state_dict_loaded"] is False
+    target = trainer.Agent(**target_cfg["model"], device="cpu")
+    original_critic = {key: value.clone() for key, value in target.critic.state_dict().items()}
+    optimizer = torch.optim.AdamW(target.parameters(), lr=5e-5)
+    start_epoch = trainer.apply_training_initialization(
+        target, optimizer, warm_start_payload=payload, warm_start_mode="reset",
+        warm_start_objective_transition=True,
+    )
+    assert start_epoch == 1
+    assert optimizer.state == {}
+    for key, value in target.backbone.state_dict().items():
+        torch.testing.assert_close(value, source.backbone.state_dict()[key], rtol=0, atol=0)
+    for key, value in target.critic.state_dict().items():
+        torch.testing.assert_close(value, original_critic[key], rtol=0, atol=0)
+    destination = tmp_path / "migrated.ckpt"
+    trainer.save_checkpoint(destination, target, optimizer, target_cfg, 0, 1234)
+    assert protocol._checkpoint_warm_start_provenance(destination) == target_cfg["protocol"]["warm_start"]
+    assert protocol._inherited_warm_start_provenance(destination) == target_cfg["protocol"]["warm_start"]
+
+
+@pytest.mark.parametrize("mutation,match", [
+    ("representation", "scale configuration mismatch"),
+    ("architecture", "model architecture mismatch"),
+    ("target_objective", "target objective disagrees"),
+    ("stable_cost", "requires the legacy actor"),
+    ("unrequested", "reward contract mismatch"),
+])
+def test_objective_transition_retains_compatibility_checks(tmp_path, mutation, match) -> None:
+    _, payload, checkpoint, target_cfg = _transition_fixture(tmp_path)
+    if mutation == "representation":
+        target_cfg["data"]["stage2_training_representation"] = "E"
+    elif mutation == "architecture":
+        target_cfg["model"]["embedding_dim"] = 64
+    elif mutation == "target_objective":
+        target_cfg["objective"]["profile_id"] = "undeclared-change"
+    elif mutation == "stable_cost":
+        target_cfg["training"]["algorithm"] = "stable_cost_v1"
+    else:
+        target_cfg["protocol"]["warm_start"] = protocol._explicit_warm_start_provenance(
+            checkpoint, epoch_mode="reset",
+        )
+    with pytest.raises(ValueError, match=match):
+        trainer.validate_warm_start_contract(
+            target_cfg, payload, current_seed=1234, checkpoint_path=checkpoint,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unexpected", "shape"])
+def test_objective_transition_actor_weights_load_strictly(tmp_path, mutation) -> None:
+    _, payload, _, target_cfg = _transition_fixture(tmp_path)
+    state = dict(payload["model_state_dict"])
+    key = "backbone.embedding.depot_embedding.weight"
+    if mutation == "missing":
+        del state[key]
+    elif mutation == "unexpected":
+        state["backbone.unexpected_parameter"] = torch.ones(1)
+    else:
+        state[key] = torch.ones(1)
+    payload["model_state_dict"] = state
+    target = trainer.Agent(**target_cfg["model"], device="cpu")
+    optimizer = torch.optim.AdamW(target.parameters())
+    with pytest.raises(RuntimeError):
+        trainer.apply_training_initialization(
+            target, optimizer, warm_start_payload=payload, warm_start_mode="reset",
+            warm_start_objective_transition=True,
         )

@@ -64,6 +64,8 @@ def _explicit_warm_start_provenance(
     checkpoint: Path,
     *,
     epoch_mode: str,
+    objective_transition: bool = False,
+    target_objective: Any = None,
 ) -> dict[str, Any]:
     source = checkpoint.expanduser().resolve(strict=True)
     resolved_epoch_mode = _validated_warm_start_epoch_mode(epoch_mode)
@@ -85,7 +87,7 @@ def _explicit_warm_start_provenance(
             "TERRAN warm-start checkpoint is missing model_state_dict"
         )
     source_seed = payload.get("seed")
-    return {
+    provenance = {
         "schema": WARM_START_SCHEMA,
         "epoch_mode": resolved_epoch_mode,
         "method": "TERRAN",
@@ -104,6 +106,38 @@ def _explicit_warm_start_provenance(
         "early_stop_state_reset": True,
         "source_baseline_evaluated": resolved_epoch_mode == "continue_global",
     }
+    if objective_transition:
+        if resolved_epoch_mode != "reset":
+            raise ValueError("TERRAN objective-transition warm start requires reset mode")
+        from ..common.objective import objective_from_checkpoint
+
+        provenance.update(
+            objective_transition=True,
+            weights_scope="actor_only",
+            model_state_dict_loaded=False,
+            actor_state_dict_loaded=True,
+            critic_state_dict_loaded=False,
+            critic_reset=True,
+            source_objective=objective_from_checkpoint(dict(payload)).to_dict(),
+            target_objective=resolve_objective(target_objective).to_dict(),
+        )
+    return provenance
+
+
+def _valid_warm_start_weights_provenance(provenance: Mapping[str, Any]) -> bool:
+    if provenance.get("objective_transition", False):
+        return (
+            provenance.get("objective_transition") is True
+            and provenance.get("epoch_mode") == "reset"
+            and provenance.get("weights_scope") == "actor_only"
+            and provenance.get("model_state_dict_loaded") is False
+            and provenance.get("actor_state_dict_loaded") is True
+            and provenance.get("critic_state_dict_loaded") is False
+            and provenance.get("critic_reset") is True
+            and isinstance(provenance.get("source_objective"), Mapping)
+            and isinstance(provenance.get("target_objective"), Mapping)
+        )
+    return provenance.get("model_state_dict_loaded") is True
 
 
 def _inherited_warm_start_provenance(checkpoint: Path) -> dict[str, Any] | None:
@@ -138,7 +172,7 @@ def _inherited_warm_start_provenance(checkpoint: Path) -> dict[str, Any] | None:
     # epoch continuation, so preserve that meaning when such a run is resumed.
     normalized.setdefault("epoch_mode", "continue_global")
     if (
-        normalized.get("model_state_dict_loaded") is not True
+        not _valid_warm_start_weights_provenance(normalized)
         or normalized.get("optimizer_state_dict_loaded") is not False
         or normalized.get("optimizer_reset") is not True
         or str(normalized.get("optimizer_name")).lower() != "adamw"
@@ -385,7 +419,7 @@ def _checkpoint_warm_start_provenance(
         source_epoch < 0
         or not source_path
         or len(source_sha) != 64
-        or provenance.get("model_state_dict_loaded") is not True
+        or not _valid_warm_start_weights_provenance(provenance)
         or provenance.get("optimizer_state_dict_loaded") is not False
         or provenance.get("optimizer_reset") is not True
         or str(provenance.get("optimizer_name", "")).lower() != "adamw"
@@ -427,6 +461,7 @@ def _checkpoint_warm_start_provenance(
 
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
     warm_start_checkpoint = getattr(args, "warm_start_checkpoint", None)
+    objective_transition = bool(getattr(args, "warm_start_objective_transition", False))
     resume_requested = bool(getattr(args, "resume", False))
     requested_warm_start_epoch_mode = _validated_warm_start_epoch_mode(
         getattr(args, "warm_start_epoch_mode", "reset")
@@ -434,6 +469,15 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
     if resume_requested and warm_start_checkpoint is not None:
         raise ValueError(
             "--resume and --warm-start-checkpoint are mutually exclusive"
+        )
+    if objective_transition and (
+        resume_requested
+        or warm_start_checkpoint is None
+        or requested_warm_start_epoch_mode != "reset"
+    ):
+        raise ValueError(
+            "TERRAN objective-transition warm start requires a checkpoint, "
+            "reset epoch mode, and a fresh run"
         )
     if (
         warm_start_checkpoint is not None
@@ -495,6 +539,8 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         warm_start_provenance = _explicit_warm_start_provenance(
             Path(warm_start_checkpoint),
             epoch_mode=requested_warm_start_epoch_mode,
+            objective_transition=objective_transition,
+            target_objective=overrides.get("objective"),
         )
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
     if effective % physical:
