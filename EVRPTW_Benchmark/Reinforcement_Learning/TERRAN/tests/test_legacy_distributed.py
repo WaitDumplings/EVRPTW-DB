@@ -14,7 +14,8 @@ from EVRPTW_Benchmark.Reinforcement_Learning.common.data_pass import seeded_pass
 from EVRPTW_Benchmark.Reinforcement_Learning.common.distributed import DistributedContext
 from EVRPTW_Benchmark.Reinforcement_Learning.common.tests.test_distributed_helpers import init_gloo, run_gloo_workers
 from EVRPTW_Benchmark.Reinforcement_Learning.AM_EVRPTW.tests.test_am_model import _instance
-from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import data_pool, trainer
+from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import data_pool, trainer, protocol
+from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN import train_distributed as distributed_entry
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.env_factory import make_terran_env
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.models import Agent
 from EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.rollout import collect_rollout, compute_returns
@@ -115,6 +116,43 @@ def _train_worker(rank, world_size, rendezvous, output):
                 "checkpoint_interval": 1, "learning_rate": .0001}, "env": {"use_jit_mask": False},
                "evaluation": {"eval_path": output, "eval_scale": "Cus2", "eval_n_traj": 3,
                  "eval_limit": 2, "eval_interval": 1, "eval_max_steps": 12, "eval_require_independent_verifier": True}}
+        source = Path(output, "warm_start_source.ckpt")
+        if source.is_file():
+            cfg["protocol"] = {
+                "warm_start_checkpoint": str(source), "warm_start_epoch_mode": "reset",
+                "warm_start": protocol._explicit_warm_start_provenance(
+                    source, epoch_mode="reset", objective_transition=True,
+                    target_objective=cfg.get("objective"), scale_transition=True,
+                    target_scale="Cus2",
+                ),
+            }
+            payload = torch.load(source, map_location="cpu", weights_only=False)
+            original_initialize = distributed_entry.initialize_warm_start
+            original_rollout = distributed_entry.collect_rollout
+            first_rollout = True
+
+            def inspect_initialization(agent, optimizer, cfg, *, seed):
+                fresh_critic = deepcopy(agent.critic.state_dict())
+                start = original_initialize(agent, optimizer, cfg, seed=seed)
+                assert start == 1 and not optimizer.state
+                for key, value in agent.critic.state_dict().items():
+                    torch.testing.assert_close(value, fresh_critic[key], rtol=0, atol=0)
+                Path(output, f"warm_rank_{rank}.json").write_text(json.dumps({
+                    "start_epoch": start, "optimizer_empty": not optimizer.state,
+                    "critic_head_fresh": True,
+                }))
+                return start
+
+            def inspect_rollout(agent, *args, **kwargs):
+                nonlocal first_rollout
+                if first_rollout:
+                    for key, value in agent.backbone.state_dict().items():
+                        torch.testing.assert_close(value, payload["model_state_dict"]["backbone." + key], rtol=0, atol=0)
+                    first_rollout = False
+                return original_rollout(agent, *args, **kwargs)
+
+            distributed_entry.initialize_warm_start = inspect_initialization
+            distributed_entry.collect_rollout = inspect_rollout
         path = train_distributed(cfg, seed=18, device="cpu", context=context)
         assert path.is_file()
     finally:
@@ -149,4 +187,46 @@ def test_distributed_topology_rejects_nondivisible_effective_batch_and_variants(
     assert configure_topology(deepcopy(cfg), DistributedContext(0, 2))["microbatches_per_rank"] == 2
     cfg["training"]["algorithm"] = "stable_cost_v1"
     with pytest.raises(ValueError, match="legacy PPO"):
+        configure_topology(cfg, DistributedContext(0, 2))
+
+
+
+def test_two_gloo_ranks_warm_start_across_scales_before_training(tmp_path):
+    torch.manual_seed(123)
+    source = Agent(embedding_dim=16, n_encode_layers=1, device="cpu")
+    source_cfg = {
+        "data": {"stage2_scale": "Cus1", "num_customers": 1, "num_charging_stations": 1,
+                 "stage2_training_representation": "G"},
+        "model": {"embedding_dim": 16, "n_encode_layers": 1},
+        "training": {"gamma": 1},
+        "protocol": {"resolved_training_signature": {"scale": "Cus1", "training_representation": "G"}},
+    }
+    torch.save({"epoch": 99, "seed": 18, "config": source_cfg,
+                "model_state_dict": source.state_dict(),
+                "optimizer_state_dict": {"must_not_be_loaded": True}},
+               tmp_path / "warm_start_source.ckpt")
+    run_gloo_workers(_train_worker, tmp_path, world_size=2)
+    for rank in range(2):
+        proof = json.loads((tmp_path / f"warm_rank_{rank}.json").read_text())
+        assert proof == {"start_epoch": 1, "optimizer_empty": True, "critic_head_fresh": True}
+    payload = torch.load(tmp_path / "training/checkpoints/checkpoint_final.pt", map_location="cpu", weights_only=False)
+    assert payload["epoch"] == 2
+    provenance = payload["config"]["protocol"]["warm_start"]
+    assert provenance["source_epoch"] == 99
+    assert provenance["source_scale"] == "Cus1"
+    assert provenance["target_scale"] == "Cus2"
+    assert provenance["scale_transition"] is True
+    assert provenance["weights_scope"] == "actor_only"
+    assert payload["config"]["distributed_contract"]["warm_start"] == provenance
+    rows = [json.loads(line) for line in (tmp_path / "training/logical_epoch_history.jsonl").read_text().splitlines()]
+    assert [row["logical_epoch"] for row in rows] == [1, 2]
+    assert [row["samples_seen"] for row in rows] == [2, 4]
+
+
+@pytest.mark.parametrize("field", ["resume_checkpoint", "warm_start_checkpoint"])
+def test_distributed_warm_start_rejects_resume_and_global_epoch_mode(field):
+    cfg = {"data": {"stage2_dataset_path": "unused"},
+           "training": {"num_envs_per_gpu": 1},
+           "protocol": {field: "source.ckpt", "warm_start_epoch_mode": "continue_global"}}
+    with pytest.raises(ValueError, match="resume|reset epoch mode"):
         configure_topology(cfg, DistributedContext(0, 2))

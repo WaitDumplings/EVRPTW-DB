@@ -195,3 +195,10 @@ stage-1 checkpoint and trains one policy synchronously on GPU 0/1 for 3000
 additional epochs. Defaults are 12 instances per GPU (global 24), 30 trajectories,
 and 500-instance validation every 100 updates. See the
 [stage-2 instructions](cus500_curr/README.md) for source identity and outputs.
+
+### 五模型 Road Cus100 → Cus500 双卡入口
+
+将第一阶段的 Road best 分别放到 `/data/cus100_ckpt/{am,evrptw_rl,drl_ts,terran,rrnco}.ckpt`，
+运行 `./script_curriculum/cus500_curr/am_cus100_to_500.sh 0 1`（其他模型替换 am）。
+均新增3000轮，每100轮验证一次。完整配置和各模型 batch 的实测范围见
+[cus500_curr/README.md](cus500_curr/README.md)。

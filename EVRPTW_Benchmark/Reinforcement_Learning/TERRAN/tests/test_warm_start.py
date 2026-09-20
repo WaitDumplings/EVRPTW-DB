@@ -515,3 +515,81 @@ def test_objective_transition_actor_weights_load_strictly(tmp_path, mutation) ->
             target, optimizer, warm_start_payload=payload, warm_start_mode="reset",
             warm_start_objective_transition=True,
         )
+
+
+@pytest.mark.parametrize("extra", [
+    [], ["--warm-start-checkpoint", "source.pt", "--resume"],
+    ["--warm-start-checkpoint", "source.pt", "--warm-start-epoch-mode", "continue_global"],
+])
+def test_scale_transition_cli_requires_fresh_reset(monkeypatch, extra) -> None:
+    monkeypatch.setattr(sys, "argv", [
+        "terran-train", "--config", "config.yaml", "--seed", "1234",
+        "--warm-start-scale-transition", *extra,
+    ])
+    with pytest.raises(SystemExit):
+        train.parse_args()
+
+
+def _scale_transition_fixture(tmp_path):
+    source, payload, checkpoint, cfg = _transition_fixture(tmp_path)
+    cfg["data"].update(stage2_scale="Cus500", num_customers=500, num_charging_stations=50)
+    cfg["training"]["epochs"] = 3000
+    cfg["protocol"]["warm_start"] = protocol._explicit_warm_start_provenance(
+        checkpoint, epoch_mode="reset", objective_transition=True,
+        target_objective=cfg["objective"], scale_transition=True, target_scale="Cus500",
+    )
+    return source, payload, checkpoint, cfg
+
+
+def test_scale_transition_loads_exact_actor_and_records_new_scale(tmp_path):
+    source, payload, checkpoint, cfg = _scale_transition_fixture(tmp_path)
+    proof = trainer.validate_warm_start_contract(cfg, payload, current_seed=1234)
+    assert proof["source_scale"] == "Cus2"
+    assert proof["target_scale"] == "Cus500"
+    assert proof["source_epoch"] == 4200
+    target = trainer.Agent(**cfg["model"], device="cpu")
+    fresh_critic = deepcopy(target.critic.state_dict())
+    optimizer = torch.optim.AdamW(target.parameters())
+    assert trainer.apply_training_initialization(
+        target, optimizer, warm_start_payload=payload, warm_start_mode="reset",
+        warm_start_objective_transition=True, warm_start_scale_transition=True,
+    ) == 1
+    assert not optimizer.state
+    for key, value in target.backbone.state_dict().items():
+        torch.testing.assert_close(value, source.backbone.state_dict()[key], rtol=0, atol=0)
+    for key, value in target.critic.state_dict().items():
+        torch.testing.assert_close(value, fresh_critic[key], rtol=0, atol=0)
+    destination = tmp_path / "cus500.ckpt"
+    trainer.save_checkpoint(destination, target, optimizer, cfg, 0, 1234)
+    assert protocol._checkpoint_warm_start_provenance(destination) == cfg["protocol"]["warm_start"]
+    assert protocol._inherited_warm_start_provenance(destination) == cfg["protocol"]["warm_start"]
+
+
+@pytest.mark.parametrize("mutation,match", [
+    ("implicit", "scale configuration mismatch"),
+    ("domain", "representation mismatch"),
+    ("seed", "seed mismatch"),
+    ("architecture", "architecture mismatch"),
+    ("provenance", "scale transition disagrees"),
+    ("reward", "reward contract mismatch"),
+])
+def test_scale_transition_preserves_other_compatibility_checks(tmp_path, mutation, match):
+    _, payload, checkpoint, cfg = _scale_transition_fixture(tmp_path)
+    seed = 1234
+    if mutation == "implicit":
+        cfg["protocol"]["warm_start"] = protocol._explicit_warm_start_provenance(
+            checkpoint, epoch_mode="reset", objective_transition=True,
+            target_objective=cfg["objective"],
+        )
+    elif mutation == "domain":
+        cfg["data"]["stage2_training_representation"] = "E"
+    elif mutation == "seed":
+        seed = 99
+    elif mutation == "architecture":
+        cfg["model"]["embedding_dim"] = 64
+    elif mutation == "provenance":
+        cfg["protocol"]["warm_start"]["target_scale"] = "Cus1000"
+    else:
+        cfg["protocol"]["warm_start"]["objective_transition"] = False
+    with pytest.raises(ValueError, match=match):
+        trainer.validate_warm_start_contract(cfg, payload, current_seed=seed)

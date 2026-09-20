@@ -66,6 +66,8 @@ def _explicit_warm_start_provenance(
     epoch_mode: str,
     objective_transition: bool = False,
     target_objective: Any = None,
+    scale_transition: bool = False,
+    target_scale: str | None = None,
 ) -> dict[str, Any]:
     source = checkpoint.expanduser().resolve(strict=True)
     resolved_epoch_mode = _validated_warm_start_epoch_mode(epoch_mode)
@@ -106,13 +108,13 @@ def _explicit_warm_start_provenance(
         "early_stop_state_reset": True,
         "source_baseline_evaluated": resolved_epoch_mode == "continue_global",
     }
-    if objective_transition:
+    if objective_transition or scale_transition:
         if resolved_epoch_mode != "reset":
-            raise ValueError("TERRAN objective-transition warm start requires reset mode")
+            raise ValueError("TERRAN actor-transition warm start requires reset mode")
         from ..common.objective import objective_from_checkpoint
 
         provenance.update(
-            objective_transition=True,
+            objective_transition=bool(objective_transition),
             weights_scope="actor_only",
             model_state_dict_loaded=False,
             actor_state_dict_loaded=True,
@@ -121,13 +123,31 @@ def _explicit_warm_start_provenance(
             source_objective=objective_from_checkpoint(dict(payload)).to_dict(),
             target_objective=resolve_objective(target_objective).to_dict(),
         )
+    if scale_transition:
+        source_data = payload.get("config", {}).get("data", {})
+        source_scale = source_data.get("stage2_scale")
+        if not source_scale and source_data.get("num_customers") is not None:
+            source_scale = f"Cus{int(source_data['num_customers'])}"
+        if not source_scale or not target_scale:
+            raise ValueError("TERRAN scale transition requires explicit source and target scales")
+        provenance.update(
+            scale_transition=True,
+            source_scale=str(source_scale),
+            target_scale=str(target_scale),
+        )
     return provenance
 
 
 def _valid_warm_start_weights_provenance(provenance: Mapping[str, Any]) -> bool:
-    if provenance.get("objective_transition", False):
+    if provenance.get("objective_transition", False) or provenance.get("scale_transition", False):
         return (
-            provenance.get("objective_transition") is True
+            isinstance(provenance.get("objective_transition", False), bool)
+            and isinstance(provenance.get("scale_transition", False), bool)
+            and (
+                not provenance.get("scale_transition", False)
+                or (isinstance(provenance.get("source_scale"), str)
+                    and isinstance(provenance.get("target_scale"), str))
+            )
             and provenance.get("epoch_mode") == "reset"
             and provenance.get("weights_scope") == "actor_only"
             and provenance.get("model_state_dict_loaded") is False
@@ -462,6 +482,7 @@ def _checkpoint_warm_start_provenance(
 def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
     warm_start_checkpoint = getattr(args, "warm_start_checkpoint", None)
     objective_transition = bool(getattr(args, "warm_start_objective_transition", False))
+    scale_transition = bool(getattr(args, "warm_start_scale_transition", False))
     resume_requested = bool(getattr(args, "resume", False))
     requested_warm_start_epoch_mode = _validated_warm_start_epoch_mode(
         getattr(args, "warm_start_epoch_mode", "reset")
@@ -470,13 +491,13 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
         raise ValueError(
             "--resume and --warm-start-checkpoint are mutually exclusive"
         )
-    if objective_transition and (
+    if (objective_transition or scale_transition) and (
         resume_requested
         or warm_start_checkpoint is None
         or requested_warm_start_epoch_mode != "reset"
     ):
         raise ValueError(
-            "TERRAN objective-transition warm start requires a checkpoint, "
+            "TERRAN actor-transition warm start requires a checkpoint, "
             "reset epoch mode, and a fresh run"
         )
     if (
@@ -541,6 +562,8 @@ def configure_protocol(args: Any, overrides: dict[str, Any]) -> tuple[dict[str, 
             epoch_mode=requested_warm_start_epoch_mode,
             objective_transition=objective_transition,
             target_objective=overrides.get("objective"),
+            scale_transition=scale_transition,
+            target_scale=getattr(args, "stage2_scale", None),
         )
     physical, effective = require_registered_batches(args, args.num_envs_per_gpu or 1)
     if effective % physical:

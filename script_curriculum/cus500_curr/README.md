@@ -1,121 +1,126 @@
-# AM Road Cus100 → Cus500 curriculum
+# Road Cus100 → Cus500：五模型双卡 curriculum
 
-This stage trains **one AM policy on physical GPU 0 and 1 together**, using Road
-Cus500 only. It imports the selected Road Cus100 stage-1 policy and runs **3000
-additional logical epochs**, with validation every 100 epochs. Euclidean data and
-the archived independently trained Cus500 checkpoint are not used.
+五个入口均从 **Road Cus100 第一阶段的 best 权重**开始，在 Road Cus500 上新增
+**3000 个 logical epoch**，每100轮用500个验证实例、best-of-30评测一次。
+每次启动训练一个模型，两个 GPU 同步更新；只做 Road，不做 Euclidean。
 
-```bash
-cd /data/Maojie/ICLR/EVRPTW-DB-curriculum
-./script_curriculum/cus500_curr/am.sh
-```
+## 准备 checkpoint
 
-The repository may instead be named `EVRPTW-DB`; paths are resolved from the script.
-Use `--dry-run` to inspect the source, dataset, topology, and complete command
-without reserving GPUs or creating a training output directory. The shell preflights and starts training in the background by default, prints the
-launcher log path, and permits disconnecting SSH. For an interactive launch, use
-`./script_curriculum/cus500_curr/am.sh --foreground`; this option must come first.
-The shell selects the `maojie` environment unless `CURRICULUM_PYTHON` or
-`CURRICULUM_CONDA_ENV` overrides it. Updating Git is explicit via `--pull`; ordinary
-launches do not change a checkout that another training process may still use.
-
-## Source weights
-
-The default source is frozen in [source_checkpoint.json](source_checkpoint.json):
+每台服务器使用相同的路径规则（每台只需放它要训练的模型）：
 
 ```text
-$CURRICULUM_STAGE1_ROOT/am_evrptw_G_Cus100_stage1_seed1234_20260920T092713_1409604/best_overall.ckpt
+/data/cus100_ckpt/
+  am.ckpt
+  evrptw_rl.ckpt
+  drl_ts.ckpt
+  terran.ckpt
+  rrnco.ckpt
 ```
 
-`CURRICULUM_STAGE1_ROOT` defaults to `/data/curriculum_stage1`. This run completed
-**2000** new Cus100 epochs, and its selected checkpoint is epoch **1300**, with
-500/500 verified feasible validation instances and mean cost
-468.9396665655092 USD. Epoch 1000 was not the final run endpoint. Its full hash is
-`6ae497332b98eefb507c63d21ff5e713a4bfeb71594259872ad2cbbf77ba2ea1`.
-Missing or changed default source files fail explicitly; there is no fallback to
-an old checkpoint or the latest checkpoint. Source weights are never overwritten.
+将各模型 **G/Cus100 curriculum 第一阶段的 `best_overall.ckpt`** 复制并重命名到这里。
+不要放 E 域、旧 D_dist 实验、已在 Cus500 上训练的 checkpoint 或临时 smoke 权重。
+脚本只读取指定模型的文件，不需要另外四个都存在；没有文件时明确报错，不回退到旧 archive。
+文件名不代表内容可信：启动前在 CPU 上核查实际模型、域、规模、seed、目标、阶段和
+架构，严格加载全部权重，记录实际 SHA256 和所选 epoch。
 
-For an explicitly chosen alternative stage-1 AM Road Cus100 checkpoint:
+例如，本机已复制第一阶段 AM 的 best epoch1300 到 `/data/cus100_ckpt/am.ckpt`。
+该文件与现有双卡 AM 运行的来源权重完全相同；现有训练继续运行，未重复启动。
+本机 EVRPTW-RL 第一阶段尚未完成，未将其中间 best 冒充最终文件；其余模型需在对应
+服务器第一阶段完成后自行放入。
+
+## 同步代码和启动
+
+在干净的仓库工作区中：
 
 ```bash
-./script_curriculum/cus500_curr/am.sh --source-checkpoint /absolute/path/best_overall.ckpt
+cd /data/Maojie/ICLR/EVRPTW-DB
+git fetch origin
+git switch ablation
+git pull --ff-only origin ablation
+conda activate maojie             # 第三台如使用 caliroute，则激活 caliroute
 ```
 
-The override must match the stage-1 protocol, Road Cus100 domain, seed, D_time
-objective, and AM architecture. Its actual hash/epoch are recorded; the default
-checkpoint's validation score is not attributed to an override.
-An explicit source override is marked as unprofiled for GPU memory.
+按模型运行一个对应命令，末尾两个数字是 `nvidia-smi` 的物理 GPU 编号：
 
-## Training and validation
+```bash
+./script_curriculum/cus500_curr/am_cus100_to_500.sh 0 1
+./script_curriculum/cus500_curr/evrptw_rl_cus100_to_500.sh 0 1
+./script_curriculum/cus500_curr/drl_ts_cus100_to_500.sh 1 2
+./script_curriculum/cus500_curr/terran_cus100_to_500.sh 0 1
+./script_curriculum/cus500_curr/rrnco_cus100_to_500.sh 0 1
+```
 
-| Setting | Default |
-|---|---|
-| GPUs | Physical 0, 1; two synchronous replicas of one model |
-| Per-GPU / global instance batch | 12 / 24; accumulation 1 |
-| New stage epochs | 1–3000; no early stopping |
-| Training trajectories | 30 per instance |
-| Train / validation action cap | 1700 / 2550 |
-| Validation | 500 Road Cus500 instances, best-of-30, every 100 epochs |
-| Training / validation seed | 1234 / 910001234 |
-| Optimizer | AdamW, learning rate 1e-4, weight decay 0.01, gradient norm limit 1 |
-| Model | AM, 128-dimensional embeddings, 3 encoder layers, 8 heads |
-| Train corpus | 10,000 Road Cus500 views, distinct from the 500 validation views/families |
-| Batch-12 sample exposure | 72,000 sampled instances / 36,000,000 customer occurrences |
+这些是可选的独立入口，不要把上面五行当成共享 GPU 的启动队列。
+脚本默认后台运行，打印 launcher PID、日志路径，可以断开 SSH；GPU 已有计算任务时会拒绝启动。
+默认沿用当前激活的 conda 环境；未激活时选择 maojie。
+`CURRICULUM_CONDA_ENV=caliroute` 或 `CURRICULUM_PYTHON=/path/to/python` 可明确指定。
 
-One logical epoch is one synchronized optimizer update, not one pass over the
-corpus. The training stream uses seeded shuffled full-pool cycles. Each rank gets
-disjoint entries within a global batch. No test data is read.
+查看配置但不占 GPU：
 
-This is **weights-only continuation across scales**, with explicit scale-transition
-permission and strict architecture loading. The source optimizer, baseline history,
-EMA value, best-selection state, and epoch/sample counters are reset. It is not a
-resume of the single-GPU run. AM's default baseline schedule restarts: the first
-2500 stage updates use EMA, followed by 500 greedy-baseline updates. Paired baseline
-probes use the default 2500-update interval and 64 training instances.
+```bash
+./script_curriculum/cus500_curr/rrnco_cus100_to_500.sh 0 1 --dry-run
+```
 
-The target is `energy_vehicle_cost`, with cost and energy both using
-`running_time_path_distance_km`. Cost is
-`413.6331536717643 * K + 0.39 * (100/257) * D_time_km` USD. Training switches to the
-shared **Cus500** reward normalizer: objective scale 4238.927542618743, failure base
-3.21013867342889, unserved coefficient 1. These are retained training-only numerical
-normalizers, not a new D_time calibration. Reported cost is independently replayed
-USD cost; candidate/epoch selection first maximizes complete-and-feasible rate,
-then minimizes mean verified cost among feasible instances.
+末尾加 `--foreground` 在前台运行。普通启动不会自动修改代码；`--pull` 才会显式
+执行 `git pull --ff-only origin ablation`。旧 `am.sh` 保留兼容，默认 GPU0/1，但现在也
+读取 `/data/cus100_ckpt/am.ckpt`。
 
-Gradients are globally normalized and summed before clipping and updating.
-BatchNorm forward statistics are local to each rank, with rank-0 running buffers
-broadcast after updates. Thus this is not claimed to be numerically equivalent to
-a serial run with the same global batch. Validation shards preserve each instance's
-seed and are merged before the single checkpoint-selection decision.
+## Batch 与已有显存证据
 
-The current curriculum weights were measured on two 2080 Ti GPUs with per-GPU
-batches 4 and 12. Batch 12 passed five EMA updates and three greedy-baseline
-updates, including validation and a baseline comparison. It is the final default;
-see [SMOKE_REPORT.md](SMOKE_REPORT.md) for recorded memory and test scope.
-A short smoke run does not establish the peak of every future random batch.
+| 方法 | 每卡 batch | 全局 batch | train/val 步数上限 | 证据范围 |
+|---|---:|---:|---:|---|
+| AM | 12 | 24 | 1700/2550 | 当前来源权重双卡短测约10071/9924 MiB，已启动正式训练 |
+| EVRPTW-RL | 24 | 48 | 600/700 | 历史 sum 版双卡约10254 MiB/进程；当前 mean 版沿用，未针对新的来源权重复测 |
+| DRL-TS | 2 | 4 | 1700/2550 | 历史双卡约9508 MiB/进程；batch3曾在 baseline encoder OOM |
+| TERRAN | 16 | 32 | 1700/2550 | 保留已有保守默认；没有匹配的 Cus500 GPU 显存实测 |
+| RRNCO | 22 | 44 | 1700/2550 | 历史双卡约9818 MiB/进程；新来源权重未复测 |
 
-## Data, outputs, and overrides
+所有方法每实例30条训练轨迹、30条验证轨迹。batch 是实例数，不乘轨迹数。
+AM 数值是设备显存（含桌面等开销），其余实测数值是进程显存，不能混为同一口径。
+历史测试的权重或目标与本轮不同；不得将其称为所有新来源都通过 GPU 测试。
+短测也不能保证未来每一个随机 batch 的峰值。详细来源在 `batch_profiles.json`；
+AM 初次实测见 `SMOKE_REPORT.md`。
 
-The complete Road release can be shared with the existing repository:
+EVRPTW-RL 保留现有 mean 版的600/700步配置；复杂路线可能达到此上限，训练日志中的
+`rollout_budget_exhausted_rate` 和验证可行率会反映这一点。其他模型保留1700/2550步。
+
+## 训练含义与方法差异
+
+- 一个 logical epoch 是一次全局 rollout/update cycle，不是遍历一次语料；TERRAN 在其中执行多次 PPO 更新。
+- 优化目标为 `energy_vehicle_cost`：`413.6331536717643*K + 0.39*(100/257)*D_time_km`。
+  成本、电量都用最快时间路径距离；独立 replay 复算验证成本。
+- 保留 Cus100 策略权重，重置优化器、baseline、epoch/数据流/选优状态，切换到 Cus500 的
+  reward normalizer。额外3000轮，无 early stopping；验证先最大化可行率，再最小化可行实例平均成本。
+- AM 保留128维/3层/8头；baseline 默认前2500轮 EMA、后500轮 greedy。
+- EVRPTW-RL 保留 mean aggregation、128维和3轮 Structure2Vec。
+- DRL-TS 从已进入 hard 阶段的来源继续，`soft_stage_end_epoch=0`，不重新执行 soft 阶段。
+- RRNCO 保留 full road graph、stable AFT、nearest relation、温度5和LOO baseline。
+- TERRAN 保留256维/3层的 legacy PPO+PBRS。双卡入口会实际加载 actor，重置 critic 和 optimizer，
+  从新阶段第1轮开始；不会自动换成 `stable_cost_v1` 或修改推理架构。PPO time chunk 为16。
+
+REINFORCE 的验证实例按 rank 分片再合并；TERRAN 在 rank0 验证完整 cohort 后广播结果。
+训练梯度按全局分母合并，各 rank 的 BatchNorm forward 使用本地统计，更新后广播 rank0 buffers；
+不宣称与同全局 batch 的单卡运行逐位等价。
+
+## 数据与输出
+
+训练使用完整10000条 Road Cus500 train views，验证使用500条独立 val views，并检查实例及
+parent family 不重叠；不读取 test。Git 不传输 dataset/checkpoint 二进制文件。
+找不到数据时指定：
 
 ```bash
 export CURRICULUM_ROAD_ROOT=/data/Maojie/ICLR/EVRPTW-DB/EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823
 ```
 
-`CUS500_ROAD_ROOT`, `CUS100_ROAD_ROOT`, and `EVRPTW_DATASET_ROOT` are fallback variables.
-Without an override the existing release locations are searched. Git transfers code,
-not the Road dataset or stage-1 checkpoint.
+也兼容 `CUS500_ROAD_ROOT`、`CUS100_ROAD_ROOT`、`EVRPTW_DATASET_ROOT`。
+checkpoint 根路径可用 `CURRICULUM_CUS100_CKPT_ROOT` 或 `--checkpoint-root` 改写；
+`--source-checkpoint` 可直接指定文件，仍需通过相同检查。
 
-Outputs default to `/data/curriculum_stage2_cus500`, overridable with
-`CURRICULUM_CUS500_OUTPUT_ROOT` or `--output-root`. Every launch uses a new dated run
-directory containing `request.json`, `status.json`, `training.log`, checkpoint files,
-`logical_epoch_history.jsonl`, `validation_history.jsonl`, and
-`validation_summary.csv`. The request records source identity, objective, scale,
-batch, GPU identities, stream hashes, code hashes, and the executed command.
+输出默认 `/data/curriculum_stage2_cus500/<model>_G_Cus500_stage2_seed1234_<timestamp>_<pid>/`，
+包含 `request.json`、`status.json`、`training.log`、checkpoint、训练/验证历史和
+`validation_summary.csv`。TERRAN 双卡的逐轮训练诊断写入 `logical_epoch_history.jsonl` 和 `logs/train_log.csv`。
+`CURRICULUM_CUS500_OUTPUT_ROOT` 或 `--output-root` 可更改训练目录。
+每次创建新目录，启动不覆盖已有结果。
 
-The Python interface also supports `--gpus 0,1`, `--batch-size 12`, `--epochs 3000`,
-`--validation-every 100`, `--validation-limit 500`, and `--run-dir` (must be new).
-Batches 4 and 12 have short-run profiles; another batch is unprofiled. Changing
-the batch changes global sample exposure.
-Short tests must use a separate output directory. Existing compute workloads on
-either selected GPU prevent startup; the launcher does not stop them.
+可选参数还包括 `--batch-size`（每卡实例数）、`--epochs`、`--validation-every`、
+`--validation-limit`。默认无需修改；改变 batch 会改变实例暴露量，override 不冒充已实测设置。

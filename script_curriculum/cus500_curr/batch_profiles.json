@@ -1,0 +1,40 @@
+{
+  "schema": "curriculum_cus500_batch_evidence_v1",
+  "models": {
+    "am_evrptw": {
+      "batch_per_gpu": 12,
+      "checkpoint_sha256": "6ae497332b98eefb507c63d21ff5e713a4bfeb71594259872ad2cbbf77ba2ea1",
+      "evidence_status": "current_curriculum_source_two_gpu_smoke_passed",
+      "peak_device_mib": [10071, 9924],
+      "scope": "Five EMA updates and three greedy updates; four validation instances; D_time, 30 trajectories, 1700/2550 caps; full AM training subsequently launched.",
+      "evidence": "script_curriculum/cus500_curr/SMOKE_REPORT.md"
+    },
+    "evrptw_rl": {
+      "batch_per_gpu": 24,
+      "evidence_status": "historical_sum_aggregation_profile_reused_for_mean_variant_not_reprofiled",
+      "peak_process_mib": [10254, 10254],
+      "scope": "Historical sum variant, six dual-GPU updates including baseline transition at 1700/2550 caps. Current mean variant uses 600/700 explicit caps and D_time; incoming curriculum weights have not been GPU-profiled.",
+      "evidence": "/data/Maojie/ICLR/cus500-evrptw-rl-after-am/EVRPTW_Benchmark/results/cus500_evrptw_rl_20260913/calibration/attempt_1789375001637246274/09_batch24_confirm/profile_summary.json"
+    },
+    "drl_ts": {
+      "batch_per_gpu": 2,
+      "evidence_status": "historical_Cus500_dual_gpu_profile_new_source_not_reprofiled",
+      "peak_process_mib": [9508, 9508],
+      "scope": "Twelve updates: six soft, six hard; old objective, fresh initialization, 30 trajectories, 1700/2550 caps. Batch3 previously OOM in baseline encoder. Curriculum continues hard with source policy and D_time.",
+      "evidence": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/measured_profiles.json"
+    },
+    "terran": {
+      "batch_per_gpu": 16,
+      "evidence_status": "conservative_existing_Cus500_default_not_gpu_profiled",
+      "scope": "Legacy PPO/PBRS topology retained, per-GPU16 and PPO time chunk16. No matching Cus500 GPU profile available; CPU/Gloo execution tests are not GPU memory measurements.",
+      "evidence": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/ablation_final/launch.py"
+    },
+    "rrnco": {
+      "batch_per_gpu": 22,
+      "evidence_status": "historical_Cus500_dual_gpu_profile_new_source_not_reprofiled",
+      "peak_process_mib": [9818, 9818],
+      "scope": "Six dual-GPU updates, old objective and fresh initialization, full graph, 30 trajectories, 1700/2550 caps, activation-checkpoint stride1. Incoming D_time curriculum weights not reprofiled.",
+      "evidence": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/measured_profiles.json"
+    }
+  }
+}

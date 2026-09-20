@@ -60,6 +60,21 @@ representation, and seed still must match. Without the explicit transition flag,
 weights-only warm starts continue to require identical objective/reward semantics
 and load both actor and critic. Resume retains its existing strict contract.
 
+For an explicit Cus100-to-Cus500 transfer, additionally pass
+`--warm-start-scale-transition`. This permits customer/station counts to change
+while preserving actor architecture, G/E domain, and seed; source and target
+scales are recorded in provenance. Keep `--warm-start-objective-transition` when
+the target uses different reward normalization or objective settings. Either
+transition initializes only the actor and resets the critic head and training
+state. Use the legacy `scripts/ablation_final/configs/terran.yaml` with the target
+scale/count overrides; the stage-1 actor is incompatible with `stable_cost_v1`.
+
+`torchrun ... -m EVRPTW_Benchmark.Reinforcement_Learning.TERRAN.train_distributed`
+supports these reset warm starts. Every rank validates and loads the source
+before the initial model broadcast. The new run records identical provenance in
+checkpoints and `distributed_contract.json`. `--training-epochs 3000` is 3000
+additional epochs; distributed resume and `continue_global` remain unsupported.
+
 ## Components
 
 - `models/`: migrated TERRAN attention backbone, actor, and critic.

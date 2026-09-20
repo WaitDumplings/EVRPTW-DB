@@ -1440,7 +1440,11 @@ def validate_warm_start_contract(
     objective_transition = bool(
         isinstance(declared, Mapping) and declared.get("objective_transition", False)
     )
-    if objective_transition:
+    scale_transition = bool(
+        isinstance(declared, Mapping) and declared.get("scale_transition", False)
+    )
+    actor_transition = objective_transition or scale_transition
+    if actor_transition:
         from .protocol import _valid_warm_start_weights_provenance
 
         if (
@@ -1457,17 +1461,27 @@ def validate_warm_start_contract(
             raise ValueError("TERRAN warm-start source objective disagrees with provenance")
         if declared["target_objective"] != resolve_objective(cfg.get("objective")).to_dict():
             raise ValueError("TERRAN warm-start target objective disagrees with provenance")
-    else:
+    if not objective_transition:
         _validate_task_reward_compatibility(cfg, payload, operation="warm-start")
     if _warm_start_model_signature(saved_cfg) != _warm_start_model_signature(cfg):
         raise ValueError("TERRAN warm-start model architecture mismatch")
-    if _warm_start_scale_signature(saved_cfg) != _warm_start_scale_signature(cfg):
+    saved_scale = _warm_start_scale_signature(saved_cfg)
+    current_scale = _warm_start_scale_signature(cfg)
+    if scale_transition:
+        if saved_scale["representation"] != current_scale["representation"]:
+            raise ValueError("TERRAN warm-start training representation mismatch")
+        if (declared["source_scale"] != saved_scale["scale"]
+                or declared["target_scale"] != current_scale["scale"]):
+            raise ValueError("TERRAN warm-start scale transition disagrees with provenance")
+    elif saved_scale != current_scale:
         raise ValueError("TERRAN warm-start scale configuration mismatch")
     saved_protocol = saved_cfg.get("protocol", {})
     saved_signature = saved_protocol.get("resolved_training_signature", {})
     current_protocol = cfg.get("protocol", {})
     current_signature = current_protocol.get("resolved_training_signature", {})
     for field in ("scale", "training_representation"):
+        if field == "scale" and scale_transition:
+            continue
         if saved_signature.get(field) != current_signature.get(field):
             raise ValueError(f"TERRAN warm-start {field} mismatch")
     if int(payload.get("seed", -1)) != int(current_seed):
@@ -1506,16 +1520,21 @@ def validate_warm_start_contract(
         "source_seed": int(payload["seed"]),
         "source_checkpoint_path": str(source),
         "source_checkpoint_sha256": _sha256_file(source),
-        "model_state_dict_loaded": not objective_transition,
+        "model_state_dict_loaded": not actor_transition,
         **({
-            "objective_transition": True,
+            "objective_transition": objective_transition,
             "weights_scope": "actor_only",
             "actor_state_dict_loaded": True,
             "critic_state_dict_loaded": False,
             "critic_reset": True,
             "source_objective": declared["source_objective"],
             "target_objective": declared["target_objective"],
-        } if objective_transition else {}),
+        } if actor_transition else {}),
+        **({
+            "scale_transition": True,
+            "source_scale": declared["source_scale"],
+            "target_scale": declared["target_scale"],
+        } if scale_transition else {}),
         "optimizer_state_dict_loaded": False,
         "optimizer_name": "adamw",
         "optimizer_reset": True,
@@ -2620,12 +2639,14 @@ def apply_training_initialization(
     warm_start_payload: Mapping[str, Any] | None = None,
     warm_start_mode: str = "continue_global",
     warm_start_objective_transition: bool = False,
+    warm_start_scale_transition: bool = False,
 ) -> int:
     """Load a continuation checkpoint or weights-only initialization."""
 
     if resume_payload is not None and warm_start_payload is not None:
         raise ValueError("resume and weights-only warm start are mutually exclusive")
-    if warm_start_objective_transition and (
+    actor_transition = warm_start_objective_transition or warm_start_scale_transition
+    if actor_transition and (
         resume_payload is not None
         or warm_start_payload is None
         or warm_start_mode != "reset"
@@ -2638,7 +2659,7 @@ def apply_training_initialization(
     if warm_start_payload is not None:
         if optimizer.state:
             raise RuntimeError("TERRAN warm-start AdamW optimizer was not reset")
-        if warm_start_objective_transition:
+        if actor_transition:
             actor_state = {
                 key.removeprefix("backbone."): value
                 for key, value in warm_start_payload["model_state_dict"].items()
@@ -2662,7 +2683,8 @@ def apply_training_initialization(
 def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None, overrides: dict[str, Any] | None = None) -> Path:
     cfg = deep_update(cfg, overrides or {})
     if cfg.get("training", {}).get("algorithm") == "stable_cost_v1":
-        if (cfg.get("protocol", {}).get("warm_start") or {}).get("objective_transition"):
+        provenance = cfg.get("protocol", {}).get("warm_start") or {}
+        if provenance.get("objective_transition") or provenance.get("scale_transition"):
             raise ValueError("TERRAN objective-transition warm start requires the legacy actor")
         from .stable_trainer import train_stable_cost
         return train_stable_cost(cfg, seed=seed, device=device)
@@ -2846,6 +2868,9 @@ def train_from_config(cfg: dict[str, Any], seed: int, device: str | None = None,
         warm_start_mode=warm_start_mode,
         warm_start_objective_transition=bool(
             (protocol_cfg.get("warm_start") or {}).get("objective_transition", False)
+        ) if warm_start_payload is not None else False,
+        warm_start_scale_transition=bool(
+            (protocol_cfg.get("warm_start") or {}).get("scale_transition", False)
         ) if warm_start_payload is not None else False,
     )
     if resume_payload is not None:

@@ -35,7 +35,7 @@ display and CUDA/NCCL overhead; very brief peaks can be missed. These short runs
 do not guarantee the peak of every future random batch. No AMP or dummy GPU
 allocation was introduced. Detailed raw paths and exact timing are in smoke_runs.csv.
 
-The combined launcher/cross-scale regression suite passed 75 tests. Shell syntax
+At the initial AM-only release, the combined launcher/cross-scale regression suite passed 75 tests. Shell syntax
 and git diff whitespace checks passed. Raw smoke outputs remain local in:
 
 - `/data/curriculum_cus500_am_smoke_20260920`

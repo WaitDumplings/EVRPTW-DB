@@ -1,7 +1,8 @@
 """Synchronous legacy-PPO TERRAN; launch with torchrun, one process per GPU.
 
 This entry deliberately keeps the legacy actor/critic and PPO/PBRS loss. It
-shares the single-GPU command line but requires fresh fixed-epoch Stage-2 runs.
+shares the single-GPU command line and supports reset warm starts for fresh
+fixed-epoch Stage-2 runs.
 No collective occurs inside a variable-length rollout or backward time chunk.
 """
 from __future__ import annotations
@@ -34,8 +35,10 @@ def configure_topology(cfg, context):
     training, protocol = cfg["training"], cfg.get("protocol", {})
     if training.get("algorithm") == "stable_cost_v1":
         raise ValueError("this entry is legacy PPO, not stable_cost_v1")
-    if protocol.get("resume_checkpoint") or protocol.get("warm_start_checkpoint"):
-        raise ValueError("distributed legacy TERRAN currently requires a fresh run; resume/warm start unsupported")
+    if protocol.get("resume_checkpoint"):
+        raise ValueError("distributed legacy TERRAN resume is unsupported")
+    if protocol.get("warm_start_checkpoint") and legacy.warm_start_epoch_mode(cfg) != "reset":
+        raise ValueError("distributed legacy TERRAN warm start requires reset epoch mode")
     if not cfg["data"].get("stage2_dataset_path"):
         raise ValueError("distributed TERRAN requires a frozen Stage-2 pool")
     physical = int(training["num_envs_per_gpu"])
@@ -58,6 +61,7 @@ def configure_topology(cfg, context):
         "validation": "rank_zero_full_frozen_cohort_broadcast_result",
         "sampler": "contiguous_physical_shards_of_shared_seeded_global_stream",
         "resume": "unsupported_fail_closed",
+        "warm_start": deepcopy(protocol.get("warm_start")),
     }
     cfg["distributed_contract"] = contract
     return contract
@@ -143,6 +147,24 @@ def _checkpoint(path, agent, optimizer, cfg, epoch, seed):
     temporary.replace(path)
 
 
+def initialize_warm_start(agent, optimizer, cfg, *, seed):
+    """Validate and load each rank before the initial model broadcast."""
+    protocol = cfg.get("protocol", {})
+    checkpoint = protocol.get("warm_start_checkpoint")
+    if checkpoint is None:
+        return 1
+    if legacy.warm_start_epoch_mode(cfg) != "reset":
+        raise ValueError("distributed legacy TERRAN warm start requires reset epoch mode")
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    legacy.validate_warm_start_contract(cfg, payload, current_seed=seed, checkpoint_path=checkpoint)
+    provenance = protocol.get("warm_start") or {}
+    return legacy.apply_training_initialization(
+        agent, optimizer, warm_start_payload=payload, warm_start_mode="reset",
+        warm_start_objective_transition=bool(provenance.get("objective_transition", False)),
+        warm_start_scale_transition=bool(provenance.get("scale_transition", False)),
+    )
+
+
 def train_distributed(cfg, *, seed, device, context):
     cfg = deepcopy(cfg)
     contract = configure_topology(cfg, context)
@@ -175,6 +197,8 @@ def train_distributed(cfg, *, seed, device, context):
         agent.critic.backbone_grad_scale = critic_config["critic_backbone_grad_scale"]
         optimizer = build_adamw_optimizer(agent.parameters(), learning_rate=float(training.get("learning_rate", 1e-4)),
                                           eps=1e-5, weight_decay=float(training.get("weight_decay", .01)))
+        if initialize_warm_start(agent, optimizer, cfg, seed=seed) != 1:
+            raise RuntimeError("distributed TERRAN warm start did not reset to epoch one")
         local_cfg = deepcopy(cfg)
         local_cfg["data"]["distributed_rank"] = context.rank
         envs, pool = legacy.make_envs(local_cfg, seed)
@@ -307,8 +331,10 @@ def train_distributed(cfg, *, seed, device, context):
 
 def main():
     args = parse_distributed_args(parse_args)
-    if args.resume or args.warm_start_checkpoint is not None:
-        raise ValueError("distributed legacy TERRAN currently requires fresh training")
+    if args.resume:
+        raise ValueError("distributed legacy TERRAN resume is unsupported")
+    if args.warm_start_checkpoint is not None and args.warm_start_epoch_mode != "reset":
+        raise ValueError("distributed legacy TERRAN warm start requires reset epoch mode")
     if not args.training_epochs or args.data_passes is not None:
         raise ValueError("distributed TERRAN requires --training-epochs")
     if args.output_dir is None:

@@ -113,6 +113,15 @@ def parse_args() -> argparse.Namespace:
             "--warm-start-objective-transition requires --warm-start-checkpoint "
             "and --warm-start-epoch-mode reset, without --resume"
         )
+    if args.warm_start_scale_transition and (
+        args.resume
+        or args.warm_start_checkpoint is None
+        or args.warm_start_epoch_mode != "reset"
+    ):
+        parser.error(
+            "--warm-start-scale-transition requires --warm-start-checkpoint "
+            "and --warm-start-epoch-mode reset, without --resume"
+        )
     if (
         not args.resume
         and args.warm_start_checkpoint is None
