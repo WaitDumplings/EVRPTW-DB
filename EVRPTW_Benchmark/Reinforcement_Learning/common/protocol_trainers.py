@@ -622,9 +622,26 @@ def _assert_warm_start_architecture(
             )
     saved_fields = saved_args.get("resolved_training_method_fields") or {}
     requested_fields = getattr(requested_args, "resolved_training_method_fields", None) or {}
-    if requested_fields.get("architecture") is not None:
-        if saved_fields.get("architecture") != requested_fields["architecture"]:
-            raise ValueError("warm-start architecture identifier mismatch")
+    requested_identifier = requested_fields.get("architecture")
+    saved_identifier = saved_fields.get("architecture")
+    if requested_identifier is not None and saved_identifier != requested_identifier:
+        # Historical single-GPU DRL-TS saves all five semantic architecture
+        # parameters but omits the redundant name attached by the torchrun
+        # adapter. Accept only that known native format: parameters above must
+        # match, and the caller still strictly loads the complete state dict.
+        legacy_native_drl = (
+            method == "DRL-TS"
+            and saved_identifier is None
+            and requested_identifier == "drl_ts_native_v1"
+            and all(saved_args.get(field) is not None
+                    and getattr(requested_args, field, None) is not None
+                    for field in _WARM_START_ARCHITECTURE_FIELDS["DRL-TS"])
+        )
+        if not legacy_native_drl:
+            raise ValueError(
+                f"warm-start architecture identifier mismatch: "
+                f"{saved_identifier!r} != {requested_identifier!r}"
+            )
 
 
 def _source_training_stage(payload: dict[str, Any]) -> str | None:

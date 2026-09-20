@@ -344,3 +344,87 @@ def test_new_stage_runs_additional_epochs_with_fresh_state_and_target_objective(
     assert resumed["warm_start_provenance"] == payload["warm_start_provenance"]
     assert resumed["optimizer_steps"] == 2
     assert len(validation_calls) == 2
+
+
+_DRL_NATIVE_FIELDS = dict(embedding_dim=128, n_encode_layers=2, n_heads=8,
+                          nearest_neighbors=10, tanh_clipping=10.0)
+
+
+def _legacy_single_drl_source(path):
+    from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.model import DRLTSPolicy
+    from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.train import configure_method_fields
+    single = SimpleNamespace(batches_per_epoch=250)
+    configure_method_fields(single)
+    assert 'architecture' not in single.resolved_training_method_fields
+    payload = _source(path, 'DRL-TS', scale='Cus100', **_DRL_NATIVE_FIELDS,
+                      resolved_training_method_fields=single.resolved_training_method_fields)
+    payload['model'] = DRLTSPolicy(**_DRL_NATIVE_FIELDS).state_dict()
+    torch.save(payload, path)
+    return payload
+
+
+def _native_dual_drl_target(output):
+    args = _target_args(output)
+    args.scale = 'Cus500'
+    args.warm_start_scale_transition = True
+    for field, value in _DRL_NATIVE_FIELDS.items():
+        setattr(args, field, value)
+    args.resolved_training_method_fields = {'architecture': 'drl_ts_native_v1'}
+    return args
+
+
+def _native_drl_load_worker(rank, world_size, rendezvous, output):
+    from EVRPTW_Benchmark.Reinforcement_Learning.common.tests.test_distributed_helpers import init_gloo
+    from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.model import DRLTSPolicy
+    import torch.distributed as dist
+    ctx = init_gloo(rank, world_size, rendezvous)
+    try:
+        args = _native_dual_drl_target(Path(output) / 'unused')
+        checkpoint = Path(output) / 'single.ckpt'
+        model = DRLTSPolicy(**_DRL_NATIVE_FIELDS)
+        optimizer = torch.optim.AdamW(model.parameters())
+        with ctx.local_phase('native DRL-TS single-to-dual curriculum load'):
+            policy, baseline, provenance = _load(checkpoint, args, method='DRL-TS', policy=model)
+        ctx.broadcast_model(policy)
+        saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
+        for key, value in policy.state_dict().items():
+            torch.testing.assert_close(value, saved['model'][key], rtol=0, atol=0)
+            torch.testing.assert_close(value, baseline.state_dict()[key], rtol=0, atol=0)
+        assert not optimizer.state
+        assert provenance['source_training_stage'] == 'hard'
+        assert provenance['source_scale'] == 'Cus100' and provenance['target_scale'] == 'Cus500'
+        Path(output, f'loaded_rank{rank}.json').write_text(json.dumps(provenance))
+    finally:
+        dist.destroy_process_group()
+
+
+def test_two_ranks_load_real_native_single_gpu_drl_without_redundant_identifier(tmp_path):
+    from EVRPTW_Benchmark.Reinforcement_Learning.common.tests.test_distributed_helpers import run_gloo_workers
+    _legacy_single_drl_source(tmp_path / 'single.ckpt')
+    run_gloo_workers(_native_drl_load_worker, tmp_path)
+    assert len(list(tmp_path.glob('loaded_rank*.json'))) == 2
+
+
+@pytest.mark.parametrize('change', ['explicit_wrong_id', 'unknown_target', 'other_method',
+                                   'missing_field', 'different_heads', 'missing_weights'])
+def test_legacy_drl_identifier_compatibility_remains_narrow(tmp_path, change):
+    from EVRPTW_Benchmark.Reinforcement_Learning.DRL_TS.model import DRLTSPolicy
+    path = tmp_path / 'single.ckpt'
+    payload = _legacy_single_drl_source(path)
+    args = _native_dual_drl_target(tmp_path / 'unused')
+    method = 'DRL-TS'
+    if change == 'explicit_wrong_id':
+        payload['args']['resolved_training_method_fields']['architecture'] = 'some_other_drl_variant'
+    elif change == 'unknown_target':
+        args.resolved_training_method_fields['architecture'] = 'drl_ts_unknown_v2'
+    elif change == 'other_method':
+        method = payload['method'] = 'AM-EVRPTW'
+    elif change == 'missing_field':
+        del payload['args']['nearest_neighbors']
+    elif change == 'different_heads':
+        payload['args']['n_heads'] = 4
+    else:
+        del payload['model'][next(iter(payload['model']))]
+    torch.save(payload, path)
+    with pytest.raises((ValueError, RuntimeError), match='architecture|Missing key'):
+        _load(path, args, method=method, policy=DRLTSPolicy(**_DRL_NATIVE_FIELDS))
