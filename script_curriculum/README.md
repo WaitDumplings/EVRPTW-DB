@@ -57,6 +57,45 @@ payloads. `checkpoints.json` pins all ten relative paths, SHA256 values, saved
 epochs and architectures. It selects EVRPTW-RL Cus100 from NPG5; the retired
 NPG6 sum-aggregation Cus500 checkpoint is never used.
 
+## One command per server
+
+After the first checkout/update containing these scripts, run the matching entry
+point from the repository root. Each script first runs
+`git pull --ff-only origin ablation`, selects its conda environment, checks all
+assigned checkpoint hashes/data locations and GPU availability, then starts its
+jobs under `nohup`. It prints the launcher PIDs and a unique log directory.
+
+| Entry point | GPU 0 | GPU 1 | GPU 2 | GPU 3 | Default environment |
+|---|---|---|---|---|---|
+| `./script_curriculum/2080ti_4_1.sh` | AM G | AM E | EVRPTW-RL G | EVRPTW-RL E | maojie |
+| `./script_curriculum/2080ti_4_2.sh` | DRL-TS G | DRL-TS E | TERRAN G | TERRAN E | maojie |
+| `./script_curriculum/2080ti_3_1.sh` | RRNCO G | RRNCO E | unused | — | caliroute |
+
+These server entries default to `/data/curriculum_stage1` for results. Submission
+logs and `jobs.tsv` go to `launchers/<server>/<UTC timestamp>_<PID>` under that
+root; each trainer prints its own result directory in its submission log.
+`CURRICULUM_OUTPUT_ROOT`, data/checkpoint overrides and `CURRICULUM_PYTHON` are
+honored. Set `CURRICULUM_CONDA_ENV` to choose a different named environment when
+an explicit Python executable is not supplied. Conda must be initialized or its
+executable available through `CONDA_EXE`/`PATH` for automatic activation.
+
+```bash
+# Check without submitting training (still pulls ablation unless disabled):
+./script_curriculum/2080ti_4_1.sh --dry-run
+
+# Run using an explicit interpreter and the current checkout:
+CURRICULUM_SKIP_PULL=1 CURRICULUM_PYTHON=/path/to/env/bin/python \
+  ./script_curriculum/2080ti_4_1.sh
+```
+
+Physical GPU IDs are checked against any existing `CUDA_VISIBLE_DEVICES` setting;
+use `unset CUDA_VISIBLE_DEVICES` first if a previous command restricted this
+terminal to a smaller GPU set. A busy GPU or failed preflight aborts before this
+server script submits any jobs. The per-job launcher also checks its GPU lock to
+handle concurrent submissions. These are background submissions, not completion
+claims; inspect the printed logs for subsequent training errors. GPU/data checks
+are repeated by each trainer, including full index/stream checks.
+
 ## Data and path overrides
 
 Road defaults search the current checkout, then the sibling `EVRPTW-DB` checkout
