@@ -156,8 +156,10 @@ is checked, but every compressed payload is not rehashed on each launch.
   normalizers; the Road D_time normalizer is a fixed reused hyperparameter,
   not a new D_time calibration. Euclidean D_dist and D_time coincide numerically.
 
-Default per-GPU instance batches and measured memory are listed in
-[SMOKE_REPORT.md](SMOKE_REPORT.md). To explicitly lower a batch if another
+RRNCO G now defaults to **batch 72**, as requested on 2026-09-20; RRNCO E
+remains batch 50. The RRNCO G batch-82 memory measurement in
+[SMOKE_REPORT.md](SMOKE_REPORT.md) is historical; batch 72 has not been GPU
+profiled separately. Other defaults retain the measured batches in that report. To explicitly lower a batch if another
 machine has less free memory, use `--batch-size 32`; the physical and effective
 batch both change, and the requested exposure is recorded. Batch is not the
 trajectory count. A smoke test with a separate fresh directory is:

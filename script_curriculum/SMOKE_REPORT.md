@@ -15,6 +15,10 @@ formal validation. Full runs retain 2000 additional epochs and validate every 10
 | TERRAN | 384 | 10102 | 1 | 384 | 10158 | 1 |
 | RRNCO | 82 | 9703 | 3 | 50 | 10331 | 1 |
 
+**Default update (2026-09-20):** RRNCO G now uses batch **72** by user request.
+The batch-82 row above records the original measurement, not the current default;
+no new GPU memory measurement is claimed for batch 72. RRNCO E remains batch 50.
+
 These are physical instance batches on one GPU, each with 30 trajectories.
 Peaks are device-level `nvidia-smi` samples at one-second intervals, including
 display/CUDA overhead; very brief peaks may be missed. G and E differ in route

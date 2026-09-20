@@ -26,9 +26,14 @@ from EVRPTW_Benchmark.Reinforcement_Learning.scripts.ablation_final.launch impor
 
 SYNTHETIC = 'TERRAN_synthetic100_feasible4_20260911'
 DEFAULT_BATCHES = {
-    'G': {'am_evrptw': 208, 'evrptw_rl': 240, 'drl_ts': 44, 'terran': 384, 'rrnco': 82},
+    'G': {'am_evrptw': 208, 'evrptw_rl': 240, 'drl_ts': 44, 'terran': 384, 'rrnco': 72},
     'E': {'am_evrptw': 108, 'evrptw_rl': 200, 'drl_ts': 44, 'terran': 384, 'rrnco': 50},
 }
+
+
+# Keep historical measurements separate from later requested batch defaults.
+PROFILED_BATCHES = {domain: dict(batches) for domain, batches in DEFAULT_BATCHES.items()}
+PROFILED_BATCHES['G']['rrnco'] = 82
 
 
 def parse_args(argv=None):
@@ -79,11 +84,13 @@ def resolve_data(domain, road_root=None, synthetic_root=None):
 def curriculum_job(a):
     batch = DEFAULT_BATCHES[a.domain][a.method] if a.batch_size is None else a.batch_size
     job = make_job(a.method, 100, 1, a.epochs, a.validation_every, a.validation_limit, batch)
+    calibration_status = 'curriculum_full_batch_cuda_smoke_passed'
+    if batch != PROFILED_BATCHES[a.domain][a.method]:
+        calibration_status = ('default_batch_not_gpu_profiled' if a.batch_size is None
+                              else 'explicit_batch_override_not_profiled')
     job.update(protocol_id='curriculum_stage1_cus100_dtime_v1', schema='curriculum_stage1_cus100_dtime_v1',
                training_representation=a.domain, run_id=f'{a.method}_{a.domain}_Cus100_stage1_seed1234',
-               calibration_status=('curriculum_full_batch_cuda_smoke_passed'
-                                   if batch == DEFAULT_BATCHES[a.domain][a.method]
-                                   else 'explicit_batch_override_not_profiled'))
+               calibration_status=calibration_status)
     if a.domain == 'E':
         job.update(source_kind='terran_synthetic', train_index='train/view_index.parquet',
                    validation_index='val/view_index.parquet',
