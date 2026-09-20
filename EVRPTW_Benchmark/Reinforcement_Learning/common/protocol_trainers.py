@@ -18,7 +18,7 @@ from .method_auxiliary import (
     assert_checkpoint_method_auxiliary,
     method_auxiliary_from_args,
 )
-from .objective import objective_from_args, objective_from_checkpoint
+from .objective import objective_from_args, objective_from_checkpoint, resolve_objective
 from .reward_contract import (
     assert_checkpoint_reward_contract,
     reward_contract_from_args,
@@ -69,6 +69,10 @@ def prepare_training_objective(args: Any):
     if objective_transition and warm_start is None:
         raise ValueError(
             "--warm-start-objective-transition requires --warm-start-checkpoint"
+        )
+    if bool(getattr(args, "warm_start_scale_transition", False)) and warm_start is None:
+        raise ValueError(
+            "--warm-start-scale-transition requires --warm-start-checkpoint"
         )
     if resume and warm_start is not None:
         raise ValueError("--resume and --warm-start-checkpoint are mutually exclusive")
@@ -645,7 +649,7 @@ def _load_warm_start_checkpoint(
     objective_config: Any,
     contract_args: Any,
 ) -> dict[str, Any]:
-    """Import policy weights only; objective transitions require explicit opt-in.
+    """Import policy weights only; objective and scale transitions require opt-in.
 
     Source optimizer, baseline, reward/environment settings and counters are never
     installed. CPU loading also avoids allocating the unused optimizer on GPU.
@@ -683,7 +687,17 @@ def _load_warm_start_checkpoint(
     saved_args = payload.get("args", {}) or {}
     if not isinstance(saved_args, dict):
         saved_args = vars(saved_args)
+    scale_transition = bool(getattr(contract_args, "warm_start_scale_transition", False))
+    source_scale = saved_args.get("scale")
+    target_scale = getattr(contract_args, "scale", None)
+    if scale_transition:
+        if source_scale is None or target_scale is None:
+            raise ValueError("warm-start scale transition requires recorded source and target scales")
+        _customer_count(source_scale)
+        _customer_count(target_scale)
     for field in ("scale", "training_representation", "seed"):
+        if field == "scale" and scale_transition:
+            continue
         requested = getattr(contract_args, field, None)
         saved = saved_args.get(field)
         if requested is not None and saved is not None and str(saved) != str(requested):
@@ -701,7 +715,11 @@ def _load_warm_start_checkpoint(
         "checkpoint_sha256": digest.hexdigest(),
         "method": payload.get("method"),
         "objective_transition": transition,
+        "scale_transition": scale_transition,
+        "source_scale": source_scale,
+        "target_scale": target_scale,
         "source_objective_config": source_objective.to_dict(),
+        "target_objective_config": resolve_objective(objective_config).to_dict(),
         "source_reward_contract": payload.get("reward_contract"),
         "source_soft_stage_contract": payload.get("soft_stage_contract"),
         "source_training_stage": _source_training_stage(payload),

@@ -1,0 +1,26 @@
+{
+  "schema": "curriculum_stage2_source_v1",
+  "method": "am_evrptw",
+  "checkpoint_method": "AM-EVRPTW",
+  "source_domain": "G",
+  "source_scale": "Cus100",
+  "source_protocol_id": "curriculum_stage1_cus100_dtime_v1",
+  "relative_path": "am_evrptw_G_Cus100_stage1_seed1234_20260920T092713_1409604/best_overall.ckpt",
+  "sha256": "6ae497332b98eefb507c63d21ff5e713a4bfeb71594259872ad2cbbf77ba2ea1",
+  "logical_epoch": 1300,
+  "source_run_completed_training_epochs": 2000,
+  "selection": "maximum independently verified complete-and-feasible rate, then minimum mean verified cost over the source stage's validation checkpoints",
+  "validation": {
+    "instances": 500,
+    "complete_and_feasible": 500,
+    "mean_verified_cost_usd": 468.9396665655092,
+    "mean_verified_distance_km": 244.5233362044133
+  },
+  "objective_distance_source": "running_time_path_distance_km",
+  "architecture": {
+    "embedding_dim": 128,
+    "n_encode_layers": 3,
+    "n_heads": 8,
+    "tanh_clipping": 10.0
+  }
+}

@@ -255,3 +255,50 @@ def test_batch_override_provenance(offset, expected):
     job = launch.curriculum_job(launch.parse_args(["am_evrptw", "G", "0", "--batch-size", str(batch)]))
     assert job["physical_batch_size"] == job["effective_batch_size"] == batch
     assert job["calibration_status"] == expected
+
+
+def test_two_gpu_supervisor_exposes_both_devices_and_inherits_locks(supervisor_case, tmp_path, monkeypatch):
+    import os
+    a, job, first = supervisor_case
+    second = {"index": 1, "uuid": first["uuid"] + "-second"}
+    job.update(world_size=2, effective_batch_size=2 * job['physical_batch_size'])
+    code = """
+import fcntl, json, os, pathlib, sys
+run = pathlib.Path(sys.argv[1])
+for uuid in sys.argv[2:]:
+    path = pathlib.Path(f'/tmp/evrptw-ablation-gpu-locks-{os.getuid()}/{uuid}.lock')
+    with path.open('a+') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise RuntimeError('a GPU lock was not inherited')
+(run / 'visible_devices').write_text(os.environ['CUDA_VISIBLE_DEVICES'])
+(run / 'training_result.json').write_text(json.dumps({'completed_training_epochs': 2}))
+"""
+    monkeypatch.setattr(launch, 'build_command', lambda *unused: [sys.executable, '-c', code,
+        str(a.run_dir), first['uuid'], second['uuid']])
+    assert launch.run_training(a, job, tmp_path / 'data', tmp_path / 'source.ckpt', {}, [first, second]) == 0
+    assert (a.run_dir / 'visible_devices').read_text() == first['uuid'] + ',' + second['uuid']
+    state = json.loads((a.run_dir / 'status.json').read_text())
+    assert state['gpu'] == [0, 1]
+    with pytest.raises(ProcessLookupError):
+        os.kill(state['pid'], 0)
+
+
+def test_second_gpu_lock_failure_releases_first_gpu(supervisor_case, tmp_path):
+    import fcntl
+    import os
+    a, job, first = supervisor_case
+    second = {'index': 1, 'uuid': first['uuid'] + '-second'}
+    job['world_size'] = 2
+    root = Path(f'/tmp/evrptw-ablation-gpu-locks-{os.getuid()}')
+    root.mkdir(exist_ok=True)
+    with (root / (second['uuid'] + '.lock')).open('a+') as occupied:
+        fcntl.flock(occupied, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match='GPU 1 is already reserved'):
+            launch.run_training(a, job, tmp_path / 'data', tmp_path / 'source.ckpt', {}, [first, second])
+        with (root / (first['uuid'] + '.lock')).open('a+') as released:
+            fcntl.flock(released, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert not a.run_dir.exists()

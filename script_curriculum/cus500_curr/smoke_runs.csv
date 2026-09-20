@@ -1,0 +1,5 @@
+phase,batch_per_gpu,global_batch,epochs,gpu0_peak_mib,gpu1_peak_mib,mean_update_s,baseline_evaluations,changed_float_tensors,run_path
+ema,4,8,3,3691,3524,2.518888883680726,0,59,/data/curriculum_cus500_am_smoke_20260920/ema_b4
+greedy,4,8,2,3657,3492,4.11682725395076,1,59,/data/curriculum_cus500_am_smoke_20260920/greedy_b4
+ema,12,24,5,10071,9924,5.474687379831448,0,59,/data/curriculum_cus500_am_b12_smoke_20260920/ema_b12
+greedy,12,24,3,9985,9920,7.23428440776964,1,59,/data/curriculum_cus500_am_b12_smoke_20260920/greedy_b12

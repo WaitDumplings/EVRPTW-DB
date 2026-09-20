@@ -140,6 +140,16 @@ def add_data_pass_arguments(parser: argparse.ArgumentParser) -> None:
             "state resets and DRL-TS requires an explicit soft-stage boundary."
         ),
     )
+    parser.add_argument(
+        "--warm-start-scale-transition",
+        action="store_true",
+        help=(
+            "Explicitly initialize compatible policy weights at a different customer "
+            "scale. Requires --warm-start-checkpoint; architecture, training domain, "
+            "and seed must still match, and all training state resets. Does not "
+            "permit objective/reward changes without --warm-start-objective-transition."
+        ),
+    )
     parser.add_argument("--max-batches-per-pass", type=int)
     parser.add_argument("--pilot-mode", action="store_true")
 

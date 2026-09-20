@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from contextlib import ExitStack
 import csv
 import fcntl
 import json
@@ -115,16 +116,18 @@ def prepare_data(root, run, job):
         audit['synthetic_payload_hashes_rechecked'] = False
     train_path, val_path = root / job['train_index'], root / job['validation_index']
     index, validation = pd.read_parquet(train_path), pd.read_parquet(val_path)
-    train = index[(index.customer_count == 100) & (index.split_id == 'train') & (index.track_id == 'train')]
-    val = validation[(validation.customer_count == 100) & (validation.split_id == 'val')]
-    if len(train) != 50000 or len(val) != 500:
-        raise ValueError(f'Expected full Cus100 corpus 50000 train/500 val; got {len(train)}/{len(val)}')
+    scale = int(job.get('scale', 'Cus100').removeprefix('Cus'))
+    expected_train = {100: 50000, 500: 10000, 1000: 5000}[scale]
+    train = index[(index.customer_count == scale) & (index.split_id == 'train') & (index.track_id == 'train')]
+    val = validation[(validation.customer_count == scale) & (validation.split_id == 'val')]
+    if len(train) != expected_train or len(val) != 500:
+        raise ValueError(f'Expected full Cus{scale} corpus {expected_train} train/500 val; got {len(train)}/{len(val)}')
     if train.view_id.duplicated().any() or val.view_id.duplicated().any():
         raise ValueError('Duplicate dataset view IDs')
     if set(train.view_id) & set(val.view_id) or set(train.family_id) & set(val.family_id):
         raise ValueError('Train/val views or parent families overlap')
     count = job['training_epochs'] * job['effective_batch_size']
-    frame, metadata = build_training_stream(index, scale='Cus100', seed=job['seed'], sample_count=count)
+    frame, metadata = build_training_stream(index, scale=f'Cus{scale}', seed=job['seed'], sample_count=count)
     metadata.update(source_index=str(train_path), source_index_sha256=digest(train_path),
                     source_kind=job['source_kind'], allowed_family_ids_source=None, allowed_family_ids_sha256=None)
     path = run / 'artifacts/training_stream.parquet'
@@ -142,6 +145,8 @@ def prepare_data(root, run, job):
 def build_command(job, data, run, checkpoint):
     command = command_for(job, data, run)
     command += ['--warm-start-checkpoint', str(checkpoint), '--warm-start-objective-transition']
+    if job.get('warm_start_scale_transition'):
+        command += ['--warm-start-scale-transition']
     if job['method'] == 'terran':
         command += ['--warm-start-epoch-mode', 'reset']
     return command
@@ -169,6 +174,7 @@ def source_file_hashes(job):
         'EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/trainer.py',
         'EVRPTW_Benchmark/Reinforcement_Learning/TERRAN/protocol.py',
     }
+    files.update(job.get('launcher_source_paths', []))
     for field in ('objective_config_path', 'reward_contract_config_path',
                   'terran_config_path', 'method_auxiliary_profile_path'):
         if job.get(field):
@@ -195,22 +201,35 @@ def terminate_trainer(child):
 
 def run_training(a, job, data, checkpoint, source, gpu):
     # Keep the lock FD alive in both supervisor and trainer to survive a lost shell.
+    selected_gpus = [gpu] if isinstance(gpu, dict) else list(gpu)
+    if len(selected_gpus) != job['world_size']:
+        raise ValueError('Selected GPU count does not match the training world size')
+    if len({g['uuid'] for g in selected_gpus}) != len(selected_gpus):
+        raise ValueError('Each distributed rank must use a distinct GPU')
+    gpu_indices = [g['index'] for g in selected_gpus]
+    gpu_label = gpu_indices[0] if len(gpu_indices) == 1 else gpu_indices
     locks = Path(f'/tmp/evrptw-ablation-gpu-locks-{os.getuid()}')
     locks.mkdir(exist_ok=True)
-    with (locks / f"{gpu['uuid']}.lock").open('a+') as lock:
-        try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise RuntimeError(f"GPU {a.gpu} is already reserved by another launcher") from exc
-        if gpu['uuid'] in compute_busy_uuids():
-            raise RuntimeError(f"GPU {a.gpu} already has a compute job")
+    with ExitStack() as stack:
+        held_locks = []
+        for selected in sorted(selected_gpus, key=lambda value: value['uuid']):
+            lock = stack.enter_context((locks / f"{selected['uuid']}.lock").open('a+'))
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError(f"GPU {selected['index']} is already reserved by another launcher") from exc
+            held_locks.append(lock)
+        busy = compute_busy_uuids()
+        for selected in selected_gpus:
+            if selected['uuid'] in busy:
+                raise RuntimeError(f"GPU {selected['index']} already has a compute job")
         stamp = time.strftime('%Y%m%dT%H%M%S', time.gmtime())
         run = (a.run_dir or a.output_root / f"{job['run_id']}_{stamp}_{os.getpid()}").expanduser().resolve()
         run.mkdir(parents=True, exist_ok=False)
         status = dict(status='preparing', launcher_pid=os.getpid(), started_at=now(),
-                      gpu=a.gpu, logical_epoch=0)
+                      gpu=gpu_label, logical_epoch=0)
         write_json(run / 'status.json', status)
-        print(f"{NAMES[a.method]} {a.domain}: GPU {a.gpu}, batch={job['physical_batch_size']}, +{a.epochs} epochs", flush=True)
+        print(f"{NAMES[a.method]} {a.domain}: GPU {gpu_label}, batch={job['physical_batch_size']}, +{a.epochs} epochs", flush=True)
         print(f"Output: {run}\nLog: {run / 'training.log'}", flush=True)
         interrupted = []
         child = None
@@ -226,7 +245,7 @@ def run_training(a, job, data, checkpoint, source, gpu):
                                ['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(),
                            source_hashes=source_file_hashes(job))
             write_json(run / 'request.json', request)
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu['uuid'], PYTHONUNBUFFERED='1',
+            env = dict(os.environ, CUDA_VISIBLE_DEVICES=','.join(g['uuid'] for g in selected_gpus), PYTHONUNBUFFERED='1',
                        OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', NUMEXPR_NUM_THREADS='1')
             def stop(sig, _frame):
                 interrupted.append(sig)
@@ -238,7 +257,7 @@ def run_training(a, job, data, checkpoint, source, gpu):
             previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
             with (run / 'training.log').open('w') as log:
                 child = subprocess.Popen(command, cwd=REPO, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                         start_new_session=True, pass_fds=(lock.fileno(),))
+                                         start_new_session=True, pass_fds=tuple(lock.fileno() for lock in held_locks))
                 status.update(status='running', pid=child.pid)
                 write_json(run / 'status.json', status)
                 if interrupted:

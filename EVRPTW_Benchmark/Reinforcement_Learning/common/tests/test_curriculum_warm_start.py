@@ -83,15 +83,17 @@ def _load(path, args, *, method="AM-EVRPTW", policy=None):
 
 
 @pytest.mark.parametrize("module", ("AM_EVRPTW", "EVRPTW_RL", "DRL_TS", "RRNCO_EVRPTW"))
-def test_all_reinforce_clis_expose_explicit_objective_transition(module, monkeypatch):
+def test_all_reinforce_clis_expose_explicit_curriculum_transitions(module, monkeypatch):
     entry = importlib.import_module(f"EVRPTW_Benchmark.Reinforcement_Learning.{module}.train")
     monkeypatch.setattr(sys, "argv", [
         "train", "--dataset-path", "data", "--output-dir", "out",
         "--warm-start-checkpoint", "source.ckpt", "--warm-start-objective-transition",
+        "--warm-start-scale-transition",
     ])
     args = entry.parse_args()
     assert args.warm_start_checkpoint == Path("source.ckpt")
     assert args.warm_start_objective_transition is True
+    assert args.warm_start_scale_transition is True
 
 
 def test_transition_is_explicit_and_cannot_weaken_resume(tmp_path):
@@ -134,6 +136,74 @@ def test_transition_requires_checkpoint_and_is_mutually_exclusive_with_resume(tm
         protocol_trainers.prepare_training_objective(args)
 
 
+def test_scale_transition_requires_separate_opt_in_and_records_both_scales(tmp_path):
+    checkpoint = tmp_path / "source.ckpt"
+    _source(checkpoint, scale="Cus100")
+    args = _target_args(tmp_path / "target")
+    args.scale = "Cus500"
+    with pytest.raises(ValueError, match="warm-start scale mismatch"):
+        _load(checkpoint, args)
+    args.warm_start_scale_transition = True
+    policy, baseline, provenance = _load(checkpoint, args)
+    assert policy.weight.item() == baseline.weight.item() == 3
+    assert provenance["scale_transition"] is True
+    assert provenance["source_scale"] == "Cus100"
+    assert provenance["target_scale"] == "Cus500"
+    assert provenance["source_logical_epoch"] == 4300
+    assert provenance["target_objective_config"] == args.objective
+    assert provenance["optimizer_reset"] and provenance["epoch_reset"]
+    assert provenance["sample_counters_reset"] and provenance["baseline_history_reset"]
+    assert provenance["validation_state_reset"] and provenance["early_stop_state_reset"]
+    # Scale opt-in must never waive the independently protected objective contract.
+    args.warm_start_objective_transition = False
+    with pytest.raises(ValueError, match="checkpoint objective mismatch"):
+        _load(checkpoint, args)
+
+
+def test_scale_transition_requires_checkpoint_and_cannot_be_resume(tmp_path):
+    args = _target_args(tmp_path / "target")
+    args.warm_start_objective_transition = False
+    args.warm_start_scale_transition = True
+    with pytest.raises(ValueError, match="--warm-start-scale-transition requires"):
+        protocol_trainers.prepare_training_objective(args)
+    args.warm_start_checkpoint = tmp_path / "source.ckpt"
+    _source(args.warm_start_checkpoint)
+    args.resume = True
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        protocol_trainers.prepare_training_objective(args)
+
+
+@pytest.mark.parametrize(("field", "value", "error"), [
+    ("training_representation", "E", "training_representation mismatch"),
+    ("seed", 5678, "seed mismatch"),
+    ("tanh_clipping", 5.0, "architecture tanh_clipping mismatch"),
+    ("scale", None, "recorded source and target scales"),
+    ("scale", "Cus0", "invalid scale"),
+])
+def test_scale_transition_keeps_non_scale_contract_checks(tmp_path, field, value, error):
+    checkpoint = tmp_path / "source.ckpt"
+    _source(checkpoint, scale="Cus100", tanh_clipping=10.0)
+    args = _target_args(tmp_path / "target")
+    args.scale = "Cus500"
+    args.warm_start_scale_transition = True
+    setattr(args, field, value)
+    with pytest.raises(ValueError, match=error):
+        _load(checkpoint, args)
+
+
+def test_scale_transition_rejects_unrecorded_source_scale_and_wrong_method(tmp_path):
+    checkpoint = tmp_path / "source.ckpt"
+    args = _target_args(tmp_path / "target")
+    args.scale = "Cus500"
+    args.warm_start_scale_transition = True
+    _source(checkpoint, scale=None)
+    with pytest.raises(ValueError, match="recorded source and target scales"):
+        _load(checkpoint, args)
+    _source(checkpoint, method="EVRPTW-RL", scale="Cus100")
+    with pytest.raises(ValueError, match="warm-start method mismatch"):
+        _load(checkpoint, args)
+
+
 @pytest.mark.parametrize(("method", "field", "saved", "requested"), [
     ("AM-EVRPTW", "tanh_clipping", 10.0, 5.0),
     ("EVRPTW-RL", "graph_aggregation", "mean", "sum"),
@@ -168,13 +238,21 @@ def test_drl_transition_requires_deliberate_stage_boundary(tmp_path):
     assert provenance["source_soft_stage_contract"]["resolved_soft_stage_end_epoch"] == 2500
 
 
-@pytest.mark.parametrize("method", METHODS)
+@pytest.mark.parametrize(("method", "scale"), [
+    *[(method, "Cus50") for method in METHODS], ("AM-EVRPTW", "Cus500"),
+])
 def test_new_stage_runs_additional_epochs_with_fresh_state_and_target_objective(
-    tmp_path, monkeypatch, method,
+    tmp_path, monkeypatch, method, scale,
 ):
     args = _target_args(tmp_path / "target")
     args.warm_start_checkpoint = tmp_path / "source.ckpt"
-    _source(args.warm_start_checkpoint, method)
+    _source(args.warm_start_checkpoint, method, scale="Cus100" if scale == "Cus500" else "Cus50")
+    if scale == "Cus500":
+        args.scale = scale
+        args.warm_start_scale_transition = True
+        args.reward_contract_snapshot["scales"][scale] = args.reward_contract_snapshot["scales"].pop("Cus50")
+        args.reward_contract_snapshot["sha256"] = reward_contract_digest(args.reward_contract_snapshot)
+        args.customer_exposure_budget = args.training_epochs * args.effective_batch_size * 500
     args.validation_limit = 3
     args.validation_every_epochs = 1
     args.validation_checkpoints = 2
@@ -245,7 +323,8 @@ def test_new_stage_runs_additional_epochs_with_fresh_state_and_target_objective(
     state = json.loads((args.output_dir / "data_pass_state.json").read_text())
     assert state["optimizer_steps"] == 2
     assert state["instances_seen"] == 4
-    assert state["customer_exposures"] == 200
+    assert state["customer_exposures"] == 4 * int(scale.removeprefix("Cus"))
+    assert payload["warm_start_provenance"]["target_scale"] == scale
     rows = [json.loads(line) for line in (args.output_dir / "reward_diagnostics.jsonl").read_text().splitlines()]
     assert [row["logical_epoch"] for row in rows] == [1, 2]
     assert all(row["session_start_logical_epoch"] == 0 for row in rows)
@@ -257,6 +336,7 @@ def test_new_stage_runs_additional_epochs_with_fresh_state_and_target_objective(
     # reinitializing weights or needing the warm-start source file again.
     args.warm_start_checkpoint = None
     args.warm_start_objective_transition = False
+    args.warm_start_scale_transition = False
     args.resume = True
     del args.warm_start_provenance
     protocol_trainers.train_reinforce_data_passes(**training_kwargs)

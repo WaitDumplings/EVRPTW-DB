@@ -187,3 +187,11 @@ overwritten. In that directory:
 To read the log while it runs: `tail -f /path/printed/by/launcher/training.log`.
 This delivery configures the 2000-epoch experiments; local GPU validation consists
 of the short runs documented in the smoke report.
+
+## Next stage: AM Road Cus500
+
+[`cus500_curr/am.sh`](cus500_curr/am.sh) loads the frozen best AM Road Cus100
+stage-1 checkpoint and trains one policy synchronously on GPU 0/1 for 3000
+additional epochs. Defaults are 12 instances per GPU (global 24), 30 trajectories,
+and 500-instance validation every 100 updates. See the
+[stage-2 instructions](cus500_curr/README.md) for source identity and outputs.
