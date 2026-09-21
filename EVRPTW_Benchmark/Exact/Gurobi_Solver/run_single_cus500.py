@@ -20,6 +20,7 @@ from pathlib import Path
 import random
 import secrets
 import signal
+import subprocess
 import sys
 import time
 import traceback
@@ -326,8 +327,54 @@ def choose_task(tasks, seed):
     return random.Random(seed).choice(candidates), candidates
 
 
+def default_output_dir():
+    return REPO_ROOT / "EVRPTW_Benchmark/results" / (
+        "gurobi_single_Cus500_dtime_"
+        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        + f"_{os.getpid()}"
+    )
+
+
+def launch_background(args):
+    """Detach one solver, with no terminal descriptors or inherited SIGHUP."""
+    out = (args.output_dir or default_output_dir()).expanduser().resolve()
+    if out.exists():
+        raise FileExistsError(f"Use a NEW output directory: {out}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    log_path = Path(str(out) + ".launcher.log")
+    command = [sys.executable, "-u", str(Path(__file__).resolve())]
+    # Rebuild parsed options, so the child cannot inherit --background (even if
+    # the caller used an argparse abbreviation). Do not set solver thread caps.
+    for key, value in vars(args).items():
+        if key in {"background", "output_dir"} or value is None or value is False:
+            continue
+        command.append("--" + key)
+        if value is not True:
+            command.append(str(value))
+    command.extend(["--output_dir", str(out)])
+    # Reserve the launch log before spawning; a second launch for the same
+    # destination fails even before the worker creates its output directory.
+    with log_path.open("x") as log:
+        old_hup = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        try:
+            child = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                     stdout=log, stderr=subprocess.STDOUT,
+                                     start_new_session=True, close_fds=True)
+        finally:
+            signal.signal(signal.SIGHUP, old_hup)
+    write_json(Path(str(out) + ".launcher.json"), {
+        "status": "spawned", "launched_at": now(), "pid": child.pid,
+        "output_dir": str(out), "progress_csv": str(out / "progress.csv"),
+        "log_file": str(log_path), "command": command,
+    })
+    print(f"Background PID: {child.pid}\nCSV: {out / 'progress.csv'}\nLog: {log_path}", flush=True)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--background", action="store_true",
+                    help="Detach solver; print PID and CSV/log paths, then exit.")
     ap.add_argument("--dataset_root", type=Path, default=None)
     ap.add_argument("--track", choices=TRACKS, default="T1")
     ap.add_argument(
@@ -373,6 +420,8 @@ def main(argv=None):
         ap.error("--log_interval_s must be finite and positive")
     if args.cs_copies < 1:
         ap.error("--cs_copies must be positive")
+    if args.background:
+        return launch_background(args)
     dataset = (
         args.dataset_root
         or Path(
@@ -395,16 +444,7 @@ def main(argv=None):
     task, candidates = choose_task(
         read_stage2_tasks(index, family_root=dataset / "materialized/families"), seed
     )
-    out = (
-        args.output_dir
-        or REPO_ROOT
-        / "EVRPTW_Benchmark/results"
-        / (
-            "gurobi_single_Cus500_dtime_"
-            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-            + f"_{os.getpid()}"
-        )
-    ).resolve()
+    out = (args.output_dir or default_output_dir()).expanduser().resolve()
     out.mkdir(parents=True, exist_ok=False)
     objective_path = (
         REPO_ROOT

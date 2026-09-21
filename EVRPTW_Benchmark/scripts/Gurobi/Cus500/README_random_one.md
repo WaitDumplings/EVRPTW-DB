@@ -10,7 +10,9 @@ conda activate maojie
 bash EVRPTW_Benchmark/scripts/Gurobi/Cus500/random_one.sh
 ```
 
-这是前台运行。默认不设置 `Threads`、`ThreadLimit`、`MIPGap`、`MIPGapAbs`
+**默认后台运行**，命令立即返回，不需要额外加 `nohup` 或 `&`。
+终端只显示 PID、`progress.csv` 和日志路径；求解器输出全部写入文件。
+关闭终端后仍继续运行。默认不设置 `Threads`、`ThreadLimit`、`MIPGap`、`MIPGapAbs`
 或 `TimeLimit`，由 Gurobi 使用其默认/环境参数。本机 Gurobi 13.0.2 验证为
 `Threads=0`（自动）、`MIPGap=0.0001`（0.01%）、`TimeLimit=Infinity`。
 自动线程数由 Gurobi 决定，并不承诺占满全部逻辑 CPU。完整有效参数记录在
@@ -54,7 +56,7 @@ C_USD = (0.39 × 100/257) × D_time_km + 413.6331536717643 × K
 解经独立重放后才标记 `verified_feasible`。原生 MIP objective 与 verified cost
 分列记录，不能把没有可行解的 objective 或 gap 填成零。
 
-启动时打印实际选中的实例 ID 和输出目录。默认保存到仓库下：
+实际选中的实例 ID 记录在日志和 `run_config.json` 中。默认保存到仓库下：
 
 ```text
 EVRPTW_Benchmark/results/gurobi_single_Cus500_dtime_<UTC时间>_<PID>/
@@ -62,6 +64,8 @@ EVRPTW_Benchmark/results/gurobi_single_Cus500_dtime_<UTC时间>_<PID>/
 
 | 文件 | 内容 |
 |---|---|
+| `<输出目录>.launcher.log`（目录旁） | 后台进程的 stdout/stderr，包括启动失败的 traceback |
+| `<输出目录>.launcher.json`（目录旁） | 启动 PID、完整命令和文件路径；`spawned` 仅表示已创建进程 |
 | `gurobi.log` | Gurobi 原生优化日志 |
 | `progress.csv` / `progress.jsonl` | incumbent objective、bound、gap、Runtime 与 wall time 的完整精度数值 |
 | `latest_progress.json` | 最近一次进度，原子替换，可在运行中查看 |
@@ -98,13 +102,19 @@ EVRPTW_Benchmark/results/gurobi_single_Cus500_dtime_<UTC时间>_<PID>/
 ```bash
 bash EVRPTW_Benchmark/scripts/Gurobi/Cus500/random_one.sh \
   --output_dir /data/gurobi_cus500_one
-# 另一个终端实时查看；该文件从启动后即持续写入。
+# 命令返回后直接查看 CSV；完成实例读取、进入求解阶段后开始写入。
 tail -f /data/gurobi_cus500_one/progress.csv
 ```
 
+无需在前台查看日志，可直接在编辑器或表格软件中打开 `progress.csv`。
+CSV 在实例加载后才创建；`--dry_run` 也在后台执行，但只生成配置、不生成求解进度 CSV。
+如果迟迟没有 CSV，检查终端显示的 `.launcher.log` 中是否有数据路径或许可证错误。
+输出目录和同名 `.launcher.log` 均不得已存在，防止重复启动或覆盖历史记录。
+
 这是事件驱动记录，不保证每秒都收到 Gurobi 回调；构模期间会先留下
-`model_build_start`，模型完成后写 `model_ready`。Ctrl-C/SIGTERM 会请求 Gurobi
-停止并在正常返回后保存已找到的 incumbent；强制 SIGKILL 无法生成最终汇总。
+`model_build_start`，模型完成后写 `model_ready`。需要停止后台求解时，使用启动时
+打印的 PID 执行 `kill -TERM <PID>`，请求 Gurobi 停止并在正常返回后保存已找到的
+incumbent；强制 SIGKILL 无法生成最终汇总。关闭终端或在终端按 Ctrl-C 不会停止后台任务。
 
 ## 验证范围
 
