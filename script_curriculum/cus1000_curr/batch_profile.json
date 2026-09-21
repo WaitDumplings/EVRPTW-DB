@@ -1,0 +1,30 @@
+{
+  "schema": "curriculum_am_cus1000_four_gpu_profile_v1",
+  "batch_per_gpu": 3,
+  "global_batch": 12,
+  "world_size": 4,
+  "source_sha256": "8d1c1b1741aa2a20258def49bae0316e9fbd0cfc8172503c4de52e8b37f877f9",
+  "source_selected_epoch": 2000,
+  "train_trajectories": 30,
+  "validation_candidates": 30,
+  "training_step_cap": 1250,
+  "validation_step_cap": 1875,
+  "source_scale": "Cus500",
+  "target_scale": "Cus1000",
+  "epochs_tested": 3,
+  "peak_allocated_bytes_per_rank": [
+    8327143936,
+    8370664960,
+    8354283008,
+    8294620672
+  ],
+  "validation_instances": 4,
+  "validation_feasible": 4,
+  "larger_batch_test": {
+    "batch_per_gpu": 4,
+    "result": "CUDA OOM in actor rollout",
+    "evidence": "/data/curriculum_cus1000_am_4gpu_b4_smoke_20260921/training.log"
+  },
+  "evidence": "/data/curriculum_cus1000_am_4gpu_b3_smoke_20260921",
+  "limits": "Short smoke on 36 training instances and 4 validation instances; not a guarantee against all future batch peaks. All smoke updates used the native EMA baseline; formal 2000 updates also precede its default 2500-step handoff."
+}
