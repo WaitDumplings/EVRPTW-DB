@@ -1,4 +1,4 @@
-# Road Cus100 → Cus500：五模型双卡 curriculum
+# Road Cus100 → Cus500：五模型 curriculum（EVRPTW-RL 支持四卡）
 
 五个入口均从 **Road Cus100 第一阶段的 best 权重**开始，在 Road Cus500 上新增
 **3000 个 logical epoch**，每100轮用500个验证实例、best-of-30评测一次。
@@ -25,8 +25,8 @@
 
 例如，本机已复制第一阶段 AM 的 best epoch1300 到 `/data/cus100_ckpt/am.ckpt`。
 该文件与现有双卡 AM 运行的来源权重完全相同；现有训练继续运行，未重复启动。
-本机 EVRPTW-RL 第一阶段尚未完成，未将其中间 best 冒充最终文件；其余模型需在对应
-服务器第一阶段完成后自行放入。
+本机 EVRPTW-RL Road 第一阶段已完成2000轮，best epoch1700（val cost482.87541062721596、500/500可行）
+已复制到 `/data/cus100_ckpt/evrptw_rl.ckpt`；其余模型需在对应服务器准备。
 
 ## 同步代码和启动
 
@@ -124,3 +124,17 @@ checkpoint 根路径可用 `CURRICULUM_CUS100_CKPT_ROOT` 或 `--checkpoint-root`
 
 可选参数还包括 `--batch-size`（每卡实例数）、`--epochs`、`--validation-every`、
 `--validation-limit`。默认无需修改；改变 batch 会改变实例暴露量，override 不冒充已实测设置。
+
+## EVRPTW-RL 四卡
+
+EVRPTW-RL 入口同时支持两卡和四卡：
+
+```bash
+./script_curriculum/cus500_curr/evrptw_rl_cus100_to_500.sh 0 1 2 3
+```
+
+默认每卡24实例，四卡全局96，每实例30轨迹；3000次更新对应288000个实例采样。
+其余训练、验证、D_time min-cost 和 warm-start 设置与双卡版本一致。
+EVRPTW-RL 新阶段前1000轮使用 EMA baseline，之后 greedy rollout baseline；
+actor 仍使用 sampling。GPU 数增加会增加全局 batch，不代表固定3000轮的时间减半。
+双卡历史显存测量不作为四卡已测试的证据；本次短测见 `EVRPTW_RL_4GPU_SMOKE.md`。

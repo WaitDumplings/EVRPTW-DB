@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared launcher; public scripts supply the method and two physical GPU indices.
+# Shared launcher; public scripts supply the method and physical GPU indices.
 set -euo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE/../.."
@@ -55,7 +55,7 @@ with (logs / 'launcher.log').open('w') as log:
                              stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                              start_new_session=True, close_fds=True)
 (logs / 'launcher.pid').write_text(str(child.pid) + '\n')
-print(f'Submitted {method} Road Cus500 two-GPU curriculum; launcher PID={child.pid}')
+print(f'Submitted {method} Road Cus500 distributed curriculum; launcher PID={child.pid}')
 print(f"Launcher log: {logs / 'launcher.log'}")
 print('The launcher checks GPU ownership and prints its result directory there.')
 PYLAUNCH

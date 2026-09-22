@@ -5,21 +5,30 @@
       "batch_per_gpu": 12,
       "checkpoint_sha256": "6ae497332b98eefb507c63d21ff5e713a4bfeb71594259872ad2cbbf77ba2ea1",
       "evidence_status": "current_curriculum_source_two_gpu_smoke_passed",
-      "peak_device_mib": [10071, 9924],
+      "peak_device_mib": [
+        10071,
+        9924
+      ],
       "scope": "Five EMA updates and three greedy updates; four validation instances; D_time, 30 trajectories, 1700/2550 caps; full AM training subsequently launched.",
       "evidence": "script_curriculum/cus500_curr/SMOKE_REPORT.md"
     },
     "evrptw_rl": {
       "batch_per_gpu": 24,
       "evidence_status": "historical_sum_aggregation_profile_reused_for_mean_variant_not_reprofiled",
-      "peak_process_mib": [10254, 10254],
+      "peak_process_mib": [
+        10254,
+        10254
+      ],
       "scope": "Historical sum variant, six dual-GPU updates including baseline transition at 1700/2550 caps. Current mean variant uses 600/700 explicit caps and D_time; incoming curriculum weights have not been GPU-profiled.",
       "evidence": "/data/Maojie/ICLR/cus500-evrptw-rl-after-am/EVRPTW_Benchmark/results/cus500_evrptw_rl_20260913/calibration/attempt_1789375001637246274/09_batch24_confirm/profile_summary.json"
     },
     "drl_ts": {
       "batch_per_gpu": 2,
       "evidence_status": "historical_Cus500_dual_gpu_profile_new_source_not_reprofiled",
-      "peak_process_mib": [9508, 9508],
+      "peak_process_mib": [
+        9508,
+        9508
+      ],
       "scope": "Twelve updates: six soft, six hard; old objective, fresh initialization, 30 trajectories, 1700/2550 caps. Batch3 previously OOM in baseline encoder. Curriculum continues hard with source policy and D_time.",
       "evidence": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/measured_profiles.json"
     },
@@ -32,9 +41,62 @@
     "rrnco": {
       "batch_per_gpu": 22,
       "evidence_status": "historical_Cus500_dual_gpu_profile_new_source_not_reprofiled",
-      "peak_process_mib": [9818, 9818],
+      "peak_process_mib": [
+        9818,
+        9818
+      ],
       "scope": "Six dual-GPU updates, old objective and fresh initialization, full graph, 30 trajectories, 1700/2550 caps, activation-checkpoint stride1. Incoming D_time curriculum weights not reprofiled.",
       "evidence": "EVRPTW_Benchmark/Reinforcement_Learning/scripts/cus500_dual_20260913/measured_profiles.json"
+    }
+  },
+  "four_gpu_models": {
+    "evrptw_rl": {
+      "batch_per_gpu": 24,
+      "world_size": 4,
+      "checkpoint_sha256": "d9afff1adbb1a5f79e1dafc68f7326f3d38d3cccf1656c9e26cc278046c5b497",
+      "evidence_status": "current_curriculum_source_four_gpu_smoke_passed",
+      "scope": "Three EMA updates and one separate greedy-baseline update; four validation instances each; mean aggregation, D_time, 30 trajectories, 600/700 caps. Production retains 1000-step EMA warmup; source actor reused with fresh optimizer.",
+      "runs": [
+        {
+          "run": "/data/curriculum_evr_cus500_4gpu_b24_smoke_20260922",
+          "epochs": 3,
+          "baselines": [
+            "paper_ema"
+          ],
+          "epoch_seconds": [
+            71.93238911498338,
+            73.36603059410118,
+            76.32468694495037
+          ],
+          "peak_allocated_bytes_per_rank": [
+            5134072832,
+            5134072832,
+            5132588032,
+            5120091136
+          ],
+          "validation_feasible": 4,
+          "validation_instances": 4
+        },
+        {
+          "run": "/data/curriculum_evr_cus500_4gpu_b24_greedy_smoke_20260922",
+          "epochs": 1,
+          "baselines": [
+            "greedy_rollout"
+          ],
+          "epoch_seconds": [
+            81.39919848390855
+          ],
+          "peak_allocated_bytes_per_rank": [
+            5120088576,
+            5120088576,
+            5132585472,
+            5120088576
+          ],
+          "validation_feasible": 4,
+          "validation_instances": 4
+        }
+      ],
+      "evidence": "script_curriculum/cus500_curr/EVRPTW_RL_4GPU_SMOKE.md"
     }
   }
 }

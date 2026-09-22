@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Road Cus100 -> Cus500 curriculum, one policy synchronously trained on two GPUs."""
+"""Road Cus100 -> Cus500 curriculum, one policy synchronously trained on two or four GPUs."""
 from __future__ import annotations
 
 import argparse
@@ -24,9 +24,9 @@ def parse_gpus(value):
     try:
         indices = [int(item.strip()) for item in value.split(',')]
     except ValueError as exc:
-        raise argparse.ArgumentTypeError('GPUs must be two physical indices, e.g. 0,1') from exc
-    if len(indices) != 2 or len(set(indices)) != 2 or min(indices) < 0:
-        raise argparse.ArgumentTypeError('Select exactly two distinct nonnegative physical GPU indices')
+        raise argparse.ArgumentTypeError('GPUs must be two or four physical indices, e.g. 0,1 or 0,1,2,3') from exc
+    if len(indices) not in (2, 4) or len(set(indices)) != len(indices) or min(indices) < 0:
+        raise argparse.ArgumentTypeError('Select two or four distinct nonnegative physical GPU indices')
     return indices
 
 
@@ -58,7 +58,7 @@ def parse_args(argv=None):
 
 def curriculum_job(args):
     batch = DEFAULT_BATCHES[args.method] if args.batch_size is None else args.batch_size
-    job = shared.make_job(args.method, 500, 2, args.epochs, args.validation_every,
+    job = shared.make_job(args.method, 500, len(args.gpus), args.epochs, args.validation_every,
                           args.validation_limit, batch)
     job.update(schema='curriculum_stage2_road_cus500_v1',
                protocol_id='curriculum_stage2_road_cus500_v1',
@@ -89,12 +89,17 @@ def source_checkpoint(args):
 
 
 def apply_batch_evidence(job, source):
-    profiles = json.loads((HERE / 'batch_profiles.json').read_text())['models']
-    profile = profiles[job['method']]
+    evidence = json.loads((HERE / 'batch_profiles.json').read_text())
+    profile = evidence['models'][job['method']]
+    if job['world_size'] == 4:
+        profile = evidence.get('four_gpu_models', {}).get(job['method'], profile)
     job['batch_evidence'] = profile
-    if (job['physical_batch_size'] == profile['batch_per_gpu']
+    if (job['world_size'] == profile.get('world_size', 2)
+            and job['physical_batch_size'] == profile['batch_per_gpu']
             and profile.get('checkpoint_sha256') == source['sha256']):
-        job['calibration_status'] = 'curriculum_exact_source_two_gpu_smoke_passed'
+        job['calibration_status'] = ('curriculum_exact_source_two_gpu_smoke_passed'
+                                     if job['world_size'] == 2
+                                     else 'curriculum_exact_source_four_gpu_smoke_passed')
 
 
 def inspect_data(root, job):

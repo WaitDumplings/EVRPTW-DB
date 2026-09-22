@@ -146,3 +146,29 @@ if '--dry-run' not in sys.argv:
     assert data['args'] == ['--method', 'am_evrptw', '--gpus', '1,2']
     pid_file = next((tmp_path / 'outputs/launchers/am_evrptw').glob('*/launcher.pid'))
     assert int(pid_file.read_text()) == data['pid']
+
+
+def test_four_gpu_evrptw_curriculum_contract():
+    args = launch.parse_args(['--method', 'evrptw_rl', '--gpus', '0,1,2,3'])
+    job = launch.curriculum_job(args)
+    assert job['world_size'] == 4
+    assert job['effective_batch_size'] == 96
+    assert job['customer_exposure_budget'] == 3000 * 96 * 500
+    command = launch.shared.build_command(job, Path('/data/road'), Path('/data/new'), Path('/data/source.ckpt'))
+    assert '--nproc_per_node=4' in command
+    native = importlib.import_module(job['train_module']).parse_args(command[command.index('--module') + 2:])
+    assert native.expected_world_size == 4
+    assert native.physical_batch_size == 24 and native.effective_batch_size == 96
+    assert native.graph_aggregation == 'mean'
+    assert native.training_epochs == 3000
+    assert (native.training_rollout_steps, native.validation_rollout_steps) == (600, 700)
+
+
+def test_four_gpu_shell_forwards_indices(tmp_path):
+    fake = tmp_path / 'python'
+    fake.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
+    fake.chmod(0o755)
+    env = dict(os.environ, CURRICULUM_PYTHON=str(fake))
+    script = launch.HERE / 'evrptw_rl_cus100_to_500.sh'
+    result = subprocess.run([str(script), '0', '1', '2', '3', '--dry-run'], env=env, text=True, capture_output=True, check=True)
+    assert result.stdout.splitlines()[1:] == ['--method', 'evrptw_rl', '--gpus', '0,1,2,3', '--dry-run']

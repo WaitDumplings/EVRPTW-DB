@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 GPU0 GPU1 [--dry-run|--foreground] [training options]" >&2
+gpus=()
+while [ "$#" -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; do
+    gpus+=("$1")
+    shift
+done
+if [ "${#gpus[@]}" -ne 2 ] && [ "${#gpus[@]}" -ne 4 ]; then
+    echo "Usage: $0 GPU0 GPU1 [GPU2 GPU3] [--dry-run|--foreground] [training options]" >&2
     exit 2
 fi
-if ! [[ "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ ]] || [ "$1" = "$2" ]; then
-    echo "Choose two different physical GPU indices, for example: $0 0 1" >&2
-    exit 2
-fi
-first_gpu="$1"
-second_gpu="$2"
-shift 2
-exec "$HERE/_launch.sh" evrptw_rl --gpus "$first_gpu,$second_gpu" "$@"
+for ((i=0; i<${#gpus[@]}; i++)); do
+    for ((j=0; j<i; j++)); do
+        if [ "${gpus[i]}" = "${gpus[j]}" ]; then
+            echo "Choose distinct physical GPU indices" >&2
+            exit 2
+        fi
+    done
+done
+gpu_list="$(IFS=,; echo "${gpus[*]}")"
+exec "$HERE/_launch.sh" evrptw_rl --gpus "$gpu_list" "$@"
