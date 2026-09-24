@@ -1,0 +1,117 @@
+{
+  "verified_at_utc": "2026-09-24T06:32:28.010241+00:00",
+  "full_initial_validation": {
+    "instances": 500,
+    "passed": 500,
+    "failed": 0,
+    "failures": [],
+    "max_absolute_error_usd": 0.0,
+    "mean_initial_objective_usd": 1997.5131394582572,
+    "all_initial_feasible_and_cost_matched": true
+  },
+  "bks_sha256": "60e287469943e05d0ee3891faba6168e3418c531a39bdcf5c731966101ff5e6c",
+  "dataset_index_sha256": "3c2a9d91e00b9e9f130f8e9a4668c0041635de30f55fa98995080b42be045c07",
+  "tested_source_sha256": {
+    "EVRPTW_Benchmark/scripts/ALNS/Cus1000/bks_refine.py": "7a6f75893da135a37c652473c6ccfddeee6fed7aa238820c98186075bd19dc8e",
+    "EVRPTW_Benchmark/MetaHeuristics/ALNS_Solver/solver.py": "931366b71c98e993a6afef8fdd05f5211499df825566845e57160ec023ce5564",
+    "EVRPTW_Benchmark/MetaHeuristics/ALNS_Solver/instance_adapter.py": "abb3fb38ba9be5e804f6581de8d71ad2041825f9a09ee156aa3635dc2b3487b3",
+    "EVRPTW_Benchmark/MetaHeuristics/benchmark_common.py": "6d5f8ae774d432e108ae90c298ef77b6e2fc0f400622c38893d2593104023ed6",
+    "EVRPTW_Core/evrptw_core/objective.py": "00eb85ba03831695232bd8eadfbb276403a51f63feaf663438e21ccdee986685"
+  },
+  "smoke": {
+    "passed": true,
+    "instances": 6,
+    "snapshots_verified": 48,
+    "distinct_worker_pids": 6,
+    "negative_cost_and_route_checks_passed": true,
+    "results": [
+      {
+        "instance_id": "iv_021ec568a08093df2a065c39",
+        "pid": 1551204,
+        "search_runtime_s": 24.000116932205856,
+        "iterations": 7,
+        "initial_objective_usd": 1825.0054225190254,
+        "objective": 1825.0054225190254,
+        "improvement_usd": 0.0,
+        "checkpoint_count": 8
+      },
+      {
+        "instance_id": "iv_03359b7c173524101ee35015",
+        "pid": 1551205,
+        "search_runtime_s": 24.000153311062604,
+        "iterations": 5,
+        "initial_objective_usd": 1768.792559024981,
+        "objective": 1768.792559024981,
+        "improvement_usd": 0.0,
+        "checkpoint_count": 8
+      },
+      {
+        "instance_id": "iv_03ed32f9248a30a68d9ef660",
+        "pid": 1551459,
+        "search_runtime_s": 24.000114972004667,
+        "iterations": 6,
+        "initial_objective_usd": 1342.2773541631163,
+        "objective": 1334.432428522603,
+        "improvement_usd": 7.844925640513338,
+        "checkpoint_count": 8
+      },
+      {
+        "instance_id": "iv_8058b8e671e9b3b5ea19c0fa",
+        "pid": 1551272,
+        "search_runtime_s": 24.000125941820443,
+        "iterations": 3,
+        "initial_objective_usd": 2254.236575808834,
+        "objective": 2254.236575808834,
+        "improvement_usd": 0.0,
+        "checkpoint_count": 8
+      },
+      {
+        "instance_id": "iv_81b3b3750e1cadccfe217097",
+        "pid": 1551273,
+        "search_runtime_s": 24.000144242076203,
+        "iterations": 1,
+        "initial_objective_usd": 1769.6931079048936,
+        "objective": 1769.1755408714598,
+        "improvement_usd": 0.5175670334338065,
+        "checkpoint_count": 8
+      },
+      {
+        "instance_id": "iv_823486baa3f252088ca57979",
+        "pid": 1551480,
+        "search_runtime_s": 24.000107622006908,
+        "iterations": 5,
+        "initial_objective_usd": 1317.1742939574356,
+        "objective": 1310.1452288960097,
+        "improvement_usd": 7.029065061425854,
+        "checkpoint_count": 8
+      }
+    ]
+  },
+  "regression_tests_passed": 4,
+  "shell_syntax_passed": true,
+  "production_dry_run": {
+    "upper_instances": 250,
+    "lower_instances": 250,
+    "disjoint_exhaustive": true,
+    "workers_per_server": 30,
+    "seconds_per_instance": 7200,
+    "checkpoint_seconds": [
+      900,
+      1800,
+      2700,
+      3600,
+      4500,
+      5400,
+      6300,
+      7200
+    ]
+  },
+  "resume_completed_results_unchanged": true,
+  "full_2h_experiment_started": false,
+  "evidence_paths": [
+    "/data/alns_bks_cus1000_T1_validation_20260924",
+    "/data/alns_bks_cus1000_T1_smoke_upper_20260924",
+    "/data/alns_bks_cus1000_T1_smoke_lower_20260924",
+    "/data/alns_bks_cus1000_T1_smoke_verification_20260924.json"
+  ]
+}
