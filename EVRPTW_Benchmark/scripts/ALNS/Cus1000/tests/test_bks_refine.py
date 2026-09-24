@@ -4,9 +4,11 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from bks_refine import Timeline, select_part
+import bks_refine
+from bks_refine import Timeline, select_part, resolve_index, INDEX_RELATIVE, DATASET_NAME
 
 
 class BKSRefineTests(unittest.TestCase):
@@ -22,6 +24,50 @@ class BKSRefineTests(unittest.TestCase):
                         [{'instance_id': 'duplicate'}] * 500):
             with self.assertRaises(ValueError):
                 select_part(records, 'upper')
+
+    def test_dataset_discovery_supports_restored_and_source_layouts(self):
+        layouts = [
+            'ICLR/repo/EVRPTW_Dataset/Instances_v2/us_11city',
+            f'ICLR/repo/EVRPTW_Dataset/Instances_v2/{DATASET_NAME}',
+            'ICLR/EVRPTW_Dataset/Instances_v2/us_11city',
+            f'ICLR/{DATASET_NAME}',
+            'ICLR/evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city',
+            f'ICLR/evrptw_runtime/EVRPTW_Dataset/Instances_v2/{DATASET_NAME}',
+            'ICLR/evrptw_runtime/EVRPTW_Dataset',
+            'evrptw_runtime/EVRPTW_Dataset/Instances_v2/us_11city',
+            'data/EVRPTW_Dataset/Instances_v2/us_11city',
+            f'data/{DATASET_NAME}',
+        ]
+        for layout in layouts:
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                index = root / layout / INDEX_RELATIVE
+                index.parent.mkdir(parents=True)
+                index.touch()
+                with patch.object(bks_refine, 'REPO', root / 'ICLR/repo'):
+                    self.assertEqual(resolve_index(None, root/'data'), index.resolve())
+
+    def test_explicit_dataset_root_and_index_override_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            index = root / 'custom' / INDEX_RELATIVE
+            index.parent.mkdir(parents=True)
+            index.touch()
+            for explicit in (index, root/'custom'):
+                self.assertEqual(resolve_index(str(explicit), root/'unused'), index.resolve())
+            with self.assertRaises(FileNotFoundError):
+                resolve_index(str(root/'missing'), root)
+
+    def test_missing_dataset_error_lists_searched_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Three runtime ancestors remain inside the isolated fixture.
+            with patch.object(bks_refine, 'REPO', root/'a/b/ICLR/repo'):
+                with self.assertRaises(FileNotFoundError) as caught:
+                    resolve_index(None, root/'data')
+            self.assertIn('EVRPTW_DATASET_ROOT', str(caught.exception))
+            self.assertIn(str(root/'a/b/ICLR/repo/EVRPTW_Dataset/Instances_v2/us_11city'/INDEX_RELATIVE),
+                          str(caught.exception))
 
     def make_timeline(self, directory):
         task = {'output_dir': directory, 'time_limit_s': 4, 'checkpoints_s': [1, 2, 3, 4],

@@ -76,15 +76,34 @@ def resolve_index(explicit, data_root):
         if not p.is_file():
             raise FileNotFoundError(p)
         return p
-    bases = [data_root, data_root / DATASET_NAME,
-             data_root / 'EVRPTW_Dataset/Instances_v2' / DATASET_NAME,
-             data_root / 'Instances_v2' / DATASET_NAME,
-             REPO / 'EVRPTW_Dataset/Instances_v2' / DATASET_NAME,
-             REPO.parent / 'EVRPTW-DB/EVRPTW_Dataset/Instances_v2' / DATASET_NAME]
-    for base in bases:
-        if (base / INDEX_RELATIVE).is_file():
-            return (base / INDEX_RELATIVE).resolve()
-    raise FileNotFoundError('Cannot locate T1 view index under /data or repository; set EVRPTW_DATASET_ROOT or --dataset-path')
+    # Accept both the restored release name and the original source name.
+    # Use script-derived repository/ICLR locations, never the caller's cwd.
+    names = ('us_11city', DATASET_NAME)
+    roots = (Path(data_root).expanduser().resolve(), REPO, REPO.parent,
+             REPO.parent / 'EVRPTW-DB')
+    bases = []
+    for root in roots:
+        bases.append(root)
+        for name in names:
+            bases.extend((root / name, root / 'EVRPTW_Dataset/Instances_v2' / name,
+                          root / 'Instances_v2' / name))
+    # Match the shared benchmark launcher restore layouts.
+    for ancestor in REPO.parents[:3]:
+        runtime_dataset = ancestor / 'evrptw_runtime/EVRPTW_Dataset'
+        bases.append(runtime_dataset)
+        for name in names:
+            bases.append(runtime_dataset / 'Instances_v2' / name)
+    candidates = list(dict.fromkeys(base / INDEX_RELATIVE for base in bases))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    checked = '\n'.join(f'  {candidate}' for candidate in candidates)
+    raise FileNotFoundError(
+        'Cannot locate the Cus1000 T1 dataset index. BKS routes alone do not include '
+        'the instance matrices. Set EVRPTW_DATASET_ROOT or --dataset-path to the '
+        'dataset root (containing generation_plan and materialized), or pass the '
+        'T1 view_index.parquet file with --dataset-path. Checked:\n' + checked)
+
 
 
 def build_tasks(args):

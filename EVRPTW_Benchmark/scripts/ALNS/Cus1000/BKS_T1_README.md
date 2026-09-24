@@ -37,7 +37,8 @@ ICLR/
 ```
 
 需要完整的匹配 family/view 文件和矩阵，BKS 中的 routes 本身不包含这些数据。
-也会自动查找仓库内 `EVRPTW_Dataset/Instances_v2/us_11city_full_clean_v7_bbde5db_20260823` 等布局。
+自动查找时同时支持恢复版目录名 `us_11city` 和原始目录名 `us_11city_full_clean_v7_bbde5db_20260823`。查找范围包括 `/data`、仓库根目录、仓库上一级 `ICLR` 下的 `EVRPTW_Dataset/Instances_v2/`，以及仓库上一级至上三级的 `evrptw_runtime/EVRPTW_Dataset/Instances_v2/`，兼容现有 benchmark 启动脚本的恢复布局。
+找不到时会列出已检查的索引路径；数据集本身需要另行恢复或复制，Git 仓库和 BKS 文件夹不能替代数据集。
 如已有数据放在其他位置：
 
 ```bash
